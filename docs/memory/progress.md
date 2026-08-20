@@ -25,7 +25,7 @@
 - Research sources are commit-pinned where possible.
 - Runtime persistent-memory layers, invariants, data model, admission, retrieval, compaction, security, and tests are specified.
 - Root agent guidance includes the project's general engineering and quality standards.
-- Local and remote `dev` integration branches exist, and the repository documents the `main -> dev -> feat/<name>` workflow.
+- Local and remote `main` and `dev` branches contain the repository foundation, and the repository documents the `main -> dev -> feat/<name>` workflow.
 
 ## Known gaps
 

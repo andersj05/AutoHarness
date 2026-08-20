@@ -16,7 +16,7 @@ Scaffold the Rust workspace and prove the smallest headless command/event/replay
 - No Rust workspace or executable implementation exists yet.
 - The default branch is `main`.
 - The repository memory system uses root `AGENTS.md`, three core memory files, progressive documentation routing, ADRs, and exceptional detailed handoffs.
-- `main` is the stable branch, `dev` is the published integration branch, and the current work remains on the short-lived `feat/repository-foundation` branch.
+- `main` contains the repository foundation, and `dev` is synchronized with that release state for the next development branch.
 - All current local Markdown links resolve.
 
 ## Recently completed
@@ -28,6 +28,7 @@ Scaffold the Rust workspace and prove the smallest headless command/event/replay
 - Validated the documentation tree and completed Phase 0.
 - Adopted repository-wide writing, commit, generated-file, technical-decision, end-to-end testing, UI-quality, and validation guidelines in `AGENTS.md`.
 - Established and published the `main -> dev -> feat/<name>` hierarchy and recorded its workflow in `AGENTS.md` and ADR-0003.
+- Promoted the repository foundation from `dev` into `main` through [PR #1](https://github.com/andersj05/AutoHarness/pull/1).
 
 ## Immediate next actions
 
