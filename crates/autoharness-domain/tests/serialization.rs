@@ -1,7 +1,8 @@
 use autoharness_domain::{
-    Causation, CommandEnvelope, CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass,
-    EventEnvelope, EventId, EventPayload, InputId, ModelId, ModelRef, PromptText, ProviderId,
-    RetryAdvice, SessionId, SessionSequence, TimestampMillis,
+    AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload,
+    CorrelationId, DeliveryMode, ErrorClass, ErrorCode, EventEnvelope, EventId, EventPayload,
+    InputId, ModelId, ModelRef, PromptText, ProviderId, PublicMessage, ResponseText, RetryAdvice,
+    SessionId, SessionSequence, TimestampMillis, UsageSnapshot,
 };
 
 fn session_id() -> SessionId {
@@ -24,6 +25,10 @@ fn input_id() -> InputId {
     InputId::new("input-1").expect("valid test ID")
 }
 
+fn attempt_id(value: &str) -> AttemptId {
+    AttemptId::new(value).expect("valid test ID")
+}
+
 fn model() -> ModelRef {
     ModelRef::new(
         ProviderId::new("google-ai-studio").expect("valid provider ID"),
@@ -33,6 +38,16 @@ fn model() -> ModelRef {
 
 fn prompt() -> PromptText {
     PromptText::new("  first line\nsecond line: こんにちは  ").expect("non-empty test prompt")
+}
+
+fn failure() -> AttemptFailure {
+    AttemptFailure::new(
+        ErrorClass::Unavailable,
+        ErrorCode::new("provider_unavailable").expect("valid error code"),
+        PublicMessage::new("The provider is temporarily unavailable")
+            .expect("valid public message"),
+        RetryAdvice::After { delay_ms: 250 },
+    )
 }
 
 #[test]
@@ -209,6 +224,290 @@ fn every_initial_command_payload_has_a_stable_serialized_shape() {
 }
 
 #[test]
+fn every_attempt_command_payload_has_a_stable_serialized_shape() {
+    let commands = [
+        CommandPayload::AdmitPromptAndPrepareAttempt {
+            session_id: session_id(),
+            input_id: input_id(),
+            prompt: prompt(),
+            delivery_mode: DeliveryMode::NextTurn,
+            attempt_id: attempt_id("attempt-1"),
+        },
+        CommandPayload::PrepareAttempt {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            input_id: input_id(),
+            retry_of: None,
+        },
+        CommandPayload::StartAttempt {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+        },
+        CommandPayload::AppendAttemptText {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            text: ResponseText::new("hello\n世界").expect("non-empty response"),
+        },
+        CommandPayload::RecordAttemptUsage {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            usage: UsageSnapshot::new(Some(3), Some(5), Some(8)).with_breakdown(
+                Some(2),
+                Some(1),
+                Some(0),
+            ),
+        },
+        CommandPayload::RequestAttemptCancellation {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+        },
+        CommandPayload::CompleteAttempt {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+        },
+        CommandPayload::FailAttempt {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            failure: failure(),
+        },
+        CommandPayload::CancelAttempt {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+        },
+        CommandPayload::MarkAttemptUnknown {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+        },
+    ];
+
+    assert_eq!(
+        serde_json::to_value(commands).expect("serialize attempt commands"),
+        serde_json::json!([
+            {
+                "kind": "admit_prompt_and_prepare_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "input_id": "input-1",
+                    "prompt": "  first line\nsecond line: こんにちは  ",
+                    "delivery_mode": "next_turn",
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "prepare_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "input_id": "input-1",
+                    "retry_of": null
+                }
+            },
+            {
+                "kind": "start_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "append_attempt_text",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "text": "hello\n世界"
+                }
+            },
+            {
+                "kind": "record_attempt_usage",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 5,
+                        "total_tokens": 8,
+                        "cached_input_tokens": 2,
+                        "reasoning_tokens": 1,
+                        "tool_tokens": 0
+                    }
+                }
+            },
+            {
+                "kind": "request_attempt_cancellation",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "complete_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "fail_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "failure": {
+                        "class": "unavailable",
+                        "code": "provider_unavailable",
+                        "message": "The provider is temporarily unavailable",
+                        "retry_advice": {
+                            "kind": "after",
+                            "delay_ms": 250
+                        }
+                    }
+                }
+            },
+            {
+                "kind": "cancel_attempt",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "mark_attempt_unknown",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1"
+                }
+            }
+        ])
+    );
+}
+
+#[test]
+fn every_attempt_event_payload_has_a_stable_serialized_shape() {
+    let events = [
+        EventPayload::AttemptPrepared {
+            attempt_id: attempt_id("attempt-1"),
+            input_id: input_id(),
+            model: model(),
+            retry_of: Some(attempt_id("attempt-0")),
+        },
+        EventPayload::AttemptStarted {
+            attempt_id: attempt_id("attempt-1"),
+        },
+        EventPayload::AttemptTextAppended {
+            attempt_id: attempt_id("attempt-1"),
+            text: ResponseText::new("hello\n世界").expect("non-empty response"),
+        },
+        EventPayload::AttemptUsageRecorded {
+            attempt_id: attempt_id("attempt-1"),
+            usage: UsageSnapshot::new(Some(3), Some(5), Some(8)).with_breakdown(
+                Some(2),
+                Some(1),
+                Some(0),
+            ),
+        },
+        EventPayload::AttemptCancellationRequested {
+            attempt_id: attempt_id("attempt-1"),
+        },
+        EventPayload::AttemptCompleted {
+            attempt_id: attempt_id("attempt-1"),
+        },
+        EventPayload::AttemptFailed {
+            attempt_id: attempt_id("attempt-1"),
+            failure: failure(),
+        },
+        EventPayload::AttemptCancelled {
+            attempt_id: attempt_id("attempt-1"),
+        },
+        EventPayload::AttemptMarkedUnknown {
+            attempt_id: attempt_id("attempt-1"),
+        },
+    ];
+
+    assert_eq!(
+        serde_json::to_value(events).expect("serialize attempt events"),
+        serde_json::json!([
+            {
+                "kind": "attempt_prepared",
+                "payload": {
+                    "attempt_id": "attempt-1",
+                    "input_id": "input-1",
+                    "model": {
+                        "provider_id": "google-ai-studio",
+                        "model_id": "models/gemini-test"
+                    },
+                    "retry_of": "attempt-0"
+                }
+            },
+            {
+                "kind": "attempt_started",
+                "payload": {
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "attempt_text_appended",
+                "payload": {
+                    "attempt_id": "attempt-1",
+                    "text": "hello\n世界"
+                }
+            },
+            {
+                "kind": "attempt_usage_recorded",
+                "payload": {
+                    "attempt_id": "attempt-1",
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 5,
+                        "total_tokens": 8,
+                        "cached_input_tokens": 2,
+                        "reasoning_tokens": 1,
+                        "tool_tokens": 0
+                    }
+                }
+            },
+            {
+                "kind": "attempt_cancellation_requested",
+                "payload": {
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "attempt_completed",
+                "payload": {
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "attempt_failed",
+                "payload": {
+                    "attempt_id": "attempt-1",
+                    "failure": {
+                        "class": "unavailable",
+                        "code": "provider_unavailable",
+                        "message": "The provider is temporarily unavailable",
+                        "retry_advice": {
+                            "kind": "after",
+                            "delay_ms": 250
+                        }
+                    }
+                }
+            },
+            {
+                "kind": "attempt_cancelled",
+                "payload": {
+                    "attempt_id": "attempt-1"
+                }
+            },
+            {
+                "kind": "attempt_marked_unknown",
+                "payload": {
+                    "attempt_id": "attempt-1"
+                }
+            }
+        ])
+    );
+}
+
+#[test]
 fn error_classification_shapes_are_explicit() {
     assert_eq!(
         serde_json::to_value([
@@ -288,4 +587,46 @@ fn enclosing_command_and_event_debug_output_redacts_prompt_content() {
 
     assert!(!format!("{command:?}").contains(secret));
     assert!(!format!("{event:?}").contains(secret));
+}
+
+#[test]
+fn enclosing_attempt_debug_output_redacts_response_and_public_message_content() {
+    let response_secret = "wrapper-level secret response";
+    let message_secret = "wrapper-level secret public message";
+    let response = ResponseText::new(response_secret).expect("non-empty response");
+    let failure = AttemptFailure::new(
+        ErrorClass::Unavailable,
+        ErrorCode::new("provider_unavailable").expect("valid code"),
+        PublicMessage::new(message_secret).expect("valid public message"),
+        RetryAdvice::Backoff,
+    );
+    let command = CommandEnvelope::new(
+        command_id("command-text"),
+        correlation_id(),
+        CommandPayload::AppendAttemptText {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            text: response.clone(),
+        },
+    );
+    let event = EventEnvelope::new_v1(
+        event_id("event-text"),
+        session_id(),
+        SessionSequence::FIRST,
+        TimestampMillis::new(1),
+        Causation::Command(command_id("command-text")),
+        correlation_id(),
+        EventPayload::AttemptTextAppended {
+            attempt_id: attempt_id("attempt-1"),
+            text: response,
+        },
+    );
+    let failed = EventPayload::AttemptFailed {
+        attempt_id: attempt_id("attempt-1"),
+        failure,
+    };
+
+    assert!(!format!("{command:?}").contains(response_secret));
+    assert!(!format!("{event:?}").contains(response_secret));
+    assert!(!format!("{failed:?}").contains(message_secret));
 }

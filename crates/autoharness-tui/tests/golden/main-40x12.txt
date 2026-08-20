@@ -1,0 +1,12 @@
+ AutoHarness | failed
+┌ Transcript ──────────────────────────┐
+│Error: Capacity is temporarily        │
+│exhausted; no credentials were        │
+│exposed.                              │
+│Press Ctrl+R to retry.                │
+└──────────────────────────────────────┘
+┌ Prompt ──────────────────────────────┐
+│Retry with a smaller scope.           │
+│Keep the checklist concise.           │
+└──────────────────────────────────────┘
+ ^S send   ^P models   ^R retry

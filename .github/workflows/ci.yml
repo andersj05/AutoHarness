@@ -47,6 +47,26 @@ jobs:
       - name: Test documentation
         run: cargo test --workspace --doc --all-features --locked
 
+  benchmarks:
+    name: Validate benchmark environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Check benchmark formatting
+        run: cargo fmt --manifest-path benchmarks/Cargo.toml -- --check
+      - name: Run benchmark Clippy
+        run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets --locked --no-deps -- -D warnings
+      - name: Test benchmark environment
+        run: cargo test --manifest-path benchmarks/Cargo.toml --all-targets --locked
+
   test:
     name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}

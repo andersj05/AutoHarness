@@ -3,24 +3,78 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-The architecture and repository-memory foundation is complete, and Phase 1 implementation is in progress.
-The first executable milestone is a fast terminal application that discovers selectable Google AI Studio models, streams responses, and records replayable sessions.
-A configurable model-router adapter follows immediately afterward.
+Phase 1 is complete.
+The repository now contains a Rust terminal application that discovers compatible Google AI Studio models, streams Gemini responses, supports cancellation and retry, and restores its selected model and transcript from SQLite after restart.
+The current provider-protocol evidence uses local HTTP fixtures and fake providers, so it does not claim a live Gemini service verification.
 
-## Project documentation
+## Run the terminal application
 
-- [Project plan](docs/PROJECT_PLAN.md)
-- [Architecture overview](docs/architecture/OVERVIEW.md)
-- [Persistent memory architecture](docs/architecture/PERSISTENT_MEMORY.md)
-- [Repository memory](docs/memory/README.md)
-- [Architecture decision records](docs/adr/README.md)
-- [Reference-project research](docs/research/agent-memory-patterns.md)
+The repository pins Rust 1.97.1 through `rust-toolchain.toml`.
+Set `GEMINI_API_KEY` in the process environment, then run the binary from the repository root.
+Do not put the key in a repository file or command-line argument.
 
-## Current status
+PowerShell 7:
 
-The pinned Rust 2024 workspace now contains provider-neutral command and event contracts plus a synchronous headless engine with deterministic replay tests.
-No terminal executable, provider adapter, or durable database exists yet.
-See [active memory](docs/memory/active.md) for the current objective and [progress](docs/memory/progress.md) for milestone status.
+```powershell
+$env:GEMINI_API_KEY = Read-Host -Prompt "Google AI Studio API key" -MaskInput
+cargo run --locked -p autoharness-app --bin autoharness
+```
+
+Bash:
+
+```bash
+read -rsp "Google AI Studio API key: " GEMINI_API_KEY
+export GEMINI_API_KEY
+cargo run --locked -p autoharness-app --bin autoharness
+```
+
+The application reads the key into a redacted, zeroizing in-memory value and never writes it to configuration or durable session state.
+If the key is missing or invalid, the terminal remains usable and presents a safe catalog error, but model discovery and chat are unavailable.
+
+## Controls
+
+| Action | Key |
+| --- | --- |
+| Send the composed prompt | `Ctrl+S` or `Ctrl+Enter` |
+| Insert a newline | `Enter` |
+| Open the model picker | `Ctrl+P` |
+| Filter models | Type while the picker is open |
+| Choose a model | `Up` or `Down`, then `Enter` |
+| Close the model picker | `Esc` |
+| Refresh a failed catalog | `Ctrl+R` while the picker is open |
+| Cancel the active response | `Esc` or `Ctrl+C` |
+| Retry the latest failed or cancelled attempt | `Ctrl+R` |
+| Scroll the transcript | `Alt+Up` or `Alt+Down`, or `Ctrl+PageUp` or `Ctrl+PageDown` |
+| Resume following the transcript tail | `Ctrl+End` |
+| Quit | `Ctrl+C` when no attempt is active |
+
+Prompts are saved before provider dispatch.
+Cancellation requests and response segments also cross the durable command boundary before the terminal treats them as committed.
+
+## Configuration and local data
+
+| Environment variable | Purpose |
+| --- | --- |
+| `GEMINI_API_KEY` | Google AI Studio credential used only by the Gemini adapter |
+| `AUTOHARNESS_DATA_DIR` | Optional absolute override for the application data directory |
+| `AUTOHARNESS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug`, or `trace`; defaults to `info` |
+
+Without an override, AutoHarness uses the platform application-data location:
+
+- Windows: `%LOCALAPPDATA%\AutoHarness`
+- macOS: `$HOME/Library/Application Support/AutoHarness`
+- Linux and other Unix systems: `$XDG_DATA_HOME/autoharness`, or `$HOME/.local/share/autoharness` when `XDG_DATA_HOME` is unset
+
+The directory contains:
+
+| File | Purpose |
+| --- | --- |
+| `autoharness.sqlite3` | Durable schema-v1 session events and rebuilt projections |
+| `autoharness.log` | Content-free structured lifecycle and operational trace events |
+| `autoharness.writer.lock` | Exclusive writer lease that prevents two processes from mutating the same store |
+
+On startup, AutoHarness replays the active session from authoritative events.
+An attempt interrupted before provider dispatch becomes a retryable failure, while an attempt interrupted after dispatch becomes an explicit unknown outcome instead of a fabricated success.
 
 ## Development
 
@@ -31,6 +85,31 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
+
+The local Phase 1 validation passed formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
+The suite covers the composed cancel, retry, and restart path; SQLite replay and projection rebuilding; model pagination; arbitrary SSE fragmentation; provider cancellation; retry classification; terminal restoration; fixed-size rendering; and credential redaction.
+A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
+
+## Performance evidence
+
+The checked-in [Phase 1 benchmark environment](benchmarks/README.md) measures durable event append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes.
+It also includes a PowerShell idle resident-memory sampler and a reference-machine record template.
+
+```text
+cargo run --release --locked --manifest-path benchmarks/Cargo.toml -- --output benchmarks/results/phase1-<machine>-<date>.json
+```
+
+The benchmark report excludes network requests and records LLM latency separately as not measured.
+Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-render latency remain unmeasured until the application exposes the exact monotonic markers defined by the [instrumentation contract](benchmarks/instrumentation-contract.md).
+
+## Project documentation
+
+- [Project plan](docs/PROJECT_PLAN.md)
+- [Architecture overview](docs/architecture/OVERVIEW.md)
+- [Persistent memory architecture](docs/architecture/PERSISTENT_MEMORY.md)
+- [Repository memory](docs/memory/README.md)
+- [Architecture decision records](docs/adr/README.md)
+- [Reference-project research](docs/research/agent-memory-patterns.md)
 
 ## Guiding principles
 

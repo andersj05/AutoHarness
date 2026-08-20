@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use autoharness_domain::{
-    ClassifiedError, CommandId, ErrorClass, EventId, InputId, RetryAdvice, SessionId,
+    AttemptId, ClassifiedError, CommandId, ErrorClass, EventId, InputId, RetryAdvice, SessionId,
 };
 
 /// Expected rejection of a command that is invalid for current session state.
@@ -28,6 +28,62 @@ pub enum CommandRejection {
         /// Owning session identity.
         session_id: SessionId,
         /// Conflicting input identity.
+        input_id: InputId,
+    },
+    /// Attempt preparation requires a selected model.
+    ModelNotSelected {
+        /// Target session identity.
+        session_id: SessionId,
+    },
+    /// An attempt referenced an input that was never admitted.
+    InputNotFound {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Missing input identity.
+        input_id: InputId,
+    },
+    /// An ordinary attempt tried to promote an already promoted input.
+    InputAlreadyPromoted {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Already promoted input identity.
+        input_id: InputId,
+    },
+    /// An attempt identity already exists in the session.
+    DuplicateAttempt {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Conflicting attempt identity.
+        attempt_id: AttemptId,
+    },
+    /// A command referenced an unknown attempt.
+    AttemptNotFound {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Missing attempt identity.
+        attempt_id: AttemptId,
+    },
+    /// An attempt does not permit the requested lifecycle transition.
+    InvalidAttemptState {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Attempt in incompatible state.
+        attempt_id: AttemptId,
+    },
+    /// A settled attempt's policy does not permit retry.
+    RetryNotAllowed {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Prior attempt identity.
+        attempt_id: AttemptId,
+    },
+    /// A retry attempted to bind a different admitted input.
+    RetryInputMismatch {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Prior attempt identity.
+        attempt_id: AttemptId,
+        /// Supplied input identity.
         input_id: InputId,
     },
     /// A command was routed to a different session aggregate.
@@ -58,6 +114,59 @@ impl Display for CommandRejection {
                 formatter,
                 "input {input_id} is already admitted to session {session_id}"
             ),
+            Self::ModelNotSelected { session_id } => {
+                write!(formatter, "session {session_id} has no selected model")
+            }
+            Self::InputNotFound {
+                session_id,
+                input_id,
+            } => write!(
+                formatter,
+                "input {input_id} does not exist in session {session_id}"
+            ),
+            Self::InputAlreadyPromoted {
+                session_id,
+                input_id,
+            } => write!(
+                formatter,
+                "input {input_id} is already promoted in session {session_id}"
+            ),
+            Self::DuplicateAttempt {
+                session_id,
+                attempt_id,
+            } => write!(
+                formatter,
+                "attempt {attempt_id} already exists in session {session_id}"
+            ),
+            Self::AttemptNotFound {
+                session_id,
+                attempt_id,
+            } => write!(
+                formatter,
+                "attempt {attempt_id} does not exist in session {session_id}"
+            ),
+            Self::InvalidAttemptState {
+                session_id,
+                attempt_id,
+            } => write!(
+                formatter,
+                "attempt {attempt_id} cannot make that transition in session {session_id}"
+            ),
+            Self::RetryNotAllowed {
+                session_id,
+                attempt_id,
+            } => write!(
+                formatter,
+                "attempt {attempt_id} cannot be retried in session {session_id}"
+            ),
+            Self::RetryInputMismatch {
+                session_id,
+                attempt_id,
+                input_id,
+            } => write!(
+                formatter,
+                "retry of attempt {attempt_id} cannot use input {input_id} in session {session_id}"
+            ),
             Self::WrongSession { expected, found } => write!(
                 formatter,
                 "command targets session {found}, but aggregate owns {expected}"
@@ -71,11 +180,19 @@ impl Error for CommandRejection {}
 impl ClassifiedError for CommandRejection {
     fn class(&self) -> ErrorClass {
         match self {
-            Self::SessionNotFound { .. } => ErrorClass::NotFound,
+            Self::SessionNotFound { .. }
+            | Self::InputNotFound { .. }
+            | Self::AttemptNotFound { .. } => ErrorClass::NotFound,
             Self::DuplicateCommand { .. }
             | Self::SessionAlreadyExists { .. }
-            | Self::DuplicateInput { .. } => ErrorClass::Conflict,
-            Self::WrongSession { .. } => ErrorClass::Validation,
+            | Self::DuplicateInput { .. }
+            | Self::InputAlreadyPromoted { .. }
+            | Self::DuplicateAttempt { .. }
+            | Self::InvalidAttemptState { .. }
+            | Self::RetryNotAllowed { .. } => ErrorClass::Conflict,
+            Self::WrongSession { .. }
+            | Self::ModelNotSelected { .. }
+            | Self::RetryInputMismatch { .. } => ErrorClass::Validation,
         }
     }
 
@@ -100,6 +217,69 @@ pub enum ReplayError {
         expected: SessionId,
         /// Session carried by the event.
         found: SessionId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// An attempt identity appears more than once in session history.
+    DuplicateAttempt {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Repeated attempt identity.
+        attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// Attempt preparation referenced an input absent from history.
+    UnknownInput {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Missing input identity.
+        input_id: InputId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// An attempt lifecycle event referenced an unknown attempt.
+    UnknownAttempt {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Missing attempt identity.
+        attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// Attempt history contains an invalid lifecycle transition.
+    IllegalAttemptTransition {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Attempt in incompatible state.
+        attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// Retry history disagrees with the prior settled attempt.
+    InvalidRetry {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// New retry attempt identity.
+        attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// An ordinary attempt reused an already promoted input.
+    InputAlreadyPromoted {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Reused input identity.
+        input_id: InputId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// A prepared attempt's model does not match the selected model at that sequence.
+    ModelSnapshotMismatch {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Attempt with the invalid snapshot.
+        attempt_id: AttemptId,
         /// Event being validated.
         event_id: EventId,
     },
@@ -227,6 +407,62 @@ impl Display for ReplayError {
             } => write!(
                 formatter,
                 "event {event_id} admits duplicate input {input_id} to session {session_id}"
+            ),
+            Self::DuplicateAttempt {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} creates duplicate attempt {attempt_id} in session {session_id}"
+            ),
+            Self::UnknownInput {
+                session_id,
+                input_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} references unknown input {input_id} in session {session_id}"
+            ),
+            Self::UnknownAttempt {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} references unknown attempt {attempt_id} in session {session_id}"
+            ),
+            Self::IllegalAttemptTransition {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} makes an illegal transition for attempt {attempt_id} in session {session_id}"
+            ),
+            Self::InvalidRetry {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} defines invalid retry attempt {attempt_id} in session {session_id}"
+            ),
+            Self::InputAlreadyPromoted {
+                session_id,
+                input_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} re-promotes input {input_id} in session {session_id}"
+            ),
+            Self::ModelSnapshotMismatch {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} records a mismatched model for attempt {attempt_id} in session {session_id}"
             ),
             Self::SequenceExhausted { session_id } => {
                 write!(

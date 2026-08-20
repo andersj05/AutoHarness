@@ -1,0 +1,23 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-a",
+      "displayName": "duplicate must not replace first",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/gemini-z",
+      "displayName": "Gemini Z",
+      "description": "malicious echo gemini-secret-sentinel",
+      "inputTokenLimit": 200,
+      "outputTokenLimit": 40,
+      "supportedGenerationMethods": ["generateContent", "countTokens"],
+      "thinking": true
+    },
+    {
+      "name": "models/gemini-secret-sentinel",
+      "displayName": "secret-bearing identity",
+      "supportedGenerationMethods": ["generateContent"]
+    }
+  ]
+}

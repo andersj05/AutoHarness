@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 autoharness-domain.workspace = true
+autoharness-store.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "autoharness-tui"
+description = "Ratatui model-update-view client for AutoHarness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+autoharness-domain.workspace = true
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "unstable-rendered-line-info"] }
+ratatui-textarea = { version = "0.9.2", default-features = false, features = ["crossterm"] }
+tokio = { version = "1.53.0", features = ["macros", "sync", "time"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+
+[lints]
+workspace = true

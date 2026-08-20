@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CommandId, CorrelationId, DeliveryMode, EventId, InputId, ModelRef, PromptText, SessionId,
-    SessionSequence, TimestampMillis,
+    AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, EventId, InputId, ModelRef,
+    PromptText, ResponseText, SessionId, SessionSequence, TimestampMillis, UsageSnapshot,
 };
 
 /// The only event schema emitted by the initial engine slice.
@@ -124,5 +124,62 @@ pub enum EventPayload {
         prompt: PromptText,
         /// Eligibility boundary for the input.
         delivery_mode: DeliveryMode,
+    },
+    /// An attempt was durably bound to exact input and a model snapshot.
+    AttemptPrepared {
+        /// Stable attempt identity.
+        attempt_id: AttemptId,
+        /// Exact input promoted into this attempt.
+        input_id: InputId,
+        /// Provider-neutral model snapshot selected for the attempt.
+        model: ModelRef,
+        /// Prior settled attempt when this attempt is an explicit retry.
+        retry_of: Option<AttemptId>,
+    },
+    /// Provider dispatch became possible immediately after this event committed.
+    AttemptStarted {
+        /// Attempt entering the in-flight state.
+        attempt_id: AttemptId,
+    },
+    /// Exact assistant response content was durably appended.
+    AttemptTextAppended {
+        /// Attempt receiving the content.
+        attempt_id: AttemptId,
+        /// Exact provider-neutral text delta.
+        text: ResponseText,
+    },
+    /// A cumulative usage snapshot replaced the previous snapshot.
+    AttemptUsageRecorded {
+        /// Attempt receiving usage.
+        attempt_id: AttemptId,
+        /// Provider-neutral cumulative usage.
+        usage: UsageSnapshot,
+    },
+    /// Cancellation was durably requested before signalling the provider task.
+    AttemptCancellationRequested {
+        /// Attempt targeted by cancellation.
+        attempt_id: AttemptId,
+    },
+    /// An attempt settled successfully.
+    AttemptCompleted {
+        /// Settled attempt.
+        attempt_id: AttemptId,
+    },
+    /// An attempt settled with a sanitized failure.
+    AttemptFailed {
+        /// Settled attempt.
+        attempt_id: AttemptId,
+        /// Safe failure projection.
+        failure: AttemptFailure,
+    },
+    /// An attempt settled after cooperative cancellation.
+    AttemptCancelled {
+        /// Settled attempt.
+        attempt_id: AttemptId,
+    },
+    /// Recovery found a dispatched attempt with an ambiguous provider outcome.
+    AttemptMarkedUnknown {
+        /// Ambiguous attempt.
+        attempt_id: AttemptId,
     },
 }

@@ -2,6 +2,12 @@
 members = [
     "crates/autoharness-domain",
     "crates/autoharness-engine",
+    "crates/autoharness-app",
+    "crates/autoharness-provider",
+    "crates/autoharness-provider-gemini",
+    "crates/autoharness-store",
+    "crates/autoharness-store-sqlite",
+    "crates/autoharness-tui",
 ]
 resolver = "3"
 
@@ -14,8 +20,29 @@ publish = false
 
 [workspace.dependencies]
 autoharness-domain = { path = "crates/autoharness-domain" }
+autoharness-engine = { path = "crates/autoharness-engine" }
+autoharness-provider = { path = "crates/autoharness-provider" }
+autoharness-provider-gemini = { path = "crates/autoharness-provider-gemini" }
+autoharness-store = { path = "crates/autoharness-store" }
+autoharness-store-sqlite = { path = "crates/autoharness-store-sqlite" }
+autoharness-tui = { path = "crates/autoharness-tui" }
+async-stream = "0.3"
+async-trait = "0.1"
+bytes = "1"
+crossterm = "0.29"
+futures-core = "0.3"
+futures-util = "0.3"
+ratatui = "0.30"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tokio = "1"
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
+uuid = "1"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
