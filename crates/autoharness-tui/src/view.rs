@@ -40,7 +40,9 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         render_standard(frame, area, model);
     }
 
-    if model.picker.open {
+    if model.credential.open {
+        render_credential(frame, area, model);
+    } else if model.picker.open {
         render_picker(frame, area, model);
     }
 }
@@ -316,6 +318,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         Span::raw("models"),
     ];
+    if area.width >= 72 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            " Ctrl+K ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ));
+        spans.push(Span::raw("API key"));
+    }
     if let Some((attempt_id, status)) = model.session.active_attempt() {
         spans.push(Span::raw("  "));
         if model.cancelling.contains(attempt_id) || matches!(status, AttemptStatus::Cancelling) {
@@ -446,6 +456,14 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 
     match &*model.catalog {
+        CatalogProjection::CredentialRequired => {
+            frame.render_widget(
+                Paragraph::new("An API key is required. Press Ctrl+K to connect Google AI Studio.")
+                    .style(MUTED_STYLE)
+                    .wrap(Wrap { trim: false }),
+                list,
+            );
+        }
         CatalogProjection::Loading => {
             frame.render_widget(Paragraph::new("Loading models...").style(MUTED_STYLE), list);
         }
@@ -491,6 +509,49 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             help,
         );
     }
+}
+
+fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = credential_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Google AI Studio API key ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mask = if model.credential.has_value() {
+        "••••••••••••"
+    } else {
+        "paste or type key"
+    };
+    let text = if inner.height < 8 || inner.width < 36 {
+        Text::from(vec![
+            Line::from("API key required"),
+            Line::styled(
+                format!(" {mask} "),
+                Style::default().fg(Color::White).bg(Color::DarkGray),
+            ),
+            Line::styled("Enter connect  Esc later", MUTED_STYLE),
+        ])
+    } else {
+        Text::from(vec![
+            Line::from("Paste your Gemini API key below."),
+            Line::from("It is kept only in memory for this run and is never saved."),
+            Line::from(""),
+            Line::styled(
+                format!("  {mask}  "),
+                Style::default().fg(Color::White).bg(Color::DarkGray),
+            ),
+            Line::from(""),
+            Line::styled("Enter connect  Backspace edit  Esc later", MUTED_STYLE),
+        ])
+    };
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_picker_models(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -591,9 +652,24 @@ fn popup_rect(area: Rect) -> Rect {
     )
 }
 
+fn credential_rect(area: Rect) -> Rect {
+    if area.width < 30 || area.height < 9 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(68);
+    let height = area.height.saturating_sub(2).min(10);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.max(1),
+        height.max(1),
+    )
+}
+
 fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
     if model.focus != Focus::Composer
         || model.picker.open
+        || model.credential.open
         || model
             .pending
             .values()

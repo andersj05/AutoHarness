@@ -186,6 +186,7 @@ dependencies = [
  "ratatui-textarea",
  "tokio",
  "tokio-util",
+ "zeroize",
 ]
 
 [[package]]

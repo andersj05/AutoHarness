@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoharness_domain::ClassifiedError as _;
-use autoharness_provider::Provider;
+use autoharness_provider::{Provider, ProviderErrorKind};
 use autoharness_provider_gemini::GeminiProvider;
 use autoharness_tui::{CatalogProjection, Model, RetryPolicy, UiFailure, bounded_ports};
 use config::{AppPaths, WriterLease};
@@ -52,12 +52,16 @@ async fn run() -> Result<(), AppError> {
         }
         Err(error) => {
             telemetry::provider_unavailable(&error);
-            let failure = UiFailure::new(
-                error.class(),
-                error.to_string(),
-                RetryPolicy::from_advice(error.retry_advice(), 0),
-            );
-            (None, CatalogProjection::Failed(failure))
+            if error.kind() == ProviderErrorKind::MissingCredential {
+                (None, CatalogProjection::CredentialRequired)
+            } else {
+                let failure = UiFailure::new(
+                    error.class(),
+                    error.to_string(),
+                    RetryPolicy::from_advice(error.retry_advice(), 0),
+                );
+                (None, CatalogProjection::Failed(failure))
+            }
         }
     };
 

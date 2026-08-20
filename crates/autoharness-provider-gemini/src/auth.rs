@@ -20,7 +20,7 @@ pub struct GeminiApiKey {
 impl GeminiApiKey {
     /// Validates an API key without ever including the rejected value in an error.
     pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
-        let value = value.into();
+        let value = Zeroizing::new(value.into());
         if value.is_empty() {
             return Err(ProviderError::new(
                 ProviderErrorKind::MissingCredential,
@@ -40,7 +40,7 @@ impl GeminiApiKey {
         let percent_encoded = percent_encode(&value, b"0123456789ABCDEF");
         let percent_encoded_lower_hex = percent_encode(&value, b"0123456789abcdef");
         Ok(Self {
-            raw: Zeroizing::new(value),
+            raw: value,
             percent_encoded: Zeroizing::new(percent_encoded),
             percent_encoded_lower_hex: Zeroizing::new(percent_encoded_lower_hex),
         })
