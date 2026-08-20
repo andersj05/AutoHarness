@@ -1,0 +1,18 @@
+ AutoHarness  |  Gemini 2.5 Pro  |  failed
+┌ Transcript ──────────────────────────────────────────────┐
+│18 input tokens · 41 output tokens                        │
+│                                                          │
+│you                                                       │
+│What could go wrong?                                      │
+│                                                          │
+│assistant · retry · failed                                │
+│The provider returned \u{1b}[31ma partial answer\u{1b}[0m.│
+│Error: Capacity is temporarily exhausted; no credentials  │
+│were exposed.                                             │
+│Press Ctrl+R to retry.                                    │
+└──────────────────────────────────────────────────────────┘
+┌ Prompt ──────────────────────────────────────────────────┐
+│Retry with a smaller scope.                               │
+│Keep the checklist concise.                               │
+└──────────────────────────────────────────────────────────┘
+ Ctrl+S send   Enter newline   Ctrl+P models   Ctrl+R retry

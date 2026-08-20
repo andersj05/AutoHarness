@@ -1,0 +1,28 @@
+event: interaction.created
+data: {"event_type":"interaction.created","interaction":{"id":"interaction-1","status":"in_progress"}}
+
+event: step.start
+data: {"event_type":"step.start","index":0,"step":{"type":"thought"}}
+
+event: step.delta
+data: {"event_type":"step.delta","index":0,"delta":{"type":"text","text":"must stay hidden"}}
+
+event: step.start
+data: {"event_type":"step.start","index":1,"step":{"type":"model_output"}}
+
+event: future.event
+data: {"event_type":"future.event","future_field":true}
+
+event: step.delta
+data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":"Hé"}}
+
+event: step.delta
+data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":"🙂"}}
+
+event: step.stop
+data: {"event_type":"step.stop","index":1,"step_usage":{"total_input_tokens":2,"total_output_tokens":1,"total_tokens":3}}
+
+event: interaction.completed
+data: {"event_type":"interaction.completed","interaction":{"status":"completed","usage":{"total_input_tokens":2,"total_output_tokens":3,"total_cached_tokens":1,"total_thought_tokens":1,"total_tool_use_tokens":0,"total_tokens":6}}}
+
+data: [DONE]

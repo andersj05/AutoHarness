@@ -68,12 +68,17 @@ identifier!(SessionId, "Stable identity for a conversation session.");
 identifier!(CommandId, "Stable identity for a requested command.");
 identifier!(EventId, "Stable identity for one durable event.");
 identifier!(InputId, "Stable identity for one admitted user input.");
+identifier!(AttemptId, "Stable identity for one provider attempt.");
 identifier!(
     CorrelationId,
     "Identity shared by commands and events in one logical operation."
 );
 identifier!(ProviderId, "Stable provider adapter identity.");
 identifier!(ModelId, "Provider-owned model identity.");
+identifier!(
+    ErrorCode,
+    "Stable public error code safe for logs and storage."
+);
 
 fn validate_identifier(value: &str) -> Result<(), ValueError> {
     if value.is_empty() {

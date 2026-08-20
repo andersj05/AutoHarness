@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CommandId, CorrelationId, DeliveryMode, InputId, ModelRef, PromptText, SessionId};
+use crate::{
+    AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, InputId, ModelRef,
+    PromptText, ResponseText, SessionId, UsageSnapshot,
+};
 
 /// A command and the metadata used to correlate its resulting events.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -77,6 +80,92 @@ pub enum CommandPayload {
         /// Boundary at which the input becomes eligible.
         delivery_mode: DeliveryMode,
     },
+    /// Atomically admit exact input and prepare its first provider attempt.
+    AdmitPromptAndPrepareAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Stable identity used to reject duplicate admission.
+        input_id: InputId,
+        /// Exact user-authored content.
+        prompt: PromptText,
+        /// Boundary at which the input becomes eligible.
+        delivery_mode: DeliveryMode,
+        /// Stable attempt identity selected before any provider effect.
+        attempt_id: AttemptId,
+    },
+    /// Prepare an attempt and bind its exact input and model before dispatch.
+    PrepareAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Stable attempt identity selected before any provider effect.
+        attempt_id: AttemptId,
+        /// Exact admitted input promoted into the attempt.
+        input_id: InputId,
+        /// Prior settled attempt when this is an explicit retry.
+        retry_of: Option<AttemptId>,
+    },
+    /// Record the durable dispatch boundary immediately before provider I/O.
+    StartAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Prepared attempt being dispatched.
+        attempt_id: AttemptId,
+    },
+    /// Append an exact provider-neutral response delta.
+    AppendAttemptText {
+        /// Target session.
+        session_id: SessionId,
+        /// Active attempt receiving content.
+        attempt_id: AttemptId,
+        /// Exact response bytes represented as UTF-8 text.
+        text: ResponseText,
+    },
+    /// Replace the cumulative usage snapshot for an active attempt.
+    RecordAttemptUsage {
+        /// Target session.
+        session_id: SessionId,
+        /// Active attempt receiving usage.
+        attempt_id: AttemptId,
+        /// Provider-neutral cumulative usage.
+        usage: UsageSnapshot,
+    },
+    /// Request cancellation before signalling the in-memory provider task.
+    RequestAttemptCancellation {
+        /// Target session.
+        session_id: SessionId,
+        /// Active attempt to cancel.
+        attempt_id: AttemptId,
+    },
+    /// Settle an attempt successfully.
+    CompleteAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Active attempt that completed.
+        attempt_id: AttemptId,
+    },
+    /// Settle an attempt with a sanitized provider-neutral failure.
+    FailAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Attempt that failed.
+        attempt_id: AttemptId,
+        /// Safe failure data suitable for persistence and display.
+        failure: AttemptFailure,
+    },
+    /// Settle an attempt after cooperative cancellation.
+    CancelAttempt {
+        /// Target session.
+        session_id: SessionId,
+        /// Attempt that observed cancellation.
+        attempt_id: AttemptId,
+    },
+    /// Mark a previously dispatched attempt as ambiguous after recovery.
+    MarkAttemptUnknown {
+        /// Target session.
+        session_id: SessionId,
+        /// In-flight attempt whose provider outcome is unknown.
+        attempt_id: AttemptId,
+    },
 }
 
 impl CommandPayload {
@@ -86,7 +175,17 @@ impl CommandPayload {
         match self {
             Self::CreateSession { session_id }
             | Self::SelectModel { session_id, .. }
-            | Self::AdmitPrompt { session_id, .. } => session_id,
+            | Self::AdmitPrompt { session_id, .. }
+            | Self::AdmitPromptAndPrepareAttempt { session_id, .. }
+            | Self::PrepareAttempt { session_id, .. }
+            | Self::StartAttempt { session_id, .. }
+            | Self::AppendAttemptText { session_id, .. }
+            | Self::RecordAttemptUsage { session_id, .. }
+            | Self::RequestAttemptCancellation { session_id, .. }
+            | Self::CompleteAttempt { session_id, .. }
+            | Self::FailAttempt { session_id, .. }
+            | Self::CancelAttempt { session_id, .. }
+            | Self::MarkAttemptUnknown { session_id, .. } => session_id,
         }
     }
 }

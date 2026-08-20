@@ -1,0 +1,38 @@
+[package]
+name = "autoharness-app"
+description = "AutoHarness terminal application composition"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "autoharness"
+path = "src/main.rs"
+
+[dependencies]
+autoharness-domain.workspace = true
+autoharness-engine.workspace = true
+autoharness-provider.workspace = true
+autoharness-provider-gemini.workspace = true
+autoharness-store.workspace = true
+autoharness-store-sqlite.workspace = true
+autoharness-tui.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+ratatui.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+async-stream.workspace = true
+async-trait.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

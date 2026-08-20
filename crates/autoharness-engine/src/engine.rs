@@ -32,13 +32,36 @@ pub trait EventMetadataSource {
 }
 
 /// Synchronous headless harness used to prove command and replay semantics.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InMemoryEngine<M> {
     metadata_source: M,
     sessions: BTreeMap<SessionId, SessionAggregate>,
     events: Vec<EventEnvelope>,
     event_ids: BTreeSet<EventId>,
     command_ids: BTreeSet<CommandId>,
+}
+
+pub(crate) struct PreparedCommand {
+    session_id: SessionId,
+    command_id: CommandId,
+    expected_last_sequence: u64,
+    candidate: SessionAggregate,
+    events: Vec<EventEnvelope>,
+    event_ids: BTreeSet<EventId>,
+}
+
+impl PreparedCommand {
+    pub(crate) const fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub(crate) const fn expected_last_sequence(&self) -> u64 {
+        self.expected_last_sequence
+    }
+
+    pub(crate) fn events(&self) -> &[EventEnvelope] {
+        &self.events
+    }
 }
 
 impl<M> InMemoryEngine<M>
@@ -95,6 +118,16 @@ where
         &mut self,
         command: &CommandEnvelope,
     ) -> Result<Vec<EventEnvelope>, EngineError> {
+        let prepared = self.prepare(command)?;
+        let events = prepared.events.clone();
+        self.commit_prepared(prepared);
+        Ok(events)
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        command: &CommandEnvelope,
+    ) -> Result<PreparedCommand, EngineError> {
         if self.command_ids.contains(command.command_id()) {
             return Err(CommandRejection::DuplicateCommand {
                 command_id: command.command_id().clone(),
@@ -108,6 +141,7 @@ where
             .cloned()
             .unwrap_or_else(|| SessionAggregate::empty(session_id.clone()));
         let payloads = current.decide(command)?;
+        let expected_last_sequence = current.last_sequence().map_or(0, SessionSequence::get);
 
         let mut next_sequence = match current.last_sequence() {
             Some(sequence) => {
@@ -139,12 +173,16 @@ where
                     event_id: generated.event_id,
                 });
             }
+            let causation = events.last().map_or_else(
+                || Causation::Command(command.command_id().clone()),
+                |prior: &EventEnvelope| Causation::Event(prior.event_id().clone()),
+            );
             events.push(EventEnvelope::new_v1(
                 generated.event_id,
                 session_id.clone(),
                 next_sequence,
                 generated.occurred_at,
-                Causation::Command(command.command_id().clone()),
+                causation,
                 command.correlation_id().clone(),
                 payload,
             ));
@@ -155,11 +193,22 @@ where
             .apply_uncommitted_batch(&events)
             .map_err(|source| EngineError::InvariantViolation { source })?;
 
-        self.sessions.insert(session_id, candidate);
-        self.command_ids.insert(command.command_id().clone());
-        self.event_ids.extend(batch_event_ids);
-        self.events.extend(events.iter().cloned());
-        Ok(events)
+        Ok(PreparedCommand {
+            session_id,
+            command_id: command.command_id().clone(),
+            expected_last_sequence,
+            candidate,
+            events,
+            event_ids: batch_event_ids,
+        })
+    }
+
+    pub(crate) fn commit_prepared(&mut self, prepared: PreparedCommand) {
+        self.sessions
+            .insert(prepared.session_id, prepared.candidate);
+        self.command_ids.insert(prepared.command_id);
+        self.event_ids.extend(prepared.event_ids);
+        self.events.extend(prepared.events);
     }
 
     /// Returns one session projection reconstructed from emitted events.
