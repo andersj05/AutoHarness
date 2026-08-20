@@ -9,7 +9,7 @@
 | Phase | Status | Verified outcome |
 | --- | --- | --- |
 | 0. Repository foundation | Complete | Plan, architecture, memory protocol, research, initial ADRs, and validated local links are present |
-| 1. Terminal vertical slice | Not started | No Rust workspace or executable exists |
+| 1. Terminal vertical slice | In progress | Pinned Rust workspace, typed domain contracts, deterministic in-memory command execution, strict replay, tests, and CI exist; the terminal/provider/storage path remains |
 | 2. Provider/router platform | Not started | No provider contracts or adapters exist |
 | 3. Safe agent execution | Not started | No tool or permission runtime exists |
 | 4. Persistent context and memory | Designed | Architecture is documented; runtime is not implemented |
@@ -26,13 +26,18 @@
 - Runtime persistent-memory layers, invariants, data model, admission, retrieval, compaction, security, and tests are specified.
 - Root agent guidance includes the project's general engineering and quality standards.
 - Local and remote `main` and `dev` branches contain the repository foundation, and the repository documents the `main -> dev -> feat/<name>` workflow.
+- Rust 1.97.1 and Cargo resolver 3 are pinned for the Rust 2024 workspace, with a workspace dependency lockfile.
+- Provider-neutral create/select/admit commands produce schema-v1 events with stable identity, sequence, time, causation, correlation, and safe payloads.
+- The headless engine rejects command-ID reuse, applies event batches atomically, and reconstructs the same selected model and admitted prompt from serialized history without using timestamps for order.
+- Compatibility tests pin every initial command/event serialization shape and verify prompt preservation, debug redaction, identifier validation, replay integrity, and failure atomicity.
+- Continuous integration defines formatting, lint, documentation, doctest, and native Linux, Windows, and macOS test gates.
 
 ## Known gaps
 
 - No license or contribution guide.
-- No Rust toolchain, workspace, dependency policy, or continuous integration.
-- No code, tests, benchmarks, migrations, or schemas.
-- No Gemini or model-router connection.
+- No executable application, Ratatui client, or terminal restoration tests.
+- No provider or storage ports, Gemini or router adapters, SQLite migrations, streaming parser, cancellation, or retry implementation.
+- No benchmarks or checked-in benchmark environment.
 - No automated documentation-link or memory-consistency check.
 
 ## Next milestone exit target
