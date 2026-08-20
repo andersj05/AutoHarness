@@ -946,8 +946,14 @@ mod tests {
                 404,
                 br#"{"error":{"code":"model_not_found","message":"not echoed"}}"#.as_slice(),
             ),
+            // Text fixtures end with one line ending. SSE dispatch requires the
+            // following blank line, which stays explicit and cross-platform here.
             ResponseSpec::sse(
-                include_bytes!("../tests/fixtures/generate-content-stream.sse").as_slice(),
+                [
+                    include_bytes!("../tests/fixtures/generate-content-stream.sse").as_slice(),
+                    b"\n",
+                ]
+                .concat(),
             ),
         ])
         .await;
