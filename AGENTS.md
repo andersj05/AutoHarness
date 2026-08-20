@@ -74,7 +74,8 @@ Review `docs/adr/README.md` before changing an architectural decision.
 
 ## Development workflow
 
-- No build, lint, or test commands exist until the Rust workspace is scaffolded.
+- Run Rust workspace commands from the repository root.
+- The verified baseline gates are `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings`, and `cargo test --workspace --all-targets --all-features --locked --no-fail-fast`.
 - Do not invent or document commands that have not been verified.
 - Add focused tests with implementation changes.
 - Provider tests must cover pagination, arbitrarily fragmented streams, cancellation, retries, and secret redaction.

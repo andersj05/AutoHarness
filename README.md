@@ -1,8 +1,11 @@
 # AutoHarness
 
-AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models. Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
+AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
+Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-The architecture and repository-memory foundation is complete, and the project is ready for its first implementation phase. The first executable milestone is a fast terminal application that discovers selectable Google AI Studio models, streams responses, and records replayable sessions. A configurable model-router adapter follows immediately afterward.
+The architecture and repository-memory foundation is complete, and Phase 1 implementation is in progress.
+The first executable milestone is a fast terminal application that discovers selectable Google AI Studio models, streams responses, and records replayable sessions.
+A configurable model-router adapter follows immediately afterward.
 
 ## Project documentation
 
@@ -15,7 +18,19 @@ The architecture and repository-memory foundation is complete, and the project i
 
 ## Current status
 
-No executable has been scaffolded yet. See [active memory](docs/memory/active.md) for the current objective and [progress](docs/memory/progress.md) for milestone status.
+The pinned Rust 2024 workspace now contains provider-neutral command and event contracts plus a synchronous headless engine with deterministic replay tests.
+No terminal executable, provider adapter, or durable database exists yet.
+See [active memory](docs/memory/active.md) for the current objective and [progress](docs/memory/progress.md) for milestone status.
+
+## Development
+
+Run the verified baseline gates from the repository root:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
+cargo test --workspace --all-targets --all-features --locked --no-fail-fast
+```
 
 ## Guiding principles
 

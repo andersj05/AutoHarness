@@ -4,19 +4,22 @@
 
 **Phase:** 1 - Fast terminal vertical slice
 
-**Status:** Ready to scaffold
+**Status:** In progress - headless replay slice verified
 
 ## Current objective
 
-Scaffold the Rust workspace and prove the smallest headless command/event/replay path before adding networking or terminal complexity.
+Build the smallest Ratatui client and application composition on top of the verified headless command/event/replay path.
 
 ## Current repository state
 
-- The repository contains planning, architecture, ADR, research, and repository-memory documents.
-- No Rust workspace or executable implementation exists yet.
-- The default branch is `main`.
+- The repository contains a Rust 2024 workspace pinned to Rust 1.97.1.
+- `autoharness-domain` defines validated identifiers, create/select/admit commands, schema-v1 session events, causation, correlation, delivery mode, and safe error classification.
+- `autoharness-engine` provides a synchronous session reducer, atomic in-memory command execution, strict replay validation, and reconstructed session projections.
+- Workspace tests verify deterministic command/event/replay behavior, exact serialized contracts, prompt preservation and debug redaction, sequence and causation integrity, command-ID reuse rejection, and failed-batch atomicity.
+- Continuous integration checks formatting, Clippy, documentation, doctests, and native tests on Linux, Windows, and macOS.
+- No executable, Ratatui client, provider adapter, or durable store exists yet.
 - The repository memory system uses root `AGENTS.md`, three core memory files, progressive documentation routing, ADRs, and exceptional detailed handoffs.
-- `main` contains the repository foundation, and `dev` is synchronized with that release state for the next development branch.
+- `main` contains the repository foundation, and `dev` is synchronized with that release state as the base for Phase 1 feature branches.
 - All current local Markdown links resolve.
 
 ## Recently completed
@@ -29,14 +32,16 @@ Scaffold the Rust workspace and prove the smallest headless command/event/replay
 - Adopted repository-wide writing, commit, generated-file, technical-decision, end-to-end testing, UI-quality, and validation guidelines in `AGENTS.md`.
 - Established and published the `main -> dev -> feat/<name>` hierarchy and recorded its workflow in `AGENTS.md` and ADR-0003.
 - Promoted the repository foundation from `dev` into `main` through [PR #1](https://github.com/andersj05/AutoHarness/pull/1).
+- Scaffolded the Rust workspace, pinned toolchain, lockfile, and cross-platform continuous-integration baseline.
+- Implemented the provider-neutral domain contracts and deterministic in-memory replay slice with focused validation.
 
 ## Immediate next actions
 
-1. Scaffold the Rust workspace and pin the supported toolchain.
-2. Define the initial domain command/event/error contracts.
-3. Add deterministic in-memory replay tests before networking or terminal integration.
-4. Implement the smallest Ratatui shell consuming engine events.
-5. Decide the license before the first public release and the Gemini default transport before implementing that adapter.
+1. Implement the smallest Ratatui shell consuming only commands, read state, and engine events.
+2. Add `autoharness-app` composition only when it can drive that shell through the real headless path.
+3. Define the storage port and SQLite migrations for sessions, durable input, attempts, and events.
+4. Decide the Gemini default transport, then implement paginated model discovery and adversarial streaming tests.
+5. Decide the license before the first public release.
 
 ## Open questions
 
@@ -47,10 +52,11 @@ Scaffold the Rust workspace and prove the smallest headless command/event/replay
 
 ## Blockers
 
-None for Phase 1 scaffolding.
+None for the current Phase 1 work.
 Router details are required before implementing that adapter but do not block the Gemini vertical slice.
 
 ## Handoff note
 
-The next implementation task should start with [ADR-0001](../adr/0001-use-rust-modular-monolith.md), [the architecture overview](../architecture/OVERVIEW.md), and Phase 1 of [the project plan](../PROJECT_PLAN.md).
+The next implementation task should start from the event-only boundary in [`autoharness-domain`](../../crates/autoharness-domain/src/lib.rs) and the replayed session projection in [`autoharness-engine`](../../crates/autoharness-engine/src/lib.rs).
+Follow Phase 1 of [the project plan](../PROJECT_PLAN.md) and keep Ratatui, network, and storage logic outside the headless engine.
 Do not create all target crates empty; introduce boundaries with their first consumer.
