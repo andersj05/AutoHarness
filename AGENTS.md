@@ -58,6 +58,20 @@ Review `docs/adr/README.md` before changing an architectural decision.
 - Apply the same standard to engineering quality.
 - Fix lint failures, test failures, and flaky tests discovered in the affected validation path, even when the current change did not cause them.
 
+## Branching workflow
+
+- Use `main -> dev -> feature branch` as the permanent branch hierarchy.
+- Keep `main` release-ready and accept regular changes into it only through a promotion from `dev`.
+- Keep `dev` as the long-lived integration branch and the base for normal development.
+- Create every regular feature, fix, documentation, or refactor branch from the latest `dev`.
+- Open regular pull requests from the short-lived branch into `dev`.
+- Promote validated releases from `dev` into `main` with a dedicated pull request.
+- Do not open a regular feature pull request directly against `main`.
+- Use a short namespace and kebab-case topic for branch names, such as `feature/gemini-provider` or `codex/gemini-provider`.
+- Delete short-lived branches after merge.
+- For an emergency production hotfix, branch from `main`, merge the fix into `main`, and immediately reconcile the same fix back into `dev`.
+- See [ADR-0003](docs/adr/0003-use-main-dev-feature-branches.md) for the durable decision.
+
 ## Development workflow
 
 - No build, lint, or test commands exist until the Rust workspace is scaffolded.

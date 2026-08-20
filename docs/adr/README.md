@@ -27,6 +27,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | --- | --- | --- |
 | [0001](0001-use-rust-modular-monolith.md) | Accepted | Use Rust and a modular-monolith architecture |
 | [0002](0002-use-repository-native-memory.md) | Accepted | Use repository-native layered memory and ADRs |
+| [0003](0003-use-main-dev-feature-branches.md) | Accepted | Use main, dev, and short-lived feature branches |
 
 ## When an ADR is not needed
 
