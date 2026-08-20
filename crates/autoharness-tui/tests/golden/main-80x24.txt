@@ -21,4 +21,4 @@
 │Retry with a smaller scope.                                                   │
 │Keep the checklist concise.                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
- Ctrl+S send   Enter newline   Ctrl+P models   Ctrl+R retry
+ Ctrl+S send   Enter newline   Ctrl+P models   Ctrl+K API key   Ctrl+R retry

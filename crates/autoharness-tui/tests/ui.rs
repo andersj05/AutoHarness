@@ -10,6 +10,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 use ratatui_textarea::{Input, Key};
+use zeroize::Zeroizing;
 
 fn model_ref(id: &str) -> ModelRef {
     ModelRef::new(
@@ -420,7 +421,9 @@ fn stale_picker_reserves_a_row_instead_of_covering_a_model() {
             models: models.clone(),
             stale: true,
         }),
-        CatalogProjection::Loading | CatalogProjection::Failed(_) => unreachable!(),
+        CatalogProjection::CredentialRequired
+        | CatalogProjection::Loading
+        | CatalogProjection::Failed(_) => unreachable!(),
     };
     let mut model = Model::new(session(1, Vec::new()), catalog);
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('p'))));
@@ -429,6 +432,94 @@ fn stale_picker_reserves_a_row_instead_of_covering_a_model() {
 
     assert!(rendered.contains("Gemini 2.5 Pro"));
     assert!(rendered.contains("stale catalog"));
+}
+
+#[test]
+fn missing_credential_opens_a_masked_zeroizing_editor() {
+    let sentinel = "gemini-ui-secret-sentinel";
+    let mut model = Model::new(
+        session(1, Vec::new()),
+        Arc::new(CatalogProjection::CredentialRequired),
+    );
+    assert!(model.credential_open());
+
+    let paste = Message::Paste(format!("{sentinel}\r\n"));
+    assert!(!format!("{paste:?}").contains(sentinel));
+    let _ = update(&mut model, paste);
+
+    assert!(model.credential_has_value());
+    assert!(!format!("{model:?}").contains(sentinel));
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    assert!(rendered.contains("••••••••••••"));
+    assert!(!rendered.contains(sentinel));
+    let tiny = buffer_text(&render_model(&model, 24, 7));
+    assert!(tiny.contains("API key required"));
+    assert!(tiny.contains("••••••••••••"));
+    assert!(!tiny.contains(sentinel));
+
+    let effects = update(&mut model, Message::Input(key_input(Key::Enter)));
+    assert!(!format!("{effects:?}").contains(sentinel));
+    assert!(!model.credential_open());
+    assert!(!model.credential_has_value());
+    let (request_id, credential) = match effects.into_iter().next() {
+        Some(UiEffect::Dispatch(UiIntent::ConfigureCredential {
+            request_id,
+            credential,
+        })) => (request_id, credential),
+        _ => panic!("expected credential intent"),
+    };
+    assert!(!format!("{credential:?}").contains(sentinel));
+    let exposed = Zeroizing::new(credential.into_string());
+    assert_eq!(exposed.as_str(), sentinel);
+
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('k'))));
+    assert!(!model.credential_open());
+    assert!(matches!(model.notice, Some(Notice::Info(_))));
+
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentRejected {
+            request_id,
+            failure: UiFailure::new(
+                ErrorClass::Authentication,
+                "provider authentication failed",
+                RetryPolicy::Never,
+            ),
+        }),
+    );
+    assert!(model.credential_open());
+    assert!(!model.credential_has_value());
+}
+
+#[test]
+fn ctrl_k_reopens_the_credential_editor_without_touching_the_prompt() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Paste("draft remains".to_owned()));
+
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('k'))));
+
+    assert!(model.credential_open());
+    assert_eq!(model.composer.text(), "draft remains");
+}
+
+#[test]
+fn a_replacement_credential_catalog_requires_a_valid_model_reselection() {
+    let mut model = empty_model();
+    let replacement = model_ref("models/gemini-replacement");
+    let catalog = Arc::new(CatalogProjection::Ready {
+        models: vec![ModelSummary {
+            model: replacement.clone(),
+            display_name: "Gemini replacement".to_owned(),
+            detail: "text".to_owned(),
+            selectable: true,
+        }],
+        stale: false,
+    });
+
+    let _ = update(&mut model, Message::CatalogChanged(catalog));
+
+    assert!(model.picker_open());
+    assert_eq!(model.picker_selection(), Some(&replacement));
 }
 
 #[test]

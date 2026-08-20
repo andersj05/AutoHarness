@@ -12,8 +12,10 @@ use autoharness_provider::{
     CancellationToken, CapabilitySupport, ChatContent, ChatMessage, ChatRequest, ChatRole,
     ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
 };
+use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_tui::{
-    AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, UiFailure, UiIntent, UiNotice,
+    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, UiFailure,
+    UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -23,6 +25,14 @@ use crate::error::AppError;
 use crate::{ids, projection, telemetry};
 
 const PROVIDER_MESSAGE_CAPACITY: usize = 128;
+
+type ProviderFactory =
+    Arc<dyn Fn(ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> + Send + Sync + 'static>;
+
+fn gemini_provider(credential: ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> {
+    let api_key = GeminiApiKey::new(credential.into_string())?;
+    Ok(Arc::new(GeminiProvider::new(api_key)?))
+}
 
 enum AsyncMessage {
     Catalog {
@@ -52,6 +62,7 @@ pub struct Coordinator {
     session: SessionAggregate,
     engine: EngineHandle,
     provider: Option<Arc<dyn Provider>>,
+    provider_factory: ProviderFactory,
     ports: AppPorts,
     messages: mpsc::Sender<AsyncMessage>,
     message_rx: mpsc::Receiver<AsyncMessage>,
@@ -73,12 +84,33 @@ impl Coordinator {
         ports: AppPorts,
         shutdown: CancellationToken,
     ) -> Self {
+        Self::with_provider_factory(
+            session_id,
+            session,
+            engine,
+            provider,
+            Arc::new(gemini_provider),
+            ports,
+            shutdown,
+        )
+    }
+
+    fn with_provider_factory(
+        session_id: SessionId,
+        session: SessionAggregate,
+        engine: EngineHandle,
+        provider: Option<Arc<dyn Provider>>,
+        provider_factory: ProviderFactory,
+        ports: AppPorts,
+        shutdown: CancellationToken,
+    ) -> Self {
         let (messages, message_rx) = mpsc::channel(PROVIDER_MESSAGE_CAPACITY);
         Self {
             session_id,
             session,
             engine,
             provider,
+            provider_factory,
             ports,
             messages,
             message_rx,
@@ -125,6 +157,12 @@ impl Coordinator {
 
     async fn handle_intent(&mut self, intent: UiIntent) -> Result<(), AppError> {
         match intent {
+            UiIntent::ConfigureCredential {
+                request_id,
+                credential,
+            } => {
+                self.configure_credential(request_id, credential).await?;
+            }
             UiIntent::RefreshCatalog { request_id } => {
                 if self.provider.is_some() {
                     self.ports
@@ -136,7 +174,7 @@ impl Coordinator {
                         request_id,
                         UiFailure::new(
                             ErrorClass::Authentication,
-                            "GEMINI_API_KEY is not configured",
+                            "A Gemini API key is not configured",
                             RetryPolicy::Never,
                         ),
                     )
@@ -144,11 +182,7 @@ impl Coordinator {
                 }
             }
             UiIntent::SelectModel { request_id, model } => {
-                if !self.catalog_models.iter().any(|descriptor| {
-                    descriptor.provider_id == *model.provider_id()
-                        && descriptor.model_id == *model.model_id()
-                        && descriptor.capabilities.chat == CapabilitySupport::Supported
-                }) {
+                if !self.model_is_available(&model) {
                     self.reject(
                         request_id,
                         UiFailure::new(
@@ -190,6 +224,43 @@ impl Coordinator {
         Ok(())
     }
 
+    async fn configure_credential(
+        &mut self,
+        request_id: RequestId,
+        credential: ApiCredential,
+    ) -> Result<(), AppError> {
+        if self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Wait for or cancel the active response before changing the API key",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        telemetry::credential_submitted();
+        match (self.provider_factory)(credential) {
+            Ok(provider) => {
+                telemetry::provider_ready();
+                self.provider = Some(provider);
+                self.catalog_models.clear();
+                self.ports
+                    .catalogs
+                    .send_replace(Arc::new(CatalogProjection::Loading));
+                self.refresh_catalog(Some(request_id));
+            }
+            Err(error) => {
+                telemetry::provider_unavailable(&error);
+                self.reject(request_id, provider_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn submit_prompt(
         &mut self,
         request_id: RequestId,
@@ -212,7 +283,7 @@ impl Coordinator {
                 request_id,
                 UiFailure::new(
                     ErrorClass::Authentication,
-                    "GEMINI_API_KEY is not configured",
+                    "A Gemini API key is not configured",
                     RetryPolicy::Never,
                 ),
             )
@@ -231,12 +302,16 @@ impl Coordinator {
                 return Ok(());
             }
         };
-        if self.session.selected_model().is_none() {
+        if !self
+            .session
+            .selected_model()
+            .is_some_and(|model| self.model_is_available(model))
+        {
             self.reject(
                 request_id,
                 UiFailure::new(
                     ErrorClass::Validation,
-                    "Choose a model before sending",
+                    "Choose a model from the current catalog before sending",
                     RetryPolicy::Never,
                 ),
             )
@@ -290,7 +365,23 @@ impl Coordinator {
                 request_id,
                 UiFailure::new(
                     ErrorClass::Authentication,
-                    "GEMINI_API_KEY is not configured",
+                    "A Gemini API key is not configured",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        if !self
+            .session
+            .selected_model()
+            .is_some_and(|model| self.model_is_available(model))
+        {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "Choose a model from the current catalog before retrying",
                     RetryPolicy::Never,
                 ),
             )
@@ -474,6 +565,14 @@ impl Coordinator {
             }
             Err(error) => {
                 telemetry::catalog_failed(&error);
+                if matches!(
+                    error.kind(),
+                    ProviderErrorKind::MissingCredential
+                        | ProviderErrorKind::Authentication
+                        | ProviderErrorKind::PermissionDenied
+                ) {
+                    self.provider = None;
+                }
                 let failure = provider_failure(&error);
                 self.ports
                     .catalogs
@@ -623,6 +722,14 @@ impl Coordinator {
                 })
                 .await;
         });
+    }
+
+    fn model_is_available(&self, model: &autoharness_domain::ModelRef) -> bool {
+        self.catalog_models.iter().any(|descriptor| {
+            descriptor.provider_id == *model.provider_id()
+                && descriptor.model_id == *model.model_id()
+                && descriptor.capabilities.chat == CapabilitySupport::Supported
+        })
     }
 
     fn spawn_stream(
@@ -1012,6 +1119,41 @@ mod tests {
         }
     }
 
+    struct AuthenticationProvider;
+
+    #[async_trait::async_trait]
+    impl Catalog for AuthenticationProvider {
+        async fn list_models(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> Result<Vec<ModelDescriptor>, ProviderError> {
+            Err(ProviderError::new(
+                ProviderErrorKind::Authentication,
+                RetryAdvice::Never,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for AuthenticationProvider {
+        async fn stream_chat(
+            &self,
+            _request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            Err(ProviderError::new(
+                ProviderErrorKind::Authentication,
+                RetryAdvice::Never,
+            ))
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for AuthenticationProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.to_owned()
+        }
+    }
+
     fn fixture_model() -> ModelRef {
         ModelRef::new(
             ProviderId::new("google-ai-studio").expect("provider ID"),
@@ -1162,6 +1304,147 @@ mod tests {
                 if failure.code().as_str() == "safety_stop"
                     && failure.retry_advice() == RetryAdvice::Never
         ));
+    }
+
+    #[tokio::test]
+    async fn in_app_credential_configures_provider_without_persisting_the_key() {
+        let sentinel = "gemini-in-app-secret-sentinel";
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("credential.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let provider = Arc::new(FakeProvider::default());
+        let provider_for_factory = provider.clone();
+        let factory: ProviderFactory = Arc::new(move |credential| {
+            let key = GeminiApiKey::new(credential.into_string())?;
+            assert_eq!(format!("{key:?}"), "GeminiApiKey([REDACTED])");
+            Ok(provider_for_factory.clone())
+        });
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id,
+            session,
+            actor.handle(),
+            None,
+            factory,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        let request_id = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id,
+                credential: ApiCredential::new(sentinel.to_owned()).expect("fixture credential"),
+            })
+            .await
+            .expect("credential intent");
+        wait_for_catalog(&mut ui).await;
+        expect_commit(&mut ui, request_id).await;
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        for entry in std::fs::read_dir(directory.path()).expect("read data directory") {
+            let path = entry.expect("data file entry").path();
+            if path.is_file() {
+                let bytes = std::fs::read(path).expect("read data file");
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel.as_bytes()),
+                    "in-app credential must not reach durable files"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_in_app_credential_can_be_replaced_without_restarting() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("credential-retry.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let valid_provider = Arc::new(FakeProvider::default());
+        let valid_provider_for_factory = valid_provider.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let factory_calls = calls.clone();
+        let factory: ProviderFactory = Arc::new(move |credential| {
+            let _key = GeminiApiKey::new(credential.into_string())?;
+            if factory_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(Arc::new(AuthenticationProvider))
+            } else {
+                Ok(valid_provider_for_factory.clone())
+            }
+        });
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id,
+            session,
+            actor.handle(),
+            None,
+            factory,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        let rejected_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id: rejected_request,
+                credential: ApiCredential::new("syntactically-valid-key".to_owned())
+                    .expect("fixture credential"),
+            })
+            .await
+            .expect("credential intent");
+        let rejected = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            rejected,
+            UiNotice::IntentRejected {
+                request_id,
+                failure: UiFailure {
+                    class: ErrorClass::Authentication,
+                    ..
+                },
+            } if request_id == rejected_request
+        ));
+
+        let accepted_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id: accepted_request,
+                credential: ApiCredential::new("replacement-key".to_owned())
+                    .expect("fixture credential"),
+            })
+            .await
+            .expect("replacement credential intent");
+        wait_for_catalog(&mut ui).await;
+        expect_commit(&mut ui, accepted_request).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]

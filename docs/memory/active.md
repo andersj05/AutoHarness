@@ -4,7 +4,7 @@
 
 **Phase:** 2 - Provider and router platform
 
-**Status:** Phase 2 ready to start - Phase 1 locally verified
+**Status:** Phase 2 ready to start - in-app Gemini credential entry locally verified
 
 ## Current objective
 
@@ -15,18 +15,23 @@ Extract reusable provider-conformance coverage from the Gemini adapter, then def
 - The repository contains an eight-crate Rust 2024 workspace pinned to Rust 1.97.1 and a runnable `autoharness` terminal binary.
 - `autoharness-domain` and `autoharness-engine` define schema-v1 commands and events, deterministic replay, durable attempt lifecycles, cancellation state, usage, safe failures, and retry lineage.
 - `autoharness-provider` exposes provider-neutral catalog and streaming ports.
-- `autoharness-provider-gemini` implements paginated Google model discovery, stable Interactions v1 streaming, a narrow pre-stream Generate Content fallback, cancellation, retry classification, limits, and credential redaction.
+- `autoharness-provider-gemini` implements paginated Google model discovery, stable Interactions v1 streaming, a narrow pre-stream Generate Content fallback, cancellation, retry classification, limits, environment or in-app credential admission, and credential redaction.
 - `autoharness-store` and `autoharness-store-sqlite` provide an event-authoritative store, transactional projections, WAL-mode local durability, idempotent append, migration verification, and projection rebuilding.
-- `autoharness-tui` provides a Ratatui model/update/view client with a searchable model picker, Unicode multiline composer, streaming transcript, cancellation, retry, usage, errors, scrolling, and compact rendering.
-- `autoharness-app` composes the terminal, bounded coordinator, provider, dedicated SQLite writer, startup recovery, process-level cancellation, structured tracing, data-directory discovery, and an exclusive writer lease.
+- `autoharness-tui` provides a Ratatui model/update/view client with masked zeroizing API-key entry, a searchable model picker, Unicode multiline composer, streaming transcript, cancellation, retry, usage, errors, scrolling, and compact rendering.
+- `autoharness-app` composes the terminal, bounded coordinator, runtime Gemini credential handoff, provider, dedicated SQLite writer, startup recovery, process-level cancellation, structured tracing, data-directory discovery, and an exclusive writer lease.
 - Formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite pass locally across the complete Phase 1 slice.
 - A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined all application files to an isolated data directory, exited successfully, and restored the terminal.
+- A credential-overlay PTY smoke run masked a bracketed-paste sentinel, cleared it on dismissal, reopened an empty editor, found no sentinel bytes in application files, and restored the terminal.
 - The tests use local HTTP fixtures and fake providers; no live Gemini network request has been exercised.
 - A checked-in isolated benchmark environment measures durable append, projection reads, and warm SQLite recovery without provider requests, and includes an idle resident-memory sampler.
 - Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, plus separate formatting, Clippy, and test gates for the isolated benchmark workspace.
 
 ## Recently completed
 
+- Added a startup API-key overlay and `Ctrl+K` replacement flow so interactive users can paste a Gemini key without first configuring their shell.
+- Recorded the ephemeral credential lifetime, zeroization, masking, transfer, and non-persistence contract in [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
+- Verified that credential values are redacted from TUI and intent debug output, absent from rendered buffers, and absent from SQLite and related durable files.
+- Verified the composed credential handoff and catalog load with a fake provider, plus the actual terminal overlay and bracketed-paste path without a live network request.
 - Completed the Phase 1 headless, provider, SQLite, Ratatui, and application-composition path.
 - Recorded stable Gemini Interactions v1 with stateless local history and a constrained compatibility fallback in [ADR-0004](../adr/0004-use-gemini-interactions-v1.md).
 - Verified the composed select, submit, stream, cancel, retry, shutdown, reopen, and replay path against a fake provider and real SQLite store.

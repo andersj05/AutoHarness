@@ -1,10 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelRef, RetryAdvice};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::{TextArea, WrapMode};
+use zeroize::{Zeroize, Zeroizing};
+
+const MAX_CREDENTIAL_BYTES: usize = 4_096;
 
 /// Monotonic, process-local identity used to correlate a UI request.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -61,6 +65,8 @@ pub struct ModelSummary {
 /// Current model-catalog read state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogProjection {
+    /// No provider credential is available for model discovery.
+    CredentialRequired,
     /// The catalog has not completed its first load.
     Loading,
     /// The latest successfully projected catalog.
@@ -80,7 +86,7 @@ impl CatalogProjection {
     pub fn models(&self) -> &[ModelSummary] {
         match self {
             Self::Ready { models, .. } => models,
-            Self::Loading | Self::Failed(_) => &[],
+            Self::CredentialRequired | Self::Loading | Self::Failed(_) => &[],
         }
     }
 }
@@ -275,6 +281,107 @@ pub enum Focus {
     Composer,
     /// The model-picker overlay owns key input.
     Picker,
+    /// The ephemeral provider-credential overlay owns key input.
+    Credential,
+}
+
+/// A provider credential transferred from the TUI without persistence or serialization.
+pub struct ApiCredential {
+    raw: Zeroizing<String>,
+}
+
+impl ApiCredential {
+    /// Creates a bounded visible-ASCII credential and keeps it in zeroizing memory.
+    pub fn new(value: String) -> Result<Self, &'static str> {
+        let raw = Zeroizing::new(value);
+        if raw.is_empty() {
+            return Err("API key must not be empty");
+        }
+        if raw.len() > MAX_CREDENTIAL_BYTES {
+            return Err("API key is too long");
+        }
+        if !raw.chars().all(|character| character.is_ascii_graphic()) {
+            return Err("API keys must contain visible ASCII characters only");
+        }
+        Ok(Self { raw })
+    }
+
+    /// Moves the credential into application composition.
+    ///
+    /// The caller must immediately transfer ownership into a redacting, zeroizing provider type.
+    #[must_use]
+    pub fn into_string(mut self) -> String {
+        std::mem::take(&mut *self.raw)
+    }
+}
+
+impl Debug for ApiCredential {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiCredential([REDACTED])")
+    }
+}
+
+/// Ephemeral, masked API-key editor state.
+#[derive(Default)]
+pub(crate) struct CredentialState {
+    pub open: bool,
+    raw: Zeroizing<String>,
+}
+
+impl CredentialState {
+    pub fn has_value(&self) -> bool {
+        !self.raw.is_empty()
+    }
+
+    pub fn append_character(&mut self, character: char) -> Result<(), &'static str> {
+        if !character.is_ascii_graphic() {
+            return Err("API keys must contain visible ASCII characters only");
+        }
+        if self.raw.len().saturating_add(character.len_utf8()) > MAX_CREDENTIAL_BYTES {
+            return Err("API key is too long");
+        }
+        self.raw.push(character);
+        Ok(())
+    }
+
+    pub fn append_paste(&mut self, value: &str) -> Result<(), &'static str> {
+        let value = value.trim_matches(char::is_whitespace);
+        if value.is_empty() {
+            return Err("Paste a non-empty API key");
+        }
+        if !value.chars().all(|character| character.is_ascii_graphic()) {
+            return Err("API keys must contain visible ASCII characters only");
+        }
+        if self.raw.len().saturating_add(value.len()) > MAX_CREDENTIAL_BYTES {
+            return Err("API key is too long");
+        }
+        self.raw.push_str(value);
+        Ok(())
+    }
+
+    pub fn pop(&mut self) {
+        self.raw.pop();
+    }
+
+    pub fn clear(&mut self) {
+        self.raw.zeroize();
+    }
+
+    pub fn take(&mut self) -> ApiCredential {
+        ApiCredential {
+            raw: std::mem::take(&mut self.raw),
+        }
+    }
+}
+
+impl Debug for CredentialState {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialState")
+            .field("open", &self.open)
+            .field("has_value", &self.has_value())
+            .finish()
+    }
 }
 
 /// Model-picker local state.
@@ -367,6 +474,8 @@ pub enum Notice {
 /// Kind of request awaiting application acknowledgement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingKind {
+    /// Runtime provider credential configuration and catalog validation.
+    ConfigureCredential,
     /// Model catalog refresh.
     RefreshCatalog,
     /// Model selection.
@@ -380,8 +489,13 @@ pub enum PendingKind {
 }
 
 /// Intent emitted by pure update logic and handled by application composition.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum UiIntent {
+    /// Configure the provider from an ephemeral API key.
+    ConfigureCredential {
+        request_id: RequestId,
+        credential: ApiCredential,
+    },
     /// Refresh the model catalog.
     RefreshCatalog { request_id: RequestId },
     /// Select a model for later turns.
@@ -411,7 +525,8 @@ impl UiIntent {
     #[must_use]
     pub const fn request_id(&self) -> RequestId {
         match self {
-            Self::RefreshCatalog { request_id }
+            Self::ConfigureCredential { request_id, .. }
+            | Self::RefreshCatalog { request_id }
             | Self::SelectModel { request_id, .. }
             | Self::SubmitPrompt { request_id, .. }
             | Self::CancelAttempt { request_id, .. }
@@ -421,7 +536,7 @@ impl UiIntent {
 }
 
 /// Effect returned by update logic.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum UiEffect {
     /// Dispatch an intent through the bounded application mailbox.
     Dispatch(UiIntent),
@@ -442,7 +557,6 @@ pub enum UiNotice {
 }
 
 /// Input to the deterministic update function.
-#[derive(Clone, Debug)]
 pub enum Message {
     /// Backend-independent keyboard input.
     Input(ratatui_textarea::Input),
@@ -462,8 +576,29 @@ pub enum Message {
     ShutdownRequested,
 }
 
+impl Debug for Message {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(_) => formatter.write_str("Input([REDACTED])"),
+            Self::Paste(_) => formatter.write_str("Paste([REDACTED])"),
+            Self::SessionChanged(session) => formatter
+                .debug_tuple("SessionChanged")
+                .field(session)
+                .finish(),
+            Self::CatalogChanged(catalog) => formatter
+                .debug_tuple("CatalogChanged")
+                .field(catalog)
+                .finish(),
+            Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
+            Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
+            Self::Resize => formatter.write_str("Resize"),
+            Self::ShutdownRequested => formatter.write_str("ShutdownRequested"),
+        }
+    }
+}
+
 /// Complete local state rendered by the terminal client.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Model {
     /// Newest session read model.
     pub session: Arc<SessionProjection>,
@@ -482,6 +617,7 @@ pub struct Model {
     /// Whether the runner should exit.
     pub should_quit: bool,
     pub(crate) picker: PickerState,
+    pub(crate) credential: CredentialState,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -495,9 +631,13 @@ impl Model {
     /// Creates UI state from application-provided read models.
     #[must_use]
     pub fn new(session: Arc<SessionProjection>, catalog: Arc<CatalogProjection>) -> Self {
-        let open_picker = session.selected_model.is_none()
+        let open_credential = matches!(&*catalog, CatalogProjection::CredentialRequired);
+        let open_picker = !open_credential
+            && session.selected_model.is_none()
             && matches!(&*catalog, CatalogProjection::Ready { models, .. } if !models.is_empty());
-        let focus = if open_picker {
+        let focus = if open_credential {
+            Focus::Credential
+        } else if open_picker {
             Focus::Picker
         } else {
             Focus::Composer
@@ -524,6 +664,10 @@ impl Model {
                 query: String::new(),
                 selected,
             },
+            credential: CredentialState {
+                open: open_credential,
+                ..CredentialState::default()
+            },
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
@@ -541,6 +685,18 @@ impl Model {
     #[must_use]
     pub const fn picker_open(&self) -> bool {
         self.picker.open
+    }
+
+    /// Returns whether the API-key overlay is open.
+    #[must_use]
+    pub const fn credential_open(&self) -> bool {
+        self.credential.open
+    }
+
+    /// Returns whether the masked credential editor contains any input.
+    #[must_use]
+    pub fn credential_has_value(&self) -> bool {
+        self.credential.has_value()
     }
 
     /// Returns the picker search query.
@@ -668,7 +824,8 @@ impl Model {
                 retry: RetryPolicy::After { delay_ms },
                 ..
             }) => Some(self.now.saturating_add(*delay_ms)),
-            CatalogProjection::Loading
+            CatalogProjection::CredentialRequired
+            | CatalogProjection::Loading
             | CatalogProjection::Ready { .. }
             | CatalogProjection::Failed(_) => None,
         };

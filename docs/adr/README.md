@@ -29,6 +29,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0002](0002-use-repository-native-memory.md) | Accepted | Use repository-native layered memory and ADRs |
 | [0003](0003-use-main-dev-feature-branches.md) | Accepted | Use main, dev, and short-lived feature branches |
 | [0004](0004-use-gemini-interactions-v1.md) | Accepted | Use Gemini Interactions v1 for the default stream |
+| [0005](0005-use-ephemeral-in-app-credentials.md) | Accepted | Accept provider credentials through an ephemeral in-app overlay |
 
 ## When an ADR is not needed
 
