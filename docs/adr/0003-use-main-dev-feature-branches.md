@@ -28,15 +28,15 @@ The repository currently has a stable `main` branch and short-lived agent work, 
 
 ## Decision outcome
 
-Chosen option: **`main -> dev -> short-lived feature branches`**.
+Chosen option: **`main -> dev -> short-lived feat/<name> branches`**.
 
 `main` is always release-ready.
 `dev` is the long-lived integration branch and begins from `main`.
 Regular feature, fix, documentation, and refactor branches begin from the latest `dev` and merge back into `dev` through pull requests.
 Validated releases move from `dev` to `main` through a dedicated promotion pull request.
 
-Branch names use a short namespace and kebab-case topic.
-Examples include `feature/gemini-provider`, `fix/stream-cancellation`, and an agent-required namespace such as `codex/repository-foundation`.
+Every normal short-lived development branch uses the `feat/<kebab-case-name>` convention.
+Examples include `feat/gemini-provider`, `feat/stream-cancellation`, and `feat/repository-foundation`.
 
 Emergency production hotfixes may branch from `main`.
 After merging a hotfix into `main`, the same change must be reconciled immediately into `dev` so the branches do not diverge.
