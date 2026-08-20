@@ -1,0 +1,14 @@
+[package]
+name = "autoharness-store"
+description = "Provider-neutral durable session storage ports for AutoHarness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+autoharness-domain = { path = "../autoharness-domain" }
+
+[lints]
+workspace = true

@@ -74,8 +74,16 @@ pub enum ValueError {
     IdentifierTooLong,
     /// A prompt was empty or contained only whitespace.
     EmptyPrompt,
+    /// A provider response delta contained no bytes.
+    EmptyResponseText,
+    /// A public message was empty or contained only whitespace.
+    EmptyPublicMessage,
+    /// A public message exceeded its durable byte bound.
+    PublicMessageTooLong,
     /// A session event sequence was zero.
     ZeroSequence,
+    /// A session event sequence exceeded the signed durable-store range.
+    SequenceTooLarge,
 }
 
 impl Display for ValueError {
@@ -91,7 +99,11 @@ impl Display for ValueError {
             }
             Self::IdentifierTooLong => "identifier exceeds the supported length",
             Self::EmptyPrompt => "prompt must contain non-whitespace text",
+            Self::EmptyResponseText => "response text must not be empty",
+            Self::EmptyPublicMessage => "public message must contain non-whitespace text",
+            Self::PublicMessageTooLong => "public message exceeds the supported length",
             Self::ZeroSequence => "session sequence must be greater than zero",
+            Self::SequenceTooLarge => "session sequence exceeds the durable storage range",
         };
 
         formatter.write_str(message)

@@ -61,6 +61,8 @@ The first end-to-end slice connects to Google AI Studio, discovers available mod
 
 ### Phase 0: Repository foundation
 
+**Status:** Complete
+
 **Goal:** Make the intended product, architecture, decisions, and current work state durable before scaffolding implementation.
 
 Deliverables:
@@ -77,6 +79,8 @@ Exit criteria:
 - No contradictory source of truth exists for project status or architecture.
 
 ### Phase 1: Fast terminal vertical slice
+
+**Status:** Complete as of 2026-08-20
 
 **Goal:** Prove the complete path from key discovery to selectable model to streamed, replayable conversation.
 
@@ -99,7 +103,12 @@ Exit criteria:
 - Replaying stored events reconstructs the same visible session.
 - Tests cover model pagination, arbitrary SSE fragmentation, cancellation, retry classification, terminal restoration, and redaction.
 
+Completion is supported by fixture-backed provider tests and a composed integration test that selects a model, streams, cancels, retries, shuts down, reopens SQLite, and compares the recovered terminal projection.
+The repository has not exercised a live Gemini network request, so that remains a separate pre-release validation item rather than claimed completion evidence.
+
 ### Phase 2: Provider and router platform
+
+**Status:** Next
 
 **Goal:** Prove that provider differences remain outside the engine.
 
@@ -197,22 +206,18 @@ Exit criteria:
 - Losing a worker cannot lose already-admitted user input or fabricate successful work.
 - Plugins have no filesystem, network, process, secret, or memory access unless explicitly granted.
 
-## Initial implementation order
+## Next implementation order
 
-After this planning foundation, implement in this order:
+Phase 1 established the complete local terminal, Gemini, storage, replay, and tracing path.
+Proceed through Phase 2 in this order:
 
-1. Scaffold the Rust workspace and lock the supported toolchain.
-2. Define core identifiers, commands, normalized stream events, and error taxonomy.
-3. Build an in-memory engine and deterministic replay test.
-4. Build a minimal Ratatui shell fed only by engine events.
-5. Define the storage port and SQLite migrations for sessions, inputs, attempts, and events.
-6. Add the Gemini models-list client with pagination and capability mapping.
-7. Add the Gemini streaming client and adversarial stream-fragmentation tests.
-8. Connect the model picker, composer, transcript, cancellation, and retry flow.
-9. Add recovery, session selection, and transcript replay.
-10. Add tracing, secret redaction, metrics, and startup/stream benchmarks.
-11. Extract provider conformance tests from the Gemini implementation.
-12. Add the configurable model-router adapter.
+1. Extract provider conformance tests from the Gemini implementation.
+2. Stabilize provider availability, capability, catalog, and streaming contracts against that suite.
+3. Define the configurable router URL, authentication-header, model-discovery, and OpenAI-compatible streaming contract.
+4. Add the router adapter behind the existing provider ports.
+5. Add shared timeout, retry, concurrency, and per-project rate-limit middleware.
+6. Add a durable model-catalog cache with explicit refresh and stale-data policy.
+7. Add safe monotonic markers for deferred startup, dispatch, and rendered-delta latency, then record the checked-in benchmark suite on an approved reference machine.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
@@ -269,7 +274,6 @@ LLM network latency must be reported separately from harness overhead.
 
 - The router's exact protocol, model-discovery endpoint, and authentication scheme.
 - The public repository license and contribution policy.
-- Whether Gemini Interactions or Generate Content is the default transport for the first executable, with the other retained as a compatibility mode.
 - Benchmark hardware and release thresholds.
 - The first non-Rust plugin authoring path to support.
 

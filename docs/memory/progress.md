@@ -9,8 +9,8 @@
 | Phase | Status | Verified outcome |
 | --- | --- | --- |
 | 0. Repository foundation | Complete | Plan, architecture, memory protocol, research, initial ADRs, and validated local links are present |
-| 1. Terminal vertical slice | In progress | Pinned Rust workspace, typed domain contracts, deterministic in-memory command execution, strict replay, tests, and CI exist; the terminal/provider/storage path remains |
-| 2. Provider/router platform | Not started | No provider contracts or adapters exist |
+| 1. Terminal vertical slice | Complete | The fixture-verified terminal path discovers models, streams typed Gemini events, cancels and retries attempts, commits SQLite events and projections, and restores the same visible session after restart |
+| 2. Provider/router platform | Not started | Phase 1 established provider-neutral ports and a Gemini adapter; shared conformance coverage and the configurable router remain |
 | 3. Safe agent execution | Not started | No tool or permission runtime exists |
 | 4. Persistent context and memory | Designed | Architecture is documented; runtime is not implemented |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
@@ -25,21 +25,34 @@
 - Research sources are commit-pinned where possible.
 - Runtime persistent-memory layers, invariants, data model, admission, retrieval, compaction, security, and tests are specified.
 - Root agent guidance includes the project's general engineering and quality standards.
-- Local and remote `main` and `dev` branches contain the repository foundation, and the repository documents the `main -> dev -> feat/<name>` workflow.
+- Root instructions and ADR-0003 define the permanent `main -> dev -> feat/<name>` workflow.
 - Rust 1.97.1 and Cargo resolver 3 are pinned for the Rust 2024 workspace, with a workspace dependency lockfile.
-- Provider-neutral create/select/admit commands produce schema-v1 events with stable identity, sequence, time, causation, correlation, and safe payloads.
-- The headless engine rejects command-ID reuse, applies event batches atomically, and reconstructs the same selected model and admitted prompt from serialized history without using timestamps for order.
-- Compatibility tests pin every initial command/event serialization shape and verify prompt preservation, debug redaction, identifier validation, replay integrity, and failure atomicity.
-- Continuous integration defines formatting, lint, documentation, doctest, and native Linux, Windows, and macOS test gates.
+- Provider-neutral session, input, attempt, cancellation, response, usage, settlement, and retry commands produce schema-v1 events with stable identity, sequence, time, causation, correlation, and safe payloads.
+- The headless engine rejects command-ID reuse and invalid attempt transitions, applies event batches atomically, and reconstructs the same selected model, transcript, usage, and retry lineage from serialized history without using timestamps for order.
+- The durable engine appends events before publishing projected state and recovers every stored session through the same strict replay path.
+- SQLite runs in WAL mode with verified durability settings, transactional event and projection updates, optimistic sequence checks, byte-identical idempotent append, migration-history validation, corruption detection, and projection rebuilding.
+- Provider-neutral catalog and chat ports isolate provider-native protocols from the engine and terminal.
+- The Gemini adapter reads `GEMINI_API_KEY` only from the environment, authenticates by a sensitive header, discovers compatible models through opaque-token pagination, streams stable Interactions v1 events, and permits only a narrow pre-stream Generate Content fallback.
+- The Gemini decoder normalizes lifecycle, text, completion, and cumulative usage events across arbitrary byte and SSE fragmentation while filtering provider thought steps.
+- The Ratatui client includes a searchable model picker, Unicode multiline composer, streamed transcript, cancellation and retry states, safe errors, usage, tail following, manual scrolling, compact layouts, and bounded application mailboxes.
+- The executable composes the terminal client, bounded async coordinator, Gemini provider, dedicated blocking SQLite writer, startup recovery, explicit cancellation, application data paths, one-writer locking, and content-free structured tracing.
+- Recovery settles never-dispatched attempts as retryable failures and marks ambiguously dispatched attempts unknown without inventing a provider outcome.
+- A composed integration test selects a model, persists a prompt, streams partial output, cancels, retries to completion, shuts down, reopens SQLite, and verifies a replay-equivalent visible session.
+- Compatibility tests pin every command and event serialization shape and verify prompt preservation, debug redaction, identifier validation, replay integrity, failure atomicity, and terminal restoration.
+- Local validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
+- A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined application files to an isolated data directory, exited successfully through `Ctrl+C`, and restored the terminal.
+- The isolated benchmark environment measures durable append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes while explicitly excluding network latency.
+- A PowerShell idle resident-memory sampler is available, and the benchmark documentation defines provenance requirements and exact monotonic markers for deferred latency metrics.
+- Continuous integration defines formatting, lint, documentation, doctest, native Linux, Windows, and macOS test gates, plus separate formatting, lint, and test gates for the isolated benchmark workspace.
 
 ## Known gaps
 
 - No license or contribution guide.
-- No executable application, Ratatui client, or terminal restoration tests.
-- No provider or storage ports, Gemini or router adapters, SQLite migrations, streaming parser, cancellation, or retry implementation.
-- No benchmarks or checked-in benchmark environment.
+- No configurable model-router adapter, shared provider-conformance suite, cross-provider middleware, or durable catalog cache.
+- No live Gemini network verification has been performed; provider protocol evidence is fixture-backed.
+- No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
 - No automated documentation-link or memory-consistency check.
 
 ## Next milestone exit target
 
-Phase 1 must deliver a selectable, cancellable, streamed Gemini conversation with durable session replay and the verification suite defined in [the project plan](../PROJECT_PLAN.md).
+Phase 2 must run the same engine and terminal session path through Gemini and a configurable router, prove adapter interchangeability with a shared conformance suite, reject known unsupported capabilities before dispatch, and keep provider-native payloads outside core types.

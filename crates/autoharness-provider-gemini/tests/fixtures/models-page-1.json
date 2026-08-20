@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-a",
+      "displayName": "Gemini A",
+      "description": "first compatible model",
+      "inputTokenLimit": 100,
+      "outputTokenLimit": 20,
+      "supportedGenerationMethods": ["generateContent"],
+      "thinking": false
+    },
+    {
+      "name": "models/embedding-only",
+      "displayName": "Embedding only",
+      "supportedGenerationMethods": ["embedContent"]
+    }
+  ],
+  "nextPageToken": "opaque +/= token?"
+}
