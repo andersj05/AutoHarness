@@ -16,7 +16,7 @@ Create better infrastructure around current language models than provider-defaul
 
 ## First user outcome
 
-A user supplies a Google AI Studio credential through `GEMINI_API_KEY`, sees a dynamically discovered list of compatible models, selects one, sends a prompt, receives cancellable streamed output, and can resume the replayable session after restarting AutoHarness.
+A user pastes a Google AI Studio credential into the running terminal or supplies it through `GEMINI_API_KEY`, sees a dynamically discovered list of compatible models, selects one, sends a prompt, receives cancellable streamed output, and can resume the replayable session after restarting AutoHarness.
 
 The next provider outcome is the same experience through the user's configurable model router.
 

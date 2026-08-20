@@ -250,7 +250,7 @@ mod tests {
     use ratatui_textarea::{Input, Key};
 
     use super::*;
-    use crate::model::{Notice, PendingKind};
+    use crate::model::{ModelSummary, Notice, PendingKind};
 
     fn selected_model() -> ModelRef {
         ModelRef::new(
@@ -260,12 +260,22 @@ mod tests {
     }
 
     fn model_with_draft() -> Model {
+        let selected = selected_model();
         let session = Arc::new(SessionProjection {
             revision: 1,
-            selected_model: Some(selected_model()),
+            selected_model: Some(selected.clone()),
             transcript: Vec::new(),
         });
-        let mut model = Model::new(session, Arc::new(CatalogProjection::Loading));
+        let catalog = Arc::new(CatalogProjection::Ready {
+            models: vec![ModelSummary {
+                model: selected,
+                display_name: "Test model".to_owned(),
+                detail: String::new(),
+                selectable: true,
+            }],
+            stale: false,
+        });
+        let mut model = Model::new(session, catalog);
         let _ = update(&mut model, Message::Paste("draft survives".to_owned()));
         model
     }
@@ -286,12 +296,12 @@ mod tests {
     fn full_intent_mailbox_becomes_an_explicit_rejection() {
         let mut model = model_with_draft();
         let effects = submit_effect(&mut model);
-        let intent = match effects.first().expect("submission effect") {
-            UiEffect::Dispatch(intent) => intent.clone(),
-            UiEffect::Quit => panic!("unexpected quit"),
-        };
         let (sender, _receiver) = mpsc::channel(1);
-        sender.try_send(intent).expect("fill mailbox");
+        sender
+            .try_send(UiIntent::RefreshCatalog {
+                request_id: crate::model::RequestId::new(999),
+            })
+            .expect("fill mailbox");
 
         assert!(!dispatch_effects(&mut model, effects, &sender));
 

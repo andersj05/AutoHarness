@@ -165,7 +165,9 @@ Generation, evaluation, and promotion must not share mutable authority.
 ## Configuration and secrets
 
 - Human-editable non-secret configuration uses a versioned file format and environment overrides.
-- Secret configuration is represented as references such as `env:GEMINI_API_KEY` or an OS-keyring entry.
+- Interactive provider credentials may enter through a dedicated masked, zeroizing terminal overlay and remain process-memory-only; see [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
+- Non-interactive secret configuration is represented as references such as `env:GEMINI_API_KEY` or a future OS-keyring entry.
+- Secret-bearing UI intents are ephemeral, non-serializable, and excluded from the engine and durable event model.
 - Debug views render a redacted configuration projection.
 - Base URLs are validated; redirect behavior must not forward credentials to an untrusted origin.
 - Provider and plugin network access is governed by an allow policy in security-sensitive modes.

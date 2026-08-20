@@ -15,6 +15,11 @@ pub fn provider_ready() {
     tracing::info!(event = "provider_ready", provider = "gemini");
 }
 
+/// Emits the handoff of an in-app credential without its value or metadata.
+pub fn credential_submitted() {
+    tracing::info!(event = "provider_credential_submitted", provider = "gemini");
+}
+
 /// Emits a sanitized provider initialization failure.
 pub fn provider_unavailable(error: &ProviderError) {
     tracing::warn!(
@@ -115,6 +120,7 @@ mod tests {
     use autoharness_domain::{PromptText, ResponseText, RetryAdvice};
     use autoharness_provider::{ProviderError, ProviderErrorKind};
     use autoharness_provider_gemini::GeminiApiKey;
+    use autoharness_tui::ApiCredential;
     use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Clone, Default)]
@@ -154,6 +160,7 @@ mod tests {
             .with_writer(capture.clone())
             .finish();
         let key = GeminiApiKey::new(sentinel).expect("fixture key");
+        let in_app_key = ApiCredential::new(sentinel.to_owned()).expect("fixture in-app key");
         let prompt = PromptText::new(sentinel).expect("fixture prompt");
         let response = ResponseText::new(sentinel).expect("fixture response");
         let error = ProviderError::new(ProviderErrorKind::Authentication, RetryAdvice::Never);
@@ -161,6 +168,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(
                 ?key,
+                ?in_app_key,
                 ?prompt,
                 ?response,
                 ?error,

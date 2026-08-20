@@ -92,11 +92,12 @@ Deliverables:
 - Gemini provider with API-key authentication, paginated model discovery, and streaming.
 - SQLite migrations and repositories for sessions, durable input, and events.
 - Model picker, transcript, multiline composer, cancellation, retry, and error presentation.
+- Masked, ephemeral in-app API-key entry with an optional environment override.
 - Structured tracing with mandatory secret redaction.
 
 Exit criteria:
 
-- `GEMINI_API_KEY` is sufficient to start a session without writing the key to disk.
+- A pasted in-app key or `GEMINI_API_KEY` is sufficient to start a session without writing the key to disk.
 - Compatible models are discovered from the API rather than hardcoded.
 - The user can choose a model, stream a response, cancel it, and retry safely.
 - Restarting the app restores the selected model and transcript.

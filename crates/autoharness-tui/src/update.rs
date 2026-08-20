@@ -15,6 +15,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
     match message {
         Message::Input(input) => handle_input(model, input),
         Message::Paste(text) => {
+            let text = zeroize::Zeroizing::new(text);
             handle_paste(model, &text);
             Vec::new()
         }
@@ -60,6 +61,24 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
 }
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('k' | 'K'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        if !model.credential.open {
+            open_credential(model);
+        }
+        return Vec::new();
+    }
+
+    if model.credential.open {
+        return handle_credential_input(model, input);
+    }
+
     if model.picker.open {
         return handle_picker_input(model, input);
     }
@@ -145,6 +164,65 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 
+fn handle_credential_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_credential(model);
+            if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+                model.notice = Some(Notice::Info(
+                    "An API key is still required; press Ctrl+K when ready".to_owned(),
+                ));
+            }
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        } => {
+            model.should_quit = true;
+            vec![UiEffect::Quit]
+        }
+        Input {
+            key: Key::Enter, ..
+        }
+        | Input {
+            key: Key::Char('s' | 'S'),
+            ctrl: true,
+            ..
+        } => submit_credential(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.credential.pop();
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } => {
+            match model.credential.append_character(character) {
+                Ok(()) => model.notice = None,
+                Err(message) => {
+                    model.notice = Some(Notice::Failure(UiFailure::new(
+                        ErrorClass::Validation,
+                        message,
+                        RetryPolicy::Never,
+                    )));
+                }
+            }
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     match input {
         Input { key: Key::Esc, .. } => {
@@ -192,7 +270,19 @@ fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 }
 
 fn handle_paste(model: &mut Model, text: &str) {
-    if model.picker.open {
+    if model.credential.open {
+        match model.credential.append_paste(text) {
+            Ok(()) => model.notice = None,
+            Err(message) => {
+                model.notice = Some(Notice::Failure(UiFailure::new(
+                    ErrorClass::Validation,
+                    message,
+                    RetryPolicy::Never,
+                )));
+            }
+        }
+        model.dirty = true;
+    } else if model.picker.open {
         let flattened = editable_safe(text).replace('\n', " ");
         model.picker.query.push_str(&flattened);
         normalize_picker_selection(model);
@@ -275,7 +365,9 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
-    if model.session.selected_model.is_none()
+    if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+        open_credential(model);
+    } else if !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
     {
         open_picker(model);
@@ -288,6 +380,9 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
         UiNotice::IntentCommitted { request_id } => {
             if let Some(pending) = model.pending.remove(&request_id) {
                 match pending {
+                    PendingKind::ConfigureCredential => {
+                        model.notice = Some(Notice::Info("API key accepted".to_owned()));
+                    }
                     PendingKind::SubmitPrompt(_) => {
                         model.composer.reset();
                         model.notice = None;
@@ -315,13 +410,53 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
             failure,
         } => {
             let pending = model.pending.remove(&request_id);
-            if matches!(pending, Some(PendingKind::SelectModel(_))) {
-                open_picker(model);
+            match pending {
+                Some(PendingKind::ConfigureCredential) => {
+                    open_credential(model);
+                }
+                Some(PendingKind::SelectModel(_)) => open_picker(model),
+                Some(
+                    PendingKind::RefreshCatalog
+                    | PendingKind::SubmitPrompt(_)
+                    | PendingKind::CancelAttempt(_)
+                    | PendingKind::RetryAttempt(_),
+                )
+                | None => {}
             }
             model.notice = Some(Notice::Failure(failure));
         }
     }
     model.dirty = true;
+}
+
+fn submit_credential(model: &mut Model) -> Vec<UiEffect> {
+    if has_pending_credential(model) {
+        return Vec::new();
+    }
+    if !model.credential.has_value() {
+        model.notice = Some(Notice::Failure(UiFailure::new(
+            ErrorClass::Validation,
+            "Paste a non-empty API key",
+            RetryPolicy::Never,
+        )));
+        model.dirty = true;
+        return Vec::new();
+    }
+
+    let credential = model.credential.take();
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ConfigureCredential);
+    close_credential(model);
+    model.notice = Some(Notice::Info(
+        "Checking API key and loading models...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ConfigureCredential {
+        request_id,
+        credential,
+    })]
 }
 
 fn submit_prompt(model: &mut Model) -> Vec<UiEffect> {
@@ -337,8 +472,10 @@ fn submit_prompt(model: &mut Model) -> Vec<UiEffect> {
         model.dirty = true;
         return Vec::new();
     }
-    if model.session.selected_model.is_none() {
-        model.notice = Some(Notice::Info("Choose a model before sending".to_owned()));
+    if !selected_model_available(model) {
+        model.notice = Some(Notice::Info(
+            "Choose a model from the current catalog before sending".to_owned(),
+        ));
         open_picker(model);
         return Vec::new();
     }
@@ -449,6 +586,10 @@ fn retry_attempt(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn refresh_catalog(model: &mut Model) -> Vec<UiEffect> {
+    if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+        open_credential(model);
+        return Vec::new();
+    }
     if model
         .pending
         .values()
@@ -478,9 +619,40 @@ fn refresh_catalog(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn open_picker(model: &mut Model) {
+    model.credential.open = false;
+    model.credential.clear();
     model.picker.open = true;
     model.focus = Focus::Picker;
     normalize_picker_selection(model);
+    model.dirty = true;
+}
+
+fn open_credential(model: &mut Model) {
+    if has_pending_credential(model) {
+        model.notice = Some(Notice::Info(
+            "The current API key is still being checked".to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
+    if model.session.active_attempt().is_some() {
+        model.notice = Some(Notice::Info(
+            "Wait for or cancel the active response before changing the API key".to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
+    model.picker.open = false;
+    model.credential.clear();
+    model.credential.open = true;
+    model.focus = Focus::Credential;
+    model.dirty = true;
+}
+
+fn close_credential(model: &mut Model) {
+    model.credential.clear();
+    model.credential.open = false;
+    model.focus = Focus::Composer;
     model.dirty = true;
 }
 
@@ -554,11 +726,32 @@ fn filtered_selectable_models(model: &Model) -> Vec<autoharness_domain::ModelRef
         .collect()
 }
 
+fn selected_model_available(model: &Model) -> bool {
+    model
+        .session
+        .selected_model
+        .as_ref()
+        .is_some_and(|selected| {
+            model
+                .catalog
+                .models()
+                .iter()
+                .any(|summary| summary.selectable && &summary.model == selected)
+        })
+}
+
 fn has_pending_submission(model: &Model) -> bool {
     model
         .pending
         .values()
         .any(|pending| matches!(pending, PendingKind::SubmitPrompt(_)))
+}
+
+fn has_pending_credential(model: &Model) -> bool {
+    model
+        .pending
+        .values()
+        .any(|pending| matches!(pending, PendingKind::ConfigureCredential))
 }
 
 fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: bool) -> bool {
@@ -567,7 +760,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
         || model.pending.values().any(|pending| match pending {
             PendingKind::CancelAttempt(candidate) if cancellation => candidate == attempt_id,
             PendingKind::RetryAttempt(candidate) if !cancellation => candidate == attempt_id,
-            PendingKind::RefreshCatalog
+            PendingKind::ConfigureCredential
+            | PendingKind::RefreshCatalog
             | PendingKind::SelectModel(_)
             | PendingKind::SubmitPrompt(_)
             | PendingKind::CancelAttempt(_)

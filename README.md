@@ -10,26 +10,20 @@ The current provider-protocol evidence uses local HTTP fixtures and fake provide
 ## Run the terminal application
 
 The repository pins Rust 1.97.1 through `rust-toolchain.toml`.
-Set `GEMINI_API_KEY` in the process environment, then run the binary from the repository root.
+Run the binary from the repository root:
+
+```text
+cargo run --locked -p autoharness-app --bin autoharness
+```
+
+When no credential is available, AutoHarness opens a masked terminal overlay.
+Paste or type the Google AI Studio API key and press `Enter` to validate it and load the model catalog.
+Press `Ctrl+K` to open the credential overlay again if the key is rejected, expires, or needs to be replaced.
+
+The application transfers the key through redacted, zeroizing in-memory values and never writes it to configuration, durable session state, logs, transcripts, or model-visible content.
+The pasted key is intentionally forgotten when the process exits.
+`GEMINI_API_KEY` remains an optional startup override for automation or managed launches.
 Do not put the key in a repository file or command-line argument.
-
-PowerShell 7:
-
-```powershell
-$env:GEMINI_API_KEY = Read-Host -Prompt "Google AI Studio API key" -MaskInput
-cargo run --locked -p autoharness-app --bin autoharness
-```
-
-Bash:
-
-```bash
-read -rsp "Google AI Studio API key: " GEMINI_API_KEY
-export GEMINI_API_KEY
-cargo run --locked -p autoharness-app --bin autoharness
-```
-
-The application reads the key into a redacted, zeroizing in-memory value and never writes it to configuration or durable session state.
-If the key is missing or invalid, the terminal remains usable and presents a safe catalog error, but model discovery and chat are unavailable.
 
 ## Controls
 
@@ -38,6 +32,7 @@ If the key is missing or invalid, the terminal remains usable and presents a saf
 | Send the composed prompt | `Ctrl+S` or `Ctrl+Enter` |
 | Insert a newline | `Enter` |
 | Open the model picker | `Ctrl+P` |
+| Open or replace the API key | `Ctrl+K` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
 | Close the model picker | `Esc` |
@@ -55,7 +50,7 @@ Cancellation requests and response segments also cross the durable command bound
 
 | Environment variable | Purpose |
 | --- | --- |
-| `GEMINI_API_KEY` | Google AI Studio credential used only by the Gemini adapter |
+| `GEMINI_API_KEY` | Optional Google AI Studio credential used only by the Gemini adapter; otherwise paste the key in the app |
 | `AUTOHARNESS_DATA_DIR` | Optional absolute override for the application data directory |
 | `AUTOHARNESS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug`, or `trace`; defaults to `info` |
 
@@ -87,8 +82,9 @@ cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
 The local Phase 1 validation passed formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
-The suite covers the composed cancel, retry, and restart path; SQLite replay and projection rebuilding; model pagination; arbitrary SSE fragmentation; provider cancellation; retry classification; terminal restoration; fixed-size rendering; and credential redaction.
+The suite covers in-app credential entry, the composed cancel, retry, and restart path, SQLite replay and projection rebuilding, model pagination, arbitrary SSE fragmentation, provider cancellation, retry classification, terminal restoration, fixed-size rendering, and credential redaction.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
+A credential-overlay PTY smoke run pasted a sentinel through bracketed paste, displayed only the fixed mask, cleared it on dismissal, reopened an empty editor through `Ctrl+K`, found no sentinel bytes in the application files, and restored the terminal on exit.
 
 ## Performance evidence
 
