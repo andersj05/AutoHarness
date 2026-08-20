@@ -1,0 +1,17 @@
+[package]
+name = "autoharness-engine"
+description = "Headless session state machine and replay engine for AutoHarness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+autoharness-domain.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
