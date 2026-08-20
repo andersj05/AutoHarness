@@ -1,0 +1,22 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Logs and local databases
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
