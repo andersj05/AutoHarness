@@ -10,7 +10,6 @@ mod auth;
 mod client;
 mod models;
 mod native_stream;
-mod sse;
 #[cfg(test)]
 mod test_http;
 

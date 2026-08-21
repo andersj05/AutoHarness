@@ -9,9 +9,10 @@ use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
 };
 use autoharness_provider::{
-    CancellationToken, CapabilitySupport, ChatContent, ChatMessage, ChatRequest, ChatRole,
-    ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
+    CancellationToken, CatalogRequest, ChatContent, ChatMessage, ChatRequest, ChatRole,
+    ModelCatalog, ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
 };
+#[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_tui::{
     ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, UiFailure,
@@ -26,9 +27,10 @@ use crate::{ids, projection, telemetry};
 
 const PROVIDER_MESSAGE_CAPACITY: usize = 128;
 
-type ProviderFactory =
+pub(crate) type ProviderFactory =
     Arc<dyn Fn(ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> + Send + Sync + 'static>;
 
+#[cfg(test)]
 fn gemini_provider(credential: ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> {
     let api_key = GeminiApiKey::new(credential.into_string())?;
     Ok(Arc::new(GeminiProvider::new(api_key)?))
@@ -38,7 +40,7 @@ enum AsyncMessage {
     Catalog {
         generation: u64,
         request_id: Option<RequestId>,
-        result: Result<Vec<ModelDescriptor>, ProviderError>,
+        result: Result<ModelCatalog, ProviderError>,
     },
     Stream {
         attempt_id: AttemptId,
@@ -76,6 +78,7 @@ pub struct Coordinator {
 impl Coordinator {
     /// Creates application composition around replayed state and bounded ports.
     #[must_use]
+    #[cfg(test)]
     pub fn new(
         session_id: SessionId,
         session: SessionAggregate,
@@ -95,7 +98,7 @@ impl Coordinator {
         )
     }
 
-    fn with_provider_factory(
+    pub(crate) fn with_provider_factory(
         session_id: SessionId,
         session: SessionAggregate,
         engine: EngineHandle,
@@ -174,7 +177,7 @@ impl Coordinator {
                         request_id,
                         UiFailure::new(
                             ErrorClass::Authentication,
-                            "A Gemini API key is not configured",
+                            "A provider API key is not configured",
                             RetryPolicy::Never,
                         ),
                     )
@@ -283,7 +286,7 @@ impl Coordinator {
                 request_id,
                 UiFailure::new(
                     ErrorClass::Authentication,
-                    "A Gemini API key is not configured",
+                    "A provider API key is not configured",
                     RetryPolicy::Never,
                 ),
             )
@@ -365,7 +368,7 @@ impl Coordinator {
                 request_id,
                 UiFailure::new(
                     ErrorClass::Authentication,
-                    "A Gemini API key is not configured",
+                    "A provider API key is not configured",
                     RetryPolicy::Never,
                 ),
             )
@@ -535,7 +538,7 @@ impl Coordinator {
         &mut self,
         generation: u64,
         request_id: Option<RequestId>,
-        result: Result<Vec<ModelDescriptor>, ProviderError>,
+        result: Result<ModelCatalog, ProviderError>,
     ) -> Result<(), AppError> {
         if generation != self.catalog_generation {
             if let Some(request_id) = request_id {
@@ -553,12 +556,14 @@ impl Coordinator {
         }
         self.catalog_cancellation = None;
         match result {
-            Ok(models) => {
+            Ok(catalog) => {
+                let stale = catalog.is_stale();
+                let models = catalog.into_models();
                 telemetry::catalog_ready(models.len());
                 self.catalog_models = models.clone();
                 self.ports
                     .catalogs
-                    .send_replace(Arc::new(projection::catalog(models)));
+                    .send_replace(Arc::new(projection::catalog(models, stale)));
                 if let Some(request_id) = request_id {
                     self.commit(request_id).await?;
                 }
@@ -713,7 +718,12 @@ impl Coordinator {
         telemetry::catalog_refresh_started(generation, request_id.is_some());
         let messages = self.messages.clone();
         tokio::spawn(async move {
-            let result = provider.list_models(cancellation).await;
+            let request = if request_id.is_some() {
+                CatalogRequest::Refresh
+            } else {
+                CatalogRequest::PreferCache
+            };
+            let result = provider.list_models(request, cancellation).await;
             let _ = messages
                 .send(AsyncMessage::Catalog {
                     generation,
@@ -728,7 +738,7 @@ impl Coordinator {
         self.catalog_models.iter().any(|descriptor| {
             descriptor.provider_id == *model.provider_id()
                 && descriptor.model_id == *model.model_id()
-                && descriptor.capabilities.chat == CapabilitySupport::Supported
+                && descriptor.capabilities.supports_streamed_chat()
         })
     }
 
@@ -991,8 +1001,8 @@ fn start_attempt_failure(error: &StartAttemptError) -> UiFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
 
     use autoharness_domain::{
@@ -1000,13 +1010,20 @@ mod tests {
         ModelId, ModelRef, ProviderId, SessionSequence, TimestampMillis,
     };
     use autoharness_provider::{
-        Catalog, Chat, CompletionReason, ModelCapabilities, ProviderEventStream, TextDelta,
-        UsageSnapshot as ProviderUsage,
+        CapabilitySupport, Catalog, CatalogFreshness, CatalogRequest, Chat, CompletionReason,
+        ModelCapabilities, ModelCatalog, ProviderAvailability, ProviderEventStream,
+        ProviderMetadata, TextDelta, UsageSnapshot as ProviderUsage,
     };
+    use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
     use autoharness_tui::{SessionProjection, TranscriptItem, UiPorts, bounded_ports};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::watch;
 
     use super::*;
+
+    static FAKE_PROVIDER_ID: LazyLock<ProviderId> =
+        LazyLock::new(|| ProviderId::new("google-ai-studio").expect("fixture provider ID"));
 
     #[derive(Default)]
     struct FakeProvider {
@@ -1018,9 +1035,13 @@ mod tests {
     impl Catalog for FakeProvider {
         async fn list_models(
             &self,
+            _request: CatalogRequest,
             _cancellation: CancellationToken,
-        ) -> Result<Vec<ModelDescriptor>, ProviderError> {
-            Ok(vec![fixture_model_descriptor()])
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
         }
     }
 
@@ -1070,6 +1091,16 @@ mod tests {
         }
     }
 
+    impl ProviderMetadata for FakeProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
     #[derive(Default)]
     struct UnsolicitedCancellationProvider {
         calls: AtomicUsize,
@@ -1079,9 +1110,13 @@ mod tests {
     impl Catalog for UnsolicitedCancellationProvider {
         async fn list_models(
             &self,
+            _request: CatalogRequest,
             _cancellation: CancellationToken,
-        ) -> Result<Vec<ModelDescriptor>, ProviderError> {
-            Ok(vec![fixture_model_descriptor()])
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
         }
     }
 
@@ -1119,14 +1154,21 @@ mod tests {
         }
     }
 
+    impl ProviderMetadata for UnsolicitedCancellationProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+    }
+
     struct AuthenticationProvider;
 
     #[async_trait::async_trait]
     impl Catalog for AuthenticationProvider {
         async fn list_models(
             &self,
+            _request: CatalogRequest,
             _cancellation: CancellationToken,
-        ) -> Result<Vec<ModelDescriptor>, ProviderError> {
+        ) -> Result<ModelCatalog, ProviderError> {
             Err(ProviderError::new(
                 ProviderErrorKind::Authentication,
                 RetryAdvice::Never,
@@ -1151,6 +1193,12 @@ mod tests {
     impl autoharness_provider::SecretRedactor for AuthenticationProvider {
         fn redact_secrets(&self, value: &str) -> String {
             value.to_owned()
+        }
+    }
+
+    impl ProviderMetadata for AuthenticationProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
         }
     }
 
@@ -1448,6 +1496,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_router_runs_the_same_catalog_and_session_path() {
+        let (base_url, server) = spawn_router_fixture().await;
+        let settings =
+            RouterSettings::new(base_url.parse().expect("fixture URL"), Some("composed"))
+                .expect("router settings")
+                .with_authentication("x-router-key", "Token")
+                .expect("router authentication");
+        let provider = Arc::new(
+            OpenAiRouterProvider::new(
+                settings,
+                RouterCredential::new("router-composed-secret").expect("credential"),
+            )
+            .expect("router provider"),
+        );
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("router-composition.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            session_id,
+            session,
+            actor.handle(),
+            Some(provider),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let model = ModelRef::new(
+            ProviderId::new("router:composed").expect("provider ID"),
+            ModelId::new("router-model").expect("model ID"),
+        );
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: model.clone(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "router composed prompt".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let completed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        ..
+                    } if text == "router response"
+                )
+            })
+        })
+        .await;
+        assert_eq!(completed.selected_model.as_ref(), Some(&model));
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+        let requests = server.await.expect("fixture server");
+        assert_eq!(
+            requests,
+            vec!["GET /v1/models?limit=1000", "POST /v1/chat/completions"]
+        );
+    }
+
+    #[tokio::test]
     async fn composed_cancel_retry_and_restart_path_is_replay_equivalent() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = directory.path().join("composition.sqlite3");
@@ -1694,5 +1822,80 @@ mod tests {
             .expect("coordinator join")
             .expect("coordinator shutdown");
         actor.shutdown().await.expect("actor shutdown");
+    }
+
+    async fn spawn_router_fixture() -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind router fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let base_url = format!("http://{address}/");
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (content_type, body) in [
+                (
+                    "application/json",
+                    r#"{"data":[{"id":"router-model","name":"Router model","capabilities":{"chat":true,"streaming":true}}],"has_more":false}"#,
+                ),
+                (
+                    "text/event-stream",
+                    concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"router response\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    ),
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.expect("fixture request");
+                requests.push(read_router_request(&mut socket).await);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("fixture response");
+            }
+            requests
+        });
+        (base_url, task)
+    }
+
+    async fn read_router_request(socket: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+            let mut chunk = [0_u8; 4096];
+            let read = socket.read(&mut chunk).await.expect("fixture read");
+            assert_ne!(read, 0);
+            bytes.extend_from_slice(&chunk[..read]);
+        };
+        let (request_line, content_length) = {
+            let headers = std::str::from_utf8(&bytes[..header_end]).expect("request headers");
+            let request_line = headers
+                .lines()
+                .next()
+                .expect("request line")
+                .trim_end_matches(" HTTP/1.1")
+                .to_owned();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .or_else(|| line.strip_prefix("Content-Length:"))
+                })
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            (request_line, content_length)
+        };
+        while bytes.len() < header_end.saturating_add(content_length) {
+            let mut chunk = [0_u8; 4096];
+            let read = socket.read(&mut chunk).await.expect("fixture body");
+            assert_ne!(read, 0);
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        request_line
     }
 }

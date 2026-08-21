@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::GeminiApiKey;
 use crate::client::classify_error_value;
-use crate::sse::SseFrame;
+use autoharness_provider::SseFrame;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Transport {
@@ -309,7 +309,7 @@ mod tests {
     use super::*;
     use autoharness_domain::ClassifiedError as _;
 
-    use crate::sse::SseDecoder;
+    use autoharness_provider::SseDecoder;
 
     fn decode_fixture(chunks: &[&[u8]]) -> Vec<ProviderStreamEvent> {
         let key = GeminiApiKey::new("gemini-secret-sentinel").expect("key");

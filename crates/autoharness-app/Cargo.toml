@@ -12,16 +12,19 @@ name = "autoharness"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
 autoharness-provider.workspace = true
 autoharness-provider-gemini.workspace = true
+autoharness-provider-openai.workspace = true
 autoharness-store.workspace = true
 autoharness-store-sqlite.workspace = true
 autoharness-tui.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
 ratatui.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
@@ -33,6 +36,7 @@ uuid = { workspace = true, features = ["v4"] }
 async-stream.workspace = true
 async-trait.workspace = true
 tempfile = "3.27.0"
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

@@ -2,9 +2,19 @@ use autoharness_store::{CorruptionArea, StoreError};
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const LATEST_SCHEMA_VERSION: u32 = 1;
-const INITIAL_MIGRATION_NAME: &str = "session_store";
-const INITIAL_MIGRATION_SQL: &str = include_str!("../migrations/0001_session_store.sql");
+const LATEST_SCHEMA_VERSION: u32 = 2;
+const MIGRATIONS: &[(u32, &str, &str)] = &[
+    (
+        1,
+        "session_store",
+        include_str!("../migrations/0001_session_store.sql"),
+    ),
+    (
+        2,
+        "model_catalog_cache",
+        include_str!("../migrations/0002_model_catalog_cache.sql"),
+    ),
+];
 
 const CREATE_MIGRATION_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -55,7 +65,7 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StoreError> {
             .map_err(map_migration_error)?
     };
 
-    if applied.len() > usize::try_from(LATEST_SCHEMA_VERSION).unwrap_or(usize::MAX) {
+    if applied.len() > MIGRATIONS.len() {
         let found = applied
             .last()
             .and_then(|(version, _, _)| u32::try_from(*version).ok())
@@ -66,49 +76,41 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StoreError> {
         });
     }
 
-    let expected_checksum = Sha256::digest(INITIAL_MIGRATION_SQL.as_bytes());
-    match applied.as_slice() {
-        [] => {
-            if user_version != 0 {
-                return Err(StoreError::CorruptData {
-                    area: CorruptionArea::MigrationHistory,
-                });
-            }
-            transaction
-                .execute_batch(INITIAL_MIGRATION_SQL)
-                .map_err(map_migration_error)?;
-            transaction
-                .execute(
-                    "INSERT INTO schema_migrations \
-                     (version, name, checksum, applied_at_ms) \
-                     VALUES (1, ?1, ?2, unixepoch('now') * 1000)",
-                    params![INITIAL_MIGRATION_NAME, expected_checksum.as_slice()],
-                )
-                .map_err(map_migration_error)?;
-            transaction
-                .pragma_update(None, "user_version", LATEST_SCHEMA_VERSION)
-                .map_err(map_migration_error)?;
-        }
-        [(version, name, checksum)] => {
-            if *version != 1
-                || name != INITIAL_MIGRATION_NAME
-                || checksum.as_slice() != expected_checksum.as_slice()
-                || user_version != 1
-            {
-                return Err(StoreError::CorruptData {
-                    area: CorruptionArea::MigrationHistory,
-                });
-            }
-        }
-        _ => {
-            return Err(StoreError::NewerSchema {
-                found: applied
-                    .last()
-                    .and_then(|(version, _, _)| u32::try_from(*version).ok())
-                    .unwrap_or(u32::MAX),
-                supported: LATEST_SCHEMA_VERSION,
+    if user_version != i64::try_from(applied.len()).unwrap_or(i64::MAX) {
+        return Err(StoreError::CorruptData {
+            area: CorruptionArea::MigrationHistory,
+        });
+    }
+    for ((version, name, checksum), (expected_version, expected_name, expected_sql)) in
+        applied.iter().zip(MIGRATIONS)
+    {
+        let expected_checksum = Sha256::digest(expected_sql.as_bytes());
+        if *version != i64::from(*expected_version)
+            || name != expected_name
+            || checksum.as_slice() != expected_checksum.as_slice()
+        {
+            return Err(StoreError::CorruptData {
+                area: CorruptionArea::MigrationHistory,
             });
         }
+    }
+
+    for (version, name, sql) in MIGRATIONS.iter().skip(applied.len()) {
+        transaction
+            .execute_batch(sql)
+            .map_err(map_migration_error)?;
+        let checksum = Sha256::digest(sql.as_bytes());
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations \
+                 (version, name, checksum, applied_at_ms) \
+                 VALUES (?1, ?2, ?3, unixepoch('now') * 1000)",
+                params![version, name, checksum.as_slice()],
+            )
+            .map_err(map_migration_error)?;
+        transaction
+            .pragma_update(None, "user_version", version)
+            .map_err(map_migration_error)?;
     }
 
     transaction.commit().map_err(map_migration_error)

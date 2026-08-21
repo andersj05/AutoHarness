@@ -22,6 +22,58 @@ use crate::migration;
 
 const MAX_SQLITE_SEQUENCE: u64 = i64::MAX as u64;
 const FULL_SYNCHRONOUS_LEVEL: i64 = 2;
+const MAX_CATALOG_CACHE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Integrity-checked provider-neutral model-catalog cache record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SqliteCatalogCacheRecord {
+    provider_id: ProviderId,
+    schema_version: u16,
+    refreshed_at_ms: i64,
+    catalog_json: Vec<u8>,
+}
+
+impl SqliteCatalogCacheRecord {
+    /// Constructs a cache record whose payload is validated when stored.
+    #[must_use]
+    pub const fn new(
+        provider_id: ProviderId,
+        schema_version: u16,
+        refreshed_at_ms: i64,
+        catalog_json: Vec<u8>,
+    ) -> Self {
+        Self {
+            provider_id,
+            schema_version,
+            refreshed_at_ms,
+            catalog_json,
+        }
+    }
+
+    /// Returns the provider-project cache identity.
+    #[must_use]
+    pub const fn provider_id(&self) -> &ProviderId {
+        &self.provider_id
+    }
+
+    /// Returns the provider catalog schema version.
+    #[must_use]
+    pub const fn schema_version(&self) -> u16 {
+        self.schema_version
+    }
+
+    /// Returns the live refresh observation time.
+    #[must_use]
+    pub const fn refreshed_at_ms(&self) -> i64 {
+        self.refreshed_at_ms
+    }
+
+    /// Returns the exact serialized provider-neutral catalog payload.
+    #[must_use]
+    pub fn catalog_json(&self) -> &[u8] {
+        &self.catalog_json
+    }
+}
 
 /// SQLite connection options whose defaults favor durable local operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,6 +188,92 @@ impl SqliteStore {
     #[must_use]
     pub const fn configuration(&self) -> &SqliteConfiguration {
         &self.configuration
+    }
+
+    /// Loads and integrity-checks one durable provider-neutral catalog cache record.
+    pub fn load_catalog_cache(
+        &mut self,
+        provider_id: &ProviderId,
+    ) -> Result<Option<SqliteCatalogCacheRecord>, StoreError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT schema_version, refreshed_at_ms, catalog_json, content_sha256 \
+                 FROM model_catalog_cache WHERE provider_id = ?1",
+                params![provider_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((schema_version, refreshed_at_ms, catalog_json, content_sha256)) = row else {
+            return Ok(None);
+        };
+        let schema_version =
+            u16::try_from(schema_version).map_err(|_| StoreError::CorruptData {
+                area: CorruptionArea::CatalogCache,
+            })?;
+        if schema_version == 0
+            || catalog_json.is_empty()
+            || catalog_json.len() > MAX_CATALOG_CACHE_BYTES
+            || Sha256::digest(&catalog_json).as_slice() != content_sha256.as_slice()
+        {
+            return Err(StoreError::CorruptData {
+                area: CorruptionArea::CatalogCache,
+            });
+        }
+        Ok(Some(SqliteCatalogCacheRecord::new(
+            provider_id.clone(),
+            schema_version,
+            refreshed_at_ms,
+            catalog_json,
+        )))
+    }
+
+    /// Transactionally replaces one provider-project catalog cache record.
+    pub fn replace_catalog_cache(
+        &mut self,
+        record: &SqliteCatalogCacheRecord,
+    ) -> Result<(), StoreError> {
+        if record.schema_version == 0
+            || record.catalog_json.is_empty()
+            || record.catalog_json.len() > MAX_CATALOG_CACHE_BYTES
+        {
+            return Err(StoreError::CorruptData {
+                area: CorruptionArea::CatalogCache,
+            });
+        }
+        let content_sha256 = Sha256::digest(&record.catalog_json);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
+        transaction
+            .execute(
+                "INSERT INTO model_catalog_cache \
+                 (provider_id, schema_version, refreshed_at_ms, catalog_json, content_sha256) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(provider_id) DO UPDATE SET \
+                    schema_version = excluded.schema_version, \
+                    refreshed_at_ms = excluded.refreshed_at_ms, \
+                    catalog_json = excluded.catalog_json, \
+                    content_sha256 = excluded.content_sha256",
+                params![
+                    record.provider_id.as_str(),
+                    i64::from(record.schema_version),
+                    record.refreshed_at_ms,
+                    &record.catalog_json,
+                    content_sha256.as_slice(),
+                ],
+            )
+            .map_err(map_sqlite_error)?;
+        transaction.commit().map_err(map_sqlite_error)
     }
 
     #[cfg(test)]

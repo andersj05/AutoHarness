@@ -1,9 +1,13 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use autoharness_domain::ProviderId;
 use futures_core::Stream;
 
-use crate::{CancellationToken, ChatRequest, ModelDescriptor, ProviderError, ProviderStreamEvent};
+use crate::{
+    CancellationToken, CatalogRequest, ChatRequest, ModelCatalog, ProviderAvailability,
+    ProviderError, ProviderStreamEvent,
+};
 
 /// A boxed provider-neutral event stream.
 pub type ProviderEventStream =
@@ -15,8 +19,9 @@ pub trait Catalog: Send + Sync {
     /// Lists all compatible models, following provider pagination internally.
     async fn list_models(
         &self,
+        request: CatalogRequest,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelDescriptor>, ProviderError>;
+    ) -> Result<ModelCatalog, ProviderError>;
 }
 
 /// Asynchronous stateless chat streaming.
@@ -36,7 +41,18 @@ pub trait SecretRedactor: Send + Sync {
     fn redact_secrets(&self, value: &str) -> String;
 }
 
-/// Combined provider port used by application composition.
-pub trait Provider: Catalog + Chat + SecretRedactor {}
+/// Stable provider identity and process-local availability metadata.
+pub trait ProviderMetadata: Send + Sync {
+    /// Returns the adapter and project identity used by durable catalog caching.
+    fn provider_id(&self) -> &ProviderId;
 
-impl<T> Provider for T where T: Catalog + Chat + SecretRedactor {}
+    /// Returns whether the constructed adapter can accept requests.
+    fn availability(&self) -> ProviderAvailability {
+        ProviderAvailability::Ready
+    }
+}
+
+/// Combined provider port used by application composition.
+pub trait Provider: Catalog + Chat + SecretRedactor + ProviderMetadata {}
+
+impl<T> Provider for T where T: Catalog + Chat + SecretRedactor + ProviderMetadata {}

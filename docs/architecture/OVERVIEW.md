@@ -98,7 +98,10 @@ Provider adapters implement four separable concerns:
 3. Request preparation from provider-neutral input plus explicitly namespaced options.
 4. Native stream decoding into normalized engine events.
 
-The first adapters are Gemini and an OpenAI-compatible model router. A provider conformance suite validates discovery pagination, cancellation, error classification, retry hints, stream fragmentation, usage, and redaction.
+The first adapters are Gemini and a configurable OpenAI-compatible model router.
+The router resolves configurable model and streamed-chat paths under one validated base URL, sends credentials only through one configured sensitive header, and disables redirects.
+A provider conformance suite validates discovery pagination, cancellation, error classification, retry hints, stream fragmentation, usage, and redaction against local HTTP fixtures.
+One provider-neutral management wrapper applies deadlines, bounded pre-stream retries, concurrency, a per-project request window, capability preflight, and durable catalog freshness policy without retrying after a semantic stream has started.
 
 ### Storage
 
@@ -110,7 +113,7 @@ Initial durable records include:
 - Admitted inputs.
 - Provider attempts and normalized events.
 - Transcript projections.
-- Catalog snapshots and refresh metadata.
+- Schema-versioned catalog snapshots and refresh metadata keyed by provider-project identity.
 - Context epochs and admissions.
 - Memory identities, revisions, evidence, and lifecycle.
 - Artifacts by content hash.
