@@ -1,14 +1,34 @@
 use std::env;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::AppError;
+use autoharness_provider::ProviderPolicy;
 
 const DATA_DIR_ENV: &str = "AUTOHARNESS_DATA_DIR";
 const DATABASE_FILE: &str = "autoharness.sqlite3";
 const LOCK_FILE: &str = "autoharness.writer.lock";
 const LOG_FILE: &str = "autoharness.log";
 const LOG_LEVEL_ENV: &str = "AUTOHARNESS_LOG";
+const PROVIDER_ENV: &str = "AUTOHARNESS_PROVIDER";
+const PROVIDER_TIMEOUT_MS_ENV: &str = "AUTOHARNESS_PROVIDER_TIMEOUT_MS";
+const PROVIDER_IDLE_TIMEOUT_MS_ENV: &str = "AUTOHARNESS_PROVIDER_IDLE_TIMEOUT_MS";
+const PROVIDER_RETRY_ATTEMPTS_ENV: &str = "AUTOHARNESS_PROVIDER_RETRY_ATTEMPTS";
+const PROVIDER_CONCURRENCY_ENV: &str = "AUTOHARNESS_PROVIDER_CONCURRENCY";
+const PROVIDER_RATE_REQUESTS_ENV: &str = "AUTOHARNESS_PROVIDER_RATE_REQUESTS";
+const PROVIDER_RATE_WINDOW_MS_ENV: &str = "AUTOHARNESS_PROVIDER_RATE_WINDOW_MS";
+const CATALOG_REFRESH_MS_ENV: &str = "AUTOHARNESS_CATALOG_REFRESH_MS";
+const CATALOG_MAX_STALE_MS_ENV: &str = "AUTOHARNESS_CATALOG_MAX_STALE_MS";
+
+/// Configured production provider adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderSelection {
+    /// Google AI Studio Gemini.
+    Gemini,
+    /// Configurable OpenAI-compatible model router.
+    Router,
+}
 
 /// Resolved application-owned paths outside the current working directory.
 pub struct AppPaths {
@@ -21,6 +41,67 @@ pub fn log_filter_directive() -> Result<String, AppError> {
     normalize_log_level(configured.as_deref())
         .map(|level| format!("autoharness={level}"))
         .ok_or(AppError::Configuration)
+}
+
+/// Resolves the selected provider, defaulting to Gemini for compatibility.
+pub fn provider_selection() -> Result<ProviderSelection, AppError> {
+    match env::var(PROVIDER_ENV)
+        .unwrap_or_else(|_| "gemini".to_owned())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "gemini" => Ok(ProviderSelection::Gemini),
+        "router" | "openai" => Ok(ProviderSelection::Router),
+        _ => Err(AppError::Configuration),
+    }
+}
+
+/// Resolves bounded shared provider policy from optional environment overrides.
+pub fn provider_policy() -> Result<ProviderPolicy, AppError> {
+    let mut policy = ProviderPolicy::default();
+    if let Some(milliseconds) = positive_u64(PROVIDER_TIMEOUT_MS_ENV)? {
+        let timeout = Duration::from_millis(milliseconds);
+        policy = policy
+            .with_dispatch_timeouts(timeout, timeout)
+            .map_err(|_| AppError::Configuration)?;
+    }
+    if let Some(milliseconds) = positive_u64(PROVIDER_IDLE_TIMEOUT_MS_ENV)? {
+        policy = policy
+            .with_stream_idle_timeout(Duration::from_millis(milliseconds))
+            .map_err(|_| AppError::Configuration)?;
+    }
+    if let Some(attempts) = positive_usize(PROVIDER_RETRY_ATTEMPTS_ENV)? {
+        policy = policy
+            .with_attempts(attempts, attempts)
+            .map_err(|_| AppError::Configuration)?;
+    }
+    if let Some(concurrency) = positive_usize(PROVIDER_CONCURRENCY_ENV)? {
+        policy = policy
+            .with_max_concurrency(concurrency)
+            .map_err(|_| AppError::Configuration)?;
+    }
+    let rate_requests = positive_usize(PROVIDER_RATE_REQUESTS_ENV)?;
+    let rate_window = positive_u64(PROVIDER_RATE_WINDOW_MS_ENV)?;
+    if rate_requests.is_some() || rate_window.is_some() {
+        policy = policy
+            .with_rate_limit(
+                rate_requests.unwrap_or(60),
+                Duration::from_millis(rate_window.unwrap_or(60_000)),
+            )
+            .map_err(|_| AppError::Configuration)?;
+    }
+    let refresh = positive_u64(CATALOG_REFRESH_MS_ENV)?;
+    let max_stale = positive_u64(CATALOG_MAX_STALE_MS_ENV)?;
+    if refresh.is_some() || max_stale.is_some() {
+        policy = policy
+            .with_catalog_cache_policy(
+                Duration::from_millis(refresh.unwrap_or(5 * 60_000)),
+                Duration::from_millis(max_stale.unwrap_or(7 * 24 * 60 * 60_000)),
+            )
+            .map_err(|_| AppError::Configuration)?;
+    }
+    Ok(policy)
 }
 
 impl AppPaths {
@@ -103,6 +184,32 @@ fn normalize_log_level(value: Option<&str>) -> Option<&'static str> {
         "trace" => Some("trace"),
         _ => None,
     }
+}
+
+fn positive_u64(name: &str) -> Result<Option<u64>, AppError> {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or(AppError::Configuration)
+        })
+        .transpose()
+}
+
+fn positive_usize(name: &str) -> Result<Option<usize>, AppError> {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or(AppError::Configuration)
+        })
+        .transpose()
 }
 
 #[cfg(target_os = "windows")]

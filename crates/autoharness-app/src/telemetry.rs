@@ -12,19 +12,18 @@ pub fn app_stopped() {
 
 /// Emits safe provider initialization state.
 pub fn provider_ready() {
-    tracing::info!(event = "provider_ready", provider = "gemini");
+    tracing::info!(event = "provider_ready");
 }
 
 /// Emits the handoff of an in-app credential without its value or metadata.
 pub fn credential_submitted() {
-    tracing::info!(event = "provider_credential_submitted", provider = "gemini");
+    tracing::info!(event = "provider_credential_submitted");
 }
 
 /// Emits a sanitized provider initialization failure.
 pub fn provider_unavailable(error: &ProviderError) {
     tracing::warn!(
         event = "provider_unavailable",
-        provider = "gemini",
         kind = ?error.kind(),
         http_status = error.http_status()
     );

@@ -11,9 +11,11 @@ use autoharness_store::{
     AppendDisposition, AppendRequest, AttemptState, CorruptionArea, IdentityKind, InputState,
     SessionStore, StoreError, TranscriptRole, TranscriptSource, TranscriptState,
 };
+use rusqlite::{Connection, params};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-use super::{FailurePoint, SqliteStore, SqliteStoreOptions};
+use super::{FailurePoint, SqliteCatalogCacheRecord, SqliteStore, SqliteStoreOptions};
 
 struct TestDatabase {
     _directory: TempDir,
@@ -134,7 +136,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("read schema version"),
-        1
+        2
     );
     assert_eq!(
         store
@@ -143,7 +145,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations"),
-        1
+        2
     );
     drop(store);
 
@@ -155,7 +157,111 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations after reopen"),
-        1
+        2
+    );
+}
+
+#[test]
+fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
+    let database = TestDatabase::new();
+    let connection = Connection::open(&database.path).expect("open version-one fixture");
+    let migration = include_str!("../migrations/0001_session_store.sql");
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY NOT NULL CHECK (version > 0),
+                name TEXT NOT NULL,
+                checksum BLOB NOT NULL CHECK (length(checksum) = 32),
+                applied_at_ms INTEGER NOT NULL
+            ) STRICT;
+            "#,
+        )
+        .expect("migration table");
+    connection
+        .execute_batch(migration)
+        .expect("version-one schema");
+    let checksum = Sha256::digest(migration.as_bytes());
+    connection
+        .execute(
+            "INSERT INTO schema_migrations \
+             (version, name, checksum, applied_at_ms) VALUES (1, 'session_store', ?1, 0)",
+            params![checksum.as_slice()],
+        )
+        .expect("version-one history");
+    connection
+        .pragma_update(None, "user_version", 1)
+        .expect("version-one pragma");
+    drop(connection);
+
+    let store = database.open();
+    assert_eq!(
+        store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("schema version"),
+        2
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("migration count"),
+        2
+    );
+}
+
+#[test]
+fn catalog_cache_round_trips_replaces_and_fails_closed_on_corruption() {
+    let database = TestDatabase::new();
+    let mut store = database.open();
+    let provider_id = ProviderId::new("router:project-a").expect("provider ID");
+    let first = SqliteCatalogCacheRecord::new(
+        provider_id.clone(),
+        1,
+        100,
+        br#"{"schema_version":1,"models":[]}"#.to_vec(),
+    );
+    store
+        .replace_catalog_cache(&first)
+        .expect("store first cache");
+    assert_eq!(
+        store
+            .load_catalog_cache(&provider_id)
+            .expect("load first cache"),
+        Some(first)
+    );
+
+    let replacement = SqliteCatalogCacheRecord::new(
+        provider_id.clone(),
+        1,
+        200,
+        br#"{"schema_version":1,"models":[{"id":"model-a"}]}"#.to_vec(),
+    );
+    store
+        .replace_catalog_cache(&replacement)
+        .expect("replace cache");
+    assert_eq!(
+        store
+            .load_catalog_cache(&provider_id)
+            .expect("load replacement"),
+        Some(replacement)
+    );
+
+    store
+        .connection
+        .execute(
+            "UPDATE model_catalog_cache SET catalog_json = x'00' WHERE provider_id = ?1",
+            params![provider_id.as_str()],
+        )
+        .expect("corrupt cache fixture");
+    assert_eq!(
+        store.load_catalog_cache(&provider_id),
+        Err(StoreError::CorruptData {
+            area: CorruptionArea::CatalogCache
+        })
     );
 }
 
@@ -910,15 +1016,15 @@ fn a_newer_database_schema_fails_closed() {
     let store = database.open();
     store
         .connection
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .expect("set future schema fixture");
     drop(store);
 
     assert_eq!(
         SqliteStore::open(&database.path).err(),
         Some(StoreError::NewerSchema {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     );
 }

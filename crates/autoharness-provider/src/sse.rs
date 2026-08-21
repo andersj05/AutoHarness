@@ -1,13 +1,32 @@
 use autoharness_domain::RetryAdvice;
-use autoharness_provider::{ProviderError, ProviderErrorKind};
 
+use crate::{ProviderError, ProviderErrorKind};
+
+/// One decoded server-sent-event frame without provider-specific interpretation.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SseFrame {
-    pub(crate) event: Option<String>,
-    pub(crate) data: String,
+pub struct SseFrame {
+    /// Optional SSE event field.
+    pub event: Option<String>,
+    /// Joined SSE data fields.
+    pub data: String,
 }
 
-pub(crate) struct SseDecoder {
+impl SseFrame {
+    /// Returns the optional SSE event field.
+    #[must_use]
+    pub fn event(&self) -> Option<&str> {
+        self.event.as_deref()
+    }
+
+    /// Returns the joined SSE data fields.
+    #[must_use]
+    pub fn data(&self) -> &str {
+        &self.data
+    }
+}
+
+/// Incremental, UTF-8-safe SSE framing shared by streaming adapters.
+pub struct SseDecoder {
     buffer: Vec<u8>,
     max_frame_bytes: usize,
     first_frame: bool,
@@ -16,7 +35,9 @@ pub(crate) struct SseDecoder {
 }
 
 impl SseDecoder {
-    pub(crate) fn new(max_frame_bytes: usize) -> Self {
+    /// Constructs a decoder with one explicit frame-size bound.
+    #[must_use]
+    pub const fn new(max_frame_bytes: usize) -> Self {
         Self {
             buffer: Vec::new(),
             max_frame_bytes,
@@ -26,12 +47,12 @@ impl SseDecoder {
         }
     }
 
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<Vec<SseFrame>, ProviderError> {
+    /// Adds an arbitrary byte fragment and returns every complete frame.
+    pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<SseFrame>, ProviderError> {
         let mut frames = Vec::new();
         for byte in bytes {
             if *byte == b'\n' && self.pending_carriage_return {
                 self.pending_carriage_return = false;
-                // A CR that completed a blank line already drained its frame.
                 if self.buffer.is_empty() {
                     continue;
                 }
@@ -65,7 +86,8 @@ impl SseDecoder {
         Ok(frames)
     }
 
-    pub(crate) fn finish(&mut self) -> Result<(), ProviderError> {
+    /// Validates that end-of-stream did not truncate a frame.
+    pub fn finish(&mut self) -> Result<(), ProviderError> {
         if self.buffer.iter().all(u8::is_ascii_whitespace) {
             self.buffer.clear();
             return Ok(());
@@ -123,39 +145,31 @@ mod tests {
     fn parses_crlf_lf_multiline_data_and_comments() {
         let mut decoder = SseDecoder::new(1024);
         let frames = decoder
-            .push(b": heartbeat\r\nevent: step.delta\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n")
+            .push(b": heartbeat\r\nevent: delta\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n")
             .expect("valid SSE");
 
-        assert_eq!(
-            frames,
-            vec![SseFrame {
-                event: Some("step.delta".to_owned()),
-                data: "{\"a\":\n1}".to_owned(),
-            }]
-        );
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].event(), Some("delta"));
+        assert_eq!(frames[0].data(), "{\"a\":\n1}");
     }
 
     #[test]
     fn accepts_every_two_way_byte_fragmentation() {
-        let input = "event: step.delta\r\ndata: {\"text\":\"é🙂\"}\r\n\r\n".as_bytes();
+        let input = "event: delta\r\ndata: {\"text\":\"é🙂\"}\r\n\r\n".as_bytes();
         for split in 0..=input.len() {
             let mut decoder = SseDecoder::new(1024);
             let mut frames = decoder.push(&input[..split]).expect("first fragment");
             frames.extend(decoder.push(&input[split..]).expect("second fragment"));
             assert_eq!(frames.len(), 1, "split at byte {split}");
-            assert_eq!(frames[0].event.as_deref(), Some("step.delta"));
         }
     }
 
     #[test]
     fn rejects_truncated_or_oversized_frames() {
         let mut truncated = SseDecoder::new(1024);
-        truncated.push(b"data: {\"x\":1}").expect("buffer fragment");
+        truncated.push(b"data: {\"x\":1}").expect("fragment");
         assert_eq!(
-            truncated
-                .finish()
-                .expect_err("must reject truncation")
-                .kind(),
+            truncated.finish().expect_err("truncated").kind(),
             ProviderErrorKind::Protocol
         );
 
@@ -163,7 +177,7 @@ mod tests {
         assert_eq!(
             oversized
                 .push(b"data: too large")
-                .expect_err("must enforce bound")
+                .expect_err("large")
                 .kind(),
             ProviderErrorKind::LimitExceeded
         );

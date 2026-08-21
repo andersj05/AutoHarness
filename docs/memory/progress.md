@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 0. Repository foundation | Complete | Plan, architecture, memory protocol, research, initial ADRs, and validated local links are present |
 | 1. Terminal vertical slice | Complete | The fixture-verified terminal path discovers models, streams typed Gemini events, cancels and retries attempts, commits SQLite events and projections, and restores the same visible session after restart |
-| 2. Provider/router platform | Not started | Phase 1 established provider-neutral ports and a Gemini adapter; shared conformance coverage and the configurable router remain |
+| 2. Provider/router platform | Complete | Gemini and the configurable OpenAI-compatible router pass fixture conformance and the same composed session path through shared provider policy and durable catalog caching |
 | 3. Safe agent execution | Not started | No tool or permission runtime exists |
 | 4. Persistent context and memory | Designed | Architecture is documented; runtime is not implemented |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
@@ -32,6 +32,13 @@
 - The durable engine appends events before publishing projected state and recovers every stored session through the same strict replay path.
 - SQLite runs in WAL mode with verified durability settings, transactional event and projection updates, optimistic sequence checks, byte-identical idempotent append, migration-history validation, corruption detection, and projection rebuilding.
 - Provider-neutral catalog and chat ports isolate provider-native protocols from the engine and terminal.
+- Stable catalog requests distinguish cache-preferred startup from explicit refresh, and catalog results identify live, fresh-cache, or stale-fallback provenance.
+- Shared provider conformance assertions pin catalog identity, normalized lifecycle, cumulative usage, non-retryable failures, and credential redaction across adapters.
+- The configurable OpenAI-compatible router adapter validates one base origin, resolves relative discovery and streamed-chat paths, supports a configurable sensitive authentication header and project identity, disables redirects, follows bounded pagination, and normalizes chat-completions SSE without leaking router payloads into core types.
+- The shared managed-provider layer applies catalog and dispatch deadlines, stream idle deadlines, bounded retries only before semantic streaming, concurrency limits, per-project request windows, and preflight rejection of known unsupported chat or streaming capabilities.
+- Schema-v1 provider-neutral catalog snapshots are stored in SQLite with content hashes and migration-history integrity, provide fresh-cache startup, and permit stale fallback only for bounded transient refresh failures.
+- A composed integration test runs the actual router adapter through model discovery, selection, prompt admission, streaming, durable completion, and terminal projection using the unchanged engine session path.
+- A real PTY router smoke run rendered discovery, selection, prompt admission, and streamed completion, then restarted with the fixture offline and restored the selected model and transcript from durable replay plus a fresh catalog cache without retaining credential bytes.
 - The Gemini adapter accepts a zeroizing in-app handoff or reads `GEMINI_API_KEY`, authenticates by a sensitive header, discovers compatible models through opaque-token pagination, streams stable Interactions v1 events, and permits only a narrow pre-stream Generate Content fallback.
 - The Gemini decoder normalizes lifecycle, text, completion, and cumulative usage events across arbitrary byte and SSE fragmentation while filtering provider thought steps.
 - The Ratatui client includes a masked zeroizing credential overlay, a searchable model picker, Unicode multiline composer, streamed transcript, cancellation and retry states, safe errors, usage, tail following, manual scrolling, compact layouts, and bounded application mailboxes.
@@ -49,11 +56,11 @@
 ## Known gaps
 
 - No license or contribution guide.
-- No configurable model-router adapter, shared provider-conformance suite, cross-provider middleware, or durable catalog cache.
 - No live Gemini network verification has been performed; provider protocol evidence is fixture-backed.
+- No live router network verification has been performed; router dialect evidence is fixture-backed.
 - No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
 - No automated documentation-link or memory-consistency check.
 
 ## Next milestone exit target
 
-Phase 2 must run the same engine and terminal session path through Gemini and a configurable router, prove adapter interchangeability with a shared conformance suite, reject known unsupported capabilities before dispatch, and keep provider-native payloads outside core types.
+Phase 3 must make every tool side effect attributable to a durable tool-call lifecycle and an explicit capability decision, settle interruption deterministically, and prevent models from acquiring authority by changing tool-call shape.

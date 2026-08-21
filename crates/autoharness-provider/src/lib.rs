@@ -4,14 +4,26 @@
 //! are safe to pass into the headless engine and deliberately contain no
 //! authentication material.
 
+mod cache;
 mod catalog;
 mod error;
+mod managed;
 mod port;
+mod sse;
 mod stream;
 
-pub use catalog::{CapabilitySupport, ModelCapabilities, ModelDescriptor};
+#[cfg(feature = "conformance")]
+pub mod conformance;
+
+pub use cache::{CATALOG_CACHE_SCHEMA_V1, CatalogCache, CatalogCacheEntry, NoCatalogCache};
+pub use catalog::{
+    CapabilitySupport, CatalogFreshness, CatalogRequest, ModelCapabilities, ModelCatalog,
+    ModelDescriptor, ProviderAvailability,
+};
 pub use error::{ProviderError, ProviderErrorKind};
-pub use port::{Catalog, Chat, Provider, ProviderEventStream, SecretRedactor};
+pub use managed::{ManagedProvider, ProviderPolicy};
+pub use port::{Catalog, Chat, Provider, ProviderEventStream, ProviderMetadata, SecretRedactor};
+pub use sse::{SseDecoder, SseFrame};
 pub use stream::{
     ChatContent, ChatMessage, ChatRequest, ChatRole, CompletionReason, ProviderStreamEvent,
     TextDelta, UsageSnapshot,

@@ -1,0 +1,14 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "model-z",
+      "name": "Router Z",
+      "description": "large model",
+      "context_window": 32768,
+      "capabilities": { "chat": true, "streaming": true, "thinking": true }
+    }
+  ],
+  "has_more": true,
+  "last_id": "opaque +/= cursor?"
+}

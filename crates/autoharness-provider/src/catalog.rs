@@ -3,6 +3,74 @@ use std::fmt::{self, Debug, Formatter};
 use autoharness_domain::{ModelId, ProviderId};
 use serde::{Deserialize, Serialize};
 
+/// Whether catalog discovery should prefer a valid cache or contact the provider.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogRequest {
+    /// Use a fresh durable catalog when one exists, otherwise refresh it.
+    PreferCache,
+    /// Contact the provider and use a bounded stale cache only on transient failure.
+    Refresh,
+}
+
+/// Provenance and freshness of one provider-neutral catalog result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogFreshness {
+    /// The result was obtained from the provider during this request.
+    Live,
+    /// The result came from a cache that is still within its refresh interval.
+    Cached,
+    /// A transient refresh failure caused a bounded stale-cache fallback.
+    Stale,
+}
+
+/// One complete provider-neutral model catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelCatalog {
+    models: Vec<ModelDescriptor>,
+    freshness: CatalogFreshness,
+}
+
+impl ModelCatalog {
+    /// Constructs a catalog result from validated provider descriptors.
+    #[must_use]
+    pub const fn new(models: Vec<ModelDescriptor>, freshness: CatalogFreshness) -> Self {
+        Self { models, freshness }
+    }
+
+    /// Returns the discovered models in stable adapter order.
+    #[must_use]
+    pub fn models(&self) -> &[ModelDescriptor] {
+        &self.models
+    }
+
+    /// Consumes the result and returns its descriptors.
+    #[must_use]
+    pub fn into_models(self) -> Vec<ModelDescriptor> {
+        self.models
+    }
+
+    /// Returns the result's live, cached, or stale provenance.
+    #[must_use]
+    pub const fn freshness(&self) -> CatalogFreshness {
+        self.freshness
+    }
+
+    /// Returns whether this result is a stale fallback after refresh failure.
+    #[must_use]
+    pub const fn is_stale(&self) -> bool {
+        matches!(self.freshness, CatalogFreshness::Stale)
+    }
+}
+
+/// Process-local provider availability before or after credential admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderAvailability {
+    /// The adapter is configured and can accept catalog or chat requests.
+    Ready,
+    /// A required provider credential has not been admitted.
+    CredentialRequired,
+}
+
 /// Whether a provider explicitly reports support for a model capability.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +104,15 @@ impl Default for ModelCapabilities {
             managed_interactions: CapabilitySupport::Unknown,
             thinking: CapabilitySupport::Unknown,
         }
+    }
+}
+
+impl ModelCapabilities {
+    /// Returns whether a known unsupported capability forbids streamed chat.
+    #[must_use]
+    pub const fn supports_streamed_chat(&self) -> bool {
+        !matches!(self.chat, CapabilitySupport::Unsupported)
+            && !matches!(self.streaming, CapabilitySupport::Unsupported)
     }
 }
 
