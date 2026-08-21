@@ -33,6 +33,8 @@ pub enum CorruptionArea {
     AttemptProjection,
     /// A transcript projection contained invalid or inconsistent data.
     TranscriptProjection,
+    /// A durable model-catalog cache record failed integrity validation.
+    CatalogCache,
     /// A migration record did not match the embedded migration set.
     MigrationHistory,
 }

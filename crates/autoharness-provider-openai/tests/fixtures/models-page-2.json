@@ -1,0 +1,16 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "model-a",
+      "name": "Router A",
+      "description": "credential router-secret is redacted",
+      "context_window": 8192
+    },
+    {
+      "id": "model-z",
+      "name": "duplicate ignored"
+    }
+  ],
+  "has_more": false
+}

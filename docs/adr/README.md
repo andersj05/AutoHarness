@@ -30,6 +30,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0003](0003-use-main-dev-feature-branches.md) | Accepted | Use main, dev, and short-lived feature branches |
 | [0004](0004-use-gemini-interactions-v1.md) | Accepted | Use Gemini Interactions v1 for the default stream |
 | [0005](0005-use-ephemeral-in-app-credentials.md) | Accepted | Accept provider credentials through an ephemeral in-app overlay |
+| [0006](0006-use-openai-compatible-router-boundary.md) | Accepted | Use an OpenAI-compatible router boundary with shared provider policy and caching |
 
 ## When an ADR is not needed
 

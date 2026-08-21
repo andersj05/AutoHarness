@@ -458,7 +458,7 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     match &*model.catalog {
         CatalogProjection::CredentialRequired => {
             frame.render_widget(
-                Paragraph::new("An API key is required. Press Ctrl+K to connect Google AI Studio.")
+                Paragraph::new("A provider API key is required. Press Ctrl+K to connect.")
                     .style(MUTED_STYLE)
                     .wrap(Wrap { trim: false }),
                 list,
@@ -516,7 +516,7 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Google AI Studio API key ")
+        .title(" Provider API key ")
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -540,7 +540,7 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
     } else {
         Text::from(vec![
-            Line::from("Paste your Gemini API key below."),
+            Line::from("Paste your provider API key below."),
             Line::from("It is kept only in memory for this run and is never saved."),
             Line::from(""),
             Line::styled(

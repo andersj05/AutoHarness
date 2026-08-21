@@ -3,9 +3,10 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-Phase 1 is complete.
-The repository now contains a Rust terminal application that discovers compatible Google AI Studio models, streams Gemini responses, supports cancellation and retry, and restores its selected model and transcript from SQLite after restart.
-The current provider-protocol evidence uses local HTTP fixtures and fake providers, so it does not claim a live Gemini service verification.
+Phase 2 is complete.
+The Rust terminal application now runs the same durable catalog, selection, streaming, cancellation, retry, and recovery path through Google AI Studio Gemini or a configurable OpenAI-compatible model router.
+Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
+The current provider-protocol evidence uses local HTTP fixtures and fake providers, so it does not claim live Gemini or router service verification.
 
 ## Run the terminal application
 
@@ -16,14 +17,20 @@ Run the binary from the repository root:
 cargo run --locked -p autoharness-app --bin autoharness
 ```
 
+Gemini remains the default provider.
 When no credential is available, AutoHarness opens a masked terminal overlay.
-Paste or type the Google AI Studio API key and press `Enter` to validate it and load the model catalog.
+Paste or type the selected provider's API key and press `Enter` to validate it and load the model catalog.
 Press `Ctrl+K` to open the credential overlay again if the key is rejected, expires, or needs to be replaced.
 
 The application transfers the key through redacted, zeroizing in-memory values and never writes it to configuration, durable session state, logs, transcripts, or model-visible content.
 The pasted key is intentionally forgotten when the process exits.
-`GEMINI_API_KEY` remains an optional startup override for automation or managed launches.
+`GEMINI_API_KEY` and `AUTOHARNESS_ROUTER_API_KEY` are optional startup overrides for automation or managed launches.
 Do not put the key in a repository file or command-line argument.
+
+To use an OpenAI-compatible router, set `AUTOHARNESS_PROVIDER=router`, a base URL ending in `/`, and the router credential.
+Router credentials require HTTPS except for loopback HTTP endpoints such as `http://127.0.0.1:PORT/`.
+The default relative endpoints are `v1/models` and `v1/chat/completions`.
+Routers mounted below a path such as `https://router.example/api/` retain that path when relative endpoints are resolved.
 
 ## Controls
 
@@ -50,7 +57,23 @@ Cancellation requests and response segments also cross the durable command bound
 
 | Environment variable | Purpose |
 | --- | --- |
+| `AUTOHARNESS_PROVIDER` | `gemini` or `router`; defaults to `gemini` |
 | `GEMINI_API_KEY` | Optional Google AI Studio credential used only by the Gemini adapter; otherwise paste the key in the app |
+| `AUTOHARNESS_ROUTER_API_KEY` | Optional router credential; otherwise paste the key in the app |
+| `AUTOHARNESS_ROUTER_BASE_URL` | Required router base URL ending in `/` when the router is selected |
+| `AUTOHARNESS_ROUTER_PROJECT` | Optional stable cache and rate-limit identity; otherwise derived from the base URL |
+| `AUTOHARNESS_ROUTER_AUTH_HEADER` | Authentication header name; defaults to `Authorization` |
+| `AUTOHARNESS_ROUTER_AUTH_SCHEME` | Authentication value prefix; defaults to `Bearer`; an empty value sends only the credential |
+| `AUTOHARNESS_ROUTER_MODELS_PATH` | Relative model-discovery path; defaults to `v1/models` |
+| `AUTOHARNESS_ROUTER_CHAT_PATH` | Relative streamed-chat path; defaults to `v1/chat/completions` |
+| `AUTOHARNESS_PROVIDER_TIMEOUT_MS` | Optional positive catalog and pre-stream dispatch timeout |
+| `AUTOHARNESS_PROVIDER_IDLE_TIMEOUT_MS` | Optional positive maximum silence between normalized stream events |
+| `AUTOHARNESS_PROVIDER_RETRY_ATTEMPTS` | Optional positive catalog and pre-stream attempt bound |
+| `AUTOHARNESS_PROVIDER_CONCURRENCY` | Optional positive concurrent-request limit for one provider project |
+| `AUTOHARNESS_PROVIDER_RATE_REQUESTS` | Optional positive request count for one provider-project rate window |
+| `AUTOHARNESS_PROVIDER_RATE_WINDOW_MS` | Optional positive provider-project rate-window duration |
+| `AUTOHARNESS_CATALOG_REFRESH_MS` | Optional positive fresh-cache interval |
+| `AUTOHARNESS_CATALOG_MAX_STALE_MS` | Optional maximum stale fallback age; must not be shorter than the refresh interval |
 | `AUTOHARNESS_DATA_DIR` | Optional absolute override for the application data directory |
 | `AUTOHARNESS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug`, or `trace`; defaults to `info` |
 
@@ -64,7 +87,7 @@ The directory contains:
 
 | File | Purpose |
 | --- | --- |
-| `autoharness.sqlite3` | Durable schema-v1 session events and rebuilt projections |
+| `autoharness.sqlite3` | Durable schema-v1 session events, rebuilt projections, and integrity-checked provider-neutral catalog snapshots |
 | `autoharness.log` | Content-free structured lifecycle and operational trace events |
 | `autoharness.writer.lock` | Exclusive writer lease that prevents two processes from mutating the same store |
 
@@ -81,10 +104,12 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-The local Phase 1 validation passed formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
-The suite covers in-app credential entry, the composed cancel, retry, and restart path, SQLite replay and projection rebuilding, model pagination, arbitrary SSE fragmentation, provider cancellation, retry classification, terminal restoration, fixed-size rendering, and credential redaction.
+The local Phase 2 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
+The suite covers both production adapters, shared conformance assertions, a real composed router session, provider policy, capability preflight, durable catalog caching and migration, in-app credential entry, cancel and retry, SQLite replay, terminal restoration, fixed-size rendering, and credential redaction.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
 A credential-overlay PTY smoke run pasted a sentinel through bracketed paste, displayed only the fixed mask, cleared it on dismissal, reopened an empty editor through `Ctrl+K`, found no sentinel bytes in the application files, and restored the terminal on exit.
+A Phase 2 PTY smoke run used a local OpenAI-compatible fixture to discover and select a router model, durably admit a prompt, render a completed streamed response, restart with the fixture offline, and restore the selected model and transcript from replay plus the fresh catalog cache.
+The isolated SQLite, log, and lock files contained no router credential bytes, and both runs restored the terminal.
 
 ## Performance evidence
 

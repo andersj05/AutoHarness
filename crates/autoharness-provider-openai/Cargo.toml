@@ -1,6 +1,6 @@
 [package]
-name = "autoharness-provider-gemini"
-description = "Google AI Studio Gemini adapter for AutoHarness"
+name = "autoharness-provider-openai"
+description = "Configurable OpenAI-compatible model-router adapter for AutoHarness"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,7 @@ futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.11.0"
 tokio = { workspace = true, features = ["macros", "time"] }
 zeroize.workspace = true
 

@@ -6,8 +6,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use autoharness_domain::{ClassifiedError, ProviderId, RetryAdvice};
 use autoharness_provider::{
-    CancellationToken, Catalog, Chat, ChatRequest, ChatRole, ModelDescriptor, ProviderError,
-    ProviderErrorKind, ProviderEventStream, ProviderStreamEvent, SecretRedactor,
+    CancellationToken, Catalog, CatalogFreshness, CatalogRequest, Chat, ChatRequest, ChatRole,
+    ModelCatalog, ProviderAvailability, ProviderError, ProviderErrorKind, ProviderEventStream,
+    ProviderMetadata, ProviderStreamEvent, SecretRedactor,
 };
 use futures_util::StreamExt as _;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER};
@@ -18,7 +19,7 @@ use serde_json::Value;
 use crate::GeminiApiKey;
 use crate::models::{ModelsPage, request_model_name};
 use crate::native_stream::{NativeStreamState, Transport};
-use crate::sse::SseDecoder;
+use autoharness_provider::SseDecoder;
 
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/";
 const API_KEY_HEADER: &str = "x-goog-api-key";
@@ -296,12 +297,23 @@ impl SecretRedactor for GeminiProvider {
     }
 }
 
+impl ProviderMetadata for GeminiProvider {
+    fn provider_id(&self) -> &ProviderId {
+        &self.provider_id
+    }
+
+    fn availability(&self) -> ProviderAvailability {
+        ProviderAvailability::Ready
+    }
+}
+
 #[async_trait]
 impl Catalog for GeminiProvider {
     async fn list_models(
         &self,
+        _request: CatalogRequest,
         cancellation: CancellationToken,
-    ) -> Result<Vec<ModelDescriptor>, ProviderError> {
+    ) -> Result<ModelCatalog, ProviderError> {
         let mut page_token = None;
         let mut seen_tokens = HashSet::new();
         let mut models = BTreeMap::new();
@@ -344,7 +356,10 @@ impl Catalog for GeminiProvider {
             }
 
             let Some(next_token) = page.next_page_token.filter(|token| !token.is_empty()) else {
-                return Ok(models.into_values().collect());
+                return Ok(ModelCatalog::new(
+                    models.into_values().collect(),
+                    CatalogFreshness::Live,
+                ));
             };
             if next_token.len() > MAX_PAGE_TOKEN_BYTES
                 || self.api_key.contains(&next_token)
@@ -822,6 +837,7 @@ mod tests {
             provider.redact_secrets(&format!("before {secret} after")),
             "before [REDACTED] after"
         );
+        autoharness_provider::conformance::assert_secret_redaction(&provider, secret);
     }
 
     #[tokio::test]
@@ -846,10 +862,16 @@ mod tests {
             GeminiProvider::for_test(GeminiApiKey::new(sentinel).expect("key"), base_url)
                 .expect("fixture provider");
 
-        let models = provider
-            .list_models(CancellationToken::new())
+        let catalog = provider
+            .list_models(CatalogRequest::Refresh, CancellationToken::new())
             .await
             .expect("paginated catalog");
+        autoharness_provider::conformance::assert_catalog(
+            &catalog,
+            provider.provider_id(),
+            &["models/gemini-a", "models/gemini-z"],
+        );
+        let models = catalog.models();
         let requests = server.await.expect("fixture server");
 
         assert_eq!(models.len(), 2);
@@ -897,7 +919,7 @@ mod tests {
                 .expect("fixture provider");
 
         let error = provider
-            .list_models(CancellationToken::new())
+            .list_models(CatalogRequest::Refresh, CancellationToken::new())
             .await
             .expect_err("repeated token must fail");
         let requests = server.await.expect("fixture server");
@@ -920,7 +942,7 @@ mod tests {
                 .expect("fixture provider");
 
         provider
-            .list_models(CancellationToken::new())
+            .list_models(CatalogRequest::Refresh, CancellationToken::new())
             .await
             .expect("catalog");
         let requests = server.await.expect("fixture server");
@@ -968,6 +990,8 @@ mod tests {
         while let Some(event) = stream.next().await {
             events.push(event.expect("normalized event"));
         }
+        autoharness_provider::conformance::assert_stream_lifecycle(&events);
+        autoharness_provider::conformance::assert_normal_completion(&events);
         let requests = server.await.expect("fixture server");
 
         assert_eq!(

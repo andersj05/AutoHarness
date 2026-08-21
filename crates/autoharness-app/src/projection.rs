@@ -70,11 +70,11 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
 
 /// Converts provider discovery into a selectable provider-neutral catalog.
 #[must_use]
-pub fn catalog(models: Vec<ModelDescriptor>) -> CatalogProjection {
+pub fn catalog(models: Vec<ModelDescriptor>, stale: bool) -> CatalogProjection {
     let models = models
         .into_iter()
         .map(|descriptor| {
-            let selectable = descriptor.capabilities.chat == CapabilitySupport::Supported;
+            let selectable = descriptor.capabilities.supports_streamed_chat();
             let detail = catalog_detail(&descriptor);
             ModelSummary {
                 model: ModelRef::new(descriptor.provider_id, descriptor.model_id),
@@ -84,10 +84,7 @@ pub fn catalog(models: Vec<ModelDescriptor>) -> CatalogProjection {
             }
         })
         .collect();
-    CatalogProjection::Ready {
-        models,
-        stale: false,
-    }
+    CatalogProjection::Ready { models, stale }
 }
 
 fn catalog_detail(descriptor: &ModelDescriptor) -> String {

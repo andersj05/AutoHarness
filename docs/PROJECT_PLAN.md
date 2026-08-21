@@ -109,7 +109,7 @@ The repository has not exercised a live Gemini network request, so that remains 
 
 ### Phase 2: Provider and router platform
 
-**Status:** Next
+**Status:** Complete
 
 **Goal:** Prove that provider differences remain outside the engine.
 
@@ -128,6 +128,9 @@ Exit criteria:
 - Adding a fixture-only provider requires no engine or TUI changes.
 - Unsupported capabilities fail before a provider request when discoverable.
 - Provider-specific payloads never enter core domain types.
+
+Completion is supported by shared conformance assertions, independent Gemini and router HTTP fixtures, provider-policy tests, SQLite cache migration and integrity tests, and a composed application test that runs router discovery and streaming through the existing coordinator, engine, store, and terminal ports.
+No live Gemini or router network request has been exercised, so live service compatibility remains separate pre-release evidence.
 
 ### Phase 3: Safe agent execution
 
@@ -209,16 +212,12 @@ Exit criteria:
 
 ## Next implementation order
 
-Phase 1 established the complete local terminal, Gemini, storage, replay, and tracing path.
-Proceed through Phase 2 in this order:
+Phases 1 and 2 established the local terminal, Gemini and router adapters, shared provider policy, durable storage and catalog caching, replay, and tracing paths.
+Proceed in this order:
 
-1. Extract provider conformance tests from the Gemini implementation.
-2. Stabilize provider availability, capability, catalog, and streaming contracts against that suite.
-3. Define the configurable router URL, authentication-header, model-discovery, and OpenAI-compatible streaming contract.
-4. Add the router adapter behind the existing provider ports.
-5. Add shared timeout, retry, concurrency, and per-project rate-limit middleware.
-6. Add a durable model-catalog cache with explicit refresh and stale-data policy.
-7. Add safe monotonic markers for deferred startup, dispatch, and rendered-delta latency, then record the checked-in benchmark suite on an approved reference machine.
+1. Add safe monotonic markers for deferred startup, dispatch, and rendered-delta latency, then record the checked-in benchmark suite on an approved reference machine.
+2. Decide the license and contribution policy before the first public release.
+3. Begin Phase 3 with versioned tool schemas and the capability-based permission boundary.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
@@ -273,7 +272,6 @@ LLM network latency must be reported separately from harness overhead.
 
 ## Open decisions
 
-- The router's exact protocol, model-discovery endpoint, and authentication scheme.
 - The public repository license and contribution policy.
 - Benchmark hardware and release thresholds.
 - The first non-Rust plugin authoring path to support.
