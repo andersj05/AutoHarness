@@ -10,6 +10,9 @@ mod resolver;
 mod source;
 
 pub use error::SettingsError;
-pub use profile::{CredentialReference, ProfileId, ProviderKind, ProviderProfile};
+pub use profile::{
+    CredentialDocument, CredentialReference, ProfileId, ProviderKind, ProviderProfile,
+    SettingsDocument, SETTINGS_SCHEMA_VERSION,
+};
 pub use resolver::{LayerKind, ResolvedSettings, SettingsBuilder};
 pub use source::Source;
