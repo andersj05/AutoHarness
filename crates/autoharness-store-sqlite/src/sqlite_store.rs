@@ -1200,6 +1200,22 @@ fn apply_projection(
         EventPayload::AttemptMarkedUnknown { attempt_id } => {
             settle_attempt(transaction, event, attempt_id, "unknown", None, mode)?;
         }
+        EventPayload::RunBudgetConfigured { .. }
+        | EventPayload::RunTurnStarted { .. }
+        | EventPayload::ToolCallProposed { .. }
+        | EventPayload::ToolPermissionRecorded { .. }
+        | EventPayload::ToolPermissionAnswered { .. }
+        | EventPayload::ToolCallStarted { .. }
+        | EventPayload::ToolCallCompleted { .. }
+        | EventPayload::ToolCallFailed { .. }
+        | EventPayload::ToolCallDenied { .. }
+        | EventPayload::ToolCallCancelled { .. }
+        | EventPayload::ToolCallMarkedUnknown { .. }
+        | EventPayload::AttemptPausedForTools { .. }
+        | EventPayload::AttemptResumedAfterTools { .. } => {
+            // Schema-v1 tool state remains authoritative in the event stream.
+            // SessionAggregate is the first read projection for this slice.
+        }
     }
     Ok(())
 }
@@ -1345,6 +1361,19 @@ fn validate_complete_streams(
                 | EventPayload::AttemptFailed { .. }
                 | EventPayload::AttemptCancelled { .. }
                 | EventPayload::AttemptMarkedUnknown { .. }
+                | EventPayload::RunBudgetConfigured { .. }
+                | EventPayload::RunTurnStarted { .. }
+                | EventPayload::ToolCallProposed { .. }
+                | EventPayload::ToolPermissionRecorded { .. }
+                | EventPayload::ToolPermissionAnswered { .. }
+                | EventPayload::ToolCallStarted { .. }
+                | EventPayload::ToolCallCompleted { .. }
+                | EventPayload::ToolCallFailed { .. }
+                | EventPayload::ToolCallDenied { .. }
+                | EventPayload::ToolCallCancelled { .. }
+                | EventPayload::ToolCallMarkedUnknown { .. }
+                | EventPayload::AttemptPausedForTools { .. }
+                | EventPayload::AttemptResumedAfterTools { .. }
                     if created => {}
                 EventPayload::InputAdmitted { input_id, .. }
                     if created && seen_inputs.insert(input_id.clone()) => {}
@@ -1358,7 +1387,20 @@ fn validate_complete_streams(
                 | EventPayload::AttemptCompleted { .. }
                 | EventPayload::AttemptFailed { .. }
                 | EventPayload::AttemptCancelled { .. }
-                | EventPayload::AttemptMarkedUnknown { .. } => {
+                | EventPayload::AttemptMarkedUnknown { .. }
+                | EventPayload::RunBudgetConfigured { .. }
+                | EventPayload::RunTurnStarted { .. }
+                | EventPayload::ToolCallProposed { .. }
+                | EventPayload::ToolPermissionRecorded { .. }
+                | EventPayload::ToolPermissionAnswered { .. }
+                | EventPayload::ToolCallStarted { .. }
+                | EventPayload::ToolCallCompleted { .. }
+                | EventPayload::ToolCallFailed { .. }
+                | EventPayload::ToolCallDenied { .. }
+                | EventPayload::ToolCallCancelled { .. }
+                | EventPayload::ToolCallMarkedUnknown { .. }
+                | EventPayload::AttemptPausedForTools { .. }
+                | EventPayload::AttemptResumedAfterTools { .. } => {
                     return Err(StoreError::CorruptData {
                         area: CorruptionArea::Event,
                     });
@@ -2145,6 +2187,19 @@ fn event_kind(payload: &EventPayload) -> &'static str {
         EventPayload::AttemptFailed { .. } => "attempt_failed",
         EventPayload::AttemptCancelled { .. } => "attempt_cancelled",
         EventPayload::AttemptMarkedUnknown { .. } => "attempt_marked_unknown",
+        EventPayload::RunBudgetConfigured { .. } => "run_budget_configured",
+        EventPayload::RunTurnStarted { .. } => "run_turn_started",
+        EventPayload::ToolCallProposed { .. } => "tool_call_proposed",
+        EventPayload::ToolPermissionRecorded { .. } => "tool_permission_recorded",
+        EventPayload::ToolPermissionAnswered { .. } => "tool_permission_answered",
+        EventPayload::ToolCallStarted { .. } => "tool_call_started",
+        EventPayload::ToolCallCompleted { .. } => "tool_call_completed",
+        EventPayload::ToolCallFailed { .. } => "tool_call_failed",
+        EventPayload::ToolCallDenied { .. } => "tool_call_denied",
+        EventPayload::ToolCallCancelled { .. } => "tool_call_cancelled",
+        EventPayload::ToolCallMarkedUnknown { .. } => "tool_call_marked_unknown",
+        EventPayload::AttemptPausedForTools { .. } => "attempt_paused_for_tools",
+        EventPayload::AttemptResumedAfterTools { .. } => "attempt_resumed_after_tools",
     }
 }
 

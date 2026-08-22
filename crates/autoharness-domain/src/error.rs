@@ -80,6 +80,16 @@ pub enum ValueError {
     EmptyPublicMessage,
     /// A public message exceeded its durable byte bound.
     PublicMessageTooLong,
+    /// Tool arguments were not a JSON object or exceeded their durable bound.
+    InvalidToolArguments,
+    /// A capability resource was empty, unsafe for logs, or exceeded its durable bound.
+    InvalidResource,
+    /// A run limit was zero or internally inconsistent.
+    InvalidRunLimits,
+    /// Tool output exceeded its durable inline bound.
+    ToolOutputTooLong,
+    /// Artifact metadata was invalid.
+    InvalidArtifact,
     /// A session event sequence was zero.
     ZeroSequence,
     /// A session event sequence exceeded the signed durable-store range.
@@ -102,6 +112,11 @@ impl Display for ValueError {
             Self::EmptyResponseText => "response text must not be empty",
             Self::EmptyPublicMessage => "public message must contain non-whitespace text",
             Self::PublicMessageTooLong => "public message exceeds the supported length",
+            Self::InvalidToolArguments => "tool arguments must be a bounded JSON object",
+            Self::InvalidResource => "capability resource is invalid",
+            Self::InvalidRunLimits => "run limits must be non-zero and internally consistent",
+            Self::ToolOutputTooLong => "tool output exceeds the durable inline bound",
+            Self::InvalidArtifact => "artifact metadata is invalid",
             Self::ZeroSequence => "session sequence must be greater than zero",
             Self::SequenceTooLarge => "session sequence exceeds the durable storage range",
         };

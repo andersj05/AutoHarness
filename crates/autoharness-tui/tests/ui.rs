@@ -3,8 +3,8 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, Notice,
-    RetryPolicy, SessionProjection, TranscriptItem, UiEffect, UiFailure, UiIntent, UiNotice,
-    UsageView, display_safe, update, view,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey,
+    TranscriptItem, UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -54,11 +54,87 @@ fn session(revision: u64, transcript: Vec<TranscriptItem>) -> Arc<SessionProject
         revision,
         selected_model: Some(pro_model()),
         transcript,
+        permission_requests: Vec::new(),
     })
 }
 
 fn empty_model() -> Model {
     Model::new(session(1, Vec::new()), ready_catalog())
+}
+
+#[test]
+fn permission_overlay_scopes_the_resource_and_dispatches_one_exact_answer() {
+    let mut projection = (*session(2, Vec::new())).clone();
+    projection.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("tool-call-1").expect("tool-call ID"),
+        tool_name: "fs_write".to_owned(),
+        capability: "filesystem write".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: vec![
+            PermissionDetailView {
+                label: "Path".to_owned(),
+                value: "src/lib.rs".to_owned(),
+            },
+            PermissionDetailView {
+                label: "Content bytes".to_owned(),
+                value: "27".to_owned(),
+            },
+        ],
+    });
+    let mut model = Model::new(Arc::new(projection), ready_catalog());
+
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    assert!(rendered.contains("Tool permission"));
+    assert!(rendered.contains("workspace:src/lib.rs"));
+    assert!(rendered.contains("Content bytes"));
+    assert!(rendered.contains("27"));
+    let effects = update(&mut model, Message::Input(key_input(Key::Char('y'))));
+
+    assert_eq!(effects.len(), 1);
+    let UiEffect::Dispatch(UiIntent::AnswerPermission {
+        tool_call_id,
+        allow,
+        ..
+    }) = &effects[0]
+    else {
+        panic!("expected permission answer");
+    };
+    assert_eq!(tool_call_id.as_str(), "tool-call-1");
+    assert!(*allow);
+    assert!(update(&mut model, Message::Input(key_input(Key::Char('y')))).is_empty());
+}
+
+#[test]
+fn permission_details_are_scrollable_and_redacted_from_debug_output() {
+    let sentinel = "permission-detail-secret";
+    let mut projection = (*session(2, Vec::new())).clone();
+    projection.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("tool-call-scroll").expect("tool-call ID"),
+        tool_name: "process_run".to_owned(),
+        capability: "process execute".to_owned(),
+        resource: "program:cargo@workspace:.".to_owned(),
+        details: (0..20)
+            .map(|index| PermissionDetailView {
+                label: "Argument".to_owned(),
+                value: if index == 19 {
+                    sentinel.to_owned()
+                } else {
+                    format!("argument-{index}")
+                },
+            })
+            .collect(),
+    });
+    let mut model = Model::new(Arc::new(projection), ready_catalog());
+
+    assert!(!format!("{model:?}").contains(sentinel));
+    let initial = buffer_text(&render_model(&model, 60, 12));
+    assert!(initial.contains("argument-0"));
+    assert!(!initial.contains(sentinel));
+    for _ in 0..24 {
+        let _ = update(&mut model, Message::Input(key_input(Key::Down)));
+    }
+    let scrolled = buffer_text(&render_model(&model, 60, 12));
+    assert!(scrolled.contains(sentinel));
 }
 
 fn key_input(key: Key) -> Input {

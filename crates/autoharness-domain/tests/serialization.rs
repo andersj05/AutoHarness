@@ -1,8 +1,10 @@
 use autoharness_domain::{
-    AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload,
-    CorrelationId, DeliveryMode, ErrorClass, ErrorCode, EventEnvelope, EventId, EventPayload,
-    InputId, ModelId, ModelRef, PromptText, ProviderId, PublicMessage, ResponseText, RetryAdvice,
-    SessionId, SessionSequence, TimestampMillis, UsageSnapshot,
+    ArtifactId, ArtifactRef, AttemptFailure, AttemptId, CapabilityKind, CapabilityRequest,
+    Causation, CommandEnvelope, CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass,
+    ErrorCode, EventEnvelope, EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer,
+    PermissionDecisionId, PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage,
+    ResourceRef, ResponseText, RetryAdvice, RunLimits, SessionId, SessionSequence, TimestampMillis,
+    ToolArguments, ToolCallId, ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
 };
 
 fn session_id() -> SessionId {
@@ -48,6 +50,24 @@ fn failure() -> AttemptFailure {
             .expect("valid public message"),
         RetryAdvice::After { delay_ms: 250 },
     )
+}
+
+fn tool_call() -> ToolCallSpec {
+    ToolCallSpec {
+        tool_call_id: ToolCallId::new("tool-call-1").expect("valid tool call ID"),
+        provider_call_id: ProviderCallId::new("provider-call-1").expect("valid provider call ID"),
+        tool_name: ToolName::new("fs_write").expect("valid tool name"),
+        schema_version: 1,
+        arguments: ToolArguments::new(serde_json::json!({
+            "path": "notes.txt",
+            "content": "hello"
+        }))
+        .expect("valid tool arguments"),
+        capability: CapabilityRequest {
+            kind: CapabilityKind::FilesystemWrite,
+            resource: ResourceRef::new("workspace:notes.txt").expect("valid resource"),
+        },
+    }
 }
 
 #[test]
@@ -629,4 +649,158 @@ fn enclosing_attempt_debug_output_redacts_response_and_public_message_content() 
     assert!(!format!("{command:?}").contains(response_secret));
     assert!(!format!("{event:?}").contains(response_secret));
     assert!(!format!("{failed:?}").contains(message_secret));
+}
+
+#[test]
+fn phase_three_authority_contracts_have_stable_serialized_shapes() {
+    let limits = RunLimits::new(4, 30_000, 20_000, 65_536, 2).expect("valid run limits");
+    let decision_id =
+        PermissionDecisionId::new("permission-1").expect("valid permission decision ID");
+    let output = ToolOutput::new(
+        "hello",
+        Some(
+            ArtifactRef::new(
+                ArtifactId::new("sha256:aaaaaaaa").expect("valid artifact ID"),
+                10,
+                "text/plain",
+            )
+            .expect("valid artifact"),
+        ),
+        10,
+        true,
+    )
+    .expect("valid bounded tool output");
+    let commands = [
+        CommandPayload::ConfigureRunBudget {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            limits,
+        },
+        CommandPayload::ProposeToolCall {
+            session_id: session_id(),
+            attempt_id: attempt_id("attempt-1"),
+            call: tool_call(),
+        },
+        CommandPayload::RecordToolPermission {
+            session_id: session_id(),
+            tool_call_id: ToolCallId::new("tool-call-1").expect("valid tool call ID"),
+            decision_id: decision_id.clone(),
+            outcome: PermissionOutcome::Ask,
+        },
+        CommandPayload::AnswerToolPermission {
+            session_id: session_id(),
+            tool_call_id: ToolCallId::new("tool-call-1").expect("valid tool call ID"),
+            decision_id,
+            answer: PermissionAnswer::AllowOnce,
+        },
+        CommandPayload::CompleteToolCall {
+            session_id: session_id(),
+            tool_call_id: ToolCallId::new("tool-call-1").expect("valid tool call ID"),
+            output,
+        },
+    ];
+
+    assert_eq!(
+        serde_json::to_value(commands).expect("serialize authority commands"),
+        serde_json::json!([
+            {
+                "kind": "configure_run_budget",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "limits": {
+                        "max_turns": 4,
+                        "max_time_ms": 30000,
+                        "max_tokens": 20000,
+                        "max_output_bytes": 65536,
+                        "max_concurrency": 2
+                    }
+                }
+            },
+            {
+                "kind": "propose_tool_call",
+                "payload": {
+                    "session_id": "session-1",
+                    "attempt_id": "attempt-1",
+                    "call": {
+                        "tool_call_id": "tool-call-1",
+                        "provider_call_id": "provider-call-1",
+                        "tool_name": "fs_write",
+                        "schema_version": 1,
+                        "arguments": {
+                            "path": "notes.txt",
+                            "content": "hello"
+                        },
+                        "capability": {
+                            "kind": "filesystem_write",
+                            "resource": "workspace:notes.txt"
+                        }
+                    }
+                }
+            },
+            {
+                "kind": "record_tool_permission",
+                "payload": {
+                    "session_id": "session-1",
+                    "tool_call_id": "tool-call-1",
+                    "decision_id": "permission-1",
+                    "outcome": "ask"
+                }
+            },
+            {
+                "kind": "answer_tool_permission",
+                "payload": {
+                    "session_id": "session-1",
+                    "tool_call_id": "tool-call-1",
+                    "decision_id": "permission-1",
+                    "answer": "allow_once"
+                }
+            },
+            {
+                "kind": "complete_tool_call",
+                "payload": {
+                    "session_id": "session-1",
+                    "tool_call_id": "tool-call-1",
+                    "output": {
+                        "content": "hello",
+                        "artifact": {
+                            "artifact_id": "sha256:aaaaaaaa",
+                            "byte_len": 10,
+                            "media_type": "text/plain"
+                        },
+                        "original_bytes": 10,
+                        "truncated": true
+                    }
+                }
+            }
+        ])
+    );
+
+    let proposed = EventPayload::ToolCallProposed {
+        attempt_id: attempt_id("attempt-1"),
+        call: tool_call(),
+    };
+    assert_eq!(
+        serde_json::to_value(proposed).expect("serialize tool event"),
+        serde_json::json!({
+            "kind": "tool_call_proposed",
+            "payload": {
+                "attempt_id": "attempt-1",
+                "call": {
+                    "tool_call_id": "tool-call-1",
+                    "provider_call_id": "provider-call-1",
+                    "tool_name": "fs_write",
+                    "schema_version": 1,
+                    "arguments": {
+                        "path": "notes.txt",
+                        "content": "hello"
+                    },
+                    "capability": {
+                        "kind": "filesystem_write",
+                        "resource": "workspace:notes.txt"
+                    }
+                }
+            }
+        })
+    );
 }

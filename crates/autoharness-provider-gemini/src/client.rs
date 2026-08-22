@@ -436,13 +436,32 @@ struct InteractionRequest<'a> {
     input: Vec<InteractionInput>,
     stream: bool,
     store: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<InteractionTool<'a>>,
 }
 
 #[derive(Serialize)]
-struct InteractionInput {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    content: [InteractionContent; 1],
+#[serde(untagged)]
+enum InteractionInput {
+    Text {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        content: [InteractionContent; 1],
+    },
+    FunctionCall {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        id: String,
+        name: String,
+        arguments: Value,
+    },
+    FunctionResult {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        call_id: String,
+        name: String,
+        result: [InteractionContent; 1],
+    },
 }
 
 #[derive(Serialize)]
@@ -450,6 +469,15 @@ struct InteractionContent {
     #[serde(rename = "type")]
     kind: &'static str,
     text: String,
+}
+
+#[derive(Serialize)]
+struct InteractionTool<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
 }
 
 #[derive(Serialize)]
@@ -476,15 +504,46 @@ fn interaction_body(
     let input = request
         .messages
         .iter()
-        .map(|message| InteractionInput {
-            kind: match message.role {
-                ChatRole::User => "user_input",
-                ChatRole::Assistant => "model_output",
+        .map(|message| match message {
+            autoharness_provider::ChatMessage::Text { role, content } => InteractionInput::Text {
+                kind: match role {
+                    ChatRole::User => "user_input",
+                    ChatRole::Assistant => "model_output",
+                },
+                content: [InteractionContent {
+                    kind: "text",
+                    text: key.redact(content.as_str()),
+                }],
             },
-            content: [InteractionContent {
-                kind: "text",
-                text: key.redact(message.content.as_str()),
-            }],
+            autoharness_provider::ChatMessage::ToolCall(call) => InteractionInput::FunctionCall {
+                kind: "function_call",
+                id: call.provider_call_id.as_str().to_owned(),
+                name: call.tool_name.as_str().to_owned(),
+                arguments: call.arguments.to_value(),
+            },
+            autoharness_provider::ChatMessage::ToolResult {
+                provider_call_id,
+                tool_name,
+                content,
+            } => InteractionInput::FunctionResult {
+                kind: "function_result",
+                call_id: provider_call_id.as_str().to_owned(),
+                name: tool_name.as_str().to_owned(),
+                result: [InteractionContent {
+                    kind: "text",
+                    text: key.redact(content.as_str()),
+                }],
+            },
+        })
+        .collect();
+    let tools = request
+        .tools
+        .iter()
+        .map(|tool| InteractionTool {
+            kind: "function",
+            name: tool.name.as_str(),
+            description: &tool.description,
+            parameters: &tool.parameters,
         })
         .collect();
     serde_json::to_vec(&InteractionRequest {
@@ -492,6 +551,7 @@ fn interaction_body(
         input,
         stream: true,
         store: false,
+        tools,
     })
     .map_err(|_| internal_error())
 }
@@ -500,17 +560,32 @@ fn generate_content_body(
     request: &ChatRequest,
     key: &GeminiApiKey,
 ) -> Result<Vec<u8>, ProviderError> {
+    if !request.tools.is_empty()
+        || request
+            .messages
+            .iter()
+            .any(|message| !matches!(message, autoharness_provider::ChatMessage::Text { .. }))
+    {
+        return Err(ProviderError::new(
+            ProviderErrorKind::Unsupported,
+            RetryAdvice::Never,
+        ));
+    }
     let contents = request
         .messages
         .iter()
-        .map(|message| GenerateMessage {
-            role: match message.role {
-                ChatRole::User => "user",
-                ChatRole::Assistant => "model",
-            },
-            parts: [GeneratePart {
-                text: key.redact(message.content.as_str()),
-            }],
+        .filter_map(|message| match message {
+            autoharness_provider::ChatMessage::Text { role, content } => Some(GenerateMessage {
+                role: match role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "model",
+                },
+                parts: [GeneratePart {
+                    text: key.redact(content.as_str()),
+                }],
+            }),
+            autoharness_provider::ChatMessage::ToolCall(_)
+            | autoharness_provider::ChatMessage::ToolResult { .. } => None,
         })
         .collect();
     serde_json::to_vec(&GenerateContentRequest { contents }).map_err(|_| internal_error())
@@ -701,18 +776,12 @@ mod tests {
         ChatRequest::new(
             ModelId::new("models/gemini-test").expect("model"),
             vec![
-                ChatMessage {
-                    role: ChatRole::User,
-                    content: ChatContent::new("first").expect("content"),
-                },
-                ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: ChatContent::new("second").expect("content"),
-                },
-                ChatMessage {
-                    role: ChatRole::User,
-                    content: ChatContent::new("third").expect("content"),
-                },
+                ChatMessage::text(ChatRole::User, ChatContent::new("first").expect("content")),
+                ChatMessage::text(
+                    ChatRole::Assistant,
+                    ChatContent::new("second").expect("content"),
+                ),
+                ChatMessage::text(ChatRole::User, ChatContent::new("third").expect("content")),
             ],
         )
         .expect("request")
@@ -742,11 +811,11 @@ mod tests {
         let key = GeminiApiKey::new(sentinel).expect("key");
         let request = ChatRequest::new(
             ModelId::new("models/gemini-test").expect("model"),
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: ChatContent::new(format!("before {sentinel} and {encoded} after"))
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new(format!("before {sentinel} and {encoded} after"))
                     .expect("content"),
-            }],
+            )],
         )
         .expect("request");
 
@@ -1143,10 +1212,10 @@ mod tests {
         .expect("fixture provider");
         let request = ChatRequest::new(
             ModelId::new("models/sensitive-model").expect("model"),
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: ChatContent::new("hello").expect("content"),
-            }],
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("hello").expect("content"),
+            )],
         )
         .expect("request");
 

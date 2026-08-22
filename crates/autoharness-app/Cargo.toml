@@ -21,6 +21,7 @@ autoharness-provider-openai.workspace = true
 autoharness-store.workspace = true
 autoharness-store-sqlite.workspace = true
 autoharness-tui.workspace = true
+autoharness-tool.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
 ratatui.workspace = true

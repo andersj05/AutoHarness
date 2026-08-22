@@ -18,6 +18,9 @@ use autoharness_provider::{
 };
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
+use autoharness_tool::{
+    FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
+};
 use autoharness_tui::{
     ApiCredential, CatalogProjection, Model, RetryPolicy, UiFailure, bounded_ports,
 };
@@ -31,9 +34,8 @@ use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
-struct ProviderComposition {
-    initial: Option<Arc<dyn Provider>>,
-    factory: ProviderFactory,
+struct ConfiguredProvider {
+    composition: coordinator::ProviderComposition,
     catalog: CatalogProjection,
 }
 
@@ -56,6 +58,7 @@ async fn run() -> Result<(), AppError> {
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
     let provider = configure_provider(Arc::clone(&cache), policy)?;
+    let tool_runtime = configure_tool_runtime(&paths)?;
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
     let initial_session = Arc::new(projection::session(&session));
@@ -76,8 +79,8 @@ async fn run() -> Result<(), AppError> {
         session_id,
         session,
         engine_actor.handle(),
-        provider.initial,
-        provider.factory,
+        provider.composition,
+        tool_runtime,
         app_ports,
         shutdown.clone(),
     );
@@ -103,10 +106,34 @@ async fn run() -> Result<(), AppError> {
     Ok(())
 }
 
+fn configure_tool_runtime(paths: &AppPaths) -> Result<Arc<ToolRuntime>, AppError> {
+    let workspace = config::workspace_root()?;
+    let filesystem = Arc::new(
+        LocalFilesystem::new(&workspace, 4 * 1024 * 1024).map_err(|_| AppError::Configuration)?,
+    );
+    let process =
+        Arc::new(LocalProcess::new(&workspace, 1024 * 1024).map_err(|_| AppError::Configuration)?);
+    let http = Arc::new(LocalHttp::new(4 * 1024 * 1024).map_err(|_| AppError::Configuration)?);
+    let artifacts =
+        Arc::new(FileArtifactStore::new(paths.artifacts()).map_err(|_| AppError::FileSystem)?);
+    ToolRuntime::new(
+        filesystem,
+        process,
+        http,
+        artifacts,
+        PermissionPolicy::local_default(),
+        2,
+        std::time::Duration::from_secs(120),
+        64 * 1024,
+    )
+    .map(Arc::new)
+    .map_err(|_| AppError::Configuration)
+}
+
 fn configure_provider(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
-) -> Result<ProviderComposition, AppError> {
+) -> Result<ConfiguredProvider, AppError> {
     let (initial, factory): (Result<Arc<dyn Provider>, ProviderError>, ProviderFactory) =
         match config::provider_selection()? {
             ProviderSelection::Gemini => {
@@ -180,9 +207,11 @@ fn configure_provider(
             }
         }
     };
-    Ok(ProviderComposition {
-        initial: provider,
-        factory,
+    Ok(ConfiguredProvider {
+        composition: coordinator::ProviderComposition {
+            initial: provider,
+            factory,
+        },
         catalog,
     })
 }

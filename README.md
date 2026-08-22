@@ -3,8 +3,9 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-Phase 2 is complete.
-The Rust terminal application now runs the same durable catalog, selection, streaming, cancellation, retry, and recovery path through Google AI Studio Gemini or a configurable OpenAI-compatible model router.
+Phase 3 is complete.
+The Rust terminal application now runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router.
+Versioned filesystem, direct-process, and HTTP tools use scoped deny, ask, or allow decisions, bounded output, content-addressed artifacts, immutable run budgets, and explicit interruption recovery.
 Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
 The current provider-protocol evidence uses local HTTP fixtures and fake providers, so it does not claim live Gemini or router service verification.
 
@@ -46,12 +47,18 @@ Routers mounted below a path such as `https://router.example/api/` retain that p
 | Refresh a failed catalog | `Ctrl+R` while the picker is open |
 | Cancel the active response | `Esc` or `Ctrl+C` |
 | Retry the latest failed or cancelled attempt | `Ctrl+R` |
+| Allow the displayed exact tool request once | `Y` |
+| Deny the displayed tool request | `N` or `Esc` |
+| Inspect a long tool request | `Up` or `Down` while the permission overlay is open |
 | Scroll the transcript | `Alt+Up` or `Alt+Down`, or `Ctrl+PageUp` or `Ctrl+PageDown` |
 | Resume following the transcript tail | `Ctrl+End` |
 | Quit | `Ctrl+C` when no attempt is active |
 
 Prompts are saved before provider dispatch.
 Cancellation requests and response segments also cross the durable command boundary before the terminal treats them as committed.
+Tool calls, scoped permission decisions, human answers, effect-start boundaries, and results cross the same boundary.
+Workspace reads, writes, direct process execution, and HTTP requests all require an explicit terminal answer under the default local policy.
+The permission overlay shows scrollable operation-specific fields, including every process argument and the HTTP method and full URL.
 
 ## Configuration and local data
 
@@ -75,6 +82,7 @@ Cancellation requests and response segments also cross the durable command bound
 | `AUTOHARNESS_CATALOG_REFRESH_MS` | Optional positive fresh-cache interval |
 | `AUTOHARNESS_CATALOG_MAX_STALE_MS` | Optional maximum stale fallback age; must not be shorter than the refresh interval |
 | `AUTOHARNESS_DATA_DIR` | Optional absolute override for the application data directory |
+| `AUTOHARNESS_WORKSPACE` | Optional absolute filesystem and process workspace root; defaults to the canonical current directory |
 | `AUTOHARNESS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug`, or `trace`; defaults to `info` |
 
 Without an override, AutoHarness uses the platform application-data location:
@@ -90,9 +98,12 @@ The directory contains:
 | `autoharness.sqlite3` | Durable schema-v1 session events, rebuilt projections, and integrity-checked provider-neutral catalog snapshots |
 | `autoharness.log` | Content-free structured lifecycle and operational trace events |
 | `autoharness.writer.lock` | Exclusive writer lease that prevents two processes from mutating the same store |
+| `artifacts/` | Content-addressed full tool output retained when the model-visible inline result is truncated |
 
 On startup, AutoHarness replays the active session from authoritative events.
 An attempt interrupted before provider dispatch becomes a retryable failure, while an attempt interrupted after dispatch becomes an explicit unknown outcome instead of a fabricated success.
+An unanswered tool permission remains pending after restart.
+A tool interrupted after its durable start boundary becomes unknown and is not executed again automatically.
 
 ## Development
 
@@ -104,8 +115,8 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-The local Phase 2 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
-The suite covers both production adapters, shared conformance assertions, a real composed router session, provider policy, capability preflight, durable catalog caching and migration, in-app credential entry, cancel and retry, SQLite replay, terminal restoration, fixed-size rendering, and credential redaction.
+The local Phase 3 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
+The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, every run-budget dimension, bounded artifacts, permission UI behavior, interruption recovery, a composed allow-execute-continue-reopen path, SQLite replay, terminal restoration, and credential redaction.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
 A credential-overlay PTY smoke run pasted a sentinel through bracketed paste, displayed only the fixed mask, cleared it on dismissal, reopened an empty editor through `Ctrl+K`, found no sentinel bytes in the application files, and restored the terminal on exit.
 A Phase 2 PTY smoke run used a local OpenAI-compatible fixture to discover and select a router model, durably admit a prompt, render a completed streamed response, restart with the fixture offline, and restore the selected model and transcript from replay plus the fresh catalog cache.

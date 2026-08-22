@@ -61,6 +61,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
 }
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if model.focus == Focus::Permission {
+        return handle_permission_input(model, input);
+    }
+
     if matches!(
         input,
         Input {
@@ -161,6 +165,44 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+    }
+}
+
+fn handle_permission_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Up, .. }
+        | Input {
+            key: Key::PageUp, ..
+        } => {
+            model.permission_scroll = model.permission_scroll.saturating_sub(1);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Down, .. }
+        | Input {
+            key: Key::PageDown, ..
+        } => {
+            model.permission_scroll = model.permission_scroll.saturating_add(1);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('y' | 'Y'),
+            ..
+        } => answer_permission(model, true),
+        Input {
+            key: Key::Char('n' | 'N') | Key::Esc,
+            ..
+        } => answer_permission(model, false),
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        } => {
+            model.should_quit = true;
+            vec![UiEffect::Quit]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -356,7 +398,23 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
         });
         original_still_failed && !retry_projected
     });
+    model.answering_permissions.retain(|tool_call_id| {
+        session
+            .permission_requests
+            .iter()
+            .any(|request| &request.tool_call_id == tool_call_id)
+    });
     model.session = session;
+    if !model.session.permission_requests.is_empty() {
+        model.permission_scroll = 0;
+        model.credential.open = false;
+        model.credential.clear();
+        model.picker.open = false;
+        model.focus = Focus::Permission;
+    } else if model.focus == Focus::Permission {
+        model.permission_scroll = 0;
+        model.focus = Focus::Composer;
+    }
     model.sync_retry_deadline();
     model.dirty = true;
 }
@@ -402,6 +460,10 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::RefreshCatalog => {
                         model.notice = Some(Notice::Info("Catalog refresh requested".to_owned()));
                     }
+                    PendingKind::AnswerPermission(tool_call_id) => {
+                        model.answering_permissions.remove(&tool_call_id);
+                        model.notice = Some(Notice::Info("Permission answer saved".to_owned()));
+                    }
                 }
             }
         }
@@ -419,7 +481,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::RefreshCatalog
                     | PendingKind::SubmitPrompt(_)
                     | PendingKind::CancelAttempt(_)
-                    | PendingKind::RetryAttempt(_),
+                    | PendingKind::RetryAttempt(_)
+                    | PendingKind::AnswerPermission(_),
                 )
                 | None => {}
             }
@@ -427,6 +490,31 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
         }
     }
     model.dirty = true;
+}
+
+fn answer_permission(model: &mut Model, allow: bool) -> Vec<UiEffect> {
+    let Some(permission) = model.session.permission_requests.first() else {
+        model.focus = Focus::Composer;
+        model.dirty = true;
+        return Vec::new();
+    };
+    let tool_call_id = permission.tool_call_id.clone();
+    if model.answering_permissions.contains(&tool_call_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::AnswerPermission(tool_call_id.clone()),
+    );
+    model.answering_permissions.insert(tool_call_id.clone());
+    model.notice = Some(Notice::Info("Saving permission answer...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::AnswerPermission {
+        request_id,
+        tool_call_id,
+        allow,
+    })]
 }
 
 fn submit_credential(model: &mut Model) -> Vec<UiEffect> {
@@ -765,7 +853,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::SelectModel(_)
             | PendingKind::SubmitPrompt(_)
             | PendingKind::CancelAttempt(_)
-            | PendingKind::RetryAttempt(_) => false,
+            | PendingKind::RetryAttempt(_)
+            | PendingKind::AnswerPermission(_) => false,
         })
 }
 

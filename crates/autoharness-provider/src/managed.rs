@@ -815,10 +815,10 @@ mod tests {
     fn request() -> ChatRequest {
         ChatRequest::new(
             ModelId::new("model-a").expect("model"),
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: ChatContent::new("hello").expect("content"),
-            }],
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("hello").expect("content"),
+            )],
         )
         .expect("request")
     }

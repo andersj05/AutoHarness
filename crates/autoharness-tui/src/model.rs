@@ -49,6 +49,27 @@ impl AttemptKey {
     }
 }
 
+/// A provider-neutral tool-call identity supplied by application composition.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ToolCallKey(String);
+
+impl ToolCallKey {
+    /// Creates a non-empty UI tool-call identity.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err("tool-call identity must not be empty");
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the stable string form.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A model row suitable for the picker without provider-native payloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelSummary {
@@ -196,6 +217,49 @@ pub enum TranscriptItem {
     },
 }
 
+/// One durable human permission request.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PermissionRequestView {
+    /// Stable tool-call identity.
+    pub tool_call_id: ToolCallKey,
+    /// Registered versioned tool name.
+    pub tool_name: String,
+    /// Trusted capability class.
+    pub capability: String,
+    /// Canonical scoped resource.
+    pub resource: String,
+    /// Trusted operation-specific fields required for an informed decision.
+    pub details: Vec<PermissionDetailView>,
+}
+
+impl Debug for PermissionRequestView {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PermissionRequestView")
+            .field("tool_call_id", &self.tool_call_id)
+            .field("tool_name", &self.tool_name)
+            .field("capability", &self.capability)
+            .field("resource", &self.resource)
+            .field("details", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// One trusted permission field visible only in the decision overlay.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PermissionDetailView {
+    /// Human-readable field label.
+    pub label: String,
+    /// Exact or conservatively summarized field value.
+    pub value: String,
+}
+
+impl Debug for PermissionDetailView {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PermissionDetailView([REDACTED])")
+    }
+}
+
 /// Read model derived from durable session events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionProjection {
@@ -205,6 +269,8 @@ pub struct SessionProjection {
     pub selected_model: Option<ModelRef>,
     /// Visible transcript in durable order.
     pub transcript: Vec<TranscriptItem>,
+    /// Durable unanswered permission requests in proposal order.
+    pub permission_requests: Vec<PermissionRequestView>,
 }
 
 impl SessionProjection {
@@ -215,6 +281,7 @@ impl SessionProjection {
             revision: 0,
             selected_model: None,
             transcript: Vec::new(),
+            permission_requests: Vec::new(),
         }
     }
 
@@ -283,6 +350,8 @@ pub enum Focus {
     Picker,
     /// The ephemeral provider-credential overlay owns key input.
     Credential,
+    /// A durable tool permission request owns key input.
+    Permission,
 }
 
 /// A provider credential transferred from the TUI without persistence or serialization.
@@ -486,6 +555,8 @@ pub enum PendingKind {
     CancelAttempt(AttemptKey),
     /// Attempt retry.
     RetryAttempt(AttemptKey),
+    /// Human response to one durable permission request.
+    AnswerPermission(ToolCallKey),
 }
 
 /// Intent emitted by pure update logic and handled by application composition.
@@ -518,6 +589,12 @@ pub enum UiIntent {
         request_id: RequestId,
         attempt_id: AttemptKey,
     },
+    /// Resolve one exact durable tool permission request.
+    AnswerPermission {
+        request_id: RequestId,
+        tool_call_id: ToolCallKey,
+        allow: bool,
+    },
 }
 
 impl UiIntent {
@@ -530,7 +607,8 @@ impl UiIntent {
             | Self::SelectModel { request_id, .. }
             | Self::SubmitPrompt { request_id, .. }
             | Self::CancelAttempt { request_id, .. }
-            | Self::RetryAttempt { request_id, .. } => *request_id,
+            | Self::RetryAttempt { request_id, .. }
+            | Self::AnswerPermission { request_id, .. } => *request_id,
         }
     }
 }
@@ -621,6 +699,8 @@ pub struct Model {
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
+    pub(crate) answering_permissions: BTreeSet<ToolCallKey>,
+    pub(crate) permission_scroll: u16,
     pub(crate) retry_deadlines: BTreeMap<AttemptKey, UiInstant>,
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
@@ -631,11 +711,15 @@ impl Model {
     /// Creates UI state from application-provided read models.
     #[must_use]
     pub fn new(session: Arc<SessionProjection>, catalog: Arc<CatalogProjection>) -> Self {
-        let open_credential = matches!(&*catalog, CatalogProjection::CredentialRequired);
+        let permission_pending = !session.permission_requests.is_empty();
+        let open_credential =
+            !permission_pending && matches!(&*catalog, CatalogProjection::CredentialRequired);
         let open_picker = !open_credential
             && session.selected_model.is_none()
             && matches!(&*catalog, CatalogProjection::Ready { models, .. } if !models.is_empty());
-        let focus = if open_credential {
+        let focus = if permission_pending {
+            Focus::Permission
+        } else if open_credential {
             Focus::Credential
         } else if open_picker {
             Focus::Picker
@@ -671,6 +755,8 @@ impl Model {
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
+            answering_permissions: BTreeSet::new(),
+            permission_scroll: 0,
             retry_deadlines: BTreeMap::new(),
             catalog_retry_deadline: None,
             next_request_id: 1,

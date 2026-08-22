@@ -8,8 +8,9 @@ mod view;
 
 pub use model::{
     ApiCredential, AttemptKey, AttemptStatus, CatalogProjection, ComposerState, Focus, Message,
-    Model, ModelSummary, Notice, PendingKind, RequestId, RetryPolicy, SessionProjection,
-    TranscriptItem, TranscriptState, UiEffect, UiFailure, UiInstant, UiIntent, UiNotice, UsageView,
+    Model, ModelSummary, Notice, PendingKind, PermissionDetailView, PermissionRequestView,
+    RequestId, RetryPolicy, SessionProjection, ToolCallKey, TranscriptItem, TranscriptState,
+    UiEffect, UiFailure, UiInstant, UiIntent, UiNotice, UsageView,
 };
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,

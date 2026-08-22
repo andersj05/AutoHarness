@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use autoharness_domain::{
     AttemptFailure, AttemptId, ClassifiedError, CommandPayload, DeliveryMode, ErrorClass,
-    ErrorCode, PromptText, PublicMessage, ResponseText, RetryAdvice, SessionId,
-    UsageSnapshot as DomainUsage,
+    ErrorCode, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage, ResponseText,
+    RetryAdvice, RunLimits, SessionId, ToolCallId, UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
@@ -11,12 +11,14 @@ use autoharness_engine::{
 use autoharness_provider::{
     CancellationToken, CatalogRequest, ChatContent, ChatMessage, ChatRequest, ChatRole,
     ModelCatalog, ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
+    ProviderToolCall, ProviderToolDefinition,
 };
 #[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
+use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
 use autoharness_tui::{
-    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, UiFailure,
-    UiIntent, UiNotice,
+    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, ToolCallKey,
+    UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -29,6 +31,11 @@ const PROVIDER_MESSAGE_CAPACITY: usize = 128;
 
 pub(crate) type ProviderFactory =
     Arc<dyn Fn(ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> + Send + Sync + 'static>;
+
+pub(crate) struct ProviderComposition {
+    pub(crate) initial: Option<Arc<dyn Provider>>,
+    pub(crate) factory: ProviderFactory,
+}
 
 #[cfg(test)]
 fn gemini_provider(credential: ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> {
@@ -46,11 +53,17 @@ enum AsyncMessage {
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
     },
+    Tool {
+        tool_call_id: ToolCallId,
+        result: Result<autoharness_domain::ToolOutput, ToolError>,
+    },
 }
 
 struct ActiveAttempt {
     attempt_id: AttemptId,
     cancellation: CancellationToken,
+    budget: RunBudget,
+    usage_base: DomainUsage,
 }
 
 enum StartAttemptError {
@@ -65,6 +78,7 @@ pub struct Coordinator {
     engine: EngineHandle,
     provider: Option<Arc<dyn Provider>>,
     provider_factory: ProviderFactory,
+    tool_runtime: Arc<ToolRuntime>,
     ports: AppPorts,
     messages: mpsc::Sender<AsyncMessage>,
     message_rx: mpsc::Receiver<AsyncMessage>,
@@ -91,8 +105,11 @@ impl Coordinator {
             session_id,
             session,
             engine,
-            provider,
-            Arc::new(gemini_provider),
+            ProviderComposition {
+                initial: provider,
+                factory: Arc::new(gemini_provider),
+            },
+            test_tool_runtime(),
             ports,
             shutdown,
         )
@@ -102,23 +119,25 @@ impl Coordinator {
         session_id: SessionId,
         session: SessionAggregate,
         engine: EngineHandle,
-        provider: Option<Arc<dyn Provider>>,
-        provider_factory: ProviderFactory,
+        provider: ProviderComposition,
+        tool_runtime: Arc<ToolRuntime>,
         ports: AppPorts,
         shutdown: CancellationToken,
     ) -> Self {
         let (messages, message_rx) = mpsc::channel(PROVIDER_MESSAGE_CAPACITY);
+        let active = recover_active_attempt(&session, &shutdown);
         Self {
             session_id,
             session,
             engine,
-            provider,
-            provider_factory,
+            provider: provider.initial,
+            provider_factory: provider.factory,
+            tool_runtime,
             ports,
             messages,
             message_rx,
             shutdown,
-            active: None,
+            active,
             catalog_models: Vec::new(),
             catalog_generation: 0,
             catalog_cancellation: None,
@@ -129,6 +148,7 @@ impl Coordinator {
     pub async fn run(mut self) -> Result<(), AppError> {
         if self.provider.is_some() {
             self.refresh_catalog(None);
+            self.maybe_resume_after_tools().await?;
         }
 
         loop {
@@ -223,6 +243,14 @@ impl Coordinator {
             } => {
                 self.retry_attempt(request_id, attempt_id).await?;
             }
+            UiIntent::AnswerPermission {
+                request_id,
+                tool_call_id,
+                allow,
+            } => {
+                self.answer_permission(request_id, tool_call_id, allow)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -255,6 +283,7 @@ impl Coordinator {
                     .catalogs
                     .send_replace(Arc::new(CatalogProjection::Loading));
                 self.refresh_catalog(Some(request_id));
+                self.maybe_resume_after_tools().await?;
             }
             Err(error) => {
                 telemetry::provider_unavailable(&error);
@@ -472,17 +501,49 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
+        let was_awaiting_tools = self
+            .session
+            .attempt(&attempt_id)
+            .is_some_and(|attempt| attempt.status() == EngineAttemptStatus::AwaitingTools);
         let cancellation = active.cancellation.clone();
         match self
             .execute(CommandPayload::RequestAttemptCancellation {
                 session_id: self.session_id.clone(),
-                attempt_id,
+                attempt_id: attempt_id.clone(),
             })
             .await
         {
             Ok(()) => {
                 telemetry::cancellation_requested();
                 cancellation.cancel();
+                if was_awaiting_tools {
+                    let pending: Vec<_> = self
+                        .session
+                        .tool_calls()
+                        .iter()
+                        .filter(|call| {
+                            call.attempt_id() == &attempt_id
+                                && !call.status().is_settled()
+                                && call.status() != autoharness_engine::ToolCallStatus::Running
+                        })
+                        .map(|call| call.call().tool_call_id.clone())
+                        .collect();
+                    for tool_call_id in pending {
+                        self.execute(CommandPayload::CancelToolCall {
+                            session_id: self.session_id.clone(),
+                            tool_call_id,
+                        })
+                        .await?;
+                    }
+                    if self.active_tool_calls_settled() {
+                        self.execute(CommandPayload::CancelAttempt {
+                            session_id: self.session_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                        })
+                        .await?;
+                        self.active = None;
+                    }
+                }
                 self.commit(request_id).await?;
             }
             Err(error) => self.reject(request_id, engine_failure(&error)).await?,
@@ -491,6 +552,7 @@ impl Coordinator {
     }
 
     async fn start_attempt(&mut self, attempt_id: AttemptId) -> Result<(), StartAttemptError> {
+        let limits = RunLimits::default();
         let request = match build_request(&self.session, &attempt_id) {
             Ok(request) => request,
             Err(error) => {
@@ -505,7 +567,20 @@ impl Coordinator {
                 return Err(StartAttemptError::Provider(error));
             }
         };
+        self.execute(CommandPayload::ConfigureRunBudget {
+            session_id: self.session_id.clone(),
+            attempt_id: attempt_id.clone(),
+            limits,
+        })
+        .await
+        .map_err(StartAttemptError::Engine)?;
         self.execute(CommandPayload::StartAttempt {
+            session_id: self.session_id.clone(),
+            attempt_id: attempt_id.clone(),
+        })
+        .await
+        .map_err(StartAttemptError::Engine)?;
+        self.execute(CommandPayload::StartRunTurn {
             session_id: self.session_id.clone(),
             attempt_id: attempt_id.clone(),
         })
@@ -514,9 +589,15 @@ impl Coordinator {
         telemetry::attempt_started();
         let cancellation = self.shutdown.child_token();
         self.spawn_stream(attempt_id.clone(), request, cancellation.clone());
+        let mut budget = RunBudget::new(limits);
+        budget
+            .start_turn()
+            .map_err(|error| StartAttemptError::Provider(tool_provider_error(&error)))?;
         self.active = Some(ActiveAttempt {
             attempt_id,
             cancellation,
+            budget,
+            usage_base: DomainUsage::default(),
         });
         Ok(())
     }
@@ -531,6 +612,10 @@ impl Coordinator {
             AsyncMessage::Stream { attempt_id, result } => {
                 self.handle_stream(attempt_id, result).await
             }
+            AsyncMessage::Tool {
+                tool_call_id,
+                result,
+            } => self.handle_tool_result(tool_call_id, result).await,
         }
     }
 
@@ -610,6 +695,10 @@ impl Coordinator {
             Ok(ProviderStreamEvent::Started) => {}
             Ok(ProviderStreamEvent::TextDelta(delta)) => {
                 let bytes = delta.as_str().len();
+                if let Err(error) = self.add_run_output(bytes) {
+                    self.fail_run_budget(attempt_id, error).await?;
+                    return Ok(());
+                }
                 self.execute(CommandPayload::AppendAttemptText {
                     session_id: self.session_id.clone(),
                     attempt_id,
@@ -622,25 +711,67 @@ impl Coordinator {
             Ok(ProviderStreamEvent::Usage(usage)) => {
                 let input_tokens = usage.input_tokens;
                 let output_tokens = usage.output_tokens;
-                let total_tokens = usage.total_tokens;
+                let cumulative = self.cumulative_usage(usage);
+                let total_tokens = cumulative.total_tokens();
+                if let Some(total) = total_tokens
+                    && let Err(error) = self.record_run_tokens(total)
+                {
+                    self.fail_run_budget(attempt_id, error).await?;
+                    return Ok(());
+                }
                 self.execute(CommandPayload::RecordAttemptUsage {
                     session_id: self.session_id.clone(),
                     attempt_id,
-                    usage: DomainUsage::new(
-                        usage.input_tokens,
-                        usage.output_tokens,
-                        usage.total_tokens,
-                    )
-                    .with_breakdown(
-                        usage.cached_input_tokens,
-                        usage.reasoning_tokens,
-                        usage.tool_tokens,
-                    ),
+                    usage: cumulative,
                 })
                 .await?;
                 telemetry::usage_committed(input_tokens, output_tokens, total_tokens);
             }
+            Ok(ProviderStreamEvent::ToolCall(call)) => {
+                if !cancellation_requested {
+                    self.handle_provider_tool_call(attempt_id, call).await?;
+                }
+            }
+            Ok(ProviderStreamEvent::Completed {
+                reason: autoharness_provider::CompletionReason::ToolCalls,
+            }) => {
+                if cancellation_requested {
+                    if self.active_tool_calls_settled() {
+                        self.execute(CommandPayload::CancelAttempt {
+                            session_id: self.session_id.clone(),
+                            attempt_id,
+                        })
+                        .await?;
+                        self.active = None;
+                    }
+                    return Ok(());
+                }
+                self.execute(CommandPayload::PauseAttemptForTools {
+                    session_id: self.session_id.clone(),
+                    attempt_id,
+                })
+                .await?;
+                self.maybe_resume_after_tools().await?;
+            }
             Ok(ProviderStreamEvent::Completed { reason }) => {
+                if self.attempt_has_unsettled_tool_calls(&attempt_id) {
+                    self.settle_attempt_tools_conservatively(&attempt_id)
+                        .await?;
+                    self.execute(CommandPayload::FailAttempt {
+                        session_id: self.session_id.clone(),
+                        attempt_id,
+                        failure: completion_failure(
+                            ErrorClass::Protocol,
+                            "orphaned_tool_calls",
+                            "The provider ended while tool calls were still unsettled",
+                            RetryAdvice::Never,
+                        ),
+                    })
+                    .await?;
+                    self.active = None;
+                    telemetry::attempt_settled("failed", None);
+                    return Ok(());
+                }
                 telemetry::completion_observed(reason);
                 let outcome = completion_outcome(reason);
                 let payload = completion_payload(&self.session_id, attempt_id, reason);
@@ -649,15 +780,19 @@ impl Coordinator {
                 telemetry::attempt_settled(outcome, None);
             }
             Ok(ProviderStreamEvent::Cancelled) if cancellation_requested => {
-                self.execute(CommandPayload::CancelAttempt {
-                    session_id: self.session_id.clone(),
-                    attempt_id,
-                })
-                .await?;
-                self.active = None;
-                telemetry::attempt_settled("cancelled", None);
+                if self.active_tool_calls_settled() {
+                    self.execute(CommandPayload::CancelAttempt {
+                        session_id: self.session_id.clone(),
+                        attempt_id,
+                    })
+                    .await?;
+                    self.active = None;
+                    telemetry::attempt_settled("cancelled", None);
+                }
             }
             Ok(ProviderStreamEvent::Cancelled) => {
+                self.settle_attempt_tools_conservatively(&attempt_id)
+                    .await?;
                 self.execute(CommandPayload::FailAttempt {
                     session_id: self.session_id.clone(),
                     attempt_id,
@@ -668,15 +803,19 @@ impl Coordinator {
                 telemetry::attempt_settled("provider_cancelled", None);
             }
             Err(error) if cancellation_requested => {
-                self.execute(CommandPayload::CancelAttempt {
-                    session_id: self.session_id.clone(),
-                    attempt_id,
-                })
-                .await?;
-                self.active = None;
-                telemetry::attempt_settled("cancelled", Some(&error));
+                if self.active_tool_calls_settled() {
+                    self.execute(CommandPayload::CancelAttempt {
+                        session_id: self.session_id.clone(),
+                        attempt_id,
+                    })
+                    .await?;
+                    self.active = None;
+                    telemetry::attempt_settled("cancelled", Some(&error));
+                }
             }
             Err(error) => {
+                self.settle_attempt_tools_conservatively(&attempt_id)
+                    .await?;
                 let (failure, outcome) = if error.kind() == ProviderErrorKind::Cancelled {
                     (unsolicited_cancellation_failure(), "provider_cancelled")
                 } else {
@@ -691,6 +830,418 @@ impl Coordinator {
                 self.active = None;
                 telemetry::attempt_settled(outcome, Some(&error));
             }
+        }
+        Ok(())
+    }
+
+    async fn handle_provider_tool_call(
+        &mut self,
+        attempt_id: AttemptId,
+        call: ProviderToolCall,
+    ) -> Result<(), AppError> {
+        let planned = match plan(IncomingToolCall {
+            tool_call_id: ids::tool_call_id(),
+            provider_call_id: call.provider_call_id,
+            tool_name: call.tool_name,
+            arguments: call.arguments,
+        }) {
+            Ok(planned) => planned,
+            Err(error) => {
+                self.settle_attempt_tools_conservatively(&attempt_id)
+                    .await?;
+                self.execute(CommandPayload::FailAttempt {
+                    session_id: self.session_id.clone(),
+                    attempt_id,
+                    failure: error.durable_failure(),
+                })
+                .await?;
+                if let Some(active) = self.active.take() {
+                    active.cancellation.cancel();
+                }
+                return Ok(());
+            }
+        };
+        let outcome = self.tool_runtime.evaluate(&planned);
+        let tool_call_id = planned.spec().tool_call_id.clone();
+        self.execute(CommandPayload::ProposeToolCall {
+            session_id: self.session_id.clone(),
+            attempt_id,
+            call: planned.spec().clone(),
+        })
+        .await?;
+        self.execute(CommandPayload::RecordToolPermission {
+            session_id: self.session_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            decision_id: ids::permission_decision_id(),
+            outcome,
+        })
+        .await?;
+        match outcome {
+            PermissionOutcome::Allow => self.start_tool_call(tool_call_id).await?,
+            PermissionOutcome::Deny => {
+                self.execute(CommandPayload::DenyToolCall {
+                    session_id: self.session_id.clone(),
+                    tool_call_id,
+                })
+                .await?;
+            }
+            PermissionOutcome::Ask => {}
+        }
+        Ok(())
+    }
+
+    async fn start_tool_call(&mut self, tool_call_id: ToolCallId) -> Result<(), AppError> {
+        let call = self
+            .session
+            .tool_call(&tool_call_id)
+            .cloned()
+            .ok_or(AppError::Configuration)?;
+        let outcome = call
+            .policy_decision()
+            .map(|(_, outcome)| *outcome)
+            .ok_or(AppError::Configuration)?;
+        let answer = call.human_answer().map(|(_, answer)| *answer);
+        let (authorized, _) = self
+            .tool_runtime
+            .authorize_replayed(call.call().clone(), outcome, answer)
+            .map_err(|_| AppError::Configuration)?;
+        self.execute(CommandPayload::StartToolCall {
+            session_id: self.session_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+        })
+        .await?;
+        let budget_result = self
+            .active
+            .as_mut()
+            .ok_or(AppError::Configuration)?
+            .budget
+            .start_tool();
+        if let Err(error) = budget_result {
+            self.execute(CommandPayload::FailToolCall {
+                session_id: self.session_id.clone(),
+                tool_call_id,
+                failure: error.durable_failure(),
+            })
+            .await?;
+            return Ok(());
+        }
+        let runtime = Arc::clone(&self.tool_runtime);
+        let messages = self.messages.clone();
+        let cancellation = self
+            .active
+            .as_ref()
+            .ok_or(AppError::Configuration)?
+            .cancellation
+            .clone();
+        tokio::spawn(async move {
+            let result = runtime.execute(authorized, cancellation).await;
+            let _ = messages
+                .send(AsyncMessage::Tool {
+                    tool_call_id,
+                    result,
+                })
+                .await;
+        });
+        Ok(())
+    }
+
+    async fn handle_tool_result(
+        &mut self,
+        tool_call_id: ToolCallId,
+        result: Result<autoharness_domain::ToolOutput, ToolError>,
+    ) -> Result<(), AppError> {
+        let Some(call) = self.session.tool_call(&tool_call_id) else {
+            return Ok(());
+        };
+        if call.status() != autoharness_engine::ToolCallStatus::Running {
+            return Ok(());
+        }
+        let attempt_id = call.attempt_id().clone();
+        if let Some(active) = &mut self.active
+            && active.attempt_id == attempt_id
+        {
+            active.budget.finish_tool();
+        }
+        match result {
+            Ok(output) => {
+                let bytes = usize::try_from(output.original_bytes()).unwrap_or(usize::MAX);
+                if let Err(error) = self.add_run_output(bytes) {
+                    self.execute(CommandPayload::MarkToolCallUnknown {
+                        session_id: self.session_id.clone(),
+                        tool_call_id,
+                    })
+                    .await?;
+                    self.fail_run_budget(attempt_id, error).await?;
+                    return Ok(());
+                } else {
+                    self.execute(CommandPayload::CompleteToolCall {
+                        session_id: self.session_id.clone(),
+                        tool_call_id,
+                        output,
+                    })
+                    .await?;
+                }
+            }
+            Err(_) => {
+                self.execute(CommandPayload::MarkToolCallUnknown {
+                    session_id: self.session_id.clone(),
+                    tool_call_id,
+                })
+                .await?;
+            }
+        }
+        if self.active.as_ref().is_some_and(|active| {
+            self.session
+                .attempt(&active.attempt_id)
+                .is_some_and(|attempt| {
+                    attempt.status() == EngineAttemptStatus::CancellationRequested
+                })
+        }) && self.active_tool_calls_settled()
+        {
+            let attempt_id = self
+                .active
+                .as_ref()
+                .expect("active checked")
+                .attempt_id
+                .clone();
+            self.execute(CommandPayload::CancelAttempt {
+                session_id: self.session_id.clone(),
+                attempt_id,
+            })
+            .await?;
+            self.active = None;
+            return Ok(());
+        }
+        self.maybe_resume_after_tools().await
+    }
+
+    async fn answer_permission(
+        &mut self,
+        request_id: RequestId,
+        tool_call_key: ToolCallKey,
+        allow: bool,
+    ) -> Result<(), AppError> {
+        let tool_call_id = match ToolCallId::new(tool_call_key.as_str()) {
+            Ok(id) => id,
+            Err(error) => {
+                self.reject(request_id, classified_failure(&error)).await?;
+                return Ok(());
+            }
+        };
+        if self.session.tool_call(&tool_call_id).is_none_or(|call| {
+            call.status() != autoharness_engine::ToolCallStatus::PermissionPending
+        }) {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "The permission request is no longer pending",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        let answer = if allow {
+            PermissionAnswer::AllowOnce
+        } else {
+            PermissionAnswer::Deny
+        };
+        self.execute(CommandPayload::AnswerToolPermission {
+            session_id: self.session_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            decision_id: ids::permission_decision_id(),
+            answer,
+        })
+        .await?;
+        if allow {
+            self.start_tool_call(tool_call_id).await?;
+        } else {
+            self.execute(CommandPayload::DenyToolCall {
+                session_id: self.session_id.clone(),
+                tool_call_id,
+            })
+            .await?;
+        }
+        self.commit(request_id).await?;
+        self.maybe_resume_after_tools().await
+    }
+
+    async fn maybe_resume_after_tools(&mut self) -> Result<(), AppError> {
+        let Some(active) = &self.active else {
+            return Ok(());
+        };
+        let attempt_id = active.attempt_id.clone();
+        if self.provider.is_none()
+            || self
+                .session
+                .attempt(&attempt_id)
+                .is_none_or(|attempt| attempt.status() != EngineAttemptStatus::AwaitingTools)
+            || !self.active_tool_calls_settled()
+        {
+            return Ok(());
+        }
+        if let Err(error) = self
+            .active
+            .as_mut()
+            .expect("active checked")
+            .budget
+            .start_turn()
+        {
+            self.fail_run_budget(attempt_id, error).await?;
+            return Ok(());
+        }
+        let usage_base = self
+            .session
+            .attempt(&attempt_id)
+            .and_then(|attempt| attempt.usage())
+            .unwrap_or_default();
+        self.active.as_mut().expect("active checked").usage_base = usage_base;
+        self.execute(CommandPayload::ResumeAttemptAfterTools {
+            session_id: self.session_id.clone(),
+            attempt_id: attempt_id.clone(),
+        })
+        .await?;
+        self.execute(CommandPayload::StartRunTurn {
+            session_id: self.session_id.clone(),
+            attempt_id: attempt_id.clone(),
+        })
+        .await?;
+        let request =
+            build_request(&self.session, &attempt_id).map_err(|_| AppError::Configuration)?;
+        let cancellation = self
+            .active
+            .as_ref()
+            .expect("active checked")
+            .cancellation
+            .clone();
+        self.spawn_stream(attempt_id, request, cancellation);
+        Ok(())
+    }
+
+    fn active_tool_calls_settled(&self) -> bool {
+        let Some(active) = &self.active else {
+            return true;
+        };
+        self.session
+            .tool_calls()
+            .iter()
+            .filter(|call| call.attempt_id() == &active.attempt_id)
+            .all(|call| call.status().is_settled())
+    }
+
+    fn attempt_has_unsettled_tool_calls(&self, attempt_id: &AttemptId) -> bool {
+        self.session
+            .tool_calls()
+            .iter()
+            .any(|call| call.attempt_id() == attempt_id && !call.status().is_settled())
+    }
+
+    async fn settle_attempt_tools_conservatively(
+        &mut self,
+        attempt_id: &AttemptId,
+    ) -> Result<(), AppError> {
+        if let Some(active) = &self.active
+            && &active.attempt_id == attempt_id
+        {
+            active.cancellation.cancel();
+        }
+        let calls = self
+            .session
+            .tool_calls()
+            .iter()
+            .filter(|call| call.attempt_id() == attempt_id && !call.status().is_settled())
+            .map(|call| (call.call().tool_call_id.clone(), call.status()))
+            .collect::<Vec<_>>();
+        for (tool_call_id, status) in calls {
+            let payload = match status {
+                autoharness_engine::ToolCallStatus::Running => {
+                    CommandPayload::MarkToolCallUnknown {
+                        session_id: self.session_id.clone(),
+                        tool_call_id,
+                    }
+                }
+                autoharness_engine::ToolCallStatus::DeniedPending => CommandPayload::DenyToolCall {
+                    session_id: self.session_id.clone(),
+                    tool_call_id,
+                },
+                autoharness_engine::ToolCallStatus::Proposed
+                | autoharness_engine::ToolCallStatus::PermissionPending
+                | autoharness_engine::ToolCallStatus::Authorized => {
+                    CommandPayload::CancelToolCall {
+                        session_id: self.session_id.clone(),
+                        tool_call_id,
+                    }
+                }
+                autoharness_engine::ToolCallStatus::Completed
+                | autoharness_engine::ToolCallStatus::Failed
+                | autoharness_engine::ToolCallStatus::Denied
+                | autoharness_engine::ToolCallStatus::Cancelled
+                | autoharness_engine::ToolCallStatus::Unknown => continue,
+            };
+            self.execute(payload).await?;
+        }
+        Ok(())
+    }
+
+    fn add_run_output(&mut self, bytes: usize) -> Result<(), ToolError> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| {
+                ToolError::new(
+                    autoharness_tool::ToolErrorKind::Internal,
+                    RetryAdvice::Never,
+                )
+            })?
+            .budget
+            .add_output(u64::try_from(bytes).unwrap_or(u64::MAX))
+    }
+
+    fn record_run_tokens(&mut self, total: u64) -> Result<(), ToolError> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| {
+                ToolError::new(
+                    autoharness_tool::ToolErrorKind::Internal,
+                    RetryAdvice::Never,
+                )
+            })?
+            .budget
+            .record_tokens(total)
+    }
+
+    fn cumulative_usage(&self, usage: autoharness_provider::UsageSnapshot) -> DomainUsage {
+        let base = self
+            .active
+            .as_ref()
+            .map_or_else(DomainUsage::default, |active| active.usage_base);
+        DomainUsage::new(
+            add_optional(base.input_tokens(), usage.input_tokens),
+            add_optional(base.output_tokens(), usage.output_tokens),
+            add_optional(base.total_tokens(), usage.total_tokens),
+        )
+        .with_breakdown(
+            add_optional(base.cached_input_tokens(), usage.cached_input_tokens),
+            add_optional(base.reasoning_tokens(), usage.reasoning_tokens),
+            add_optional(base.tool_tokens(), usage.tool_tokens),
+        )
+    }
+
+    async fn fail_run_budget(
+        &mut self,
+        attempt_id: AttemptId,
+        error: ToolError,
+    ) -> Result<(), AppError> {
+        self.settle_attempt_tools_conservatively(&attempt_id)
+            .await?;
+        self.execute(CommandPayload::FailAttempt {
+            session_id: self.session_id.clone(),
+            attempt_id,
+            failure: error.durable_failure(),
+        })
+        .await?;
+        if let Some(active) = self.active.take() {
+            active.cancellation.cancel();
         }
         Ok(())
     }
@@ -835,24 +1386,185 @@ fn build_request(
         .iter()
         .filter(|input| input.promoted_by().is_some())
     {
-        messages.push(ChatMessage {
-            role: ChatRole::User,
-            content: ChatContent::new(input.prompt().as_str())?,
-        });
+        messages.push(ChatMessage::text(
+            ChatRole::User,
+            ChatContent::new(input.prompt().as_str())?,
+        ));
         for response in session.attempts().iter().filter(|candidate| {
             candidate.input_id() == input.input_id()
-                && candidate.status() == EngineAttemptStatus::Completed
+                && (candidate.status() == EngineAttemptStatus::Completed
+                    || (candidate.attempt_id() == attempt_id
+                        && session
+                            .tool_calls()
+                            .iter()
+                            .any(|call| call.attempt_id() == attempt_id)))
         }) {
             let text = response.response_text();
             if !text.trim().is_empty() {
-                messages.push(ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: ChatContent::new(text)?,
-                });
+                messages.push(ChatMessage::text(
+                    ChatRole::Assistant,
+                    ChatContent::new(text)?,
+                ));
+            }
+            for tool_call in session
+                .tool_calls()
+                .iter()
+                .filter(|call| call.attempt_id() == response.attempt_id())
+            {
+                messages.push(ChatMessage::ToolCall(ProviderToolCall {
+                    provider_call_id: tool_call.call().provider_call_id.clone(),
+                    tool_name: tool_call.call().tool_name.clone(),
+                    arguments: tool_call.call().arguments.clone(),
+                }));
+                if tool_call.status().is_settled() {
+                    let result = tool_result_content(tool_call);
+                    messages.push(ChatMessage::ToolResult {
+                        provider_call_id: tool_call.call().provider_call_id.clone(),
+                        tool_name: tool_call.call().tool_name.clone(),
+                        content: ChatContent::new(result)?,
+                    });
+                }
             }
         }
     }
+    let tools = definitions()
+        .into_iter()
+        .map(|definition| {
+            ProviderToolDefinition::new_v1(
+                definition.name,
+                definition.description,
+                definition.parameters,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     ChatRequest::new(attempt.model().model_id().clone(), messages)
+        .map(|request| request.with_tools(tools))
+}
+
+fn recover_active_attempt(
+    session: &SessionAggregate,
+    shutdown: &CancellationToken,
+) -> Option<ActiveAttempt> {
+    let attempt = session
+        .attempts()
+        .iter()
+        .rev()
+        .find(|attempt| attempt.status() == EngineAttemptStatus::AwaitingTools)?;
+    let limits = attempt.run_limits().unwrap_or_default();
+    let tokens = attempt
+        .usage()
+        .and_then(|usage| usage.total_tokens())
+        .unwrap_or(0);
+    let mut output_bytes = u64::try_from(attempt.response_text().len()).unwrap_or(u64::MAX);
+    for output in session
+        .tool_calls()
+        .iter()
+        .filter(|call| call.attempt_id() == attempt.attempt_id())
+        .filter_map(autoharness_engine::ToolCallProjection::output)
+    {
+        output_bytes = output_bytes.saturating_add(output.original_bytes());
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        });
+    let started_ms = attempt
+        .started_at()
+        .and_then(|timestamp| u64::try_from(timestamp.get()).ok())
+        .unwrap_or(now_ms);
+    let elapsed = std::time::Duration::from_millis(now_ms.saturating_sub(started_ms));
+    let budget = RunBudget::restore(
+        limits,
+        elapsed,
+        attempt.turns_started(),
+        tokens,
+        output_bytes,
+        0,
+    )
+    .expect("durable run counters fit configured limits");
+    Some(ActiveAttempt {
+        attempt_id: attempt.attempt_id().clone(),
+        cancellation: shutdown.child_token(),
+        budget,
+        usage_base: attempt.usage().unwrap_or_default(),
+    })
+}
+
+fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.saturating_add(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn tool_provider_error(error: &ToolError) -> ProviderError {
+    let kind = match error.kind() {
+        autoharness_tool::ToolErrorKind::Timeout => ProviderErrorKind::Timeout,
+        autoharness_tool::ToolErrorKind::Cancelled => ProviderErrorKind::Cancelled,
+        autoharness_tool::ToolErrorKind::PermissionDenied => ProviderErrorKind::PermissionDenied,
+        autoharness_tool::ToolErrorKind::InvalidCall
+        | autoharness_tool::ToolErrorKind::OutputLimit => ProviderErrorKind::LimitExceeded,
+        autoharness_tool::ToolErrorKind::Filesystem
+        | autoharness_tool::ToolErrorKind::Process
+        | autoharness_tool::ToolErrorKind::Http
+        | autoharness_tool::ToolErrorKind::Artifact => ProviderErrorKind::Unavailable,
+        autoharness_tool::ToolErrorKind::Internal => ProviderErrorKind::Internal,
+    };
+    ProviderError::new(kind, error.retry_advice())
+}
+
+#[cfg(test)]
+fn test_tool_runtime() -> Arc<ToolRuntime> {
+    let root = tempfile::tempdir().expect("tool test directory").keep();
+    test_tool_runtime_at(&root)
+}
+
+#[cfg(test)]
+fn test_tool_runtime_at(root: &std::path::Path) -> Arc<ToolRuntime> {
+    use autoharness_tool::{
+        FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy,
+    };
+
+    let artifacts = root.join("artifacts");
+    Arc::new(
+        ToolRuntime::new(
+            Arc::new(LocalFilesystem::new(root, 1024 * 1024).expect("filesystem")),
+            Arc::new(LocalProcess::new(root, 1024 * 1024).expect("process")),
+            Arc::new(LocalHttp::new(1024 * 1024).expect("HTTP")),
+            Arc::new(FileArtifactStore::new(artifacts).expect("artifacts")),
+            PermissionPolicy::local_default(),
+            2,
+            std::time::Duration::from_secs(10),
+            64 * 1024,
+        )
+        .expect("tool runtime"),
+    )
+}
+
+fn tool_result_content(call: &autoharness_engine::ToolCallProjection) -> String {
+    match call.status() {
+        autoharness_engine::ToolCallStatus::Completed => call.output().map_or_else(
+            || "Tool completed without output".to_owned(),
+            |output| output.content().to_owned(),
+        ),
+        autoharness_engine::ToolCallStatus::Failed => call.failure().map_or_else(
+            || "Tool failed".to_owned(),
+            |failure| format!("Tool failed: {}", failure.message().as_str()),
+        ),
+        autoharness_engine::ToolCallStatus::Denied => "Tool permission was denied".to_owned(),
+        autoharness_engine::ToolCallStatus::Cancelled => "Tool execution was cancelled".to_owned(),
+        autoharness_engine::ToolCallStatus::Unknown => {
+            "Tool outcome is unknown after interruption and was not retried".to_owned()
+        }
+        autoharness_engine::ToolCallStatus::Proposed
+        | autoharness_engine::ToolCallStatus::PermissionPending
+        | autoharness_engine::ToolCallStatus::Authorized
+        | autoharness_engine::ToolCallStatus::DeniedPending
+        | autoharness_engine::ToolCallStatus::Running => "Tool result is not settled".to_owned(),
+    }
 }
 
 fn attempt_failure(error: &ProviderError) -> AttemptFailure {
@@ -916,6 +1628,16 @@ fn completion_payload(
                 RetryAdvice::Never,
             ),
         },
+        CompletionReason::ToolCalls => CommandPayload::FailAttempt {
+            session_id: session_id.clone(),
+            attempt_id,
+            failure: completion_failure(
+                ErrorClass::Internal,
+                "unhandled_tool_completion",
+                "The provider tool turn could not be continued",
+                RetryAdvice::Never,
+            ),
+        },
     }
 }
 
@@ -928,6 +1650,7 @@ const fn completion_outcome(reason: autoharness_provider::CompletionReason) -> &
         CompletionReason::Safety => "safety_stop",
         CompletionReason::Recitation => "recitation_stop",
         CompletionReason::Other => "provider_stop",
+        CompletionReason::ToolCalls => "tool_calls",
     }
 }
 
@@ -1007,7 +1730,8 @@ mod tests {
 
     use autoharness_domain::{
         Causation, CommandId, CorrelationId, EventEnvelope, EventId, EventPayload, InputId,
-        ModelId, ModelRef, ProviderId, SessionSequence, TimestampMillis,
+        ModelId, ModelRef, ProviderCallId, ProviderId, SessionSequence, TimestampMillis,
+        ToolArguments, ToolName,
     };
     use autoharness_provider::{
         CapabilitySupport, Catalog, CatalogFreshness, CatalogRequest, Chat, CompletionReason,
@@ -1092,6 +1816,214 @@ mod tests {
     }
 
     impl ProviderMetadata for FakeProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
+    #[derive(Clone, Copy, Default)]
+    enum ToolLoopCall {
+        #[default]
+        Write,
+        Read,
+    }
+
+    #[derive(Default)]
+    struct ToolLoopProvider {
+        first_call: ToolLoopCall,
+        calls: AtomicUsize,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl ToolLoopProvider {
+        fn reading() -> Self {
+            Self {
+                first_call: ToolLoopCall::Read,
+                ..Self::default()
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Catalog for ToolLoopProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for ToolLoopProvider {
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            self.requests.lock().expect("request lock").push(request);
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                let (provider_call_id, tool_name, arguments) = match self.first_call {
+                    ToolLoopCall::Write => (
+                        "call-write-1",
+                        "fs_write",
+                        ToolArguments::new(serde_json::json!({
+                            "path": "result.txt",
+                            "content": "written by tool"
+                        }))
+                        .expect("tool arguments"),
+                    ),
+                    ToolLoopCall::Read => (
+                        "call-read-1",
+                        "fs_read",
+                        ToolArguments::new(serde_json::json!({"path": ".env"}))
+                            .expect("tool arguments"),
+                    ),
+                };
+                Ok(Box::pin(futures_util::stream::iter([
+                    Ok(ProviderStreamEvent::Started),
+                    Ok(ProviderStreamEvent::ToolCall(ProviderToolCall {
+                        provider_call_id: ProviderCallId::new(provider_call_id)
+                            .expect("provider call ID"),
+                        tool_name: ToolName::new(tool_name).expect("tool name"),
+                        arguments,
+                    })),
+                    Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::ToolCalls,
+                    }),
+                ])))
+            } else {
+                Ok(Box::pin(futures_util::stream::iter([
+                    Ok(ProviderStreamEvent::Started),
+                    Ok(ProviderStreamEvent::TextDelta(
+                        TextDelta::new("tool complete").expect("text delta"),
+                    )),
+                    Ok(ProviderStreamEvent::Usage(ProviderUsage {
+                        input_tokens: Some(8),
+                        output_tokens: Some(2),
+                        cached_input_tokens: None,
+                        reasoning_tokens: None,
+                        tool_tokens: Some(1),
+                        total_tokens: Some(10),
+                    })),
+                    Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::Stop,
+                    }),
+                ])))
+            }
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for ToolLoopProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.to_owned()
+        }
+    }
+
+    impl ProviderMetadata for ToolLoopProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
+    struct CommitThenCancelledFilesystem {
+        root: std::path::PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl autoharness_tool::FilesystemCapability for CommitThenCancelledFilesystem {
+        async fn read(
+            &self,
+            path: &std::path::Path,
+            _cancellation: &CancellationToken,
+        ) -> Result<Vec<u8>, ToolError> {
+            std::fs::read(self.root.join(path)).map_err(|_| {
+                ToolError::new(
+                    autoharness_tool::ToolErrorKind::Filesystem,
+                    RetryAdvice::Never,
+                )
+            })
+        }
+
+        async fn write(
+            &self,
+            path: &std::path::Path,
+            content: &[u8],
+            _cancellation: &CancellationToken,
+        ) -> Result<Vec<u8>, ToolError> {
+            std::fs::write(self.root.join(path), content).expect("committed fixture effect");
+            Err(ToolError::new(
+                autoharness_tool::ToolErrorKind::Cancelled,
+                RetryAdvice::Never,
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct ToolThenErrorProvider;
+
+    #[async_trait::async_trait]
+    impl Catalog for ToolThenErrorProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for ToolThenErrorProvider {
+        async fn stream_chat(
+            &self,
+            _request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            let arguments = ToolArguments::new(serde_json::json!({
+                "path": "result.txt",
+                "content": "must not execute"
+            }))
+            .expect("tool arguments");
+            Ok(Box::pin(futures_util::stream::iter([
+                Ok(ProviderStreamEvent::Started),
+                Ok(ProviderStreamEvent::ToolCall(ProviderToolCall {
+                    provider_call_id: ProviderCallId::new("call-before-error")
+                        .expect("provider call ID"),
+                    tool_name: ToolName::new("fs_write").expect("tool name"),
+                    arguments,
+                })),
+                Err(ProviderError::new(
+                    ProviderErrorKind::Protocol,
+                    RetryAdvice::Never,
+                )),
+            ])))
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for ToolThenErrorProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.to_owned()
+        }
+    }
+
+    impl ProviderMetadata for ToolThenErrorProvider {
         fn provider_id(&self) -> &ProviderId {
             &FAKE_PROVIDER_ID
         }
@@ -1322,7 +2254,13 @@ mod tests {
         let request = build_request(&aggregate, &attempt_id).expect("valid provider request");
 
         assert_eq!(request.messages.len(), 1);
-        assert_eq!(request.messages[0].content.as_str(), "hello");
+        assert_eq!(
+            request.messages[0]
+                .content()
+                .expect("text message")
+                .as_str(),
+            "hello"
+        );
     }
 
     #[test]
@@ -1378,8 +2316,11 @@ mod tests {
             session_id,
             session,
             actor.handle(),
-            None,
-            factory,
+            ProviderComposition {
+                initial: None,
+                factory,
+            },
+            test_tool_runtime(),
             app,
             shutdown.clone(),
         );
@@ -1444,8 +2385,11 @@ mod tests {
             session_id,
             session,
             actor.handle(),
-            None,
-            factory,
+            ProviderComposition {
+                initial: None,
+                factory,
+            },
+            test_tool_runtime(),
             app,
             shutdown.clone(),
         );
@@ -1573,6 +2517,464 @@ mod tests {
             requests,
             vec!["GET /v1/models?limit=1000", "POST /v1/chat/completions"]
         );
+    }
+
+    #[tokio::test]
+    async fn composed_tool_permission_execution_continuation_and_restart_are_durable() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("tool-composition.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let provider = Arc::new(ToolLoopProvider::default());
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let factory: ProviderFactory = Arc::new(|_| {
+            Err(ProviderError::new(
+                ProviderErrorKind::MissingCredential,
+                RetryAdvice::Never,
+            ))
+        });
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory,
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "write the requested result".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        assert_eq!(permission.tool_name, "fs_write");
+        assert_eq!(permission.capability, "filesystem write");
+        assert_eq!(permission.resource, "workspace:result.txt");
+        assert!(
+            permission
+                .details
+                .iter()
+                .any(|detail| { detail.label == "Path" && detail.value == "result.txt" })
+        );
+        assert!(
+            permission
+                .details
+                .iter()
+                .any(|detail| { detail.label == "Content bytes" && detail.value == "15" })
+        );
+        assert!(
+            !workspace.join("result.txt").exists(),
+            "no side effect may happen before the exact human answer is durable"
+        );
+
+        let permission_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: permission_request,
+                tool_call_id: permission.tool_call_id,
+                allow: true,
+            })
+            .await
+            .expect("permission answer");
+        expect_commit(&mut ui, permission_request).await;
+        let completed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        ..
+                    } if text == "tool complete"
+                )
+            })
+        })
+        .await;
+        assert!(completed.permission_requests.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("result.txt")).expect("tool output file"),
+            "written by tool"
+        );
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(projection::session(&recovered), *completed);
+        assert_eq!(recovered.tool_calls().len(), 1);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Completed
+        );
+        reopened.shutdown().await.expect("reopened actor shutdown");
+
+        let requests = provider.requests.lock().expect("request lock");
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].messages.iter().all(|message| {
+            !matches!(
+                message,
+                ChatMessage::ToolCall(_) | ChatMessage::ToolResult { .. }
+            )
+        }));
+        assert!(requests[1].messages.iter().any(|message| {
+            matches!(
+                message,
+                ChatMessage::ToolCall(call)
+                    if call.provider_call_id.as_str() == "call-write-1"
+            )
+        }));
+        assert!(requests[1].messages.iter().any(|message| {
+            matches!(
+                message,
+                ChatMessage::ToolResult {
+                    provider_call_id,
+                    tool_name,
+                    content,
+                } if provider_call_id.as_str() == "call-write-1"
+                    && tool_name.as_str() == "fs_write"
+                    && content.as_str() == "wrote 15 bytes"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn workspace_secret_read_requires_a_human_answer_before_persistence_or_replay() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let sentinel = "workspace-secret-sentinel";
+        std::fs::write(workspace.join(".env"), sentinel).expect("secret fixture");
+        let database = directory.path().join("read-permission.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let provider = Arc::new(ToolLoopProvider::reading());
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id,
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "read configuration".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        assert_eq!(permission.tool_name, "fs_read");
+        assert!(
+            provider.requests.lock().expect("request lock").len() == 1,
+            "the provider must not receive a tool result before the human answer"
+        );
+
+        let deny_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: deny_request,
+                tool_call_id: permission.tool_call_id,
+                allow: false,
+            })
+            .await
+            .expect("deny permission");
+        expect_commit(&mut ui, deny_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.is_empty()
+                && projection.transcript.iter().any(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Completed,
+                            ..
+                        }
+                    )
+                })
+        })
+        .await;
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+        for entry in std::fs::read_dir(directory.path()).expect("state directory") {
+            let entry = entry.expect("state entry");
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("read-permission")
+            {
+                let bytes = std::fs::read(entry.path()).expect("durable state file");
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel.as_bytes()),
+                    "workspace secret must not reach durable state"
+                );
+            }
+        }
+        let requests = provider.requests.lock().expect("request lock");
+        assert_eq!(requests.len(), 2);
+        let serialized = serde_json::to_vec(&*requests).expect("provider requests");
+        assert!(
+            !serialized
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_bytes()),
+            "workspace secret must not reach provider-visible history"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_failure_settles_pending_tools_before_the_parent_attempt() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("tool-error.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            Some(Arc::new(ToolThenErrorProvider)),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "tool then error".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let failed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.is_empty()
+                && projection.transcript.iter().any(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Failed(_),
+                            ..
+                        }
+                    )
+                })
+        })
+        .await;
+        assert!(failed.permission_requests.is_empty());
+        assert!(!workspace.join("result.txt").exists());
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(recovered.tool_calls().len(), 1);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Cancelled
+        );
+        assert_eq!(
+            recovered.attempts().last().expect("attempt").status(),
+            EngineAttemptStatus::Failed
+        );
+        reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn post_commit_tool_error_is_durably_unknown_and_not_failed_or_cancelled() {
+        use autoharness_tool::{
+            FileArtifactStore, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
+        };
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let artifacts = workspace.join("artifacts");
+        let runtime = Arc::new(
+            ToolRuntime::new(
+                Arc::new(CommitThenCancelledFilesystem {
+                    root: workspace.clone(),
+                }),
+                Arc::new(LocalProcess::new(&workspace, 1024 * 1024).expect("process")),
+                Arc::new(LocalHttp::new(1024 * 1024).expect("HTTP")),
+                Arc::new(FileArtifactStore::new(artifacts).expect("artifacts")),
+                PermissionPolicy::local_default(),
+                2,
+                Duration::from_secs(10),
+                64 * 1024,
+            )
+            .expect("runtime"),
+        );
+        let database = directory.path().join("ambiguous-effect.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let provider = Arc::new(ToolLoopProvider::default());
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: Some(provider),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            runtime,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "write with ambiguous settlement".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        let allow_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: allow_request,
+                tool_call_id: permission.tool_call_id,
+                allow: true,
+            })
+            .await
+            .expect("allow permission");
+        expect_commit(&mut ui, allow_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("result.txt")).expect("committed effect"),
+            "written by tool"
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Unknown
+        );
+        reopened.shutdown().await.expect("reopened actor shutdown");
     }
 
     #[tokio::test]
@@ -1709,7 +3111,10 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].messages.len(), 1);
         assert_eq!(
-            requests[1].messages[0].content.as_str(),
+            requests[1].messages[0]
+                .content()
+                .expect("text message")
+                .as_str(),
             "exact [REDACTED] user prompt"
         );
         drop(requests);

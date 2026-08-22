@@ -5,7 +5,10 @@ mod durable;
 mod engine;
 mod error;
 
-pub use aggregate::{AdmittedInput, AttemptProjection, AttemptStatus, SessionAggregate};
+pub use aggregate::{
+    AdmittedInput, AttemptProjection, AttemptStatus, SessionAggregate, ToolCallProjection,
+    ToolCallStatus,
+};
 pub use durable::{DurableEngine, DurableEngineError};
 pub use engine::{EventMetadataSource, GeneratedEventMetadata, InMemoryEngine};
 pub use error::{CommandRejection, EngineError, ReplayError};

@@ -70,6 +70,23 @@ identifier!(EventId, "Stable identity for one durable event.");
 identifier!(InputId, "Stable identity for one admitted user input.");
 identifier!(AttemptId, "Stable identity for one provider attempt.");
 identifier!(
+    ToolCallId,
+    "Stable local identity for one durable tool call."
+);
+identifier!(
+    ProviderCallId,
+    "Provider-owned tool-call identity retained for continuation."
+);
+identifier!(
+    PermissionDecisionId,
+    "Stable identity for one durable capability-policy decision."
+);
+identifier!(
+    ArtifactId,
+    "Content-addressed identity for one retained artifact."
+);
+identifier!(ToolName, "Stable versioned tool name exposed to models.");
+identifier!(
     CorrelationId,
     "Identity shared by commands and events in one logical operation."
 );

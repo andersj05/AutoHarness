@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use autoharness_domain::{
     AttemptId, CommandEnvelope, CommandId, CommandPayload, CorrelationId, EventId, InputId,
-    SessionId, TimestampMillis,
+    PermissionDecisionId, SessionId, TimestampMillis, ToolCallId,
 };
 use autoharness_engine::{EventMetadataSource, GeneratedEventMetadata};
 use uuid::Uuid;
@@ -45,6 +45,18 @@ pub fn attempt_id() -> AttemptId {
     AttemptId::new(tagged("attempt")).expect("UUID attempt IDs are valid")
 }
 
+/// Creates a globally unique local tool-call identity.
+#[must_use]
+pub fn tool_call_id() -> ToolCallId {
+    ToolCallId::new(tagged("tool-call")).expect("UUID tool-call IDs are valid")
+}
+
+/// Creates a globally unique permission-decision identity.
+#[must_use]
+pub fn permission_decision_id() -> PermissionDecisionId {
+    PermissionDecisionId::new(tagged("permission")).expect("UUID permission IDs are valid")
+}
+
 fn event_id() -> EventId {
     EventId::new(tagged("event")).expect("UUID event IDs are valid")
 }
@@ -69,5 +81,7 @@ mod tests {
         assert_ne!(session_id(), session_id());
         assert_ne!(input_id(), input_id());
         assert_ne!(attempt_id(), attempt_id());
+        assert_ne!(tool_call_id(), tool_call_id());
+        assert_ne!(permission_decision_id(), permission_decision_id());
     }
 }

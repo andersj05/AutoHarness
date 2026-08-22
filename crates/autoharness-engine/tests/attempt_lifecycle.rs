@@ -1,16 +1,236 @@
 use autoharness_domain::{
-    AttemptFailure, AttemptId, CommandEnvelope, CommandId, CommandPayload, CorrelationId,
-    DeliveryMode, ErrorClass, ErrorCode, EventEnvelope, EventId, InputId, ModelId, ModelRef,
-    PromptText, ProviderId, PublicMessage, ResponseText, RetryAdvice, SessionId, TimestampMillis,
-    UsageSnapshot,
+    AttemptFailure, AttemptId, CapabilityKind, CapabilityRequest, Causation, CommandEnvelope,
+    CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass, ErrorCode, EventEnvelope,
+    EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer, PermissionDecisionId,
+    PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage, ResourceRef,
+    ResponseText, RetryAdvice, RunLimits, SessionId, TimestampMillis, ToolArguments, ToolCallId,
+    ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
 };
 use autoharness_engine::{
     AttemptStatus, CommandRejection, EngineError, EventMetadataSource, GeneratedEventMetadata,
-    InMemoryEngine,
+    InMemoryEngine, ReplayError, ToolCallStatus,
 };
 
+#[derive(Debug)]
 struct CounterMetadata {
     next: u64,
+}
+
+#[test]
+fn tool_effect_requires_frozen_permission_and_resumes_after_durable_settlement() {
+    let mut engine = InMemoryEngine::new(CounterMetadata::new(1));
+    create_selected_session(&mut engine);
+    let attempt = attempt_id("attempt-tool");
+    execute(
+        &mut engine,
+        "prepare-tool",
+        CommandPayload::PrepareAttempt {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+            input_id: input_id(),
+            retry_of: None,
+        },
+    );
+    execute(
+        &mut engine,
+        "budget-tool",
+        CommandPayload::ConfigureRunBudget {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+            limits: RunLimits::default(),
+        },
+    );
+    execute(
+        &mut engine,
+        "start-tool-attempt",
+        CommandPayload::StartAttempt {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+        },
+    );
+    execute(
+        &mut engine,
+        "turn-one",
+        CommandPayload::StartRunTurn {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+        },
+    );
+    let tool_call_id = ToolCallId::new("tool-call-1").expect("tool-call ID");
+    let call = ToolCallSpec {
+        tool_call_id: tool_call_id.clone(),
+        provider_call_id: ProviderCallId::new("provider-call-1").expect("provider call ID"),
+        tool_name: ToolName::new("fs_write").expect("tool name"),
+        schema_version: 1,
+        arguments: ToolArguments::new(serde_json::json!({"path":"a","content":"b"}))
+            .expect("arguments"),
+        capability: CapabilityRequest {
+            kind: CapabilityKind::FilesystemWrite,
+            resource: ResourceRef::new("workspace:a").expect("resource"),
+        },
+    };
+    execute(
+        &mut engine,
+        "propose-tool",
+        CommandPayload::ProposeToolCall {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+            call,
+        },
+    );
+    execute(
+        &mut engine,
+        "ask-tool",
+        CommandPayload::RecordToolPermission {
+            session_id: session_id(),
+            tool_call_id: tool_call_id.clone(),
+            decision_id: PermissionDecisionId::new("permission-policy").expect("decision ID"),
+            outcome: PermissionOutcome::Ask,
+        },
+    );
+
+    let terminal_with_pending_tool = engine
+        .execute(&command(
+            "complete-with-pending-tool",
+            CommandPayload::CompleteAttempt {
+                session_id: session_id(),
+                attempt_id: attempt.clone(),
+            },
+        ))
+        .expect_err("parent cannot settle while a tool remains pending");
+    assert!(matches!(
+        terminal_with_pending_tool,
+        EngineError::CommandRejected(CommandRejection::InvalidAttemptState { .. })
+    ));
+
+    let unknown_with_pending_tool = engine
+        .execute(&command(
+            "unknown-with-pending-tool",
+            CommandPayload::MarkAttemptUnknown {
+                session_id: session_id(),
+                attempt_id: attempt.clone(),
+            },
+        ))
+        .expect_err("unknown parent cannot retain a live tool");
+    assert!(matches!(
+        unknown_with_pending_tool,
+        EngineError::CommandRejected(CommandRejection::InvalidAttemptState { .. })
+    ));
+
+    let mut invalid_history = engine.events().to_vec();
+    let prior = invalid_history.last().expect("prior event");
+    invalid_history.push(EventEnvelope::new_v1(
+        EventId::new("event-invalid-unknown").expect("event ID"),
+        session_id(),
+        prior.sequence().checked_next().expect("next sequence"),
+        TimestampMillis::new(99),
+        Causation::Event(prior.event_id().clone()),
+        prior.correlation_id().clone(),
+        EventPayload::AttemptMarkedUnknown {
+            attempt_id: attempt.clone(),
+        },
+    ));
+    let replay_error = InMemoryEngine::replay(CounterMetadata::new(100), invalid_history)
+        .expect_err("replay rejects unknown parent with a live tool");
+    assert!(matches!(
+        replay_error,
+        ReplayError::IllegalAttemptTransition { .. }
+    ));
+
+    let rejected = engine
+        .execute(&command(
+            "start-without-answer",
+            CommandPayload::StartToolCall {
+                session_id: session_id(),
+                tool_call_id: tool_call_id.clone(),
+            },
+        ))
+        .expect_err("ask is not execution authority");
+    assert!(matches!(
+        rejected,
+        EngineError::CommandRejected(CommandRejection::InvalidToolCallState { .. })
+    ));
+
+    execute(
+        &mut engine,
+        "answer-tool",
+        CommandPayload::AnswerToolPermission {
+            session_id: session_id(),
+            tool_call_id: tool_call_id.clone(),
+            decision_id: PermissionDecisionId::new("permission-human").expect("decision ID"),
+            answer: PermissionAnswer::AllowOnce,
+        },
+    );
+    execute(
+        &mut engine,
+        "start-exact-tool",
+        CommandPayload::StartToolCall {
+            session_id: session_id(),
+            tool_call_id: tool_call_id.clone(),
+        },
+    );
+    let failure_with_running_tool = engine
+        .execute(&command(
+            "fail-with-running-tool",
+            CommandPayload::FailAttempt {
+                session_id: session_id(),
+                attempt_id: attempt.clone(),
+                failure: AttemptFailure::new(
+                    ErrorClass::Protocol,
+                    ErrorCode::new("provider_failed").expect("error code"),
+                    PublicMessage::new("The provider failed").expect("message"),
+                    RetryAdvice::Never,
+                ),
+            },
+        ))
+        .expect_err("parent cannot fail while a tool is running");
+    assert!(matches!(
+        failure_with_running_tool,
+        EngineError::CommandRejected(CommandRejection::InvalidAttemptState { .. })
+    ));
+    execute(
+        &mut engine,
+        "pause-for-tool",
+        CommandPayload::PauseAttemptForTools {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+        },
+    );
+    execute(
+        &mut engine,
+        "complete-tool",
+        CommandPayload::CompleteToolCall {
+            session_id: session_id(),
+            tool_call_id: tool_call_id.clone(),
+            output: ToolOutput::new("ok", None, 2, false).expect("output"),
+        },
+    );
+    execute(
+        &mut engine,
+        "resume-tool",
+        CommandPayload::ResumeAttemptAfterTools {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+        },
+    );
+    execute(
+        &mut engine,
+        "turn-two",
+        CommandPayload::StartRunTurn {
+            session_id: session_id(),
+            attempt_id: attempt.clone(),
+        },
+    );
+
+    let live = engine.session(&session_id()).expect("session").clone();
+    assert_eq!(live.attempt(&attempt).expect("attempt").turns_started(), 2);
+    assert_eq!(
+        live.tool_call(&tool_call_id).expect("tool call").status(),
+        ToolCallStatus::Completed
+    );
+    let replayed = InMemoryEngine::replay(CounterMetadata::new(100), engine.events().to_vec())
+        .expect("replay");
+    assert_eq!(replayed.session(&session_id()), Some(&live));
 }
 
 impl CounterMetadata {
