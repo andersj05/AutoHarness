@@ -14,8 +14,8 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    CatalogProjection, Message, Model, RetryPolicy, SessionProjection, UiEffect, UiFailure,
-    UiIntent, UiNotice,
+    CatalogProjection, Message, Model, RetryPolicy, SessionProjection, SessionsProjection,
+    UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::{update, view};
 
@@ -30,6 +30,8 @@ pub struct UiPorts {
     pub intents: mpsc::Sender<UiIntent>,
     /// Latest session projection, coalesced by `watch`.
     pub sessions: watch::Receiver<Arc<SessionProjection>>,
+    /// Latest all-sessions read model, coalesced by `watch`.
+    pub session_lists: watch::Receiver<Arc<SessionsProjection>>,
     /// Latest catalog projection, coalesced by `watch`.
     pub catalogs: watch::Receiver<Arc<CatalogProjection>>,
     /// Bounded commit and rejection notices.
@@ -42,6 +44,8 @@ pub struct AppPorts {
     pub intents: mpsc::Receiver<UiIntent>,
     /// Session projection publisher.
     pub sessions: watch::Sender<Arc<SessionProjection>>,
+    /// All-sessions read-model publisher.
+    pub session_lists: watch::Sender<Arc<SessionsProjection>>,
     /// Catalog projection publisher.
     pub catalogs: watch::Sender<Arc<CatalogProjection>>,
     /// Bounded commit and rejection publisher.
@@ -52,22 +56,26 @@ pub struct AppPorts {
 #[must_use]
 pub fn bounded_ports(
     session: Arc<SessionProjection>,
+    session_list: Arc<SessionsProjection>,
     catalog: Arc<CatalogProjection>,
 ) -> (UiPorts, AppPorts) {
     let (intent_tx, intent_rx) = mpsc::channel(INTENT_CAPACITY);
     let (session_tx, session_rx) = watch::channel(session);
+    let (session_list_tx, session_list_rx) = watch::channel(session_list);
     let (catalog_tx, catalog_rx) = watch::channel(catalog);
     let (notice_tx, notice_rx) = mpsc::channel(APP_NOTICE_CAPACITY);
     (
         UiPorts {
             intents: intent_tx,
             sessions: session_rx,
+            session_lists: session_list_rx,
             catalogs: catalog_rx,
             notices: notice_rx,
         },
         AppPorts {
             intents: intent_rx,
             sessions: session_tx,
+            session_lists: session_list_tx,
             catalogs: catalog_tx,
             notices: notice_tx,
         },
@@ -131,6 +139,7 @@ where
     let UiPorts {
         intents,
         mut sessions,
+        mut session_lists,
         mut catalogs,
         mut notices,
     } = ports;
@@ -164,6 +173,11 @@ where
                 result.map_err(|_| RunnerError::ApplicationDisconnected("session projection"))?;
                 let session = Arc::clone(&sessions.borrow_and_update());
                 let _ = update(&mut model, Message::SessionChanged(session));
+            }
+            result = session_lists.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("session list"))?;
+                let list = Arc::clone(&session_lists.borrow_and_update());
+                let _ = update(&mut model, Message::SessionsChanged(list));
             }
             result = catalogs.changed() => {
                 result.map_err(|_| RunnerError::ApplicationDisconnected("catalog projection"))?;
@@ -277,7 +291,11 @@ mod tests {
             }],
             stale: false,
         });
-        let mut model = Model::new(session, catalog);
+        let mut model = Model::new(
+            session,
+            Arc::new(crate::model::SessionsProjection::default()),
+            catalog,
+        );
         let _ = update(&mut model, Message::Paste("draft survives".to_owned()));
         model
     }

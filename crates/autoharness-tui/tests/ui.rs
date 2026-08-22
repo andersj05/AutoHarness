@@ -3,8 +3,9 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, Notice,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey,
-    TranscriptItem, UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, update, view,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection,
+    SessionsProjection, ToolCallKey, TranscriptItem, UiEffect, UiFailure, UiIntent, UiNotice,
+    UsageView, display_safe, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -60,7 +61,11 @@ fn session(revision: u64, transcript: Vec<TranscriptItem>) -> Arc<SessionProject
 }
 
 fn empty_model() -> Model {
-    Model::new(session(1, Vec::new()), ready_catalog())
+    Model::new(
+        session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    )
 }
 
 #[test]
@@ -82,7 +87,11 @@ fn permission_overlay_scopes_the_resource_and_dispatches_one_exact_answer() {
             },
         ],
     });
-    let mut model = Model::new(Arc::new(projection), ready_catalog());
+    let mut model = Model::new(
+        Arc::new(projection),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
 
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("Tool permission"));
@@ -125,7 +134,11 @@ fn permission_details_are_scrollable_and_redacted_from_debug_output() {
             })
             .collect(),
     });
-    let mut model = Model::new(Arc::new(projection), ready_catalog());
+    let mut model = Model::new(
+        Arc::new(projection),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
 
     assert!(!format!("{model:?}").contains(sentinel));
     let initial = buffer_text(&render_model(&model, 60, 12));
@@ -223,7 +236,11 @@ fn snapshot_model() -> Model {
             retry_of: Some(AttemptKey::new("attempt-1").expect("valid attempt")),
         },
     ];
-    let mut model = Model::new(session(8, transcript), ready_catalog());
+    let mut model = Model::new(
+        session(8, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
     let _ = update(
         &mut model,
         Message::Paste("Retry with a smaller scope.\nKeep the checklist concise.".to_owned()),
@@ -303,7 +320,11 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
         usage: None,
         retry_of: None,
     };
-    let mut model = Model::new(session(2, vec![streaming]), ready_catalog());
+    let mut model = Model::new(
+        session(2, vec![streaming]),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
 
     let first = update(&mut model, Message::Input(key_input(Key::Esc)));
     let cancel_request = match first.as_slice() {
@@ -411,7 +432,11 @@ fn settled_cancellation_can_be_retried_immediately() {
         usage: None,
         retry_of: None,
     };
-    let mut model = Model::new(session(3, vec![cancelled]), ready_catalog());
+    let mut model = Model::new(
+        session(3, vec![cancelled]),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
 
     let retry = update(&mut model, Message::Input(ctrl(Key::Char('r'))));
 
@@ -430,7 +455,11 @@ fn catalog_refresh_respects_provider_retry_delay() {
         "Model discovery is rate limited",
         RetryPolicy::After { delay_ms: 5_000 },
     )));
-    let mut model = Model::new(session(1, Vec::new()), catalog);
+    let mut model = Model::new(
+        session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        catalog,
+    );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('p'))));
 
     assert!(
@@ -502,7 +531,11 @@ fn stale_picker_reserves_a_row_instead_of_covering_a_model() {
         | CatalogProjection::Loading
         | CatalogProjection::Failed(_) => unreachable!(),
     };
-    let mut model = Model::new(session(1, Vec::new()), catalog);
+    let mut model = Model::new(
+        session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        catalog,
+    );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('p'))));
 
     let rendered = buffer_text(&render_model(&model, 40, 12));
@@ -516,6 +549,7 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
     let sentinel = "gemini-ui-secret-sentinel";
     let mut model = Model::new(
         session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
         Arc::new(CatalogProjection::CredentialRequired),
     );
     assert!(model.credential_open());
@@ -641,7 +675,11 @@ fn stale_session_projection_cannot_roll_the_transcript_back() {
         input_id: "new".to_owned(),
         text: "newest".to_owned(),
     };
-    let mut model = Model::new(session(9, vec![newest]), ready_catalog());
+    let mut model = Model::new(
+        session(9, vec![newest]),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
     let old = TranscriptItem::User {
         input_id: "old".to_owned(),
         text: "stale".to_owned(),
@@ -687,7 +725,11 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
             text: format!("message {index}"),
         })
         .collect();
-    let mut model = Model::new(session(11, transcript), ready_catalog());
+    let mut model = Model::new(
+        session(11, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
     let at_tail = buffer_text(&render_model(&model, 40, 12));
     assert!(at_tail.contains("message 9"));
 

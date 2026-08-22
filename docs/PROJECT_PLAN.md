@@ -194,7 +194,7 @@ Ignored opt-in Gemini and router compatibility probes compile and retain only st
 
 ### Phase 3.2: Complete session lifecycle
 
-**Status:** Planned
+**Status:** Implemented
 
 **Goal:** Turn the existing replay store into a usable multi-session product rather than an application that silently opens one active session.
 

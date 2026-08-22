@@ -3,8 +3,8 @@ use autoharness_domain::{
     Causation, CommandEnvelope, CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass,
     ErrorCode, EventEnvelope, EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer,
     PermissionDecisionId, PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage,
-    ResourceRef, ResponseText, RetryAdvice, RunLimits, SessionId, SessionSequence, TimestampMillis,
-    ToolArguments, ToolCallId, ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
+    ResourceRef, ResponseText, RetryAdvice, RunLimits, SessionId, SessionSequence, SessionTitle,
+    TimestampMillis, ToolArguments, ToolCallId, ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
 };
 
 fn session_id() -> SessionId {
@@ -165,6 +165,180 @@ fn every_v1_event_payload_has_a_stable_serialized_shape() {
                     }
                 }
             }
+        ])
+    );
+}
+
+#[test]
+fn every_session_lifecycle_payload_has_a_stable_serialized_shape() {
+    let commands = [
+        CommandEnvelope::new(
+            command_id("command-rename"),
+            correlation_id(),
+            CommandPayload::RenameSession {
+                session_id: session_id(),
+                title: SessionTitle::new("Deep dive: streaming").expect("valid test title"),
+            },
+        ),
+        CommandEnvelope::new(
+            command_id("command-archive"),
+            correlation_id(),
+            CommandPayload::ArchiveSession {
+                session_id: session_id(),
+            },
+        ),
+        CommandEnvelope::new(
+            command_id("command-unarchive"),
+            correlation_id(),
+            CommandPayload::UnarchiveSession {
+                session_id: session_id(),
+            },
+        ),
+    ];
+    assert_eq!(
+        serde_json::to_value(commands).expect("serialize lifecycle commands"),
+        serde_json::json!([
+            {
+                "command_id": "command-rename",
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "rename_session",
+                    "payload": {
+                        "session_id": "session-1",
+                        "title": "Deep dive: streaming"
+                    }
+                }
+            },
+            {
+                "command_id": "command-archive",
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "archive_session",
+                    "payload": {
+                        "session_id": "session-1"
+                    }
+                }
+            },
+            {
+                "command_id": "command-unarchive",
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "unarchive_session",
+                    "payload": {
+                        "session_id": "session-1"
+                    }
+                }
+            }
+        ])
+    );
+
+    let events = [
+        EventEnvelope::new_v1(
+            event_id("event-rename"),
+            session_id(),
+            SessionSequence::FIRST,
+            TimestampMillis::new(100),
+            Causation::Command(command_id("command-rename")),
+            correlation_id(),
+            EventPayload::SessionRenamed {
+                title: SessionTitle::new("Deep dive: streaming").expect("valid test title"),
+            },
+        ),
+        EventEnvelope::new_v1(
+            event_id("event-archive"),
+            session_id(),
+            SessionSequence::new(2).expect("nonzero sequence"),
+            TimestampMillis::new(90),
+            Causation::Event(event_id("event-rename")),
+            correlation_id(),
+            EventPayload::SessionArchived,
+        ),
+        EventEnvelope::new_v1(
+            event_id("event-unarchive"),
+            session_id(),
+            SessionSequence::new(3).expect("nonzero sequence"),
+            TimestampMillis::new(80),
+            Causation::Command(command_id("command-unarchive")),
+            correlation_id(),
+            EventPayload::SessionUnarchived,
+        ),
+    ];
+    assert_eq!(
+        serde_json::to_value(&events).expect("serialize lifecycle events"),
+        serde_json::json!([
+            {
+                "schema_version": 1,
+                "event_id": "event-rename",
+                "session_id": "session-1",
+                "sequence": 1,
+                "occurred_at": 100,
+                "causation": {
+                    "kind": "command",
+                    "id": "command-rename"
+                },
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "session_renamed",
+                    "payload": {
+                        "title": "Deep dive: streaming"
+                    }
+                }
+            },
+            {
+                "schema_version": 1,
+                "event_id": "event-archive",
+                "session_id": "session-1",
+                "sequence": 2,
+                "occurred_at": 90,
+                "causation": {
+                    "kind": "event",
+                    "id": "event-rename"
+                },
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "session_archived"
+                }
+            },
+            {
+                "schema_version": 1,
+                "event_id": "event-unarchive",
+                "session_id": "session-1",
+                "sequence": 3,
+                "occurred_at": 80,
+                "causation": {
+                    "kind": "command",
+                    "id": "command-unarchive"
+                },
+                "correlation_id": "correlation-1",
+                "payload": {
+                    "kind": "session_unarchived"
+                }
+            }
+        ])
+    );
+
+    let renamed: EventEnvelope = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "event_id": "event-rename",
+        "session_id": "session-1",
+        "sequence": 1,
+        "occurred_at": 100,
+        "causation": {"kind": "command", "id": "command-rename"},
+        "correlation_id": "correlation-1",
+        "payload": {"kind": "session_renamed", "payload": {"title": "Deep dive: streaming"}}
+    }))
+    .expect("deserialize renamed event");
+    assert_eq!(renamed, events[0]);
+    let payload_kinds: Vec<_> = events
+        .iter()
+        .map(|event| serde_json::to_value(event.payload()).expect("serialize payload"))
+        .collect();
+    assert_eq!(
+        serde_json::to_value(payload_kinds).expect("serialize payloads"),
+        serde_json::json!([
+            {"kind": "session_renamed", "payload": {"title": "Deep dive: streaming"}},
+            {"kind": "session_archived"},
+            {"kind": "session_unarchived"}
         ])
     );
 }

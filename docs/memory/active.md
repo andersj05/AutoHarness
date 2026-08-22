@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-22
 
-**Phase:** 3.1 - Live protocol reliability and recovery
+**Phase:** 3.2 - Complete session lifecycle
 
-**Status:** Phase 3.1 live Gemini probes pass on 2026-08-22; configured-router live evidence remains open
+**Status:** Phase 3.2 implemented locally on `feat/phase-3-2-session-lifecycle`; configured-router live evidence remains open
 
 ## Current objective
 
-Run the opt-in configured-router compatibility probe with a runtime router credential, then proceed to Phase 3.2 session lifecycle work.
+Reconcile Phase 3.2 into `dev`, then proceed through Phase 3.3 profiles and settings.
 
 ## Current repository state
 
@@ -26,7 +26,10 @@ Run the opt-in configured-router compatibility probe with a runtime router crede
 - Gemini Interactions function-call arguments are buffered across streamed deltas and emitted only after a complete bounded JSON object is available.
 - Unknown names and invalid argument shapes become durable `InvalidToolCall` no-authority proposals, are force-denied even under permissive policy, and return a deterministic result for bounded model repair.
 - Provider request history includes completed turns and the current input while excluding unrelated prior failed or cancelled prompts.
-- `Ctrl+N` creates and activates a fresh durable session even when credentials or the catalog are unavailable, but browsing, switching, renaming, archiving, exporting, and deleting sessions remain Phase 3.2 work.
+- `Ctrl+N` creates and activates a fresh durable session even when credentials or the catalog are unavailable, and `Ctrl+L` opens a searchable session browser over every durable session.
+- The session lifecycle is event-sourced under [ADR-0011](../adr/0011-use-event-sourced-session-lifecycle.md): rename, archive, and unarchive are schema-v1 commands and events, archived sessions accept only unarchive, switching replays the target history before any projection swap and is refused while an attempt or permission prompt is active.
+- Deleting a session exports the complete authoritative event stream to a documented provider-neutral JSON archive beside the database first ([format](../architecture/SESSION_EXPORT.md)); export failure aborts deletion, and version-mismatched deletes fail closed.
+- Session titles use the validated `SessionTitle` value type (non-empty, bounded, no control characters) and store titles live in SQLite migration 3.
 - Non-secret runtime configuration is environment-driven, and the in-app credential overlay is intentionally session-only under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
 - The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
 - The live 2026-08-22 Interactions dialect sends an empty `arguments` placeholder at function-call start and complete arguments as an `arguments_delta` step delta; the decoder now routes that delta type, ignores the empty placeholder, and pins the shape with a recorded fixture test.
@@ -42,6 +45,9 @@ Run the opt-in configured-router compatibility probe with a runtime router crede
 
 ## Recently completed
 
+- Implemented Phase 3.2: schema-v3 session titles, enriched summaries, event-sourced rename/archive/unarchive with aggregate guards, atomic version-checked deletion, pre-deletion export, and a searchable `Ctrl+L` browser with slash commands and per-session composer drafts.
+- Verified the composed two-session create, rename, archive, unarchive, switch, restart, and replay-equivalence path against real SQLite.
+- Recorded the lifecycle contract in [ADR-0011](../adr/0011-use-event-sourced-session-lifecycle.md) and the export format in [SESSION_EXPORT](../architecture/SESSION_EXPORT.md).
 - Buffered Gemini Interactions function calls until every streamed `partial_arguments` fragment forms the complete bounded JSON object.
 - Added capability-aware tool advertisement with backward-compatible catalog decoding and positive support required before exposing functions.
 - Added durable force-denied invalid-call proposals, deterministic provider repair results, no-authority authorization checks, and content-free rejection telemetry.
@@ -84,24 +90,22 @@ Run the opt-in configured-router compatibility probe with a runtime router crede
 ## Immediate next actions
 
 1. Run the opt-in configured-router plain-chat and HTTP-function compatibility probes against the intended router project and record only the pass or fail matrix and version provenance.
-2. Verify approval, execution, continuation, and durable replay through the real terminal for one live provider flow.
-3. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates after any further live compatibility correction.
-4. Complete Phase 3.2 session browsing, switching, lifecycle metadata, offline navigation, export, and deletion semantics.
-5. Proceed through Phase 3.3 profiles and settings, Phase 3.4 TUI usability, and Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
+2. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates, then promote Phase 3.2 from `feat/phase-3-2-session-lifecycle` into `dev`.
+3. Proceed through Phase 3.3 profiles and settings, Phase 3.4 TUI usability, and Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
 
 ## Open questions
 
 - What reference machine should define startup and stream-overhead benchmarks?
 - Should [the proposed operating-system credential profile decision](../adr/0009-use-os-backed-provider-credential-profiles.md) be accepted as written before Phase 3.3?
-- What exact export, retention, hard-deletion, and artifact-cleanup semantics should govern sessions?
 
 ## Blockers
 
-None for the completed local Phase 3.1 implementation or Phase 3.2 design work.
+None for the completed local Phase 3.1 and Phase 3.2 implementations.
 A configured router endpoint plus credential is required for the remaining Phase 3.1 live-provider exit evidence; the Gemini half closed on 2026-08-22.
 An approved reference machine is required before recording authoritative latency results in Phase 3.5.
 
 ## Handoff note
 
-The Phase 3.1 local implementation is on `feat/phase-3-1-reliability` and keeps the live network matrix open until runtime credentials are available.
+Phase 3.2 is complete on `feat/phase-3-2-session-lifecycle` with all baseline gates passing; merge through a pull request into `dev` per [ADR-0003](../adr/0003-use-main-dev-feature-branches.md).
+The Phase 3.1 configured-router live matrix stays open until runtime credentials are available.
 Use the ignored structural compatibility probes first, then verify the same plain-chat and approved HTTP-tool paths through the real terminal without retaining provider content or credentials.

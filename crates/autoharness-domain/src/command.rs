@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, InputId, ModelRef,
     PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RunLimits,
-    SessionId, ToolCallId, ToolCallSpec, ToolOutput, UsageSnapshot,
+    SessionId, SessionTitle, ToolCallId, ToolCallSpec, ToolOutput, UsageSnapshot,
 };
 
 /// A command and the metadata used to correlate its resulting events.
@@ -61,6 +61,23 @@ pub enum CommandPayload {
     /// Create a new session aggregate.
     CreateSession {
         /// Stable identity selected before durable creation.
+        session_id: SessionId,
+    },
+    /// Replace the user-facing title of an existing session.
+    RenameSession {
+        /// Target session.
+        session_id: SessionId,
+        /// Validated replacement title.
+        title: SessionTitle,
+    },
+    /// Retain a session but stop it from accepting ordinary commands.
+    ArchiveSession {
+        /// Target session.
+        session_id: SessionId,
+    },
+    /// Return an archived session to ordinary command eligibility.
+    UnarchiveSession {
+        /// Target session.
         session_id: SessionId,
     },
     /// Select a provider-neutral model for subsequent turns.
@@ -282,6 +299,9 @@ impl CommandPayload {
     pub const fn session_id(&self) -> &SessionId {
         match self {
             Self::CreateSession { session_id }
+            | Self::RenameSession { session_id, .. }
+            | Self::ArchiveSession { session_id }
+            | Self::UnarchiveSession { session_id }
             | Self::SelectModel { session_id, .. }
             | Self::AdmitPrompt { session_id, .. }
             | Self::AdmitPromptAndPrepareAttempt { session_id, .. }

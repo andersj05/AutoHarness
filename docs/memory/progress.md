@@ -13,7 +13,7 @@
 | 2. Provider/router platform | Complete | Gemini and the configurable OpenAI-compatible router pass fixture conformance and the same composed session path through shared provider policy and durable catalog caching |
 | 3. Safe agent execution | Complete | Security-audited versioned tools run through explicit durable permission, bounded provider admission, capability, budget, artifact, continuation, parent-child lifetime, and conservative recovery boundaries |
 | 3.1. Live protocol reliability and recovery | Active | Gemini argument aggregation, durable invalid-call repair, failed-turn isolation, capability gating, stable diagnostics, and durable `Ctrl+N` recovery pass local fixture, integration, render, replay, and PTY tests; live Gemini plain-chat and function-call probes passed on 2026-08-22 while the configured router remains open |
-| 3.2. Complete session lifecycle | Planned | The store can list sessions, but the application and TUI expose only one startup-selected session |
+| 3.2. Complete session lifecycle | Complete | Event-sourced rename, archive, unarchive, guarded switching, atomic version-checked deletion with pre-deletion export, schema-v3 titles, a searchable `Ctrl+L` browser with slash commands and per-session drafts, and the composed two-session restart replay-equivalence path pass domain, engine, store, TUI, app, and render tests |
 | 3.3. User profiles, settings, and secure credentials | Planned | Environment configuration and session-only credential entry exist; persistent profiles and settings do not |
 | 3.4. TUI usability and discoverability | Planned | The focused chat controls exist; full navigation, command discovery, help, and settings surfaces do not |
 | 3.5. Terminal release hardening | Planned | Existing fixture, PTY, and security gates remain; the complete terminal product gate is not implemented |
@@ -67,6 +67,11 @@
 - The Ratatui client includes a masked zeroizing credential overlay, a searchable model picker, Unicode multiline composer, streamed transcript, cancellation and retry states, safe errors, usage, tail following, manual scrolling, compact layouts, and bounded application mailboxes.
 - Failed transcript rows expose stable codes, compact safe attempt references, retry actions, and a fresh-session recovery action.
 - A global `Ctrl+N` action creates and activates a fresh durable session from credential, catalog, or settled-attempt failure states, and session identity prevents a new revision-1 projection from being mistaken for stale state.
+- A searchable `Ctrl+L` session browser lists every durable session with deterministic titles, active and archived badges, case-insensitive search, Ctrl-chord rename, archive, unarchive, confirm-gated delete, and slash-command equivalents, while per-session composer drafts survive switching.
+- Rename, archive, and unarchive are schema-v1 events guarded by the aggregate: archived sessions accept only unarchive, duplicate transitions conflict, and every command decision stays strictly replayable.
+- Opening another session replays its authoritative history into the coordinator before any projection swap, and switching is refused while an attempt or permission prompt is active.
+- Deleting a settled session exports its complete event history to a documented provider-neutral JSON archive beside the database before any row is removed; export failure aborts deletion and sequence-mismatched deletes fail closed.
+- SQLite migration 3 stores session titles, projection rebuilds preserve them, and enriched summaries feed both the browser and the export.
 - The executable composes the terminal client, bounded async coordinator, runtime Gemini provider replacement, dedicated blocking SQLite writer, startup recovery, explicit cancellation, application data paths, one-writer locking, and content-free structured tracing.
 - Recovery settles never-dispatched attempts as retryable failures and marks ambiguously dispatched attempts unknown without inventing a provider outcome.
 - Tool recovery preserves unanswered permission requests only for parents already awaiting tools, settles every live child before marking an interrupted parent unknown, marks started effects unknown without replay, and resumes a paused provider turn only after every call is settled.
@@ -89,9 +94,8 @@
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence now includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
-- The terminal can create a fresh session but cannot browse, switch, rename, archive, export, or delete sessions even though durable session summaries can be listed by the store.
 - The terminal has no user settings or named provider profiles, and pasted credentials are intentionally forgotten at process exit.
-- Offline session browsing is unavailable because application composition exposes only one startup-selected session.
+- Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session.
 - No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
 
 ## Next milestone exit target
