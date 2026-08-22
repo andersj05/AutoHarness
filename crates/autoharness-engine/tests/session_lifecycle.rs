@@ -91,42 +91,6 @@ fn unarchive() -> CommandPayload {
     }
 }
 
-fn admit_and_complete_attempt(engine: &mut InMemoryEngine<ScriptedMetadata>) {
-    engine
-        .execute(&command(
-            "command-admit",
-            CommandPayload::AdmitPromptAndPrepareAttempt {
-                session_id: session_id(),
-                input_id: InputId::new("input-1").expect("valid input ID"),
-                prompt: PromptText::new("hello").expect("non-empty prompt"),
-                delivery_mode: DeliveryMode::NextTurn,
-                attempt_id: autoharness_domain::AttemptId::new("attempt-1")
-                    .expect("valid attempt ID"),
-            },
-        ))
-        .expect("admit and prepare");
-    engine
-        .execute(&command(
-            "command-start",
-            CommandPayload::StartAttempt {
-                session_id: session_id(),
-                attempt_id: autoharness_domain::AttemptId::new("attempt-1")
-                    .expect("valid attempt ID"),
-            },
-        ))
-        .expect("start attempt");
-    engine
-        .execute(&command(
-            "command-complete",
-            CommandPayload::CompleteAttempt {
-                session_id: session_id(),
-                attempt_id: autoharness_domain::AttemptId::new("attempt-1")
-                    .expect("valid attempt ID"),
-            },
-        ))
-        .expect("complete attempt");
-}
-
 fn prepared_failure() -> AttemptFailure {
     AttemptFailure::new(
         autoharness_domain::ErrorClass::Unavailable,
@@ -203,7 +167,7 @@ fn archived_sessions_reject_ordinary_commands_but_stay_readable() {
 
 #[test]
 fn unarchive_restores_command_eligibility_and_replays_exactly() {
-    let mut engine = lifecycle_engine(&[
+    let engine = lifecycle_engine(&[
         create(),
         select(),
         archive(),
