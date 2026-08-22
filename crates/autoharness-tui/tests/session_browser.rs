@@ -309,6 +309,26 @@ fn archive_unarchive_rename_and_confirmed_delete_dispatch_exact_intents() {
 }
 
 #[test]
+fn ctrl_c_quits_from_inside_the_browser_overlay() {
+    let mut model = Model::new(
+        session("session-live"),
+        sessions(&[
+            entry("session-live", "Live work", false, true),
+            entry("session-old", "Old work", false, false),
+        ]),
+        ready_catalog(),
+    );
+    let _ = update(&mut model, Message::Input(ctrl('l')));
+    assert!(model.browser_open());
+    assert!(!model.should_quit);
+
+    let effects = update(&mut model, Message::Input(ctrl('c')));
+
+    assert!(model.should_quit);
+    assert!(matches!(effects.as_slice(), [UiEffect::Quit]));
+}
+
+#[test]
 fn deleting_the_active_session_is_refused_locally() {
     let mut model = Model::new(
         session("session-live"),

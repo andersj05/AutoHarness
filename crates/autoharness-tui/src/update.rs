@@ -371,6 +371,18 @@ fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 /// Letter shortcuts use Ctrl chords so plain characters always extend the
 /// filter query, matching the model picker's convention.
 fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    // Ctrl+C always quits, even from inside the browser overlay.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
     if model.browser.renaming {
         return handle_browser_rename_input(model, input);
     }
