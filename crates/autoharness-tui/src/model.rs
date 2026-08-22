@@ -797,6 +797,96 @@ pub(crate) struct BrowserState {
     pub confirming_delete: Option<String>,
 }
 
+/// Safe provider-kind label surfaced by application composition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderKindLabel {
+    /// Google AI Studio Gemini.
+    Gemini,
+    /// Configurable OpenAI-compatible router.
+    Router,
+}
+
+impl ProviderKindLabel {
+    /// Returns the stable lowercase label shown to users.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini",
+            Self::Router => "router",
+        }
+    }
+}
+
+/// Safe credential-source label surfaced by application composition.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CredentialSourceLabel {
+    /// A process environment variable supplied the credential.
+    Environment,
+    /// The operating-system credential vault resolved a profile reference.
+    CredentialVault,
+    /// Nothing persisted; session-only entry applies.
+    #[default]
+    SessionOnly,
+}
+
+impl CredentialSourceLabel {
+    /// Returns the stable lowercase label shown to users.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::CredentialVault => "credential vault",
+            Self::SessionOnly => "session only",
+        }
+    }
+}
+
+/// Read-only view of effective provider and credential status.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProviderStatusProjection {
+    /// Active profile name, when one is configured.
+    pub active_profile: Option<String>,
+    /// Provider adapter selected by the active profile.
+    pub provider_kind: Option<ProviderKindLabel>,
+    /// Effective credential source in safe terms.
+    pub credential_source: CredentialSourceLabel,
+    /// Whether a usable credential is currently connected.
+    pub credential_connected: bool,
+}
+
+/// Read model of resolved settings for display and provenance.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SettingsProjection {
+    /// Effective provider and credential status.
+    pub provider_status: ProviderStatusProjection,
+}
+
+impl SettingsProjection {
+    /// Returns the effective provider label in safe provenance terms.
+    #[must_use]
+    pub fn provider_label(&self) -> String {
+        let status = &self.provider_status;
+        match (&status.active_profile, status.provider_kind) {
+            (Some(profile), Some(kind)) => format!("{} via '{}'", kind.as_str(), profile),
+            (Some(profile), None) => format!("profile '{profile}'"),
+            (None, Some(kind)) => kind.as_str().to_owned(),
+            (None, None) => "gemini (default)".to_owned(),
+        }
+    }
+
+    /// Returns the effective credential label in safe provenance terms.
+    #[must_use]
+    pub fn credential_label(&self) -> String {
+        let status = &self.provider_status;
+        match (status.credential_source, status.credential_connected) {
+            (_, false) if status.active_profile.is_some() => {
+                "session only; press Ctrl+K to connect".to_owned()
+            }
+            (source, _) => source.as_str().to_owned(),
+        }
+    }
+}
+
 /// Per-session composer draft keyed by stable session identity.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub(crate) struct SessionDrafts {
@@ -826,6 +916,10 @@ pub struct Model {
     pub catalog: Arc<CatalogProjection>,
     /// Newest read model of every durable session.
     pub(crate) sessions: Arc<SessionsProjection>,
+    /// Newest resolved-settings read model.
+    pub(crate) settings: Arc<SettingsProjection>,
+    /// Whether the settings overlay is visible.
+    pub(crate) settings_open: bool,
     /// Multiline prompt composer.
     pub composer: ComposerState,
     /// Transcript tail-follow and scroll state.
@@ -889,6 +983,8 @@ impl Model {
             session,
             catalog,
             sessions,
+            settings: Arc::new(SettingsProjection::default()),
+            settings_open: false,
             composer: ComposerState::default(),
             transcript: TranscriptState::new(),
             focus,
@@ -926,6 +1022,48 @@ impl Model {
     #[must_use]
     pub const fn browser_open(&self) -> bool {
         self.browser.open
+    }
+
+    /// Replaces the resolved-settings read model.
+    pub fn apply_settings(&mut self, settings: Arc<SettingsProjection>) {
+        self.settings = settings;
+        self.dirty = true;
+    }
+
+    /// Returns the newest resolved-settings read model.
+    #[must_use]
+    pub fn settings(&self) -> &SettingsProjection {
+        &self.settings
+    }
+
+    /// Returns whether the settings overlay is visible.
+    #[must_use]
+    pub const fn settings_open(&self) -> bool {
+        self.settings_open
+    }
+
+    /// Returns the effective provider label in safe provenance terms.
+    #[must_use]
+    pub fn settings_provider_label(&self) -> String {
+        let status = &self.settings.provider_status;
+        match (&status.active_profile, status.provider_kind) {
+            (Some(profile), Some(kind)) => format!("{} via '{}'", kind.as_str(), profile),
+            (Some(profile), None) => format!("profile '{profile}'"),
+            (None, Some(kind)) => kind.as_str().to_owned(),
+            (None, None) => "gemini (default)".to_owned(),
+        }
+    }
+
+    /// Returns the effective credential label in safe provenance terms.
+    #[must_use]
+    pub fn settings_credential_label(&self) -> String {
+        let status = &self.settings.provider_status;
+        match (status.credential_source, status.credential_connected) {
+            (CredentialSourceLabel::CredentialVault, true) => "credential vault".to_owned(),
+            (CredentialSourceLabel::Environment, true) => "environment".to_owned(),
+            (source, true) => source.as_str().to_owned(),
+            (_, false) => "session only; press Ctrl+K to connect".to_owned(),
+        }
     }
 
     /// Returns the highlighted browser session identity.

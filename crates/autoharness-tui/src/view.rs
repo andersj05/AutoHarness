@@ -48,7 +48,43 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         render_credential(frame, area, model);
     } else if model.picker.open {
         render_picker(frame, area, model);
+    } else if model.settings_open {
+        render_settings(frame, area, model);
     }
+}
+
+/// Renders the non-modal settings overlay from local state only.
+fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Settings ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let credential_line = model.settings().credential_label();
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Provider   ", MUTED_STYLE),
+            Span::raw(display_safe(&model.settings().provider_label())),
+        ]),
+        Line::from(vec![
+            Span::styled("Credential ", MUTED_STYLE),
+            Span::raw(display_safe(&credential_line)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Ctrl+, close - Ctrl+K connect key - Ctrl+P choose model",
+            MUTED_STYLE,
+        )),
+    ];
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
 }
 
 /// Renders the searchable session-browser overlay from local state only.
