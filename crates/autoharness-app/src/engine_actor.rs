@@ -8,7 +8,7 @@ use autoharness_domain::{
 use autoharness_engine::{
     AttemptStatus, DurableEngine, DurableEngineError, SessionAggregate, ToolCallStatus,
 };
-use autoharness_store::{SessionStatus, SessionStore};
+use autoharness_store::{DeletionDisposition, SessionStatus, SessionStore, SessionSummary};
 use autoharness_store_sqlite::SqliteStore;
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,10 +25,27 @@ pub struct EngineReply {
     pub session: SessionAggregate,
 }
 
-enum Request {
+/// Storage-level request served on the dedicated blocking thread.
+pub enum StorageRequest {
+    /// Executes one engine command against one session aggregate.
     Execute {
         command: Box<CommandEnvelope>,
         reply: oneshot::Sender<Result<EngineReply, DurableEngineError>>,
+    },
+    /// Lists every durable session summary in recent-first order.
+    ListSessions {
+        reply: oneshot::Sender<Result<Vec<SessionSummary>, AppError>>,
+    },
+    /// Loads one session's full event history for replay or export.
+    LoadEvents {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<Vec<autoharness_domain::EventEnvelope>, AppError>>,
+    },
+    /// Removes a settled session and every dependent row.
+    DeleteSession {
+        session_id: SessionId,
+        expected_last_sequence: u64,
+        reply: oneshot::Sender<Result<DeletionDisposition, AppError>>,
     },
     Shutdown,
 }
@@ -36,7 +53,7 @@ enum Request {
 /// Cloneable asynchronous handle to the dedicated blocking storage thread.
 #[derive(Clone)]
 pub struct EngineHandle {
-    requests: mpsc::Sender<Request>,
+    requests: mpsc::Sender<StorageRequest>,
 }
 
 impl EngineHandle {
@@ -47,7 +64,7 @@ impl EngineHandle {
     ) -> Result<EngineReply, DurableEngineError> {
         let (reply, response) = oneshot::channel();
         self.requests
-            .send(Request::Execute {
+            .send(StorageRequest::Execute {
                 command: Box::new(command),
                 reply,
             })
@@ -56,6 +73,47 @@ impl EngineHandle {
         response
             .await
             .map_err(|_| DurableEngineError::StoreInvariant)?
+    }
+
+    /// Lists every durable session summary from the storage thread.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::ListSessions { reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Loads one session's complete authoritative event history.
+    pub async fn load_events(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<autoharness_domain::EventEnvelope>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadEvents { session_id, reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Deletes a settled session and every dependent row atomically.
+    pub async fn delete_session(
+        &self,
+        session_id: SessionId,
+        expected_last_sequence: u64,
+    ) -> Result<DeletionDisposition, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::DeleteSession {
+                session_id,
+                expected_last_sequence,
+                reply,
+            })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
     }
 }
 
@@ -68,7 +126,7 @@ pub struct EngineActor {
 impl EngineActor {
     /// Opens storage, replays history, and creates the first session when empty.
     pub fn start(database_path: PathBuf) -> Result<(Self, SessionId, SessionAggregate), AppError> {
-        let (requests, receiver) = mpsc::channel(64);
+        let (requests, receiver) = mpsc::channel::<StorageRequest>(64);
         let (ready, startup) = std::sync::mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("autoharness-storage".to_owned())
@@ -94,7 +152,7 @@ impl EngineActor {
 
     /// Stops and joins the storage thread after the terminal has been restored.
     pub async fn shutdown(mut self) -> Result<(), AppError> {
-        let _ = self.handle.requests.send(Request::Shutdown).await;
+        let _ = self.handle.requests.send(StorageRequest::Shutdown).await;
         drop(self.handle);
         let thread = self.thread.take().ok_or(AppError::WorkerStopped)?;
         tokio::task::spawn_blocking(move || thread.join())
@@ -106,7 +164,7 @@ impl EngineActor {
 
 fn run(
     database_path: PathBuf,
-    mut receiver: mpsc::Receiver<Request>,
+    mut receiver: mpsc::Receiver<StorageRequest>,
     ready: std::sync::mpsc::SyncSender<Result<(SessionId, SessionAggregate), AppError>>,
 ) {
     let (mut engine, session_id, session) = match open(database_path) {
@@ -122,7 +180,7 @@ fn run(
 
     while let Some(request) = receiver.blocking_recv() {
         match request {
-            Request::Execute { command, reply } => {
+            StorageRequest::Execute { command, reply } => {
                 let session_id = command.session_id().clone();
                 let result = engine.execute(&command).and_then(|events| {
                     let session = engine
@@ -137,9 +195,53 @@ fn run(
                 });
                 let _ = reply.send(result);
             }
-            Request::Shutdown => break,
+            StorageRequest::ListSessions { reply } => {
+                let _ = reply.send(engine.store().list_sessions().map_err(AppError::from));
+            }
+            StorageRequest::LoadEvents { session_id, reply } => {
+                let result = load_all_events(&mut engine, &session_id);
+                let _ = reply.send(result);
+            }
+            StorageRequest::DeleteSession {
+                session_id,
+                expected_last_sequence,
+                reply,
+            } => {
+                let result = engine
+                    .store_mut()
+                    .delete_session(&session_id, expected_last_sequence)
+                    .map_err(AppError::from);
+                telemetry::session_deleted(result.is_ok());
+                let _ = reply.send(result);
+            }
+            StorageRequest::Shutdown => break,
         }
     }
+}
+
+fn load_all_events(
+    engine: &mut LocalEngine,
+    session_id: &autoharness_domain::SessionId,
+) -> Result<Vec<autoharness_domain::EventEnvelope>, AppError> {
+    use autoharness_store::{DEFAULT_EVENT_PAGE_SIZE, SessionStore as _};
+
+    let mut events = Vec::new();
+    let mut after = 0_u64;
+    loop {
+        let page = engine
+            .store()
+            .load_events(session_id, after, DEFAULT_EVENT_PAGE_SIZE)
+            .map_err(AppError::from)?;
+        let loaded = page.len();
+        if let Some(last) = page.last() {
+            after = last.sequence().get();
+        }
+        events.extend(page);
+        if loaded < usize::try_from(DEFAULT_EVENT_PAGE_SIZE).unwrap_or(usize::MAX) {
+            break;
+        }
+    }
+    Ok(events)
 }
 
 fn open(database_path: PathBuf) -> Result<(LocalEngine, SessionId, SessionAggregate), AppError> {

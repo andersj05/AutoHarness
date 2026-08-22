@@ -3,7 +3,7 @@ use std::sync::Arc;
 use autoharness_domain::{
     AttemptFailure, AttemptId, ClassifiedError, CommandPayload, DeliveryMode, ErrorClass,
     ErrorCode, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage, ResponseText,
-    RetryAdvice, RunLimits, SessionId, ToolCallId, UsageSnapshot as DomainUsage,
+    RetryAdvice, RunLimits, SessionId, SessionTitle, ToolCallId, UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
@@ -15,10 +15,11 @@ use autoharness_provider::{
 };
 #[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
+use autoharness_store::SessionStatus;
 use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
 use autoharness_tui::{
-    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy, ToolCallKey,
-    UiFailure, UiIntent, UiNotice,
+    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy,
+    SessionBrowserEntry, SessionsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -146,6 +147,7 @@ impl Coordinator {
 
     /// Runs until terminal shutdown or application-channel closure.
     pub async fn run(mut self) -> Result<(), AppError> {
+        self.publish_sessions().await?;
         if self.provider.is_some() {
             self.refresh_catalog(None);
             self.maybe_resume_after_tools().await?;
@@ -253,6 +255,316 @@ impl Coordinator {
             } => {
                 self.answer_permission(request_id, tool_call_id, allow)
                     .await?;
+            }
+            UiIntent::OpenSession {
+                request_id,
+                session_id,
+            } => {
+                self.open_session(request_id, session_id).await?;
+            }
+            UiIntent::RenameSession {
+                request_id,
+                session_id,
+                title,
+            } => {
+                self.rename_session(request_id, session_id, title).await?;
+            }
+            UiIntent::ArchiveSession {
+                request_id,
+                session_id,
+            } => {
+                self.archive_session(request_id, session_id, true).await?;
+            }
+            UiIntent::UnarchiveSession {
+                request_id,
+                session_id,
+            } => {
+                self.archive_session(request_id, session_id, false).await?;
+            }
+            UiIntent::DeleteSession {
+                request_id,
+                session_id,
+            } => {
+                self.delete_session(request_id, session_id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuilds and publishes the all-sessions read model from durable state.
+    async fn publish_sessions(&self) -> Result<(), AppError> {
+        let active = self.session_id.as_str().to_owned();
+        let summaries = match self.engine.list_sessions().await {
+            Ok(summaries) => summaries,
+            Err(error) => {
+                tracing::warn!(error = %error, "session listing failed");
+                return Ok(());
+            }
+        };
+        let sessions = summaries
+            .iter()
+            .map(|summary| SessionBrowserEntry {
+                session_id: summary.session_id().as_str().to_owned(),
+                title: summary.display_title(),
+                archived: summary.status() == SessionStatus::Archived,
+                selected_model: summary.selected_model().cloned(),
+                updated_at_ms: summary.updated_at().get(),
+                active: summary.session_id().as_str() == active,
+            })
+            .collect();
+        self.ports
+            .session_lists
+            .send_replace(Arc::new(SessionsProjection { sessions }));
+        Ok(())
+    }
+
+    /// Opens a different durable session after verifying it is switch-safe.
+    ///
+    /// The switch is rejected while an attempt is in flight in the current
+    /// session so no provider task or pending permission can be orphaned.
+    /// The target aggregate is rebuilt from its authoritative history before
+    /// any projection swap, so an unknown identity fails closed.
+    async fn open_session(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+    ) -> Result<(), AppError> {
+        if self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Cancel or wait for the active response before switching sessions",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        if raw_session_id == self.session_id.as_str() {
+            // Selecting the already-active row just closes the browser.
+            self.commit(request_id).await?;
+            return Ok(());
+        }
+        let target = match SessionId::new(raw_session_id.clone()) {
+            Ok(target) => target,
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Validation,
+                        "That session identity is invalid",
+                        RetryPolicy::Never,
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let events = match self.engine.load_events(target.clone()).await {
+            Ok(events) => events,
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Storage,
+                        "That session could not be loaded from local storage",
+                        RetryPolicy::Never,
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let aggregate =
+            match autoharness_engine::SessionAggregate::rehydrate(target.clone(), &events) {
+                Ok(aggregate) => aggregate,
+                Err(_) => {
+                    self.reject(
+                        request_id,
+                        UiFailure::new(
+                            ErrorClass::Storage,
+                            "That session's history failed validation",
+                            RetryPolicy::Never,
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+        self.session_id = target;
+        self.session = aggregate;
+        self.active = None;
+        self.catalog_cancellation = None;
+        self.ports
+            .sessions
+            .send_replace(Arc::new(projection::session(&self.session)));
+        self.publish_sessions().await?;
+        self.commit(request_id).await?;
+        self.maybe_resume_after_tools().await
+    }
+
+    async fn rename_session(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+        title: String,
+    ) -> Result<(), AppError> {
+        let Ok(session_id) = SessionId::new(raw_session_id.clone()) else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "That session identity is invalid",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        let title = match SessionTitle::new(title) {
+            Ok(title) => title,
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Validation,
+                        "Session titles must be 1-128 visible characters",
+                        RetryPolicy::Never,
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let payload = CommandPayload::RenameSession {
+            session_id: session_id.clone(),
+            title,
+        };
+        match self.execute(payload).await {
+            Ok(()) => {
+                self.publish_sessions().await?;
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, engine_failure(&error)).await?,
+        }
+        Ok(())
+    }
+
+    async fn archive_session(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+        archive: bool,
+    ) -> Result<(), AppError> {
+        let Ok(session_id) = SessionId::new(raw_session_id) else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "That session identity is invalid",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        let payload = if archive {
+            CommandPayload::ArchiveSession {
+                session_id: session_id.clone(),
+            }
+        } else {
+            CommandPayload::UnarchiveSession {
+                session_id: session_id.clone(),
+            }
+        };
+        match self.execute(payload).await {
+            Ok(()) => {
+                self.publish_sessions().await?;
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, engine_failure(&error)).await?,
+        }
+        Ok(())
+    }
+
+    /// Permanently deletes a settled non-active session.
+    ///
+    /// Deletion of the active session is refused locally because the running
+    /// coordinator owns its aggregates; the user must switch first.
+    async fn delete_session(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+    ) -> Result<(), AppError> {
+        if raw_session_id == self.session_id.as_str() || self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Switch to another session before deleting this one",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        let Ok(session_id) = SessionId::new(raw_session_id) else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "That session identity is invalid",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        let expected_last_sequence = self
+            .engine
+            .list_sessions()
+            .await
+            .ok()
+            .and_then(|summaries| {
+                summaries
+                    .iter()
+                    .find(|summary| summary.session_id() == &session_id)
+                    .map(|summary| summary.last_sequence().get())
+            });
+        let Some(expected_last_sequence) = expected_last_sequence else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::NotFound,
+                    "That session no longer exists",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        match self
+            .engine
+            .delete_session(session_id, expected_last_sequence)
+            .await
+        {
+            Ok(_)
+            | Err(AppError::Store(autoharness_store::StoreError::InvalidSessionTransition)) => {
+                self.publish_sessions().await?;
+                self.commit(request_id).await?;
+            }
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Conflict,
+                        "The session still has unsettled work and cannot be deleted yet",
+                        RetryPolicy::Now,
+                    ),
+                )
+                .await?;
             }
         }
         Ok(())
@@ -2378,6 +2690,7 @@ mod tests {
         let initial_session = Arc::new(projection::session(&session));
         let (mut ui, app) = bounded_ports(
             initial_session,
+            Arc::new(SessionsProjection::default()),
             Arc::new(CatalogProjection::CredentialRequired),
         );
         let shutdown = CancellationToken::new();
@@ -2420,6 +2733,187 @@ mod tests {
                 .any(|summary| summary.session_id() == &created_session_id),
             "the fresh session must remain durably discoverable"
         );
+    }
+
+    #[tokio::test]
+    async fn two_sessions_switch_rename_and_survive_restart_with_replay_equivalence() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("lifecycle.sqlite3");
+        let (actor, first_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            first_id.clone(),
+            session,
+            actor.handle(),
+            None,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        // Wait for the initial session list publication.
+        let listed =
+            wait_for_session_list(&mut ui.session_lists, |list| !list.sessions.is_empty()).await;
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].active);
+
+        // Create a second session; the coordinator activates it.
+        let create_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::CreateSession {
+                request_id: create_request,
+            })
+            .await
+            .expect("create intent");
+        expect_commit(&mut ui, create_request).await;
+        let second = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id != first_id.as_str()
+        })
+        .await;
+        let second_id = SessionId::new(&second.session_id).expect("second session ID");
+
+        // Rename the second session and observe the browser list update.
+        let rename_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::RenameSession {
+                request_id: rename_request,
+                session_id: second.session_id.clone(),
+                title: "Deep dive".to_owned(),
+            })
+            .await
+            .expect("rename intent");
+        expect_commit(&mut ui, rename_request).await;
+        let renamed = wait_for_session_list(&mut ui.session_lists, |list| {
+            list.sessions
+                .iter()
+                .any(|entry| entry.title == "Deep dive" && entry.active)
+        })
+        .await;
+        assert_eq!(renamed.len(), 2);
+
+        // Archive the first session while working in the second.
+        let archive_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::ArchiveSession {
+                request_id: archive_request,
+                session_id: first_id.as_str().to_owned(),
+            })
+            .await
+            .expect("archive intent");
+        expect_commit(&mut ui, archive_request).await;
+        let archived = wait_for_session_list(&mut ui.session_lists, |list| {
+            list.sessions
+                .iter()
+                .any(|entry| entry.session_id == first_id.as_str() && entry.archived)
+        })
+        .await;
+        assert_eq!(archived.len(), 2);
+
+        // Switch back into the first session; unarchive it first because an
+        // archived session accepts no ordinary commands after activation.
+        let unarchive_request = RequestId::new(4);
+        ui.intents
+            .send(UiIntent::UnarchiveSession {
+                request_id: unarchive_request,
+                session_id: first_id.as_str().to_owned(),
+            })
+            .await
+            .expect("unarchive intent");
+        expect_commit(&mut ui, unarchive_request).await;
+        let open_request = RequestId::new(5);
+        ui.intents
+            .send(UiIntent::OpenSession {
+                request_id: open_request,
+                session_id: first_id.as_str().to_owned(),
+            })
+            .await
+            .expect("open intent");
+        expect_commit(&mut ui, open_request).await;
+        let reopened = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id == first_id.as_str()
+        })
+        .await;
+        // Created, archived, and unarchived: three durable events so far.
+        assert_eq!(reopened.revision, 3);
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        // Restart replays both sessions with their durable lifecycle state.
+        let (actor, active_id, active_session) =
+            crate::engine_actor::EngineActor::start(database).expect("restart engine actor");
+        assert_eq!(active_id, first_id, "the most recent session reactivates");
+        assert!(!active_session.is_archived());
+        assert_eq!(
+            active_session
+                .title()
+                .map(autoharness_domain::SessionTitle::as_str),
+            None,
+            "the first session was never renamed"
+        );
+
+        let summaries = actor
+            .handle()
+            .list_sessions()
+            .await
+            .expect("restart listing");
+        assert_eq!(summaries.len(), 2);
+        let second_summary = summaries
+            .iter()
+            .find(|summary| summary.session_id() == &second_id)
+            .expect("second session summary");
+        assert_eq!(
+            second_summary
+                .title()
+                .map(autoharness_domain::SessionTitle::as_str),
+            Some("Deep dive")
+        );
+        assert_eq!(
+            second_summary.status(),
+            autoharness_store::SessionStatus::Active
+        );
+        let replay = autoharness_engine::SessionAggregate::rehydrate(
+            second_id.clone(),
+            &actor
+                .handle()
+                .load_events(second_id)
+                .await
+                .expect("second session events"),
+        )
+        .expect("second session replays");
+        assert_eq!(
+            replay.title().map(autoharness_domain::SessionTitle::as_str),
+            Some("Deep dive")
+        );
+
+        actor.shutdown().await.expect("restart shutdown");
+    }
+
+    async fn wait_for_session_list(
+        ui: &mut tokio::sync::watch::Receiver<Arc<SessionsProjection>>,
+        condition: impl Fn(&SessionsProjection) -> bool,
+    ) -> Vec<SessionBrowserEntry> {
+        loop {
+            {
+                let current = ui.borrow_and_update();
+                if condition(&current) {
+                    return current.sessions.clone();
+                }
+            }
+            if ui.changed().await.is_err() {
+                panic!("session list channel closed");
+            }
+        }
     }
 
     #[test]
@@ -2621,6 +3115,7 @@ mod tests {
         let initial_session = Arc::new(projection::session(&session));
         let (mut ui, app) = bounded_ports(
             initial_session,
+            Arc::new(SessionsProjection::default()),
             Arc::new(CatalogProjection::CredentialRequired),
         );
         let shutdown = CancellationToken::new();
@@ -2690,6 +3185,7 @@ mod tests {
         let initial_session = Arc::new(projection::session(&session));
         let (mut ui, app) = bounded_ports(
             initial_session,
+            Arc::new(SessionsProjection::default()),
             Arc::new(CatalogProjection::CredentialRequired),
         );
         let shutdown = CancellationToken::new();
@@ -2771,7 +3267,11 @@ mod tests {
         let (actor, session_id, session) =
             crate::engine_actor::EngineActor::start(database).expect("engine actor");
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id,
@@ -2839,7 +3339,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(InvalidToolRepairProvider::default());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id.clone(),
@@ -2934,7 +3438,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(InvalidToolRepairProvider::never_repairs());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id.clone(),
@@ -3011,7 +3519,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(ToolLoopProvider::default());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let factory: ProviderFactory = Arc::new(|_| {
             Err(ProviderError::new(
@@ -3165,7 +3677,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(ToolLoopProvider::reading());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::with_provider_factory(
             session_id,
@@ -3279,7 +3795,11 @@ mod tests {
         let (actor, session_id, session) =
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id.clone(),
@@ -3374,7 +3894,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(ToolLoopProvider::default());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::with_provider_factory(
             session_id.clone(),
@@ -3467,7 +3991,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
         let provider = Arc::new(FakeProvider::default());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id.clone(),
@@ -3622,7 +4150,11 @@ mod tests {
             crate::engine_actor::EngineActor::start(database).expect("engine actor");
         let provider = Arc::new(UnsolicitedCancellationProvider::default());
         let initial_session = Arc::new(projection::session(&session));
-        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
         let shutdown = CancellationToken::new();
         let coordinator = Coordinator::new(
             session_id,
