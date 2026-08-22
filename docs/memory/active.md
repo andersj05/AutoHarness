@@ -89,7 +89,6 @@ Run the opt-in live Gemini and configured-router compatibility probes, verify th
 
 ## Open questions
 
-- Which open-source license should govern the repository?
 - What reference machine should define startup and stream-overhead benchmarks?
 - Should [the proposed operating-system credential profile decision](../adr/0009-use-os-backed-provider-credential-profiles.md) be accepted as written before Phase 3.3?
 - What exact export, retention, hard-deletion, and artifact-cleanup semantics should govern sessions?

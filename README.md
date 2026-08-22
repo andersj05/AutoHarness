@@ -158,4 +158,7 @@ Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-rend
 - Keep secrets out of source control, logs, transcripts, and model-visible memory.
 - Prefer native performance, bounded concurrency, deterministic recovery, and explicit permissions.
 
-Licensing and contributor policies will be finalized before the first public release.
+## License and contributions
+
+AutoHarness is released under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the branching model, required validation gates, and documentation expectations before opening a pull request.
