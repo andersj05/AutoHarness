@@ -355,8 +355,7 @@ Proceed in this order:
 3. Complete Phase 3.3 typed settings, provider profiles, and opt-in operating-system credential storage.
 4. Complete Phase 3.4 TUI usability and discoverability.
 5. Complete Phase 3.5 cross-platform release hardening, benchmark markers, and reference-machine evidence.
-6. Decide the license and contribution policy before the first public release.
-7. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+6. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
@@ -422,7 +421,6 @@ LLM network latency must be reported separately from harness overhead.
 
 ## Open decisions
 
-- The public repository license and contribution policy.
 - Benchmark hardware and release thresholds.
 - Credential-vault behavior on Linux systems without a Secret Service implementation.
 - Session hard-deletion, artifact cleanup, retention, and export semantics.
