@@ -12,7 +12,7 @@
 | 1. Terminal vertical slice | Complete | The fixture-verified terminal path discovers models, streams typed Gemini events, cancels and retries attempts, commits SQLite events and projections, and restores the same visible session after restart |
 | 2. Provider/router platform | Complete | Gemini and the configurable OpenAI-compatible router pass fixture conformance and the same composed session path through shared provider policy and durable catalog caching |
 | 3. Safe agent execution | Complete | Security-audited versioned tools run through explicit durable permission, bounded provider admission, capability, budget, artifact, continuation, parent-child lifetime, and conservative recovery boundaries |
-| 3.1. Live protocol reliability and recovery | Active | Gemini argument aggregation, durable invalid-call repair, failed-turn isolation, capability gating, stable diagnostics, and durable `Ctrl+N` recovery pass local fixture, integration, render, replay, and PTY tests; live provider exit evidence remains open |
+| 3.1. Live protocol reliability and recovery | Active | Gemini argument aggregation, durable invalid-call repair, failed-turn isolation, capability gating, stable diagnostics, and durable `Ctrl+N` recovery pass local fixture, integration, render, replay, and PTY tests; live Gemini plain-chat and function-call probes passed on 2026-08-22 while the configured router remains open |
 | 3.2. Complete session lifecycle | Planned | The store can list sessions, but the application and TUI expose only one startup-selected session |
 | 3.3. User profiles, settings, and secure credentials | Planned | Environment configuration and session-only credential entry exist; persistent profiles and settings do not |
 | 3.4. TUI usability and discoverability | Planned | The focused chat controls exist; full navigation, command discovery, help, and settings surfaces do not |
@@ -81,11 +81,12 @@
 - The isolated benchmark environment measures durable append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes while explicitly excluding network latency.
 - A PowerShell idle resident-memory sampler is available, and the benchmark documentation defines provenance requirements and exact monotonic markers for deferred latency metrics.
 - Continuous integration defines formatting, lint, documentation, doctest, native Linux, Windows, and macOS test gates, plus separate formatting, lint, and test gates for the isolated benchmark workspace.
+- The opt-in live Gemini probes passed on 2026-08-22 against production Google AI Studio on current-generation models after the decoder learned the live `arguments_delta` dialect and stopped treating the empty start placeholder as complete arguments.
 
 ## Known gaps
 
 - No license or contribution guide.
-- No successful reviewed live Gemini compatibility verification has been performed; checked-in provider and function-calling protocol evidence is fixture-backed.
+- Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence now includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
 - The terminal can create a fresh session but cannot browse, switch, rename, archive, export, or delete sessions even though durable session summaries can be listed by the store.
 - The terminal has no user settings or named provider profiles, and pasted credentials are intentionally forgotten at process exit.
@@ -95,4 +96,4 @@
 
 ## Next milestone exit target
 
-Phase 3.1 must run the compiled opt-in probes and real terminal plain-chat and approved HTTP-tool continuation paths against live Gemini and the configured router, then record secret-free pass or fail evidence.
+Phase 3.1 must run the compiled opt-in configured-router probes and verify real terminal plain-chat and approved HTTP-tool continuation paths for at least one live provider, then record secret-free pass or fail evidence.
