@@ -382,6 +382,32 @@ pub enum Focus {
     Credential,
     /// A durable tool permission request owns key input.
     Permission,
+    /// The session-browser overlay owns key input.
+    Browser,
+}
+
+/// One searchable row in the session browser.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionBrowserEntry {
+    /// Stable durable session identity.
+    pub session_id: String,
+    /// Deterministic browser label derived from durable state.
+    pub title: String,
+    /// Durable lifecycle state of the session.
+    pub archived: bool,
+    /// Latest selected provider-neutral model identity, when any.
+    pub selected_model: Option<ModelRef>,
+    /// Last event's observed time in epoch milliseconds.
+    pub updated_at_ms: i64,
+    /// Whether this row is the currently active session.
+    pub active: bool,
+}
+
+/// Read model for every durable session known to the application.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionsProjection {
+    /// Sessions in deterministic recent-first order.
+    pub sessions: Vec<SessionBrowserEntry>,
 }
 
 /// A provider credential transferred from the TUI without persistence or serialization.
@@ -589,6 +615,16 @@ pub enum PendingKind {
     RetryAttempt(AttemptKey),
     /// Human response to one durable permission request.
     AnswerPermission(ToolCallKey),
+    /// Durable rename of one session.
+    RenameSession(String),
+    /// Durable archive of one session.
+    ArchiveSession(String),
+    /// Durable unarchive of one session.
+    UnarchiveSession(String),
+    /// Confirmed deletion of one session.
+    DeleteSession(String),
+    /// Opening one durable session as the active session.
+    OpenSession(String),
 }
 
 /// Intent emitted by pure update logic and handled by application composition.
@@ -629,6 +665,32 @@ pub enum UiIntent {
         tool_call_id: ToolCallKey,
         allow: bool,
     },
+    /// Open one durable session by identity.
+    OpenSession {
+        request_id: RequestId,
+        session_id: String,
+    },
+    /// Replace the title of one durable session.
+    RenameSession {
+        request_id: RequestId,
+        session_id: String,
+        title: String,
+    },
+    /// Retain a session but stop it from accepting ordinary commands.
+    ArchiveSession {
+        request_id: RequestId,
+        session_id: String,
+    },
+    /// Return an archived session to ordinary command eligibility.
+    UnarchiveSession {
+        request_id: RequestId,
+        session_id: String,
+    },
+    /// Permanently delete a confirmed session and its history.
+    DeleteSession {
+        request_id: RequestId,
+        session_id: String,
+    },
 }
 
 impl UiIntent {
@@ -643,7 +705,12 @@ impl UiIntent {
             | Self::SubmitPrompt { request_id, .. }
             | Self::CancelAttempt { request_id, .. }
             | Self::RetryAttempt { request_id, .. }
-            | Self::AnswerPermission { request_id, .. } => *request_id,
+            | Self::AnswerPermission { request_id, .. }
+            | Self::OpenSession { request_id, .. }
+            | Self::RenameSession { request_id, .. }
+            | Self::ArchiveSession { request_id, .. }
+            | Self::UnarchiveSession { request_id, .. }
+            | Self::DeleteSession { request_id, .. } => *request_id,
         }
     }
 }
@@ -677,6 +744,8 @@ pub enum Message {
     Paste(String),
     /// Newest session projection.
     SessionChanged(Arc<SessionProjection>),
+    /// Newest read model of every durable session.
+    SessionsChanged(Arc<SessionsProjection>),
     /// Newest model catalog projection.
     CatalogChanged(Arc<CatalogProjection>),
     /// Application acknowledgement.
@@ -698,6 +767,10 @@ impl Debug for Message {
                 .debug_tuple("SessionChanged")
                 .field(session)
                 .finish(),
+            Self::SessionsChanged(sessions) => formatter
+                .debug_tuple("SessionsChanged")
+                .field(sessions)
+                .finish(),
             Self::CatalogChanged(catalog) => formatter
                 .debug_tuple("CatalogChanged")
                 .field(catalog)
@@ -710,6 +783,40 @@ impl Debug for Message {
     }
 }
 
+/// Session-browser local state.
+#[derive(Debug, Default)]
+pub(crate) struct BrowserState {
+    pub open: bool,
+    pub query: String,
+    /// Stable identity of the highlighted row.
+    pub selected: Option<String>,
+    /// When set, the highlighted row awaits a typed replacement title.
+    pub renaming: bool,
+    pub rename_buffer: String,
+    /// When set, deletion of this identity is awaiting explicit confirmation.
+    pub confirming_delete: Option<String>,
+}
+
+/// Per-session composer draft keyed by stable session identity.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub(crate) struct SessionDrafts {
+    drafts: BTreeMap<String, String>,
+}
+
+impl SessionDrafts {
+    pub(crate) fn take_for(&mut self, session_id: &str) -> Option<String> {
+        self.drafts.remove(session_id)
+    }
+
+    pub(crate) fn stash(&mut self, session_id: &str, draft: String) {
+        if draft.is_empty() {
+            self.drafts.remove(session_id);
+        } else {
+            self.drafts.insert(session_id.to_owned(), draft);
+        }
+    }
+}
+
 /// Complete local state rendered by the terminal client.
 #[derive(Debug)]
 pub struct Model {
@@ -717,6 +824,8 @@ pub struct Model {
     pub session: Arc<SessionProjection>,
     /// Newest catalog read model.
     pub catalog: Arc<CatalogProjection>,
+    /// Newest read model of every durable session.
+    pub(crate) sessions: Arc<SessionsProjection>,
     /// Multiline prompt composer.
     pub composer: ComposerState,
     /// Transcript tail-follow and scroll state.
@@ -731,6 +840,9 @@ pub struct Model {
     pub should_quit: bool,
     pub(crate) picker: PickerState,
     pub(crate) credential: CredentialState,
+    pub(crate) browser: BrowserState,
+    /// Composer text saved while working in another session.
+    pub(crate) drafts: SessionDrafts,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -745,7 +857,11 @@ pub struct Model {
 impl Model {
     /// Creates UI state from application-provided read models.
     #[must_use]
-    pub fn new(session: Arc<SessionProjection>, catalog: Arc<CatalogProjection>) -> Self {
+    pub fn new(
+        session: Arc<SessionProjection>,
+        sessions: Arc<SessionsProjection>,
+        catalog: Arc<CatalogProjection>,
+    ) -> Self {
         let permission_pending = !session.permission_requests.is_empty();
         let open_credential =
             !permission_pending && matches!(&*catalog, CatalogProjection::CredentialRequired);
@@ -772,6 +888,7 @@ impl Model {
         let mut model = Self {
             session,
             catalog,
+            sessions,
             composer: ComposerState::default(),
             transcript: TranscriptState::new(),
             focus,
@@ -787,6 +904,8 @@ impl Model {
                 open: open_credential,
                 ..CredentialState::default()
             },
+            browser: BrowserState::default(),
+            drafts: SessionDrafts::default(),
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
@@ -799,13 +918,81 @@ impl Model {
         };
         model.sync_retry_deadline();
         model.sync_catalog_retry_deadline();
+        model.sync_browser_selection();
         model
+    }
+
+    /// Returns whether the session-browser overlay is open.
+    #[must_use]
+    pub const fn browser_open(&self) -> bool {
+        self.browser.open
+    }
+
+    /// Returns the highlighted browser session identity.
+    #[must_use]
+    pub fn browser_selection(&self) -> Option<&str> {
+        self.browser.selected.as_deref()
+    }
+
+    /// Returns whether a rename buffer is active in the browser.
+    #[must_use]
+    pub const fn browser_renaming(&self) -> bool {
+        self.browser.renaming
+    }
+
+    /// Returns the pending rename buffer content.
+    #[must_use]
+    pub fn browser_rename_buffer(&self) -> &str {
+        &self.browser.rename_buffer
+    }
+
+    /// Returns the current browser filter query.
+    #[must_use]
+    pub fn browser_query(&self) -> &str {
+        &self.browser.query
+    }
+
+    /// Returns the identity awaiting confirmed deletion, if any.
+    #[must_use]
+    pub fn browser_delete_confirmation(&self) -> Option<&str> {
+        self.browser.confirming_delete.as_deref()
     }
 
     /// Returns whether the picker overlay is open.
     #[must_use]
     pub const fn picker_open(&self) -> bool {
         self.picker.open
+    }
+
+    /// Returns the filtered session-browser rows in durable order.
+    #[must_use]
+    pub fn browser_entries(&self) -> Vec<&SessionBrowserEntry> {
+        let query = self.browser.query.to_lowercase();
+        self.sessions
+            .sessions
+            .iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.title.to_lowercase().contains(&query)
+                    || entry.session_id.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    pub(crate) fn sync_browser_selection(&mut self) {
+        let entries = self.browser_entries();
+        if entries.is_empty() {
+            self.browser.selected = None;
+            return;
+        }
+        let valid = self
+            .browser
+            .selected
+            .as_ref()
+            .is_some_and(|selected| entries.iter().any(|entry| &entry.session_id == selected));
+        if !valid {
+            self.browser.selected = Some(entries[0].session_id.clone());
+        }
     }
 
     /// Returns whether the API-key overlay is open.
