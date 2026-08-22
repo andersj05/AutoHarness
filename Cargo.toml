@@ -28,6 +28,7 @@ autoharness-engine = { path = "crates/autoharness-engine" }
 autoharness-provider = { path = "crates/autoharness-provider" }
 autoharness-provider-gemini = { path = "crates/autoharness-provider-gemini" }
 autoharness-provider-openai = { path = "crates/autoharness-provider-openai" }
+autoharness-settings = { path = "crates/autoharness-settings" }
 autoharness-store = { path = "crates/autoharness-store" }
 autoharness-store-sqlite = { path = "crates/autoharness-store-sqlite" }
 autoharness-tui = { path = "crates/autoharness-tui" }
@@ -47,6 +48,7 @@ tokio-util = "0.7"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = "0.3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 uuid = "1"
 zeroize = "1"
 
