@@ -28,6 +28,10 @@ This index routes humans and agents to the smallest authoritative document for a
 
 - [Agent memory patterns](research/agent-memory-patterns.md): source review and the conventions adopted for AutoHarness.
 
+## Validation
+
+- [`scripts/check_docs_links.py`](../scripts/check_docs_links.py): verifies that every relative link in every Markdown file resolves and that every ADR is indexed; runs in CI and locally from the repository root.
+
 ## Source-of-truth rule
 
 Each fact should have one authoritative home:

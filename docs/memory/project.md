@@ -33,7 +33,7 @@ The second provider outcome is the same experience through the user's configurab
 - Improvements require versioned evaluations, guardrails, promotion evidence, and rollback.
 - Secrets never enter source control, logs, transcripts, telemetry, or model-visible memory.
 - The permanent branch hierarchy is `main -> dev -> short-lived feat/<name> branches`; see [ADR-0003](../adr/0003-use-main-dev-feature-branches.md).
-- The project will be open source; the exact license remains an open decision.
+- The project is open source under the MIT License; see [ADR-0010](../adr/0010-use-mit-license.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Product principles
 
