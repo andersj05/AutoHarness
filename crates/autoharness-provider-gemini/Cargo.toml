@@ -21,6 +21,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 autoharness-provider = { path = "../autoharness-provider", features = ["conformance"] }
+autoharness-tool.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]

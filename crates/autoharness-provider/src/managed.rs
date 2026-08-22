@@ -705,6 +705,7 @@ mod tests {
             streaming: CapabilitySupport::Unsupported,
             managed_interactions: CapabilitySupport::Unknown,
             thinking: CapabilitySupport::Unknown,
+            tool_calling: CapabilitySupport::Unknown,
         };
         let inner = Arc::new(FakeProvider::new(vec![
             Err(retryable),
@@ -845,6 +846,7 @@ mod tests {
             streaming: CapabilitySupport::Supported,
             managed_interactions: CapabilitySupport::Unknown,
             thinking: CapabilitySupport::Unknown,
+            tool_calling: CapabilitySupport::Supported,
         }
     }
 }

@@ -42,6 +42,7 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
                                 failure.message().as_str(),
                                 RetryPolicy::from_advice(failure.retry_advice(), 0),
                             )
+                            .with_code(failure.code().as_str())
                         }),
                 ),
                 EngineAttemptStatus::Unknown => AttemptStatus::Failed(interrupted_failure()),
@@ -82,6 +83,7 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
         .collect();
 
     SessionProjection {
+        session_id: aggregate.session_id().as_str().to_owned(),
         revision: aggregate
             .last_sequence()
             .map_or(0, |sequence| sequence.get()),
@@ -93,6 +95,7 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
 
 const fn capability_name(kind: autoharness_domain::CapabilityKind) -> &'static str {
     match kind {
+        autoharness_domain::CapabilityKind::InvalidToolCall => "invalid tool call",
         autoharness_domain::CapabilityKind::FilesystemRead => "filesystem read",
         autoharness_domain::CapabilityKind::FilesystemWrite => "filesystem write",
         autoharness_domain::CapabilityKind::ProcessExecute => "process execute",
@@ -139,6 +142,7 @@ fn interrupted_failure() -> UiFailure {
         "The provider attempt was interrupted before its outcome was known",
         RetryPolicy::Now,
     )
+    .with_code("interrupted_attempt")
 }
 
 #[cfg(test)]

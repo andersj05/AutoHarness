@@ -180,6 +180,9 @@ impl Coordinator {
 
     async fn handle_intent(&mut self, intent: UiIntent) -> Result<(), AppError> {
         match intent {
+            UiIntent::CreateSession { request_id } => {
+                self.create_session(request_id).await?;
+            }
             UiIntent::ConfigureCredential {
                 request_id,
                 credential,
@@ -251,6 +254,41 @@ impl Coordinator {
                 self.answer_permission(request_id, tool_call_id, allow)
                     .await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn create_session(&mut self, request_id: RequestId) -> Result<(), AppError> {
+        if self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Cancel or finish the active response before starting a new session",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let session_id = ids::session_id();
+        match self
+            .engine
+            .execute(ids::command(CommandPayload::CreateSession {
+                session_id: session_id.clone(),
+            }))
+            .await
+        {
+            Ok(reply) => {
+                self.session_id = session_id;
+                self.session = reply.session;
+                self.ports
+                    .sessions
+                    .send_replace(Arc::new(projection::session(&self.session)));
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, engine_failure(&error)).await?,
         }
         Ok(())
     }
@@ -553,7 +591,11 @@ impl Coordinator {
 
     async fn start_attempt(&mut self, attempt_id: AttemptId) -> Result<(), StartAttemptError> {
         let limits = RunLimits::default();
-        let request = match build_request(&self.session, &attempt_id) {
+        let advertise_tools = self
+            .session
+            .attempt(&attempt_id)
+            .is_some_and(|attempt| self.model_supports_tools(attempt.model()));
+        let request = match build_request(&self.session, &attempt_id, advertise_tools) {
             Ok(request) => request,
             Err(error) => {
                 self.execute(CommandPayload::FailAttempt {
@@ -862,6 +904,9 @@ impl Coordinator {
             }
         };
         let outcome = self.tool_runtime.evaluate(&planned);
+        if planned.spec().capability.kind == autoharness_domain::CapabilityKind::InvalidToolCall {
+            telemetry::invalid_tool_call_rejected();
+        }
         let tool_call_id = planned.spec().tool_call_id.clone();
         self.execute(CommandPayload::ProposeToolCall {
             session_id: self.session_id.clone(),
@@ -1107,8 +1152,12 @@ impl Coordinator {
             attempt_id: attempt_id.clone(),
         })
         .await?;
-        let request =
-            build_request(&self.session, &attempt_id).map_err(|_| AppError::Configuration)?;
+        let advertise_tools = self
+            .session
+            .attempt(&attempt_id)
+            .is_some_and(|attempt| self.model_supports_tools(attempt.model()));
+        let request = build_request(&self.session, &attempt_id, advertise_tools)
+            .map_err(|_| AppError::Configuration)?;
         let cancellation = self
             .active
             .as_ref()
@@ -1293,6 +1342,14 @@ impl Coordinator {
         })
     }
 
+    fn model_supports_tools(&self, model: &autoharness_domain::ModelRef) -> bool {
+        self.catalog_models.iter().any(|descriptor| {
+            descriptor.provider_id == *model.provider_id()
+                && descriptor.model_id == *model.model_id()
+                && descriptor.capabilities.supports_tool_calling()
+        })
+    }
+
     fn spawn_stream(
         &self,
         attempt_id: AttemptId,
@@ -1376,16 +1433,20 @@ impl Coordinator {
 fn build_request(
     session: &SessionAggregate,
     attempt_id: &AttemptId,
+    advertise_tools: bool,
 ) -> Result<ChatRequest, ProviderError> {
     let attempt = session
         .attempt(attempt_id)
         .ok_or_else(|| ProviderError::new(ProviderErrorKind::Internal, RetryAdvice::Never))?;
     let mut messages = Vec::new();
-    for input in session
-        .admitted_inputs()
-        .iter()
-        .filter(|input| input.promoted_by().is_some())
-    {
+    for input in session.admitted_inputs().iter().filter(|input| {
+        input.promoted_by().is_some()
+            && (input.input_id() == attempt.input_id()
+                || session.attempts().iter().any(|candidate| {
+                    candidate.input_id() == input.input_id()
+                        && candidate.status() == EngineAttemptStatus::Completed
+                }))
+    }) {
         messages.push(ChatMessage::text(
             ChatRole::User,
             ChatContent::new(input.prompt().as_str())?,
@@ -1437,8 +1498,13 @@ fn build_request(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    ChatRequest::new(attempt.model().model_id().clone(), messages)
-        .map(|request| request.with_tools(tools))
+    ChatRequest::new(attempt.model().model_id().clone(), messages).map(|request| {
+        if advertise_tools {
+            request.with_tools(tools)
+        } else {
+            request
+        }
+    })
 }
 
 fn recover_active_attempt(
@@ -1506,7 +1572,8 @@ fn tool_provider_error(error: &ToolError) -> ProviderError {
         autoharness_tool::ToolErrorKind::Cancelled => ProviderErrorKind::Cancelled,
         autoharness_tool::ToolErrorKind::PermissionDenied => ProviderErrorKind::PermissionDenied,
         autoharness_tool::ToolErrorKind::InvalidCall
-        | autoharness_tool::ToolErrorKind::OutputLimit => ProviderErrorKind::LimitExceeded,
+        | autoharness_tool::ToolErrorKind::OutputLimit
+        | autoharness_tool::ToolErrorKind::TurnLimit => ProviderErrorKind::LimitExceeded,
         autoharness_tool::ToolErrorKind::Filesystem
         | autoharness_tool::ToolErrorKind::Process
         | autoharness_tool::ToolErrorKind::Http
@@ -1554,6 +1621,13 @@ fn tool_result_content(call: &autoharness_engine::ToolCallProjection) -> String 
             || "Tool failed".to_owned(),
             |failure| format!("Tool failed: {}", failure.message().as_str()),
         ),
+        autoharness_engine::ToolCallStatus::Denied
+            if call.call().capability.kind
+                == autoharness_domain::CapabilityKind::InvalidToolCall =>
+        {
+            "Tool call rejected: use only an advertised tool with its exact argument schema"
+                .to_owned()
+        }
         autoharness_engine::ToolCallStatus::Denied => "Tool permission was denied".to_owned(),
         autoharness_engine::ToolCallStatus::Cancelled => "Tool execution was cancelled".to_owned(),
         autoharness_engine::ToolCallStatus::Unknown => {
@@ -1712,7 +1786,7 @@ fn engine_failure(error: &DurableEngineError) -> UiFailure {
 }
 
 fn provider_failure(error: &ProviderError) -> UiFailure {
-    classified_failure(error)
+    classified_failure(error).with_code(provider_code(error.kind()))
 }
 
 fn start_attempt_failure(error: &StartAttemptError) -> UiFailure {
@@ -1739,6 +1813,8 @@ mod tests {
         ProviderMetadata, TextDelta, UsageSnapshot as ProviderUsage,
     };
     use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
+    use autoharness_store::SessionStore as _;
+    use autoharness_store_sqlite::SqliteStore;
     use autoharness_tui::{SessionProjection, TranscriptItem, UiPorts, bounded_ports};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::{TcpListener, TcpStream};
@@ -1930,6 +2006,100 @@ mod tests {
     }
 
     impl ProviderMetadata for ToolLoopProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
+    struct InvalidToolRepairProvider {
+        repair_after_first: bool,
+        calls: AtomicUsize,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl Default for InvalidToolRepairProvider {
+        fn default() -> Self {
+            Self {
+                repair_after_first: true,
+                calls: AtomicUsize::new(0),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl InvalidToolRepairProvider {
+        fn never_repairs() -> Self {
+            Self {
+                repair_after_first: false,
+                ..Self::default()
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Catalog for InvalidToolRepairProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for InvalidToolRepairProvider {
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            self.requests.lock().expect("request lock").push(request);
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 || !self.repair_after_first {
+                Ok(Box::pin(futures_util::stream::iter([
+                    Ok(ProviderStreamEvent::Started),
+                    Ok(ProviderStreamEvent::ToolCall(ProviderToolCall {
+                        provider_call_id: ProviderCallId::new(format!("call-invalid-{call}"))
+                            .expect("provider call ID"),
+                        tool_name: ToolName::new("web_search").expect("tool name"),
+                        arguments: ToolArguments::new(serde_json::json!({
+                            "query": "news today"
+                        }))
+                        .expect("tool arguments"),
+                    })),
+                    Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::ToolCalls,
+                    }),
+                ])))
+            } else {
+                Ok(Box::pin(futures_util::stream::iter([
+                    Ok(ProviderStreamEvent::Started),
+                    Ok(ProviderStreamEvent::TextDelta(
+                        TextDelta::new("recovered after invalid tool call").expect("text delta"),
+                    )),
+                    Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::Stop,
+                    }),
+                ])))
+            }
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for InvalidToolRepairProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.to_owned()
+        }
+    }
+
+    impl ProviderMetadata for InvalidToolRepairProvider {
         fn provider_id(&self) -> &ProviderId {
             &FAKE_PROVIDER_ID
         }
@@ -2155,6 +2325,7 @@ mod tests {
                 streaming: CapabilitySupport::Supported,
                 managed_interactions: CapabilitySupport::Unknown,
                 thinking: CapabilitySupport::Unknown,
+                tool_calling: CapabilitySupport::Supported,
             },
         }
     }
@@ -2196,6 +2367,59 @@ mod tests {
             .expect("notice timeout")
             .expect("notice sender remains open");
         assert_eq!(notice, UiNotice::IntentCommitted { request_id });
+    }
+
+    #[tokio::test]
+    async fn new_session_intent_commits_without_a_provider_or_catalog() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("new-session.sqlite3");
+        let (actor, original_session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            original_session_id.clone(),
+            session,
+            actor.handle(),
+            None,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        let request_id = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::CreateSession { request_id })
+            .await
+            .expect("new session intent");
+        expect_commit(&mut ui, request_id).await;
+        let created = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id != original_session_id.as_str()
+        })
+        .await;
+        assert_eq!(created.revision, 1);
+        assert!(created.transcript.is_empty());
+        assert!(created.selected_model.is_none());
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        let store = SqliteStore::open(database).expect("reopen store");
+        let created_session_id = SessionId::new(&created.session_id).expect("created session ID");
+        let summaries = store.list_sessions().expect("session summaries");
+        assert!(
+            summaries
+                .iter()
+                .any(|summary| summary.session_id() == &created_session_id),
+            "the fresh session must remain durably discoverable"
+        );
     }
 
     #[test]
@@ -2251,7 +2475,95 @@ mod tests {
             .collect();
         let aggregate = SessionAggregate::rehydrate(session_id, &events).expect("valid history");
 
-        let request = build_request(&aggregate, &attempt_id).expect("valid provider request");
+        let request = build_request(&aggregate, &attempt_id, true).expect("valid provider request");
+        let plain_request =
+            build_request(&aggregate, &attempt_id, false).expect("valid plain request");
+
+        assert_eq!(request.messages.len(), 1);
+        assert!(!request.tools.is_empty());
+        assert!(plain_request.tools.is_empty());
+        assert_eq!(
+            request.messages[0]
+                .content()
+                .expect("text message")
+                .as_str(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn provider_request_does_not_replay_a_prior_failed_prompt() {
+        let session_id = SessionId::new("session-failed-context").expect("session ID");
+        let first_input = InputId::new("input-failed").expect("input ID");
+        let second_input = InputId::new("input-current").expect("input ID");
+        let first_attempt = AttemptId::new("attempt-failed").expect("attempt ID");
+        let second_attempt = AttemptId::new("attempt-current").expect("attempt ID");
+        let model = fixture_model();
+        let payloads = [
+            EventPayload::SessionCreated,
+            EventPayload::ModelSelected {
+                model: model.clone(),
+            },
+            EventPayload::InputAdmitted {
+                input_id: first_input.clone(),
+                prompt: PromptText::new("Search the web for news today").expect("prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            },
+            EventPayload::AttemptPrepared {
+                attempt_id: first_attempt.clone(),
+                input_id: first_input,
+                model: model.clone(),
+                retry_of: None,
+            },
+            EventPayload::AttemptStarted {
+                attempt_id: first_attempt.clone(),
+            },
+            EventPayload::AttemptFailed {
+                attempt_id: first_attempt,
+                failure: completion_failure(
+                    ErrorClass::Protocol,
+                    "protocol",
+                    "The provider response was invalid",
+                    RetryAdvice::Never,
+                ),
+            },
+            EventPayload::InputAdmitted {
+                input_id: second_input.clone(),
+                prompt: PromptText::new("Hello").expect("prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            },
+            EventPayload::AttemptPrepared {
+                attempt_id: second_attempt.clone(),
+                input_id: second_input,
+                model,
+                retry_of: None,
+            },
+            EventPayload::AttemptStarted {
+                attempt_id: second_attempt.clone(),
+            },
+        ];
+        let events: Vec<_> = payloads
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                EventEnvelope::new_v1(
+                    EventId::new(format!("failed-event-{index}")).expect("event ID"),
+                    session_id.clone(),
+                    SessionSequence::new(index as u64 + 1).expect("sequence"),
+                    TimestampMillis::new(index as i64),
+                    Causation::Command(
+                        CommandId::new(format!("failed-command-{index}")).expect("command ID"),
+                    ),
+                    CorrelationId::new(format!("failed-correlation-{index}"))
+                        .expect("correlation ID"),
+                    payload,
+                )
+            })
+            .collect();
+        let aggregate = SessionAggregate::rehydrate(session_id, &events).expect("valid history");
+
+        let request =
+            build_request(&aggregate, &second_attempt, true).expect("valid provider request");
 
         assert_eq!(request.messages.len(), 1);
         assert_eq!(
@@ -2259,7 +2571,7 @@ mod tests {
                 .content()
                 .expect("text message")
                 .as_str(),
-            "hello"
+            "Hello"
         );
     }
 
@@ -2517,6 +2829,176 @@ mod tests {
             requests,
             vec!["GET /v1/models?limit=1000", "POST /v1/chat/completions"]
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_tool_call_is_denied_durably_and_repaired_in_the_same_attempt() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("invalid-tool-repair.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let provider = Arc::new(InvalidToolRepairProvider::default());
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            Some(provider.clone()),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Search the web for news today".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let completed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        ..
+                    } if text == "recovered after invalid tool call"
+                )
+            })
+        })
+        .await;
+        assert!(completed.permission_requests.is_empty());
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            assert!(
+                requests[1]
+                    .messages
+                    .iter()
+                    .any(|message| matches!(message, ChatMessage::ToolCall(call) if call.tool_name.as_str() == "web_search"))
+            );
+            assert!(requests[1].messages.iter().any(|message| {
+                matches!(
+                    message,
+                    ChatMessage::ToolResult { content, .. }
+                        if content.as_str().contains("use only an advertised tool")
+                )
+            }));
+        }
+
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(recovered.attempts().len(), 1);
+        assert_eq!(recovered.attempts()[0].turns_started(), 2);
+        assert_eq!(recovered.tool_calls().len(), 1);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Denied
+        );
+        assert_eq!(
+            recovered.tool_calls()[0].call().capability.kind,
+            autoharness_domain::CapabilityKind::InvalidToolCall
+        );
+        reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn repeated_invalid_tool_calls_stop_at_the_durable_turn_limit() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("invalid-tool-limit.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let provider = Arc::new(InvalidToolRepairProvider::never_repairs());
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(initial_session, Arc::new(CatalogProjection::Loading));
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            Some(provider.clone()),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Keep requesting an unknown tool".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if code == "tool_turn_limit"
+                )
+            })
+        })
+        .await;
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            usize::try_from(RunLimits::default().max_turns).expect("turn limit fits usize")
+        );
+
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(recovered.attempts()[0].turns_started(), 8);
+        assert_eq!(recovered.tool_calls().len(), 8);
+        assert!(recovered.tool_calls().iter().all(|call| {
+            call.status() == autoharness_engine::ToolCallStatus::Denied
+                && call.call().capability.kind
+                    == autoharness_domain::CapabilityKind::InvalidToolCall
+        }));
+        reopened.shutdown().await.expect("reopened actor shutdown");
     }
 
     #[tokio::test]

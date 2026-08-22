@@ -6,6 +6,8 @@
 
 **Owners:** Project maintainers
 
+**2026-08-22 clarification:** Tool definitions require positive model capability evidence, while missing or older cached capability metadata disables tool advertisement and preserves plain streamed chat.
+
 ## Context and problem statement
 
 Phase 2 must prove that a configurable model router can use the same catalog, session, streaming, cancellation, retry, and recovery path as Gemini without introducing router payloads into the engine or terminal.
@@ -42,6 +44,7 @@ Credential-bearing non-loopback router endpoints require HTTPS, while loopback H
 The adapter sends complete locally reconstructed chat history with `stream: true` and requests streamed usage when supported.
 It normalizes OpenAI-compatible server-sent events into the existing lifecycle, text, cumulative usage, cancellation, and completion events.
 Provider extensions in model metadata may explicitly advertise capabilities, but absent metadata remains unknown rather than being invented.
+The application advertises the built-in custom-function registry only when the selected descriptor positively reports support for the adapter's exact tool-calling dialect.
 
 Application composition wraps both Gemini and router adapters with the same bounded policy layer.
 That layer applies dispatch and idle deadlines, bounded pre-stream retries, concurrency limits, a per-project request window, and capability preflight from the most recent discovered catalog.

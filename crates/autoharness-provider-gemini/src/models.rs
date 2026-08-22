@@ -71,6 +71,7 @@ impl NativeModel {
                 streaming: CapabilitySupport::Unknown,
                 managed_interactions: CapabilitySupport::Unknown,
                 thinking,
+                tool_calling: CapabilitySupport::Supported,
             },
         })
     }
@@ -122,6 +123,10 @@ mod tests {
             CapabilitySupport::Unknown
         );
         assert_eq!(mapped.capabilities.thinking, CapabilitySupport::Supported);
+        assert_eq!(
+            mapped.capabilities.tool_calling,
+            CapabilitySupport::Supported
+        );
     }
 
     #[test]
