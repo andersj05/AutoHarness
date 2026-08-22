@@ -38,6 +38,9 @@ jobs:
         run: rustup toolchain install
       - name: Show toolchain
         run: rustc --version --verbose
+      - name: Install Linux credential-vault system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run Clippy
@@ -102,5 +105,8 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
+      - name: Install Linux credential-vault system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Run tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast

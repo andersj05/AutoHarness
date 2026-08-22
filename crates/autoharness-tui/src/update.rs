@@ -76,6 +76,22 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         return create_session(model);
     }
 
+    // Ctrl+, toggles the non-modal settings overlay from any focus except
+    // the permission decision, which owns the keyboard exclusively.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char(','),
+            ctrl: true,
+            ..
+        }
+    ) && model.focus != Focus::Permission
+    {
+        model.settings_open = !model.settings_open;
+        model.dirty = true;
+        return Vec::new();
+    }
+
     if model.focus == Focus::Permission {
         return handle_permission_input(model, input);
     }
