@@ -150,6 +150,8 @@ impl RetryPolicy {
 pub struct UiFailure {
     /// Stable failure class.
     pub class: ErrorClass,
+    /// Stable machine-readable failure code.
+    pub code: String,
     /// Sanitized public message. Rendering still escapes terminal controls.
     pub message: String,
     /// User-visible retry policy.
@@ -162,9 +164,34 @@ impl UiFailure {
     pub fn new(class: ErrorClass, message: impl Into<String>, retry: RetryPolicy) -> Self {
         Self {
             class,
+            code: error_class_code(class).to_owned(),
             message: message.into(),
             retry,
         }
+    }
+
+    /// Replaces the class fallback with a more specific stable code.
+    #[must_use]
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = code.into();
+        self
+    }
+}
+
+const fn error_class_code(class: ErrorClass) -> &'static str {
+    match class {
+        ErrorClass::Validation => "validation",
+        ErrorClass::NotFound => "not_found",
+        ErrorClass::Conflict => "conflict",
+        ErrorClass::Authentication => "authentication",
+        ErrorClass::PermissionDenied => "permission_denied",
+        ErrorClass::RateLimited => "rate_limited",
+        ErrorClass::Timeout => "timeout",
+        ErrorClass::Unavailable => "unavailable",
+        ErrorClass::Cancelled => "cancelled",
+        ErrorClass::Protocol => "protocol",
+        ErrorClass::Storage => "storage",
+        ErrorClass::Internal => "internal",
     }
 }
 
@@ -263,6 +290,8 @@ impl Debug for PermissionDetailView {
 /// Read model derived from durable session events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionProjection {
+    /// Stable durable identity of the projected session.
+    pub session_id: String,
     /// Monotonic projection revision.
     pub revision: u64,
     /// Current selected model.
@@ -278,6 +307,7 @@ impl SessionProjection {
     #[must_use]
     pub const fn empty() -> Self {
         Self {
+            session_id: String::new(),
             revision: 0,
             selected_model: None,
             transcript: Vec::new(),
@@ -543,6 +573,8 @@ pub enum Notice {
 /// Kind of request awaiting application acknowledgement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingKind {
+    /// Durable creation and activation of a fresh session.
+    CreateSession,
     /// Runtime provider credential configuration and catalog validation.
     ConfigureCredential,
     /// Model catalog refresh.
@@ -562,6 +594,8 @@ pub enum PendingKind {
 /// Intent emitted by pure update logic and handled by application composition.
 #[derive(Debug)]
 pub enum UiIntent {
+    /// Create and activate a fresh durable session.
+    CreateSession { request_id: RequestId },
     /// Configure the provider from an ephemeral API key.
     ConfigureCredential {
         request_id: RequestId,
@@ -602,7 +636,8 @@ impl UiIntent {
     #[must_use]
     pub const fn request_id(&self) -> RequestId {
         match self {
-            Self::ConfigureCredential { request_id, .. }
+            Self::CreateSession { request_id }
+            | Self::ConfigureCredential { request_id, .. }
             | Self::RefreshCatalog { request_id }
             | Self::SelectModel { request_id, .. }
             | Self::SubmitPrompt { request_id, .. }

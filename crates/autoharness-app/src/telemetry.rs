@@ -82,6 +82,11 @@ pub fn cancellation_requested() {
     tracing::info!(event = "attempt_cancellation_requested");
 }
 
+/// Emits a content-free invalid model-call rejection.
+pub fn invalid_tool_call_rejected() {
+    tracing::warn!(event = "invalid_tool_call_rejected");
+}
+
 /// Emits a durable response segment size without response content.
 pub fn response_segment_committed(bytes: usize) {
     tracing::debug!(event = "response_segment_committed", bytes);

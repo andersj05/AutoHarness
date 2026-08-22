@@ -24,6 +24,8 @@ pub enum ToolErrorKind {
     Cancelled,
     /// Captured output exceeded the hard run bound.
     OutputLimit,
+    /// Provider repair or tool continuation exceeded the hard turn bound.
+    TurnLimit,
     /// Full output could not be retained as an artifact.
     Artifact,
     /// An internal invariant failed.
@@ -73,6 +75,7 @@ impl Display for ToolError {
             ToolErrorKind::Timeout => "The tool operation exceeded its deadline",
             ToolErrorKind::Cancelled => "The tool operation was cancelled",
             ToolErrorKind::OutputLimit => "The tool output exceeded the run limit",
+            ToolErrorKind::TurnLimit => "The provider turn limit was reached",
             ToolErrorKind::Artifact => "The full tool output could not be retained",
             ToolErrorKind::Internal => "The tool runtime encountered an internal error",
         })
@@ -84,7 +87,9 @@ impl Error for ToolError {}
 impl ClassifiedError for ToolError {
     fn class(&self) -> ErrorClass {
         match self.kind {
-            ToolErrorKind::InvalidCall | ToolErrorKind::OutputLimit => ErrorClass::Validation,
+            ToolErrorKind::InvalidCall | ToolErrorKind::OutputLimit | ToolErrorKind::TurnLimit => {
+                ErrorClass::Validation
+            }
             ToolErrorKind::PermissionDenied => ErrorClass::PermissionDenied,
             ToolErrorKind::Timeout => ErrorClass::Timeout,
             ToolErrorKind::Cancelled => ErrorClass::Cancelled,
@@ -109,6 +114,7 @@ const fn error_code(kind: ToolErrorKind) -> &'static str {
         ToolErrorKind::Timeout => "tool_timeout",
         ToolErrorKind::Cancelled => "tool_cancelled",
         ToolErrorKind::OutputLimit => "tool_output_limit",
+        ToolErrorKind::TurnLimit => "tool_turn_limit",
         ToolErrorKind::Artifact => "tool_artifact_failed",
         ToolErrorKind::Internal => "tool_internal",
     }

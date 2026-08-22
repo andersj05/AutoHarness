@@ -30,6 +30,8 @@ pub(crate) struct NativeCapabilities {
     chat: Option<bool>,
     streaming: Option<bool>,
     thinking: Option<bool>,
+    tools: Option<bool>,
+    function_calling: Option<bool>,
 }
 
 impl NativeModel {
@@ -63,6 +65,7 @@ impl NativeModel {
                 streaming: support(value.streaming),
                 managed_interactions: CapabilitySupport::Unsupported,
                 thinking: support(value.thinking),
+                tool_calling: support(value.function_calling.or(value.tools)),
             },
         );
         Some(ModelDescriptor {
@@ -131,5 +134,9 @@ mod tests {
             CapabilitySupport::Unsupported
         );
         assert_eq!(descriptor.capabilities.thinking, CapabilitySupport::Unknown);
+        assert_eq!(
+            descriptor.capabilities.tool_calling,
+            CapabilitySupport::Unknown
+        );
     }
 }

@@ -105,6 +105,10 @@ impl ToolRuntime {
         cancellation: &CancellationToken,
     ) -> Result<Vec<u8>, ToolError> {
         match operation {
+            Operation::RejectInvalid => Err(ToolError::new(
+                ToolErrorKind::InvalidCall,
+                RetryAdvice::Never,
+            )),
             Operation::ReadFile { path } => self.filesystem.read(&path, cancellation).await,
             Operation::WriteFile { path, content } => {
                 self.filesystem.write(&path, &content, cancellation).await

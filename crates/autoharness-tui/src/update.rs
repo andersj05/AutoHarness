@@ -61,6 +61,17 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
 }
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('n' | 'N'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        return create_session(model);
+    }
+
     if model.focus == Focus::Permission {
         return handle_permission_input(model, input);
     }
@@ -355,8 +366,22 @@ fn input_composer(editor: &mut ratatui_textarea::TextArea<'static>, input: Input
 }
 
 fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
-    if session.revision < model.session.revision {
+    let session_changed = session.session_id != model.session.session_id;
+    if !session_changed && session.revision < model.session.revision {
         return;
+    }
+    if session_changed {
+        model.composer.reset();
+        model.transcript = crate::model::TranscriptState::new();
+        model.cancelling.clear();
+        model.retrying.clear();
+        model.answering_permissions.clear();
+        model.permission_scroll = 0;
+        model.credential.open = false;
+        model.credential.clear();
+        model.picker.open = false;
+        model.picker.selected = session.selected_model.clone();
+        model.focus = Focus::Composer;
     }
     if model.transcript.follow_tail {
         model.transcript.rows_from_bottom = 0;
@@ -414,6 +439,11 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
     } else if model.focus == Focus::Permission {
         model.permission_scroll = 0;
         model.focus = Focus::Composer;
+    } else if session_changed
+        && model.session.selected_model.is_none()
+        && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
+    {
+        open_picker(model);
     }
     model.sync_retry_deadline();
     model.dirty = true;
@@ -438,6 +468,12 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
         UiNotice::IntentCommitted { request_id } => {
             if let Some(pending) = model.pending.remove(&request_id) {
                 match pending {
+                    PendingKind::CreateSession => {
+                        model.composer.reset();
+                        model.credential.open = false;
+                        model.credential.clear();
+                        model.notice = Some(Notice::Info("New session created".to_owned()));
+                    }
                     PendingKind::ConfigureCredential => {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
                     }
@@ -473,6 +509,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
         } => {
             let pending = model.pending.remove(&request_id);
             match pending {
+                Some(PendingKind::CreateSession) => {}
                 Some(PendingKind::ConfigureCredential) => {
                     open_credential(model);
                 }
@@ -490,6 +527,21 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
         }
     }
     model.dirty = true;
+}
+
+fn create_session(model: &mut Model) -> Vec<UiEffect> {
+    if model
+        .pending
+        .values()
+        .any(|pending| matches!(pending, PendingKind::CreateSession))
+    {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model.pending.insert(request_id, PendingKind::CreateSession);
+    model.notice = Some(Notice::Info("Creating a new session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::CreateSession { request_id })]
 }
 
 fn answer_permission(model: &mut Model, allow: bool) -> Vec<UiEffect> {
@@ -848,7 +900,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
         || model.pending.values().any(|pending| match pending {
             PendingKind::CancelAttempt(candidate) if cancellation => candidate == attempt_id,
             PendingKind::RetryAttempt(candidate) if !cancellation => candidate == attempt_id,
-            PendingKind::ConfigureCredential
+            PendingKind::CreateSession
+            | PendingKind::ConfigureCredential
             | PendingKind::RefreshCatalog
             | PendingKind::SelectModel(_)
             | PendingKind::SubmitPrompt(_)

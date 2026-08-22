@@ -74,6 +74,8 @@ impl<'de> Deserialize<'de> for ToolArguments {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityKind {
+    /// No external authority because trusted planning rejected the model call.
+    InvalidToolCall,
     /// Read bytes from a workspace-confined path.
     FilesystemRead,
     /// Create or replace bytes at a workspace-confined path.
@@ -146,20 +148,20 @@ pub enum PermissionAnswer {
     Deny,
 }
 
-/// Model-authored call data paired with trusted derived authority.
+/// Model-authored call data paired with trusted derived authority or explicit no-authority rejection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolCallSpec {
     /// Stable local identity allocated before admission.
     pub tool_call_id: ToolCallId,
     /// Provider identity used when returning the result.
     pub provider_call_id: ProviderCallId,
-    /// Versioned registered tool name.
+    /// Bounded model-selected tool name.
     pub tool_name: ToolName,
     /// Exact supported schema version.
     pub schema_version: u16,
     /// Validated but still untrusted model arguments.
     pub arguments: ToolArguments,
-    /// Exact capability derived by the trusted registry.
+    /// Exact capability or no-authority rejection derived by the trusted registry.
     pub capability: CapabilityRequest,
 }
 

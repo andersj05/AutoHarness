@@ -3,11 +3,12 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-Phase 3 is complete.
-The Rust terminal application now runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router.
+The Phase 3 safe-execution substrate is complete, and Phase 3.1 local protocol reliability and recovery are fixture-verified while live-provider exit evidence remains open.
+The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, but session browsing, persistent profiles, and in-app settings remain planned work.
 Versioned filesystem, direct-process, and HTTP tools use scoped deny, ask, or allow decisions, bounded output, content-addressed artifacts, immutable run budgets, and explicit interruption recovery.
 Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
-The current provider-protocol evidence uses local HTTP fixtures and fake providers, so it does not claim live Gemini or router service verification.
+Gemini function arguments are aggregated across streamed deltas, malformed model calls are durably denied and returned for bounded repair, and failed prompts are not replayed into unrelated later turns.
+The current reviewed provider-protocol evidence still does not claim a successful live Gemini or router verification.
 
 ## Run the terminal application
 
@@ -40,6 +41,7 @@ Routers mounted below a path such as `https://router.example/api/` retain that p
 | Send the composed prompt | `Ctrl+S` or `Ctrl+Enter` |
 | Insert a newline | `Enter` |
 | Open the model picker | `Ctrl+P` |
+| Create a fresh durable session | `Ctrl+N` |
 | Open or replace the API key | `Ctrl+K` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
@@ -117,6 +119,10 @@ cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 
 The local Phase 3 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
 The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, every run-budget dimension, bounded artifacts, permission UI behavior, interruption recovery, a composed allow-execute-continue-reopen path, SQLite replay, terminal restoration, and credential redaction.
+A one-byte-fragmented Gemini Interactions fixture covers streamed function arguments, and a composed SQLite-backed test proves an unknown tool name is force-denied, returned to the provider, repaired in the same bounded attempt, and replayed after restart.
+A Phase 3.1 PTY smoke run pressed `Ctrl+N` from the credential overlay, observed the durable new-session confirmation, exited through `Ctrl+C`, restored the terminal, and removed the isolated test data afterward.
+Opt-in ignored live probes are available in each provider crate and retain only structural event assertions.
+With the corresponding runtime credentials configured, run `cargo test --locked -p autoharness-provider-gemini --test live_compat -- --ignored` for Gemini and `cargo test --locked -p autoharness-provider-openai --test live_compat -- --ignored` for the configured router.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
 A credential-overlay PTY smoke run pasted a sentinel through bracketed paste, displayed only the fixed mask, cleared it on dismissal, reopened an empty editor through `Ctrl+K`, found no sentinel bytes in the application files, and restored the terminal on exit.
 A Phase 2 PTY smoke run used a local OpenAI-compatible fixture to discover and select a router model, durably admit a prompt, render a completed streamed response, restart with the fixture offline, and restore the selected model and transcript from replay plus the fresh catalog cache.

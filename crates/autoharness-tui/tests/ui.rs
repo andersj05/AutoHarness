@@ -51,6 +51,7 @@ fn ready_catalog() -> Arc<CatalogProjection> {
 
 fn session(revision: u64, transcript: Vec<TranscriptItem>) -> Arc<SessionProjection> {
     Arc::new(SessionProjection {
+        session_id: "session-fixture".to_owned(),
         revision,
         selected_model: Some(pro_model()),
         transcript,
@@ -576,6 +577,42 @@ fn ctrl_k_reopens_the_credential_editor_without_touching_the_prompt() {
 
     assert!(model.credential_open());
     assert_eq!(model.composer.text(), "draft remains");
+}
+
+#[test]
+fn ctrl_n_is_global_and_accepts_a_lower_revision_from_the_new_session() {
+    let mut model = empty_model();
+    let _ = update(
+        &mut model,
+        Message::Paste("draft from old session".to_owned()),
+    );
+    let effects = update(&mut model, Message::Input(ctrl(Key::Char('n'))));
+    let [UiEffect::Dispatch(UiIntent::CreateSession { request_id })] = effects.as_slice() else {
+        panic!("Ctrl+N must dispatch the typed new-session intent");
+    };
+
+    let replacement = Arc::new(SessionProjection {
+        session_id: "session-replacement".to_owned(),
+        revision: 1,
+        selected_model: None,
+        transcript: Vec::new(),
+        permission_requests: Vec::new(),
+    });
+    let _ = update(&mut model, Message::SessionChanged(replacement));
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted {
+            request_id: *request_id,
+        }),
+    );
+
+    assert_eq!(model.session.session_id, "session-replacement");
+    assert_eq!(model.session.revision, 1);
+    assert!(model.composer.is_blank());
+    assert_eq!(
+        model.notice,
+        Some(Notice::Info("New session created".to_owned()))
+    );
 }
 
 #[test]

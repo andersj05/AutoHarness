@@ -139,6 +139,7 @@ mod tests {
                     streaming: CapabilitySupport::Unknown,
                     managed_interactions: CapabilitySupport::Unsupported,
                     thinking: CapabilitySupport::Unknown,
+                    tool_calling: CapabilitySupport::Unknown,
                 },
             }],
         );

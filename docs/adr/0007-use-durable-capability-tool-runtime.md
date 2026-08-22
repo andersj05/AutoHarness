@@ -8,6 +8,9 @@
 
 **2026-08-22 clarification:** ADR-0008 supersedes the modeled-cost portions of this decision until a trusted durable pricing snapshot exists.
 
+**2026-08-22 clarification:** A provider call that fails strict registered-schema parsing is frozen as a bounded `InvalidToolCall` no-authority proposal, force-denied by policy, and returned as a tool result for bounded model repair.
+This remains an execution rejection and cannot be authorized by a permissive rule or forged replay evidence.
+
 ## Context and problem statement
 
 Phase 3 must let a model request useful local actions without treating model-authored JSON as authority.
@@ -36,6 +39,7 @@ Chosen option: **add a provider-neutral durable tool lifecycle and execute only 
 
 The registered schema version, tool name, provider call identity, bounded arguments, and trusted derived capability become one immutable `ToolCallSpec`.
 Strict trusted parsers reject unknown fields, path traversal, unsupported HTTP methods and origins, shell programs, and any schema or argument drift during recovery.
+A rejected provider call still crosses the durable proposal and denial lifecycle with a no-authority capability so the model can receive a deterministic correction without terminating the session.
 A model cannot name a capability directly.
 
 The permission policy evaluates the exact tool, capability class, and canonical resource and returns deny, ask, or allow.

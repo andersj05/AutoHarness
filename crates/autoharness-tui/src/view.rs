@@ -306,7 +306,12 @@ fn transcript_text(model: &Model) -> Text<'static> {
                         ERROR_STYLE,
                     ));
                     lines.push(Line::styled(
-                        retry_label(model, attempt_id, failure.retry),
+                        format!(
+                            "{} | {} | ref {}",
+                            display_safe(&failure.code),
+                            retry_label(model, attempt_id, failure.retry),
+                            diagnostic_reference(attempt_id)
+                        ),
                         MUTED_STYLE,
                     ));
                 }
@@ -339,7 +344,11 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let (label, style) = match notice {
         Notice::Info(message) => (display_safe(message), Style::default().fg(Color::Yellow)),
         Notice::Failure(failure) => (
-            format!("Error: {}", display_safe(&failure.message)),
+            format!(
+                "Error [{}]: {}",
+                display_safe(&failure.code),
+                display_safe(&failure.message)
+            ),
             ERROR_STYLE,
         ),
     };
@@ -363,18 +372,27 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::raw("send  "),
-        Span::styled(
+    ];
+    if area.width >= 72 {
+        spans.push(Span::styled(
             " Enter ",
             Style::default().fg(Color::Black).bg(Color::DarkGray),
-        ),
-        Span::raw("newline  "),
+        ));
+        spans.push(Span::raw("newline  "));
+    }
+    spans.extend([
         Span::styled(
             " Ctrl+P ",
             Style::default().fg(Color::Black).bg(Color::DarkGray),
         ),
-        Span::raw("models"),
-    ];
-    if area.width >= 72 {
+        Span::raw("models  "),
+        Span::styled(
+            " Ctrl+N ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("new"),
+    ]);
+    if area.width >= 100 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             " Ctrl+K ",
@@ -429,7 +447,12 @@ fn render_narrow_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             " ^P ",
             Style::default().fg(Color::Black).bg(Color::DarkGray),
         ),
-        Span::raw("models"),
+        Span::raw("models  "),
+        Span::styled(
+            " ^N ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ),
+        Span::raw("new"),
     ];
     if let Some((attempt_id, status)) = model.session.active_attempt() {
         spans.push(Span::raw("  "));
@@ -755,20 +778,32 @@ fn spinner(now: u64) -> &'static str {
 
 fn retry_label(model: &Model, attempt_id: &crate::model::AttemptKey, retry: RetryPolicy) -> String {
     match retry {
-        RetryPolicy::Never => "Retry is unavailable for this failure.".to_owned(),
-        RetryPolicy::Now => "Press Ctrl+R to retry.".to_owned(),
+        RetryPolicy::Never => "Ctrl+N new".to_owned(),
+        RetryPolicy::Now => "Ctrl+R retry | Ctrl+N new".to_owned(),
         RetryPolicy::After { .. } | RetryPolicy::At(_)
             if model.retry_available(attempt_id, retry) =>
         {
-            "Press Ctrl+R to retry.".to_owned()
+            "Ctrl+R retry | Ctrl+N new".to_owned()
         }
         RetryPolicy::After { .. } | RetryPolicy::At(_) => {
             model.retry_remaining_ms(attempt_id, retry).map_or_else(
-                || "Retry is not available yet.".to_owned(),
-                |remaining_ms| format!("Retry available in {}.", retry_countdown(remaining_ms)),
+                || "retry pending | Ctrl+N new".to_owned(),
+                |remaining_ms| format!("retry in {} | Ctrl+N new", retry_countdown(remaining_ms)),
             )
         }
     }
+}
+
+fn diagnostic_reference(attempt_id: &crate::model::AttemptKey) -> String {
+    let value = attempt_id.as_str();
+    let characters = value.chars().count();
+    if characters <= 16 {
+        return display_safe(value);
+    }
+    value
+        .chars()
+        .skip(characters.saturating_sub(12))
+        .collect::<String>()
 }
 
 fn retry_countdown(remaining_ms: u64) -> String {
