@@ -123,4 +123,24 @@ pub trait SessionStore {
 
     /// Rebuilds every read projection from retained authoritative events.
     fn rebuild_projections(&mut self) -> Result<(), StoreError>;
+
+    /// Removes one session and every dependent row inside a single transaction.
+    ///
+    /// Implementations must reject deletion of a session that still has
+    /// unsettled provider attempts so an in-flight attempt can never lose its
+    /// durable history, and must report whether the session existed.
+    fn delete_session(
+        &mut self,
+        session_id: &SessionId,
+        expected_last_sequence: u64,
+    ) -> Result<DeletionDisposition, StoreError>;
+}
+
+/// Whether an explicit deletion removed the session or found nothing to remove.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeletionDisposition {
+    /// The session and its dependents were removed by this call.
+    Deleted,
+    /// No session with that identity existed.
+    NotFound,
 }

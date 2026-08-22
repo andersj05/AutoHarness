@@ -136,7 +136,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("read schema version"),
-        2
+        3
     );
     assert_eq!(
         store
@@ -145,7 +145,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations"),
-        2
+        3
     );
     drop(store);
 
@@ -157,7 +157,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations after reopen"),
-        2
+        3
     );
 }
 
@@ -200,7 +200,7 @@ fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version"),
-        2
+        3
     );
     assert_eq!(
         store
@@ -209,7 +209,7 @@ fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
                 row.get::<_, i64>(0)
             })
             .expect("migration count"),
-        2
+        3
     );
 }
 
@@ -1016,15 +1016,279 @@ fn a_newer_database_schema_fails_closed() {
     let store = database.open();
     store
         .connection
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .expect("set future schema fixture");
     drop(store);
 
     assert_eq!(
         SqliteStore::open(&database.path).err(),
         Some(StoreError::NewerSchema {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
+    );
+}
+
+#[test]
+fn session_lifecycle_events_update_the_session_projection() {
+    let database = TestDatabase::new();
+    let mut store = database.open();
+    let session = session_id("session-lifecycle");
+
+    store
+        .append(&AppendRequest::new(
+            session.clone(),
+            0,
+            vec![event(
+                "event-1",
+                &session,
+                1,
+                "command-create",
+                300,
+                EventPayload::SessionCreated,
+            )],
+        ))
+        .expect("create session");
+    store
+        .append(&AppendRequest::new(
+            session.clone(),
+            1,
+            vec![event(
+                "event-2",
+                &session,
+                2,
+                "command-rename",
+                250,
+                EventPayload::SessionRenamed {
+                    title: autoharness_domain::SessionTitle::new("Deep dive").expect("title"),
+                },
+            )],
+        ))
+        .expect("rename session");
+    store
+        .append(&AppendRequest::new(
+            session.clone(),
+            2,
+            vec![event(
+                "event-3",
+                &session,
+                3,
+                "command-archive",
+                200,
+                EventPayload::SessionArchived,
+            )],
+        ))
+        .expect("archive session");
+
+    let summaries = store.list_sessions().expect("list sessions");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(
+        summaries[0].status(),
+        autoharness_store::SessionStatus::Archived
+    );
+    assert_eq!(
+        summaries[0]
+            .title()
+            .map(autoharness_domain::SessionTitle::as_str),
+        Some("Deep dive")
+    );
+
+    store
+        .append(&AppendRequest::new(
+            session.clone(),
+            3,
+            vec![event(
+                "event-4",
+                &session,
+                4,
+                "command-unarchive",
+                150,
+                EventPayload::SessionUnarchived,
+            )],
+        ))
+        .expect("unarchive session");
+    let summaries = store.list_sessions().expect("list sessions again");
+    assert_eq!(
+        summaries[0].status(),
+        autoharness_store::SessionStatus::Active
+    );
+}
+
+#[test]
+fn projection_rebuild_restores_title_and_status_from_history() {
+    let database = TestDatabase::new();
+    let mut store = database.open();
+    let session = session_id("session-rebuild");
+
+    let events = vec![
+        event(
+            "event-1",
+            &session,
+            1,
+            "command-create",
+            300,
+            EventPayload::SessionCreated,
+        ),
+        event(
+            "event-2",
+            &session,
+            2,
+            "command-rename",
+            250,
+            EventPayload::SessionRenamed {
+                title: autoharness_domain::SessionTitle::new("Kept title").expect("title"),
+            },
+        ),
+        event(
+            "event-3",
+            &session,
+            3,
+            "command-archive",
+            200,
+            EventPayload::SessionArchived,
+        ),
+    ];
+    store
+        .append(&AppendRequest::new(session.clone(), 0, events))
+        .expect("seed lifecycle history");
+
+    // Corrupt the projection, then rebuild strictly from retained events.
+    store
+        .connection
+        .execute(
+            "UPDATE sessions SET status = 'active', title = NULL WHERE session_id = ?1",
+            params![session.as_str()],
+        )
+        .expect("corrupt projection");
+    store.rebuild_projections().expect("rebuild projections");
+
+    let summaries = store.list_sessions().expect("list rebuilt sessions");
+    assert_eq!(
+        summaries[0].status(),
+        autoharness_store::SessionStatus::Archived
+    );
+    assert_eq!(
+        summaries[0]
+            .title()
+            .map(autoharness_domain::SessionTitle::as_str),
+        Some("Kept title")
+    );
+}
+
+#[test]
+fn deletion_removes_the_session_and_every_dependent_row_atomically() {
+    let database = TestDatabase::new();
+    let mut store = database.open();
+    let session = session_id("session-delete");
+    let other = session_id("session-kept");
+
+    let mut history = initial_events(&session, "delete me");
+    history.push(event(
+        "event-4",
+        &session,
+        4,
+        "command-prepare",
+        90,
+        EventPayload::AttemptPrepared {
+            attempt_id: attempt_id("attempt-1"),
+            input_id: input_id("input-1"),
+            model: model(),
+            retry_of: None,
+        },
+    ));
+    history.push(event(
+        "event-5",
+        &session,
+        5,
+        "command-start",
+        80,
+        EventPayload::AttemptStarted {
+            attempt_id: attempt_id("attempt-1"),
+        },
+    ));
+    history.push(event(
+        "event-6",
+        &session,
+        6,
+        "command-text",
+        70,
+        EventPayload::AttemptTextAppended {
+            attempt_id: attempt_id("attempt-1"),
+            text: ResponseText::new("answer").expect("non-empty response"),
+        },
+    ));
+    history.push(event(
+        "event-7",
+        &session,
+        7,
+        "command-complete",
+        60,
+        EventPayload::AttemptCompleted {
+            attempt_id: attempt_id("attempt-1"),
+        },
+    ));
+    store
+        .append(&AppendRequest::new(session.clone(), 0, history))
+        .expect("seed settled session");
+
+    store
+        .append(&AppendRequest::new(
+            other.clone(),
+            0,
+            vec![
+                event(
+                    "event-kept-1",
+                    &other,
+                    1,
+                    "command-create-kept",
+                    300,
+                    EventPayload::SessionCreated,
+                ),
+                event(
+                    "event-kept-2",
+                    &other,
+                    2,
+                    "command-select-kept",
+                    200,
+                    EventPayload::ModelSelected { model: model() },
+                ),
+            ],
+        ))
+        .expect("seed kept session");
+
+    // Version mismatch refuses to delete.
+    assert!(matches!(
+        store.delete_session(&session, 3),
+        Err(StoreError::VersionConflict { .. })
+    ));
+
+    // Correct version deletes every dependent row in one transaction.
+    assert_eq!(
+        store.delete_session(&session, 7),
+        Ok(autoharness_store::DeletionDisposition::Deleted)
+    );
+    assert_eq!(
+        store.delete_session(&session, 7),
+        Ok(autoharness_store::DeletionDisposition::NotFound)
+    );
+
+    assert!(store.list_sessions().expect("list after delete").len() == 1);
+    assert!(
+        store
+            .load_events(&session, 0, 32)
+            .expect("deleted history is gone")
+            .is_empty()
+    );
+    assert_eq!(
+        store.list_sessions().expect("list kept")[0].session_id(),
+        &other
+    );
+
+    // The kept session remains fully readable and replayable.
+    let reopened = database.open();
+    assert_eq!(
+        reopened.list_sessions().expect("reopen list").len(),
+        1,
+        "deletion is durable across reopen"
     );
 }

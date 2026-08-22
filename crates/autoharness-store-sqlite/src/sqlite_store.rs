@@ -5,13 +5,13 @@ use std::time::Duration;
 use autoharness_domain::{
     AttemptFailure, AttemptId, Causation, DeliveryMode, EVENT_SCHEMA_V1, EventEnvelope,
     EventPayload, InputId, ModelId, ModelRef, PromptText, ProviderId, SessionId, SessionSequence,
-    TimestampMillis, UsageSnapshot,
+    SessionTitle, TimestampMillis, UsageSnapshot,
 };
 use autoharness_store::{
     AdmittedInputRecord, AppendDisposition, AppendReceipt, AppendRequest, AttemptRecord,
-    AttemptState, CorruptionArea, IdentityKind, InputState, SessionStatus, SessionStore,
-    SessionSummary, StoreError, TranscriptEntry, TranscriptRole, TranscriptSource, TranscriptState,
-    TranscriptText,
+    AttemptState, CorruptionArea, DeletionDisposition, IdentityKind, InputState, SessionStatus,
+    SessionStore, SessionSummary, StoreError, TranscriptEntry, TranscriptRole, TranscriptSource,
+    TranscriptState, TranscriptText,
 };
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -444,7 +444,7 @@ impl SessionStore for SqliteStore {
             .connection
             .prepare(
                 "SELECT \
-                    s.session_id, s.status, s.selected_provider_id, s.selected_model_id, \
+                    s.session_id, s.status, s.title, s.selected_provider_id, s.selected_model_id, \
                     s.last_sequence, s.created_at_ms, s.updated_at_ms, \
                     (SELECT MIN(e.sequence) FROM session_events AS e WHERE e.session_id = s.session_id), \
                     (SELECT MAX(e.sequence) FROM session_events AS e WHERE e.session_id = s.session_id), \
@@ -458,14 +458,15 @@ impl SessionStore for SqliteStore {
                 Ok(SessionProjectionRow {
                     session_id: row.get(0)?,
                     status: row.get(1)?,
-                    selected_provider_id: row.get(2)?,
-                    selected_model_id: row.get(3)?,
-                    last_sequence: row.get(4)?,
-                    created_at_ms: row.get(5)?,
-                    updated_at_ms: row.get(6)?,
-                    minimum_event_sequence: row.get(7)?,
-                    maximum_event_sequence: row.get(8)?,
-                    event_count: row.get(9)?,
+                    title: row.get(2)?,
+                    selected_provider_id: row.get(3)?,
+                    selected_model_id: row.get(4)?,
+                    last_sequence: row.get(5)?,
+                    created_at_ms: row.get(6)?,
+                    updated_at_ms: row.get(7)?,
+                    minimum_event_sequence: row.get(8)?,
+                    maximum_event_sequence: row.get(9)?,
+                    event_count: row.get(10)?,
                 })
             })
             .map_err(map_sqlite_error)?;
@@ -601,8 +602,9 @@ impl SessionStore for SqliteStore {
                  DELETE FROM provider_attempts; \
                  DELETE FROM admitted_inputs; \
                  UPDATE sessions \
-                 SET status = 'active', selected_provider_id = NULL, selected_model_id = NULL, \
-                     last_sequence = 0, created_at_ms = 0, updated_at_ms = 0;",
+                 SET status = 'active', title = NULL, selected_provider_id = NULL, \
+                     selected_model_id = NULL, last_sequence = 0, created_at_ms = 0, \
+                     updated_at_ms = 0;",
             )
             .map_err(map_sqlite_error)?;
 
@@ -638,6 +640,79 @@ impl SessionStore for SqliteStore {
         }
 
         transaction.commit().map_err(map_sqlite_error)
+    }
+
+    fn delete_session(
+        &mut self,
+        session_id: &SessionId,
+        expected_last_sequence: u64,
+    ) -> Result<DeletionDisposition, StoreError> {
+        if expected_last_sequence > MAX_SQLITE_SEQUENCE {
+            return Err(StoreError::SequenceOutOfRange);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
+
+        let existing: Option<(i64, String)> = transaction
+            .query_row(
+                "SELECT last_sequence, status FROM sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((last_sequence, _status)) = existing else {
+            return Ok(DeletionDisposition::NotFound);
+        };
+        let actual_version = u64::try_from(last_sequence).map_err(|_| StoreError::CorruptData {
+            area: CorruptionArea::SessionProjection,
+        })?;
+        if actual_version != expected_last_sequence {
+            return Err(StoreError::VersionConflict {
+                session_id: session_id.clone(),
+                expected: expected_last_sequence,
+                actual: actual_version,
+            });
+        }
+        let unsettled = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM provider_attempts \
+                 WHERE session_id = ?1 \
+                   AND state IN ('prepared', 'in_flight')",
+                params![session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(map_sqlite_error)?;
+        if unsettled != 0 {
+            return Err(StoreError::InvalidSessionTransition);
+        }
+
+        // Delete every dependent row inside this transaction, deepest first,
+        // so a crash can never leave orphaned projections or events behind.
+        // The retained event stream is authoritative history; deletion is an
+        // explicit user request and removes replay data irreversibly.
+        for statement in [
+            "DELETE FROM transcript_segments WHERE session_id = ?1",
+            "DELETE FROM transcript_messages WHERE session_id = ?1",
+            "DELETE FROM provider_attempts WHERE session_id = ?1",
+            "DELETE FROM admitted_inputs WHERE session_id = ?1",
+            "DELETE FROM session_events WHERE session_id = ?1",
+            "DELETE FROM sessions WHERE session_id = ?1",
+        ] {
+            let changed = transaction
+                .execute(statement, params![session_id.as_str()])
+                .map_err(map_sqlite_error)?;
+            if statement.starts_with("DELETE FROM sessions") && changed != 1 {
+                return Err(StoreError::CorruptData {
+                    area: CorruptionArea::SessionProjection,
+                });
+            }
+        }
+
+        transaction.commit().map_err(map_sqlite_error)?;
+        Ok(DeletionDisposition::Deleted)
     }
 }
 
@@ -902,6 +977,45 @@ fn apply_projection(
                         area: CorruptionArea::SessionProjection,
                     });
                 }
+            }
+        }
+        EventPayload::SessionRenamed { title } => {
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET title = ?2 WHERE session_id = ?1",
+                    params![event.session_id().as_str(), title.as_str()],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed != 1 {
+                return Err(StoreError::CorruptData {
+                    area: CorruptionArea::SessionProjection,
+                });
+            }
+        }
+        EventPayload::SessionArchived => {
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET status = 'archived' WHERE session_id = ?1",
+                    params![event.session_id().as_str()],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed != 1 {
+                return Err(StoreError::CorruptData {
+                    area: CorruptionArea::SessionProjection,
+                });
+            }
+        }
+        EventPayload::SessionUnarchived => {
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET status = 'active' WHERE session_id = ?1",
+                    params![event.session_id().as_str()],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed != 1 {
+                return Err(StoreError::CorruptData {
+                    area: CorruptionArea::SessionProjection,
+                });
             }
         }
         EventPayload::ModelSelected { model } => {
@@ -1351,7 +1465,10 @@ fn validate_complete_streams(
                         area: CorruptionArea::Event,
                     });
                 }
-                EventPayload::ModelSelected { .. }
+                EventPayload::SessionRenamed { .. }
+                | EventPayload::SessionArchived
+                | EventPayload::SessionUnarchived
+                | EventPayload::ModelSelected { .. }
                 | EventPayload::AttemptPrepared { .. }
                 | EventPayload::AttemptStarted { .. }
                 | EventPayload::AttemptTextAppended { .. }
@@ -1377,7 +1494,10 @@ fn validate_complete_streams(
                     if created => {}
                 EventPayload::InputAdmitted { input_id, .. }
                     if created && seen_inputs.insert(input_id.clone()) => {}
-                EventPayload::ModelSelected { .. }
+                EventPayload::SessionRenamed { .. }
+                | EventPayload::SessionArchived
+                | EventPayload::SessionUnarchived
+                | EventPayload::ModelSelected { .. }
                 | EventPayload::InputAdmitted { .. }
                 | EventPayload::AttemptPrepared { .. }
                 | EventPayload::AttemptStarted { .. }
@@ -1522,6 +1642,7 @@ fn load_all_stored_event_rows(
 struct SessionProjectionRow {
     session_id: String,
     status: String,
+    title: Option<String>,
     selected_provider_id: Option<String>,
     selected_model_id: Option<String>,
     last_sequence: i64,
@@ -1534,53 +1655,40 @@ struct SessionProjectionRow {
 
 impl SessionProjectionRow {
     fn validate(self) -> Result<SessionSummary, StoreError> {
-        let session_id = SessionId::new(self.session_id).map_err(|_| StoreError::CorruptData {
+        let corrupt = || StoreError::CorruptData {
             area: CorruptionArea::SessionProjection,
-        })?;
+        };
+        let session_id = SessionId::new(self.session_id).map_err(|_| corrupt())?;
         let status = match self.status.as_str() {
             "active" => SessionStatus::Active,
             "archived" => SessionStatus::Archived,
-            _ => {
-                return Err(StoreError::CorruptData {
-                    area: CorruptionArea::SessionProjection,
-                });
-            }
+            _ => return Err(corrupt()),
+        };
+        let title = match &self.title {
+            None => None,
+            Some(raw) if raw.is_empty() => return Err(corrupt()),
+            Some(raw) => Some(SessionTitle::new(raw.clone()).map_err(|_| corrupt())?),
         };
         let selected_model = match (self.selected_provider_id, self.selected_model_id) {
             (None, None) => None,
             (Some(provider), Some(model)) => Some(ModelRef::new(
-                ProviderId::new(provider).map_err(|_| StoreError::CorruptData {
-                    area: CorruptionArea::SessionProjection,
-                })?,
-                ModelId::new(model).map_err(|_| StoreError::CorruptData {
-                    area: CorruptionArea::SessionProjection,
-                })?,
+                ProviderId::new(provider).map_err(|_| corrupt())?,
+                ModelId::new(model).map_err(|_| corrupt())?,
             )),
-            _ => {
-                return Err(StoreError::CorruptData {
-                    area: CorruptionArea::SessionProjection,
-                });
-            }
+            _ => return Err(corrupt()),
         };
-        let sequence_value =
-            u64::try_from(self.last_sequence).map_err(|_| StoreError::CorruptData {
-                area: CorruptionArea::SessionProjection,
-            })?;
-        let last_sequence =
-            SessionSequence::new(sequence_value).map_err(|_| StoreError::CorruptData {
-                area: CorruptionArea::SessionProjection,
-            })?;
+        let sequence_value = u64::try_from(self.last_sequence).map_err(|_| corrupt())?;
+        let last_sequence = SessionSequence::new(sequence_value).map_err(|_| corrupt())?;
         if self.minimum_event_sequence != Some(1)
             || self.maximum_event_sequence != Some(self.last_sequence)
             || self.event_count != self.last_sequence
         {
-            return Err(StoreError::CorruptData {
-                area: CorruptionArea::SessionProjection,
-            });
+            return Err(corrupt());
         }
         Ok(SessionSummary::new(
             session_id,
             status,
+            title,
             selected_model,
             last_sequence,
             TimestampMillis::new(self.created_at_ms),
@@ -2176,6 +2284,9 @@ fn parse_projection_sequence(
 fn event_kind(payload: &EventPayload) -> &'static str {
     match payload {
         EventPayload::SessionCreated => "session_created",
+        EventPayload::SessionRenamed { .. } => "session_renamed",
+        EventPayload::SessionArchived => "session_archived",
+        EventPayload::SessionUnarchived => "session_unarchived",
         EventPayload::ModelSelected { .. } => "model_selected",
         EventPayload::InputAdmitted { .. } => "input_admitted",
         EventPayload::AttemptPrepared { .. } => "attempt_prepared",

@@ -2,7 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use autoharness_domain::{
     AttemptFailure, AttemptId, DeliveryMode, InputId, ModelRef, PromptText, SessionId,
-    SessionSequence, TimestampMillis, UsageSnapshot, ValueError,
+    SessionSequence, SessionTitle, TimestampMillis, UsageSnapshot, ValueError,
 };
 
 /// Current durable session lifecycle state.
@@ -19,6 +19,7 @@ pub enum SessionStatus {
 pub struct SessionSummary {
     session_id: SessionId,
     status: SessionStatus,
+    title: Option<SessionTitle>,
     selected_model: Option<ModelRef>,
     last_sequence: SessionSequence,
     created_at: TimestampMillis,
@@ -31,6 +32,7 @@ impl SessionSummary {
     pub const fn new(
         session_id: SessionId,
         status: SessionStatus,
+        title: Option<SessionTitle>,
         selected_model: Option<ModelRef>,
         last_sequence: SessionSequence,
         created_at: TimestampMillis,
@@ -39,6 +41,7 @@ impl SessionSummary {
         Self {
             session_id,
             status,
+            title,
             selected_model,
             last_sequence,
             created_at,
@@ -56,6 +59,25 @@ impl SessionSummary {
     #[must_use]
     pub const fn status(&self) -> SessionStatus {
         self.status
+    }
+
+    /// Returns the latest user-facing title, when one was set.
+    #[must_use]
+    pub const fn title(&self) -> Option<&SessionTitle> {
+        self.title.as_ref()
+    }
+
+    /// Returns a deterministic browser label: the explicit title when set,
+    /// otherwise the fixed fallback derived from durable identity.
+    ///
+    /// The fallback is intentionally not transcript-derived so offline
+    /// browsing never leaks provider content into unattended surfaces.
+    #[must_use]
+    pub fn display_title(&self) -> String {
+        match &self.title {
+            Some(title) => title.as_str().to_owned(),
+            None => format!("Untitled session {}", self.session_id.as_str()),
+        }
     }
 
     /// Returns the latest selected model projection.

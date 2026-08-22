@@ -2,7 +2,7 @@ use autoharness_store::{CorruptionArea, StoreError};
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const LATEST_SCHEMA_VERSION: u32 = 2;
+const LATEST_SCHEMA_VERSION: u32 = 3;
 const MIGRATIONS: &[(u32, &str, &str)] = &[
     (
         1,
@@ -13,6 +13,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         2,
         "model_catalog_cache",
         include_str!("../migrations/0002_model_catalog_cache.sql"),
+    ),
+    (
+        3,
+        "session_lifecycle",
+        include_str!("../migrations/0003_session_lifecycle.sql"),
     ),
 ];
 
