@@ -74,6 +74,12 @@ pub enum ValueError {
     IdentifierTooLong,
     /// A prompt was empty or contained only whitespace.
     EmptyPrompt,
+    /// A session title was empty or contained only whitespace.
+    EmptySessionTitle,
+    /// A session title exceeded its durable byte bound.
+    SessionTitleTooLong,
+    /// A session title contained a character unsafe for terminal display.
+    InvalidSessionTitle,
     /// A provider response delta contained no bytes.
     EmptyResponseText,
     /// A public message was empty or contained only whitespace.
@@ -109,6 +115,9 @@ impl Display for ValueError {
             }
             Self::IdentifierTooLong => "identifier exceeds the supported length",
             Self::EmptyPrompt => "prompt must contain non-whitespace text",
+            Self::EmptySessionTitle => "session title must contain non-whitespace text",
+            Self::SessionTitleTooLong => "session title exceeds the supported length",
+            Self::InvalidSessionTitle => "session title must not contain control characters",
             Self::EmptyResponseText => "response text must not be empty",
             Self::EmptyPublicMessage => "public message must contain non-whitespace text",
             Self::PublicMessageTooLong => "public message exceeds the supported length",

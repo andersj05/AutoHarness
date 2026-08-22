@@ -21,5 +21,5 @@ pub use tool::{
 };
 pub use value::{
     AttemptFailure, DeliveryMode, ModelRef, PromptText, PublicMessage, ResponseText,
-    SessionSequence, TimestampMillis, UsageSnapshot,
+    SessionSequence, SessionTitle, TimestampMillis, UsageSnapshot,
 };
