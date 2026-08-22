@@ -12,7 +12,7 @@ mod source;
 pub use error::SettingsError;
 pub use profile::{
     CredentialDocument, CredentialReference, ProfileId, ProviderKind, ProviderProfile,
-    SettingsDocument, SETTINGS_SCHEMA_VERSION,
+    SETTINGS_SCHEMA_VERSION, SettingsDocument,
 };
 pub use resolver::{LayerKind, ResolvedSettings, SettingsBuilder};
 pub use source::Source;
