@@ -3,6 +3,7 @@ mod config;
 mod coordinator;
 mod engine_actor;
 mod error;
+mod export;
 mod ids;
 mod projection;
 mod telemetry;

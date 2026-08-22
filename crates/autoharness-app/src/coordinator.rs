@@ -522,18 +522,12 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
-        let expected_last_sequence = self
-            .engine
-            .list_sessions()
-            .await
-            .ok()
-            .and_then(|summaries| {
-                summaries
-                    .iter()
-                    .find(|summary| summary.session_id() == &session_id)
-                    .map(|summary| summary.last_sequence().get())
-            });
-        let Some(expected_last_sequence) = expected_last_sequence else {
+        let summaries = self.engine.list_sessions().await?;
+        let Some(summary) = summaries
+            .iter()
+            .find(|summary| summary.session_id() == &session_id)
+            .cloned()
+        else {
             self.reject(
                 request_id,
                 UiFailure::new(
@@ -545,22 +539,33 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
-        match self
+        let expected_last_sequence = summary.last_sequence().get();
+        let delete_result = self
             .engine
-            .delete_session(session_id, expected_last_sequence)
-            .await
-        {
-            Ok(_)
-            | Err(AppError::Store(autoharness_store::StoreError::InvalidSessionTransition)) => {
+            .export_and_delete_session(session_id, expected_last_sequence)
+            .await;
+        match delete_result {
+            Ok(_) => {
                 self.publish_sessions().await?;
                 self.commit(request_id).await?;
             }
-            Err(_) => {
+            Err(AppError::Store(autoharness_store::StoreError::InvalidSessionTransition)) => {
                 self.reject(
                     request_id,
                     UiFailure::new(
                         ErrorClass::Conflict,
                         "The session still has unsettled work and cannot be deleted yet",
+                        RetryPolicy::Now,
+                    ),
+                )
+                .await?;
+            }
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Storage,
+                        "The session could not be deleted from local storage",
                         RetryPolicy::Now,
                     ),
                 )

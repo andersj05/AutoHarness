@@ -41,11 +41,11 @@ pub enum StorageRequest {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<autoharness_domain::EventEnvelope>, AppError>>,
     },
-    /// Removes a settled session and every dependent row.
-    DeleteSession {
+    /// Exports one session to JSON, then deletes it when the export succeeds.
+    ExportAndDeleteSession {
         session_id: SessionId,
         expected_last_sequence: u64,
-        reply: oneshot::Sender<Result<DeletionDisposition, AppError>>,
+        reply: oneshot::Sender<Result<Option<std::path::PathBuf>, AppError>>,
     },
     Shutdown,
 }
@@ -98,15 +98,19 @@ impl EngineHandle {
         response.await.map_err(|_| AppError::WorkerStopped)?
     }
 
-    /// Deletes a settled session and every dependent row atomically.
-    pub async fn delete_session(
+    /// Exports one session to JSON, then deletes it when the export succeeds.
+    ///
+    /// The archive is written beside the database. Returns the archive path
+    /// when a deletion happened and `None` when the session was already
+    /// absent.
+    pub async fn export_and_delete_session(
         &self,
         session_id: SessionId,
         expected_last_sequence: u64,
-    ) -> Result<DeletionDisposition, AppError> {
+    ) -> Result<Option<std::path::PathBuf>, AppError> {
         let (reply, response) = oneshot::channel();
         self.requests
-            .send(StorageRequest::DeleteSession {
+            .send(StorageRequest::ExportAndDeleteSession {
                 session_id,
                 expected_last_sequence,
                 reply,
@@ -167,6 +171,10 @@ fn run(
     mut receiver: mpsc::Receiver<StorageRequest>,
     ready: std::sync::mpsc::SyncSender<Result<(SessionId, SessionAggregate), AppError>>,
 ) {
+    let export_directory = database_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     let (mut engine, session_id, session) = match open(database_path) {
         Ok(startup) => startup,
         Err(error) => {
@@ -202,16 +210,49 @@ fn run(
                 let result = load_all_events(&mut engine, &session_id);
                 let _ = reply.send(result);
             }
-            StorageRequest::DeleteSession {
+            StorageRequest::ExportAndDeleteSession {
                 session_id,
                 expected_last_sequence,
                 reply,
             } => {
-                let result = engine
-                    .store_mut()
-                    .delete_session(&session_id, expected_last_sequence)
-                    .map_err(AppError::from);
-                telemetry::session_deleted(result.is_ok());
+                // The export and the delete share the single storage thread so
+                // the pre-deletion archive always reflects durable state, and
+                // a failed export aborts the deletion. Archives land beside the
+                // database.
+                let summaries = engine.store().list_sessions().map_err(AppError::from);
+                let result = summaries.and_then(|summaries| {
+                    let summary = summaries
+                        .iter()
+                        .find(|summary| summary.session_id() == &session_id)
+                        .cloned();
+                    let Some(summary) = summary else {
+                        return Ok(None);
+                    };
+                    if summary.last_sequence().get() != expected_last_sequence {
+                        return Err(AppError::Store(
+                            autoharness_store::StoreError::VersionConflict {
+                                session_id: session_id.clone(),
+                                expected: expected_last_sequence,
+                                actual: summary.last_sequence().get(),
+                            },
+                        ));
+                    }
+                    let archive = crate::export::export_session(
+                        engine.store_mut(),
+                        &summary,
+                        &export_directory,
+                    )
+                    .map(Some)?;
+                    match engine
+                        .store_mut()
+                        .delete_session(&session_id, expected_last_sequence)
+                        .map_err(AppError::from)?
+                    {
+                        DeletionDisposition::Deleted => Ok(archive),
+                        DeletionDisposition::NotFound => Ok(None),
+                    }
+                });
+                telemetry::session_deleted(matches!(result, Ok(Some(_))));
                 let _ = reply.send(result);
             }
             StorageRequest::Shutdown => break,

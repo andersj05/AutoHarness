@@ -10,6 +10,7 @@ This index routes humans and agents to the smallest authoritative document for a
 
 - [System overview](architecture/OVERVIEW.md): component boundaries, dependency rules, runtime flow, and proposed workspace.
 - [Persistent memory](architecture/PERSISTENT_MEMORY.md): durable session, context, knowledge, and experiment memory contracts.
+- [Session export format](architecture/SESSION_EXPORT.md): the provider-neutral JSON export written before destructive deletion.
 
 ## Durable decisions
 
