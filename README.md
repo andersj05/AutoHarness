@@ -42,6 +42,11 @@ Routers mounted below a path such as `https://router.example/api/` retain that p
 | Insert a newline | `Enter` |
 | Open the model picker | `Ctrl+P` |
 | Create a fresh durable session | `Ctrl+N` |
+| Open the session browser | `Ctrl+L` |
+| Search sessions | Type while the browser is open |
+| Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` while the browser is open |
+| Delete the highlighted session | `Ctrl+D` then `Y` to confirm while the browser is open |
+| Slash commands | `/sessions`, `/open <n>`, `/rename <title>`, `/archive`, `/unarchive`, `/delete` in the composer |
 | Open or replace the API key | `Ctrl+K` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
