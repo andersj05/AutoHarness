@@ -4,8 +4,8 @@ use autoharness_domain::{
     AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload, DeliveryMode,
     EVENT_SCHEMA_V1, EventEnvelope, EventId, EventPayload, InputId, ModelRef, PermissionAnswer,
     PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RetryAdvice, RunLimits,
-    SessionId, SessionSequence, TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput,
-    UsageSnapshot,
+    SessionId, SessionSequence, SessionTitle, TimestampMillis, ToolCallId, ToolCallSpec,
+    ToolOutput, UsageSnapshot,
 };
 
 use crate::{CommandRejection, ReplayError};
@@ -284,6 +284,8 @@ impl AttemptProjection {
 pub struct SessionAggregate {
     session_id: SessionId,
     is_created: bool,
+    title: Option<SessionTitle>,
+    is_archived: bool,
     selected_model: Option<ModelRef>,
     admitted_inputs: Vec<AdmittedInput>,
     admitted_input_ids: BTreeSet<InputId>,
@@ -303,6 +305,8 @@ impl SessionAggregate {
         Self {
             session_id,
             is_created: false,
+            title: None,
+            is_archived: false,
             selected_model: None,
             admitted_inputs: Vec::new(),
             admitted_input_ids: BTreeSet::new(),
@@ -325,6 +329,17 @@ impl SessionAggregate {
             });
         }
 
+        // Archived sessions stay readable but accept no command except
+        // unarchive; rename and archive are also lifecycle-only commands
+        // evaluated below without this guard.
+        match command.payload() {
+            CommandPayload::CreateSession { .. }
+            | CommandPayload::RenameSession { .. }
+            | CommandPayload::ArchiveSession { .. }
+            | CommandPayload::UnarchiveSession { .. } => {}
+            _ => self.require_not_archived()?,
+        }
+
         let payload = match command.payload() {
             CommandPayload::CreateSession { .. } => {
                 if self.is_created {
@@ -333,6 +348,38 @@ impl SessionAggregate {
                     });
                 }
                 EventPayload::SessionCreated
+            }
+            CommandPayload::RenameSession { title, .. } => {
+                self.require_created()?;
+                EventPayload::SessionRenamed {
+                    title: title.clone(),
+                }
+            }
+            CommandPayload::ArchiveSession { .. } => {
+                self.require_created()?;
+                if self.is_archived {
+                    return Err(CommandRejection::InvalidSessionState {
+                        session_id: self.session_id.clone(),
+                    });
+                }
+                let unsettled = self.attempts.iter().any(|attempt| {
+                    !attempt.status.is_settled() || attempt.status == AttemptStatus::AwaitingTools
+                });
+                if unsettled {
+                    return Err(CommandRejection::SessionHasUnsettledWork {
+                        session_id: self.session_id.clone(),
+                    });
+                }
+                EventPayload::SessionArchived
+            }
+            CommandPayload::UnarchiveSession { .. } => {
+                self.require_created()?;
+                if !self.is_archived {
+                    return Err(CommandRejection::InvalidSessionState {
+                        session_id: self.session_id.clone(),
+                    });
+                }
+                EventPayload::SessionUnarchived
             }
             CommandPayload::SelectModel { model, .. } => {
                 self.require_created()?;
@@ -774,6 +821,18 @@ impl SessionAggregate {
         self.is_created
     }
 
+    /// Returns the latest user-facing session title, when one was set.
+    #[must_use]
+    pub const fn title(&self) -> Option<&SessionTitle> {
+        self.title.as_ref()
+    }
+
+    /// Returns whether the session currently rejects ordinary commands.
+    #[must_use]
+    pub const fn is_archived(&self) -> bool {
+        self.is_archived
+    }
+
     /// Returns the latest selected model, if any.
     #[must_use]
     pub const fn selected_model(&self) -> Option<&ModelRef> {
@@ -831,6 +890,16 @@ impl SessionAggregate {
             Ok(())
         } else {
             Err(CommandRejection::SessionNotFound {
+                session_id: self.session_id.clone(),
+            })
+        }
+    }
+
+    fn require_not_archived(&self) -> Result<(), CommandRejection> {
+        if !self.is_archived {
+            Ok(())
+        } else {
+            Err(CommandRejection::SessionArchived {
                 session_id: self.session_id.clone(),
             })
         }
@@ -918,6 +987,30 @@ impl SessionAggregate {
                     });
                 }
                 self.is_created = true;
+            }
+            EventPayload::SessionRenamed { title } => {
+                self.require_created_for_replay(event)?;
+                self.title = Some(title.clone());
+            }
+            EventPayload::SessionArchived => {
+                self.require_created_for_replay(event)?;
+                if self.is_archived {
+                    return Err(ReplayError::IllegalSessionTransition {
+                        session_id: self.session_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.is_archived = true;
+            }
+            EventPayload::SessionUnarchived => {
+                self.require_created_for_replay(event)?;
+                if !self.is_archived {
+                    return Err(ReplayError::IllegalSessionTransition {
+                        session_id: self.session_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.is_archived = false;
             }
             EventPayload::ModelSelected { model } => {
                 self.require_created_for_replay(event)?;
