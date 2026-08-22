@@ -6,6 +6,7 @@ members = [
     "crates/autoharness-provider",
     "crates/autoharness-provider-gemini",
     "crates/autoharness-provider-openai",
+    "crates/autoharness-settings",
     "crates/autoharness-store",
     "crates/autoharness-store-sqlite",
     "crates/autoharness-tui",

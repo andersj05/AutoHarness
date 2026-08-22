@@ -1,0 +1,19 @@
+[package]
+name = "autoharness-settings"
+description = "Versioned typed settings resolver and provider profiles for AutoHarness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+autoharness-domain.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

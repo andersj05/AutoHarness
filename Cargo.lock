@@ -183,6 +183,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoharness-settings"
+version = "0.1.0"
+dependencies = [
+ "autoharness-domain",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "autoharness-store"
 version = "0.1.0"
 dependencies = [
