@@ -9,25 +9,31 @@ mod projection;
 mod telemetry;
 mod terminal;
 
+use std::env;
 use std::fs::OpenOptions;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use autoharness_app::credential::CredentialSourceName;
+use autoharness_app::profiles::ProfileStore;
+use autoharness_app::vault::KeyringVault;
 use autoharness_domain::ClassifiedError as _;
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
 };
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
+use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
 use autoharness_tui::{
-    ApiCredential, CatalogProjection, Model, RetryPolicy, SessionsProjection, UiFailure,
+    ApiCredential, CatalogProjection, CredentialSourceLabel, Model, ProviderKindLabel,
+    ProviderStatusProjection, RetryPolicy, SessionsProjection, SettingsProjection, UiFailure,
     bounded_ports,
 };
 use catalog_cache::SqliteCatalogCache;
-use config::{AppPaths, ProviderSelection, WriterLease};
+use config::{AppPaths, WriterLease};
 use coordinator::{Coordinator, ProviderFactory};
 use engine_actor::EngineActor;
 use error::AppError;
@@ -35,6 +41,7 @@ use terminal::TerminalGuard;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
+use zeroize::Zeroizing;
 
 struct ConfiguredProvider {
     composition: coordinator::ProviderComposition,
@@ -59,18 +66,22 @@ async fn run() -> Result<(), AppError> {
     telemetry::app_started();
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
-    let provider = configure_provider(Arc::clone(&cache), policy)?;
+    let resolved = resolve_launch(&paths);
+    let provider = configure_provider(Arc::clone(&cache), policy, &resolved)?;
     let tool_runtime = configure_tool_runtime(&paths)?;
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
+    let initial_settings = Arc::new(settings_projection(&resolved));
     let model = Model::new(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
         Arc::clone(&initial_catalog),
     );
+    let mut model = model;
+    model.apply_settings(Arc::clone(&initial_settings));
     let (ui_ports, app_ports) = bounded_ports(initial_session, initial_sessions, initial_catalog);
     let shutdown = CancellationToken::new();
 
@@ -113,6 +124,118 @@ async fn run() -> Result<(), AppError> {
     Ok(())
 }
 
+/// Everything resolved before any UI or provider construction begins.
+pub(crate) struct LaunchResolution {
+    /// Effective credential source in safe terms.
+    pub source: CredentialSourceName,
+    /// Active profile identity, when one applies.
+    pub active_profile: Option<String>,
+    /// Provider kind selected by the active profile.
+    pub provider_kind: Option<autoharness_settings::ProviderKind>,
+    /// Credential bytes when one resolved; empty for session-only launches.
+    pub credential: Zeroizing<String>,
+    /// Non-secret router connection fields from the active profile.
+    pub router: Option<RouterProfileFields>,
+}
+
+/// Non-secret router connection fields carried by a profile.
+pub(crate) struct RouterProfileFields {
+    pub base_url: String,
+    pub project: Option<String>,
+    pub auth_header: Option<String>,
+}
+
+impl RouterProfileFields {
+    fn build_settings(&self) -> Result<RouterSettings, AppError> {
+        // RouterSettings validates the URL; parse through the adapter's
+        // re-exported URL type.
+        let url = self
+            .base_url
+            .parse::<autoharness_provider_openai::RouterUrl>()
+            .map_err(|_| AppError::Configuration)?;
+        let settings = RouterSettings::new(url, self.project.as_deref())
+            .map_err(|_| AppError::Configuration)?;
+        if let Some(header) = &self.auth_header {
+            settings
+                .clone()
+                .with_authentication(header, "Bearer")
+                .map_err(|_| AppError::Configuration)?;
+        }
+        Ok(settings)
+    }
+}
+
+fn resolve_launch(paths: &AppPaths) -> LaunchResolution {
+    // Layered resolution: user profile document plus live environment.
+    let document = ProfileStore::open(&paths.profiles())
+        .and_then(|store| store.read_document())
+        .unwrap_or_default();
+    let settings = SettingsBuilder::new()
+        .with_layer(LayerKind::UserFile, document)
+        .with_environment(env::vars())
+        .resolve();
+    let vault = KeyringVault::new();
+    match settings {
+        Ok(settings) => {
+            let resolver = autoharness_app::ProfileCredentialResolver::new(&vault)
+                .with_environment(env::vars());
+            match resolver.resolve(&settings) {
+                Ok(source) => LaunchResolution {
+                    source: source.source_name(),
+                    active_profile: source.profile_id().map(str::to_owned),
+                    provider_kind: source.provider_kind(),
+                    credential: source.into_credential(),
+                    router: router_fields(&settings),
+                },
+                Err(_) => unavailable_launch(),
+            }
+        }
+        // Malformed settings degrade to environment/session-only operation.
+        Err(_) => unavailable_launch(),
+    }
+}
+
+fn router_fields(settings: &autoharness_settings::ResolvedSettings) -> Option<RouterProfileFields> {
+    let id = autoharness_settings::ProfileId::new(settings.active_profile()?).ok()?;
+    let profile = settings.profile(&id)?;
+    if profile.kind() != autoharness_settings::ProviderKind::Router {
+        return None;
+    }
+    Some(RouterProfileFields {
+        base_url: profile.base_url()?.to_owned(),
+        project: profile.project().map(str::to_owned),
+        auth_header: profile.auth_header().map(str::to_owned),
+    })
+}
+
+fn unavailable_launch() -> LaunchResolution {
+    LaunchResolution {
+        source: CredentialSourceName::SessionOnly,
+        active_profile: None,
+        provider_kind: None,
+        credential: Zeroizing::new(String::new()),
+        router: None,
+    }
+}
+
+fn settings_projection(resolved: &LaunchResolution) -> SettingsProjection {
+    SettingsProjection {
+        provider_status: ProviderStatusProjection {
+            active_profile: resolved.active_profile.clone(),
+            provider_kind: resolved.provider_kind.map(|kind| match kind {
+                autoharness_settings::ProviderKind::Gemini => ProviderKindLabel::Gemini,
+                autoharness_settings::ProviderKind::Router => ProviderKindLabel::Router,
+            }),
+            credential_source: match resolved.source {
+                CredentialSourceName::Environment => CredentialSourceLabel::Environment,
+                CredentialSourceName::CredentialVault => CredentialSourceLabel::CredentialVault,
+                CredentialSourceName::SessionOnly => CredentialSourceLabel::SessionOnly,
+            },
+            credential_connected: !resolved.credential.is_empty(),
+        },
+    }
+}
+
 fn configure_tool_runtime(paths: &AppPaths) -> Result<Arc<ToolRuntime>, AppError> {
     let workspace = config::workspace_root()?;
     let filesystem = Arc::new(
@@ -140,34 +263,48 @@ fn configure_tool_runtime(paths: &AppPaths) -> Result<Arc<ToolRuntime>, AppError
 fn configure_provider(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
+    resolved: &LaunchResolution,
 ) -> Result<ConfiguredProvider, AppError> {
+    // A profile selects its adapter; otherwise the environment variable wins.
+    let selection = match resolved.provider_kind {
+        Some(kind) => Ok(match kind {
+            autoharness_settings::ProviderKind::Gemini => config::ProviderSelection::Gemini,
+            autoharness_settings::ProviderKind::Router => config::ProviderSelection::Router,
+        }),
+        None => config::provider_selection(),
+    };
     let (initial, factory): (Result<Arc<dyn Provider>, ProviderError>, ProviderFactory) =
-        match config::provider_selection()? {
-            ProviderSelection::Gemini => {
+        match selection? {
+            config::ProviderSelection::Gemini => {
                 let factory_cache = Arc::clone(&cache);
                 let factory_policy = policy.clone();
                 let factory: ProviderFactory = Arc::new(move |credential: ApiCredential| {
-                    let provider: Arc<dyn Provider> = Arc::new(GeminiProvider::new(
-                        GeminiApiKey::new(credential.into_string())?,
-                    )?);
+                    let api_key = GeminiApiKey::new(credential.into_string())?;
+                    let provider: Arc<dyn Provider> = Arc::new(GeminiProvider::new(api_key)?);
                     Ok(managed_provider(
                         provider,
                         Arc::clone(&factory_cache),
                         factory_policy.clone(),
                     ))
                 });
-                let initial = GeminiApiKey::from_env().and_then(|key| {
-                    let provider: Arc<dyn Provider> = Arc::new(GeminiProvider::new(key)?);
-                    Ok(managed_provider(
-                        provider,
-                        Arc::clone(&cache),
-                        policy.clone(),
-                    ))
-                });
+                let initial = if resolved.credential.is_empty() {
+                    GeminiApiKey::from_env().and_then(|key| {
+                        let provider: Arc<dyn Provider> = Arc::new(GeminiProvider::new(key)?);
+                        Ok(provider)
+                    })
+                } else {
+                    GeminiApiKey::new(resolved.credential.as_str()).and_then(|key| {
+                        let provider: Arc<dyn Provider> = Arc::new(GeminiProvider::new(key)?);
+                        Ok(provider)
+                    })
+                };
                 (initial, factory)
             }
-            ProviderSelection::Router => {
-                let settings = RouterSettings::from_env().map_err(|_| AppError::Configuration)?;
+            config::ProviderSelection::Router => {
+                let settings = match &resolved.router {
+                    Some(fields) => fields.build_settings()?,
+                    None => RouterSettings::from_env().map_err(|_| AppError::Configuration)?,
+                };
                 let factory_settings = settings.clone();
                 let factory_cache = Arc::clone(&cache);
                 let factory_policy = policy.clone();
@@ -182,15 +319,27 @@ fn configure_provider(
                         factory_policy.clone(),
                     ))
                 });
-                let initial = RouterCredential::from_env().and_then(|credential| {
-                    let provider: Arc<dyn Provider> =
-                        Arc::new(OpenAiRouterProvider::new(settings.clone(), credential)?);
-                    Ok(managed_provider(
-                        provider,
-                        Arc::clone(&cache),
-                        policy.clone(),
-                    ))
-                });
+                let initial = if resolved.credential.is_empty() {
+                    RouterCredential::from_env().and_then(|credential| {
+                        let provider: Arc<dyn Provider> =
+                            Arc::new(OpenAiRouterProvider::new(settings.clone(), credential)?);
+                        Ok(managed_provider(
+                            provider,
+                            Arc::clone(&cache),
+                            policy.clone(),
+                        ))
+                    })
+                } else {
+                    RouterCredential::new(resolved.credential.as_str()).and_then(|credential| {
+                        let provider: Arc<dyn Provider> =
+                            Arc::new(OpenAiRouterProvider::new(settings.clone(), credential)?);
+                        Ok(managed_provider(
+                            provider,
+                            Arc::clone(&cache),
+                            policy.clone(),
+                        ))
+                    })
+                };
                 (initial, factory)
             }
         };

@@ -217,7 +217,7 @@ Exit criteria:
 
 ### Phase 3.3: User profiles, settings, and secure credentials
 
-**Status:** Planned
+**Status:** Implemented
 
 **Goal:** Let users configure AutoHarness inside the terminal and reconnect after restart without storing plaintext API keys in ordinary configuration or session history.
 
@@ -238,6 +238,16 @@ Exit criteria:
 - A user can inspect which profile and setting source is active, replace or remove its credential, and choose session-only mode.
 - AutoHarness remains usable for offline session management when the credential vault is locked or unavailable.
 - Cross-platform tests use fake vaults, and platform smoke tests verify save, retrieve, replace, and delete behavior without printing secret values.
+
+**Local implementation evidence:** Implemented and fixture-verified on 2026-08-22.
+
+ADR-0009 is accepted and [ADR-0012](adr/0012-use-typed-settings-resolver.md) records the layered resolver contract.
+`autoharness-settings` resolves defaults, user file, workspace file, environment, and overrides in fixed order with per-key provenance; malformed layers degrade to safe diagnostics, future schema versions fail closed, and workspace documents cannot override provider, profile, or policy keys.
+The `autoharness.profiles.json` document stores validated profiles atomically with a `.bad` backup on corruption, and credential linkage writes only opaque references to the operating-system vault through the `keyring` crate (Windows Credential Manager, macOS Keychain, Linux Secret Service) behind an application-owned port with a fake implementation for tests.
+Startup resolves one effective source in precedence order: environment, then the active profile's vault entry, then session-only entry; a missing or locked vault degrades to offline-usable session-only operation.
+The terminal publishes safe provenance labels and a non-modal `Ctrl+,` settings overlay showing which source is active.
+Sentinel tests scan every durable file plus debug output across save, rotate, disconnect, and delete flows and find no credential bytes.
+Remaining for full exit evidence: in-terminal flows to create, replace, test, and disconnect credentials from the overlay itself, and platform vault smoke coverage beyond the fake.
 
 ### Phase 3.4: TUI usability and discoverability
 

@@ -14,7 +14,7 @@
 | 3. Safe agent execution | Complete | Security-audited versioned tools run through explicit durable permission, bounded provider admission, capability, budget, artifact, continuation, parent-child lifetime, and conservative recovery boundaries |
 | 3.1. Live protocol reliability and recovery | Active | Gemini argument aggregation, durable invalid-call repair, failed-turn isolation, capability gating, stable diagnostics, and durable `Ctrl+N` recovery pass local fixture, integration, render, replay, and PTY tests; live Gemini plain-chat and function-call probes passed on 2026-08-22 while the configured router remains open |
 | 3.2. Complete session lifecycle | Complete | Event-sourced rename, archive, unarchive, guarded switching, atomic version-checked deletion with pre-deletion export, schema-v3 titles, a searchable `Ctrl+L` browser with slash commands and per-session drafts, and the composed two-session restart replay-equivalence path pass domain, engine, store, TUI, app, and render tests |
-| 3.3. User profiles, settings, and secure credentials | Planned | Environment configuration and session-only credential entry exist; persistent profiles and settings do not |
+| 3.3. User profiles, settings, and secure credentials | Implemented | Layered typed settings with provenance, validated profiles in an atomic schema-versioned document, the OS credential-vault port over Windows Credential Manager, macOS Keychain, and Linux Secret Service, startup reconnect from environment or vault with session-only degradation, a `Ctrl+,` settings overlay naming each source, and sentinel tests proving no credential bytes reach durable files pass resolver, vault, profile-store, startup-reconnect, TUI, and sentinel tests |
 | 3.4. TUI usability and discoverability | Planned | The focused chat controls exist; full navigation, command discovery, help, and settings surfaces do not |
 | 3.5. Terminal release hardening | Planned | Existing fixture, PTY, and security gates remain; the complete terminal product gate is not implemented |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.x |
@@ -89,12 +89,18 @@
 - An automated stdlib-only check validates every relative Markdown link, heading anchor, and ADR index entry locally and in a dedicated CI job.
 - The opt-in live Gemini probes passed on 2026-08-22 against production Google AI Studio on current-generation models after the decoder learned the live `arguments_delta` dialect and stopped treating the empty start placeholder as complete arguments.
 - The repository carries the accepted MIT license decision in ADR-0010 with a root `LICENSE`, a contributor guide, and workspace-level Cargo license metadata.
+- ADR-0009 is accepted: opted-in provider credentials live in the operating-system credential vault behind an application-owned port, profiles retain only opaque references, and missing or locked vaults degrade to environment or session-only operation without any plaintext fallback store.
+- ADR-0012 is accepted: settings resolve through defaults, user file, workspace file, environment, and overrides in fixed order with per-key provenance, malformed-layer recovery, fail-closed future schema versions, and a workspace allowlist that cannot weaken credential or permission policy.
+- The `autoharness.profiles.json` document stores validated named profiles atomically with schema version 1 and a `.bad` backup on corruption; credential linkage writes only opaque references such as `autoharness/profile/<name>`.
+- Startup resolves one effective credential source in precedence order (environment, then active-profile vault entry, then session-only) before provider construction, and publishes safe provenance labels to the terminal's non-modal `Ctrl+,` settings overlay.
+- Sentinel tests scan every durable file plus debug output across save, rotate, disconnect, and delete flows with a unique marker secret and find no leakage.
 
 ## Known gaps
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence now includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
-- The terminal has no user settings or named provider profiles, and pasted credentials are intentionally forgotten at process exit.
+- Phase 3.3 profiles, settings, and the vault port are implemented locally, but creating, replacing, testing, and disconnecting credentials still requires either an existing profile document or shell setup because the in-terminal management flows are not built yet.
+- Platform vault smoke coverage beyond the fake vault is not implemented; keyring-backed save and load have no automated Windows, macOS, or Linux service verification.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session.
 - No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
 

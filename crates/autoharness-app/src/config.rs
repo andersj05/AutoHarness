@@ -152,6 +152,12 @@ impl AppPaths {
     pub fn artifacts(&self) -> PathBuf {
         self.data_dir.join("artifacts")
     }
+
+    /// Returns the non-secret provider-profile settings document path.
+    #[must_use]
+    pub fn profiles(&self) -> PathBuf {
+        self.data_dir.join("autoharness.profiles.json")
+    }
 }
 
 /// Exclusive operating-system lease held for the lifetime of one app process.

@@ -29,6 +29,14 @@ The pasted key is intentionally forgotten when the process exits.
 `GEMINI_API_KEY` and `AUTOHARNESS_ROUTER_API_KEY` are optional startup overrides for automation or managed launches.
 Do not put the key in a repository file or command-line argument.
 
+### Provider profiles and the credential vault
+
+A named provider profile stores non-secret connection fields plus an opaque credential reference; the raw key lives only in the operating-system credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
+Saving a credential is explicit and opt in.
+When an active profile has a stored credential, AutoHarness reconnects after restart without asking for the key again.
+If the vault is unavailable, AutoHarness stays usable offline and falls back to environment or session-only entry; it never creates its own plaintext store.
+Press `Ctrl+,` to open the settings overlay, which shows the effective provider and the safe credential source (`environment`, `credential vault`, or `session only`).
+
 To use an OpenAI-compatible router, set `AUTOHARNESS_PROVIDER=router`, a base URL ending in `/`, and the router credential.
 Router credentials require HTTPS except for loopback HTTP endpoints such as `http://127.0.0.1:PORT/`.
 The default relative endpoints are `v1/models` and `v1/chat/completions`.
@@ -48,6 +56,7 @@ Routers mounted below a path such as `https://router.example/api/` retain that p
 | Delete the highlighted session | `Ctrl+D` then `Y` to confirm while the browser is open |
 | Slash commands | `/sessions`, `/open <n>`, `/rename <title>`, `/archive`, `/unarchive`, `/delete` in the composer |
 | Open or replace the API key | `Ctrl+K` |
+| Toggle the settings overlay | `Ctrl+,` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
 | Close the model picker | `Esc` |
