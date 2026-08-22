@@ -81,10 +81,10 @@
 - The isolated benchmark environment measures durable append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes while explicitly excluding network latency.
 - A PowerShell idle resident-memory sampler is available, and the benchmark documentation defines provenance requirements and exact monotonic markers for deferred latency metrics.
 - Continuous integration defines formatting, lint, documentation, doctest, native Linux, Windows, and macOS test gates, plus separate formatting, lint, and test gates for the isolated benchmark workspace.
+- The repository carries the accepted MIT license decision in ADR-0010 with a root `LICENSE`, a contributor guide, and workspace-level Cargo license metadata.
 
 ## Known gaps
 
-- No license or contribution guide.
 - No successful reviewed live Gemini compatibility verification has been performed; checked-in provider and function-calling protocol evidence is fixture-backed.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
 - The terminal can create a fresh session but cannot browse, switch, rename, archive, export, or delete sessions even though durable session summaries can be listed by the store.
