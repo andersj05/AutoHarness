@@ -112,7 +112,7 @@ impl NativeStreamState {
             "step.delta" => {
                 if matches!(
                     value.pointer("/delta/type").and_then(Value::as_str),
-                    Some("arguments" | "function_call_arguments")
+                    Some("arguments" | "function_call_arguments" | "arguments_delta")
                 ) {
                     self.append_function_arguments(value, key)?;
                     return Ok(Vec::new());
@@ -246,7 +246,15 @@ impl NativeStreamState {
             }
             pending.name = Some(name.to_owned());
         }
-        if let Some(arguments) = step.get("arguments") {
+        // The live Interactions dialect sends an empty object here as a
+        // placeholder before streamed argument deltas. Storing it as complete
+        // arguments would shadow the real fragments, so only non-empty
+        // arguments count as complete at start. A genuinely argument-free call
+        // still emits an empty object at completion.
+        if let Some(arguments) = step
+            .get("arguments")
+            .filter(|value| !is_empty_object(value))
+        {
             self.set_complete_arguments(index, arguments.clone())?;
         }
         Ok(())
@@ -494,6 +502,10 @@ fn model_output_start_text(
         }
     }
     Ok(events)
+}
+
+fn is_empty_object(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| object.is_empty())
 }
 
 fn step_type(value: &Value) -> Option<&str> {
@@ -1066,6 +1078,45 @@ mod tests {
                     tool_name: ToolName::new("fs_read").expect("tool name"),
                     arguments: ToolArguments::new(serde_json::json!({"path":"README.md"}))
                         .expect("tool arguments"),
+                }),
+                ProviderStreamEvent::Completed {
+                    reason: CompletionReason::ToolCalls,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn live_dialect_function_call_ignores_empty_placeholder_and_routes_arguments_delta() {
+        // Recorded 2026-08-22 wire shape: the step.start carries an empty
+        // arguments placeholder, and the complete arguments arrive in one
+        // arguments_delta step.delta. The call must normalize from the delta,
+        // never from the placeholder.
+        let fixture = include_bytes!("../tests/fixtures/interactions-tool-stream-live-dialect.sse");
+        let one_byte = fixture.iter().map(std::slice::from_ref).collect::<Vec<_>>();
+        let events = decode_fixture(&one_byte);
+
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::Started,
+                ProviderStreamEvent::ToolCall(ProviderToolCall {
+                    provider_call_id: ProviderCallId::new("call_3362969")
+                        .expect("provider call ID"),
+                    tool_name: ToolName::new("http_request").expect("tool name"),
+                    arguments: ToolArguments::new(serde_json::json!({
+                        "method": "GET",
+                        "url": "https://example.com"
+                    }))
+                    .expect("tool arguments"),
+                }),
+                ProviderStreamEvent::Usage(UsageSnapshot {
+                    input_tokens: Some(75),
+                    output_tokens: Some(26),
+                    cached_input_tokens: Some(0),
+                    reasoning_tokens: Some(77),
+                    tool_tokens: Some(0),
+                    total_tokens: Some(178),
                 }),
                 ProviderStreamEvent::Completed {
                     reason: CompletionReason::ToolCalls,

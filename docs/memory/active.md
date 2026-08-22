@@ -4,11 +4,11 @@
 
 **Phase:** 3.1 - Live protocol reliability and recovery
 
-**Status:** Phase 3.1 local implementation and fixture gates pass - live-provider exit evidence remains open
+**Status:** Phase 3.1 live Gemini probes pass on 2026-08-22; configured-router live evidence remains open
 
 ## Current objective
 
-Run the opt-in live Gemini and configured-router compatibility probes, verify the real terminal plain-chat and approved HTTP-tool flows, and then proceed to Phase 3.2 session lifecycle work.
+Run the opt-in configured-router compatibility probe with a runtime router credential, then proceed to Phase 3.2 session lifecycle work.
 
 ## Current repository state
 
@@ -29,12 +29,14 @@ Run the opt-in live Gemini and configured-router compatibility probes, verify th
 - `Ctrl+N` creates and activates a fresh durable session even when credentials or the catalog are unavailable, but browsing, switching, renaming, archiving, exporting, and deleting sessions remain Phase 3.2 work.
 - Non-secret runtime configuration is environment-driven, and the in-app credential overlay is intentionally session-only under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
 - The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
+- The live 2026-08-22 Interactions dialect sends an empty `arguments` placeholder at function-call start and complete arguments as an `arguments_delta` step delta; the decoder now routes that delta type, ignores the empty placeholder, and pins the shape with a recorded fixture test.
+- On 2026-08-22 both opt-in Gemini live probes passed against production Google AI Studio using current-generation models: plain chat with the complete registry streamed text to completion, and streamed function calling produced one complete bounded `http_request` call before a tool-calls completion.
 - Stable failure codes, compact safe attempt references, retry actions, and the global fresh-session action are rendered in failed transcript rows and fixed-size golden buffers.
 - Formatting, strict Clippy, full workspace tests, warning-denied rustdoc, doctests, fixed-size renders, and the actual credential-free `Ctrl+N` PTY flow pass locally after Phase 3.1 documentation reconciliation.
 - A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined all application files to an isolated data directory, exited successfully, and restored the terminal.
 - A credential-overlay PTY smoke run masked a bracketed-paste sentinel, cleared it on dismissal, reopened an empty editor, found no sentinel bytes in application files, and restored the terminal.
 - A Phase 2 PTY smoke run discovered and selected a model through a local router fixture, streamed a completed response, restarted with the fixture offline, restored the selected model and transcript through replay plus the fresh catalog cache, found no credential bytes in application files, and restored the terminal on both exits.
-- The automated tests use local HTTP fixtures and fake providers; no successful live Gemini compatibility run is part of the reviewed test evidence.
+- The automated tests use local HTTP fixtures and fake providers; the opt-in Gemini live compatibility probes are reviewed evidence as of their 2026-08-22 passing run.
 - A checked-in isolated benchmark environment measures durable append, projection reads, and warm SQLite recovery without provider requests, and includes an idle resident-memory sampler.
 - Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, plus separate formatting, Clippy, and test gates for the isolated benchmark workspace.
 
@@ -81,9 +83,9 @@ Run the opt-in live Gemini and configured-router compatibility probes, verify th
 
 ## Immediate next actions
 
-1. Run the opt-in Gemini plain-chat and HTTP-function compatibility probes with a runtime credential, then verify approval, execution, continuation, and durable replay through the real terminal.
-2. Run the configured-router HTTP-function probe against the intended router project and record only the pass or fail matrix and version provenance.
-3. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates after any live compatibility correction.
+1. Run the opt-in configured-router plain-chat and HTTP-function compatibility probes against the intended router project and record only the pass or fail matrix and version provenance.
+2. Verify approval, execution, continuation, and durable replay through the real terminal for one live provider flow.
+3. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates after any further live compatibility correction.
 4. Complete Phase 3.2 session browsing, switching, lifecycle metadata, offline navigation, export, and deletion semantics.
 5. Proceed through Phase 3.3 profiles and settings, Phase 3.4 TUI usability, and Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
 
@@ -96,7 +98,7 @@ Run the opt-in live Gemini and configured-router compatibility probes, verify th
 ## Blockers
 
 None for the completed local Phase 3.1 implementation or Phase 3.2 design work.
-A runtime Gemini credential and configured router endpoint plus credential are required for the remaining Phase 3.1 live-provider exit evidence.
+A configured router endpoint plus credential is required for the remaining Phase 3.1 live-provider exit evidence; the Gemini half closed on 2026-08-22.
 An approved reference machine is required before recording authoritative latency results in Phase 3.5.
 
 ## Handoff note
