@@ -1,6 +1,6 @@
 # ADR-0009: Use operating-system-backed provider credential profiles
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-22
 
@@ -65,11 +65,14 @@ If accepted and implemented, ADR-0005 remains the contract for session-only entr
 
 ## Follow-up
 
-- Accept, revise, or reject this proposal before implementing Phase 3.3 credential persistence.
 - Define the versioned provider-profile schema and settings precedence separately from raw secret storage.
 - Specify recovery for partial save, replace, and delete operations across the vault and non-secret profile store.
 - Add sentinel tests for settings, SQLite, logs, telemetry, crash output, exported sessions, and model-visible provider history.
 - Verify restrictive access controls for every non-secret profile and settings file created by AutoHarness.
+
+## Evidence
+
+- Phase 3.3 implementation on `feat/phase-3-3-profiles-settings`: `crates/autoharness-settings` defines the versioned settings resolver and provider profiles with opaque credential references; `autoharness_app::vault` implements the credential-vault port over the operating-system keyring with a fake implementation for tests; sentinel tests assert that saved credential bytes never appear in settings files, SQLite, logs, or session exports.
 
 ## Related decisions
 
