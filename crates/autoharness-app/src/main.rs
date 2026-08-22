@@ -3,6 +3,7 @@ mod config;
 mod coordinator;
 mod engine_actor;
 mod error;
+mod export;
 mod ids;
 mod projection;
 mod telemetry;
@@ -22,7 +23,8 @@ use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
 use autoharness_tui::{
-    ApiCredential, CatalogProjection, Model, RetryPolicy, UiFailure, bounded_ports,
+    ApiCredential, CatalogProjection, Model, RetryPolicy, SessionsProjection, UiFailure,
+    bounded_ports,
 };
 use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, ProviderSelection, WriterLease};
@@ -63,8 +65,13 @@ async fn run() -> Result<(), AppError> {
 
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
-    let model = Model::new(Arc::clone(&initial_session), Arc::clone(&initial_catalog));
-    let (ui_ports, app_ports) = bounded_ports(initial_session, initial_catalog);
+    let initial_sessions = Arc::new(SessionsProjection::default());
+    let model = Model::new(
+        Arc::clone(&initial_session),
+        Arc::clone(&initial_sessions),
+        Arc::clone(&initial_catalog),
+    );
+    let (ui_ports, app_ports) = bounded_ports(initial_session, initial_sessions, initial_catalog);
     let shutdown = CancellationToken::new();
 
     let mut terminal = match TerminalGuard::enter() {

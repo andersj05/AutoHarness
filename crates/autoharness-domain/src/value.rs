@@ -78,6 +78,60 @@ impl<'de> Deserialize<'de> for PromptText {
     }
 }
 
+/// Exact user-authored session title.
+///
+/// Titles are labels rendered in terminal surfaces, so control characters are
+/// rejected and the byte bound keeps one-line browser rows predictable.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionTitle(String);
+
+impl SessionTitle {
+    /// Maximum persisted byte length for a session title.
+    pub const MAX_BYTES: usize = 128;
+
+    /// Validates a visible, bounded session title without transforming it.
+    pub fn new(value: impl Into<String>) -> Result<Self, ValueError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ValueError::EmptySessionTitle);
+        }
+        if value.len() > Self::MAX_BYTES {
+            return Err(ValueError::SessionTitleTooLong);
+        }
+        if value.chars().any(char::is_control) {
+            return Err(ValueError::InvalidSessionTitle);
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the exact title content.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Debug for SessionTitle {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionTitle")
+            .field("content", &self.0)
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionTitle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(D::Error::custom)
+    }
+}
+
 /// Exact provider-authored response content.
 ///
 /// Whitespace-only deltas are valid because they can be meaningful when

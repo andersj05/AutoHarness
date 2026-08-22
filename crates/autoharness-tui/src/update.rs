@@ -5,7 +5,7 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, CatalogProjection, Focus, Message, Model, Notice, PendingKind, RetryPolicy,
-    SessionProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -21,6 +21,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::SessionChanged(session) => {
             apply_session(model, session);
+            Vec::new()
+        }
+        Message::SessionsChanged(sessions) => {
+            apply_sessions(model, sessions);
             Vec::new()
         }
         Message::CatalogChanged(catalog) => {
@@ -74,6 +78,24 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 
     if model.focus == Focus::Permission {
         return handle_permission_input(model, input);
+    }
+
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('l' | 'L'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        if !model.browser.open {
+            open_browser(model);
+        }
+        return Vec::new();
+    }
+
+    if model.browser.open {
+        return handle_browser_input(model, input);
     }
 
     if matches!(
@@ -170,12 +192,34 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         input => {
+            // Slash commands give keyboard-first access to the session
+            // lifecycle without opening the browser overlay.
+            if !has_pending_submission(model)
+                && let Some(effects) = maybe_slash_command(model, &input)
+            {
+                return effects;
+            }
             if !has_pending_submission(model) && input_composer(&mut model.composer.editor, input) {
                 model.notice = None;
                 model.dirty = true;
             }
             Vec::new()
         }
+    }
+}
+
+/// Recognizes exact slash commands typed into an otherwise empty composer.
+fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>> {
+    if model.composer.lines() != ["/sessions"] {
+        return None;
+    }
+    match input.key {
+        Key::Enter if !input.ctrl => {
+            model.composer.reset();
+            open_browser(model);
+            Some(Vec::new())
+        }
+        _ => None,
     }
 }
 
@@ -322,6 +366,375 @@ fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 
+/// Applies keyboard input while the session-browser overlay owns focus.
+///
+/// Letter shortcuts use Ctrl chords so plain characters always extend the
+/// filter query, matching the model picker's convention.
+fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    // Ctrl+C always quits, even from inside the browser overlay.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if model.browser.renaming {
+        return handle_browser_rename_input(model, input);
+    }
+
+    // While a deletion is armed, Y confirms and N or Esc cancels.
+    if model.browser.confirming_delete.is_some() {
+        match input {
+            Input {
+                key: Key::Char('y' | 'Y'),
+                ctrl: false,
+                ..
+            } => return confirm_delete_selected_session(model),
+            Input {
+                key: Key::Char('n' | 'N'),
+                ctrl: false,
+                ..
+            }
+            | Input { key: Key::Esc, .. } => {
+                model.browser.confirming_delete = None;
+                model.dirty = true;
+                return Vec::new();
+            }
+            _ => return Vec::new(),
+        }
+    }
+
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_browser(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => open_selected_session(model),
+        Input { key: Key::Up, .. } => {
+            move_browser_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_browser_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('r' | 'R'),
+            ctrl: true,
+            ..
+        } => rename_selected_session(model),
+        Input {
+            key: Key::Char('a' | 'A'),
+            ctrl: true,
+            ..
+        } => toggle_archive_selected_session(model),
+        Input {
+            key: Key::Char('d' | 'D'),
+            ctrl: true,
+            ..
+        } => request_delete_selected_session(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.browser.query.pop();
+            model.sync_browser_selection();
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.browser.query.push(character);
+            model.sync_browser_selection();
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Applies keyboard input while a rename buffer is active in the browser.
+fn handle_browser_rename_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            model.browser.renaming = false;
+            model.browser.rename_buffer.clear();
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => submit_browser_rename(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.browser.rename_buffer.pop();
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() && model.browser.rename_buffer.len() < 128 => {
+            model.browser.rename_buffer.push(character);
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn apply_sessions(model: &mut Model, sessions: Arc<SessionsProjection>) {
+    model.sessions = sessions;
+    model.sync_browser_selection();
+    model.dirty = true;
+}
+
+fn open_browser(model: &mut Model) {
+    model.picker.open = false;
+    model.credential.open = false;
+    model.credential.clear();
+    model.browser.open = true;
+    model.browser.renaming = false;
+    model.browser.rename_buffer.clear();
+    model.browser.confirming_delete = None;
+    if let Some(active) = model
+        .sessions
+        .sessions
+        .iter()
+        .find(|entry| entry.active)
+        .map(|entry| entry.session_id.clone())
+    {
+        model.browser.selected = Some(active);
+    }
+    model.focus = Focus::Browser;
+    model.sync_browser_selection();
+    model.dirty = true;
+}
+
+fn close_browser(model: &mut Model) {
+    model.browser.open = false;
+    model.browser.renaming = false;
+    model.browser.rename_buffer.clear();
+    model.browser.confirming_delete = None;
+    model.focus = Focus::Composer;
+    model.dirty = true;
+}
+
+fn selected_browser_entry(model: &Model) -> Option<&crate::model::SessionBrowserEntry> {
+    let selected = model.browser.selected.as_ref()?;
+    model
+        .browser_entries()
+        .into_iter()
+        .find(|entry| &entry.session_id == selected)
+}
+
+fn move_browser_selection(model: &mut Model, direction: isize) {
+    let entries = model.browser_entries();
+    if entries.is_empty() {
+        return;
+    }
+    let current = model
+        .browser
+        .selected
+        .as_ref()
+        .and_then(|selected| {
+            entries
+                .iter()
+                .position(|entry| &entry.session_id == selected)
+        })
+        .unwrap_or(0);
+    let next = if direction < 0 {
+        current.checked_sub(1).unwrap_or(entries.len() - 1)
+    } else {
+        (current + 1) % entries.len()
+    };
+    model.browser.selected = Some(entries[next].session_id.clone());
+    model.browser.confirming_delete = None;
+    model.dirty = true;
+}
+
+fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
+    model.pending.values().any(|pending| match pending {
+        PendingKind::RenameSession(candidate)
+        | PendingKind::ArchiveSession(candidate)
+        | PendingKind::UnarchiveSession(candidate)
+        | PendingKind::DeleteSession(candidate)
+        | PendingKind::OpenSession(candidate) => candidate == session_id,
+        PendingKind::CreateSession
+        | PendingKind::ConfigureCredential
+        | PendingKind::RefreshCatalog
+        | PendingKind::SelectModel(_)
+        | PendingKind::SubmitPrompt(_)
+        | PendingKind::CancelAttempt(_)
+        | PendingKind::RetryAttempt(_)
+        | PendingKind::AnswerPermission(_) => false,
+    })
+}
+
+fn open_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(entry) = selected_browser_entry(model).map(|entry| entry.session_id.clone()) else {
+        return Vec::new();
+    };
+    if has_pending_lifecycle(model, &entry) {
+        return Vec::new();
+    }
+    if entry == model.session.session_id {
+        close_browser(model);
+        return Vec::new();
+    }
+    if model.session.active_attempt().is_some() {
+        model.notice = Some(Notice::Info(
+            "Cancel or wait for the active response before switching sessions".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::OpenSession(entry.clone()));
+    model.notice = Some(Notice::Info("Opening session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::OpenSession {
+        request_id,
+        session_id: entry,
+    })]
+}
+
+fn rename_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(title) = selected_browser_entry(model).map(|entry| entry.title.clone()) else {
+        return Vec::new();
+    };
+    model.browser.renaming = true;
+    model.browser.rename_buffer = title;
+    model.dirty = true;
+    Vec::new()
+}
+
+fn submit_browser_rename(model: &mut Model) -> Vec<UiEffect> {
+    let Some(session_id) = model.browser.selected.clone() else {
+        return Vec::new();
+    };
+    let title = model.browser.rename_buffer.trim().to_owned();
+    if title.is_empty() || title.len() > 128 {
+        model.notice = Some(Notice::Failure(UiFailure::new(
+            ErrorClass::Validation,
+            "Session title must be 1-128 visible characters",
+            RetryPolicy::Never,
+        )));
+        model.dirty = true;
+        return Vec::new();
+    }
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    model.browser.renaming = false;
+    model.browser.rename_buffer.clear();
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::RenameSession(session_id.clone()));
+    model.notice = Some(Notice::Info("Saving new title...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::RenameSession {
+        request_id,
+        session_id,
+        title,
+    })]
+}
+
+fn toggle_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some((session_id, archived)) =
+        selected_browser_entry(model).map(|entry| (entry.session_id.clone(), entry.archived))
+    else {
+        return Vec::new();
+    };
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    let (kind, intent) = if archived {
+        (
+            PendingKind::UnarchiveSession(session_id.clone()),
+            UiIntent::UnarchiveSession {
+                request_id,
+                session_id: session_id.clone(),
+            },
+        )
+    } else {
+        (
+            PendingKind::ArchiveSession(session_id.clone()),
+            UiIntent::ArchiveSession {
+                request_id,
+                session_id: session_id.clone(),
+            },
+        )
+    };
+    model.pending.insert(request_id, kind);
+    model.notice = Some(Notice::Info(if archived {
+        "Unarchiving session...".to_owned()
+    } else {
+        "Archiving session...".to_owned()
+    }));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(intent)]
+}
+
+fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(entry) = selected_browser_entry(model) else {
+        return Vec::new();
+    };
+    if entry.active {
+        model.notice = Some(Notice::Info(
+            "Switch to another session before deleting the active one".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+    model.browser.confirming_delete = Some(entry.session_id.clone());
+    model.notice = Some(Notice::Info(
+        "Press Y again to permanently delete; N or Esc cancels".to_owned(),
+    ));
+    model.dirty = true;
+    Vec::new()
+}
+
+fn confirm_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(session_id) = model.browser.confirming_delete.take() else {
+        // A stray Y with no armed deletion is ignored.
+        return Vec::new();
+    };
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::DeleteSession(session_id.clone()));
+    model.notice = Some(Notice::Info("Deleting session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::DeleteSession {
+        request_id,
+        session_id,
+    })]
+}
+
 fn handle_paste(model: &mut Model, text: &str) {
     if model.credential.open {
         match model.credential.append_paste(text) {
@@ -366,12 +779,23 @@ fn input_composer(editor: &mut ratatui_textarea::TextArea<'static>, input: Input
 }
 
 fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
-    let session_changed = session.session_id != model.session.session_id;
+    let outgoing = model.session.session_id.clone();
+    let session_changed = session.session_id != outgoing;
     if !session_changed && session.revision < model.session.revision {
         return;
     }
     if session_changed {
+        // Stash the outgoing draft, clear the editor, and restore whatever
+        // draft belongs to the incoming durable session.
+        let current = model.composer.text();
+        model.drafts.stash(&outgoing, current);
         model.composer.reset();
+        if let Some(saved) = model.drafts.take_for(&session.session_id) {
+            let _ = model
+                .composer
+                .editor
+                .insert_str(crate::text::editable_safe(&saved));
+        }
         model.transcript = crate::model::TranscriptState::new();
         model.cancelling.clear();
         model.retrying.clear();
@@ -500,6 +924,22 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         model.answering_permissions.remove(&tool_call_id);
                         model.notice = Some(Notice::Info("Permission answer saved".to_owned()));
                     }
+                    PendingKind::RenameSession(_) => {
+                        model.notice = Some(Notice::Info("Title saved".to_owned()));
+                    }
+                    PendingKind::ArchiveSession(_) => {
+                        model.notice = Some(Notice::Info("Session archived".to_owned()));
+                    }
+                    PendingKind::UnarchiveSession(_) => {
+                        model.notice = Some(Notice::Info("Session unarchived".to_owned()));
+                    }
+                    PendingKind::DeleteSession(_) => {
+                        model.notice = Some(Notice::Info("Session deleted".to_owned()));
+                    }
+                    PendingKind::OpenSession(_) => {
+                        close_browser(model);
+                        model.notice = Some(Notice::Info("Session opened".to_owned()));
+                    }
                 }
             }
         }
@@ -519,7 +959,12 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     | PendingKind::SubmitPrompt(_)
                     | PendingKind::CancelAttempt(_)
                     | PendingKind::RetryAttempt(_)
-                    | PendingKind::AnswerPermission(_),
+                    | PendingKind::AnswerPermission(_)
+                    | PendingKind::RenameSession(_)
+                    | PendingKind::ArchiveSession(_)
+                    | PendingKind::UnarchiveSession(_)
+                    | PendingKind::DeleteSession(_)
+                    | PendingKind::OpenSession(_),
                 )
                 | None => {}
             }
@@ -907,7 +1352,12 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::SubmitPrompt(_)
             | PendingKind::CancelAttempt(_)
             | PendingKind::RetryAttempt(_)
-            | PendingKind::AnswerPermission(_) => false,
+            | PendingKind::AnswerPermission(_)
+            | PendingKind::RenameSession(_)
+            | PendingKind::ArchiveSession(_)
+            | PendingKind::UnarchiveSession(_)
+            | PendingKind::DeleteSession(_)
+            | PendingKind::OpenSession(_) => false,
         })
 }
 

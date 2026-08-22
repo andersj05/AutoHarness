@@ -48,6 +48,11 @@ pub fn command_committed(event_count: usize, last_sequence: u64) {
     tracing::debug!(event = "command_committed", event_count, last_sequence);
 }
 
+/// Emits a session deletion outcome without session identity or content.
+pub fn session_deleted(succeeded: bool) {
+    tracing::info!(event = "session_deleted", succeeded);
+}
+
 /// Emits the start of bounded model discovery.
 pub fn catalog_refresh_started(generation: u64, interactive: bool) {
     tracing::info!(event = "catalog_refresh_started", generation, interactive);

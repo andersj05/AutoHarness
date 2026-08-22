@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, EventId, InputId, ModelRef,
     PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RunLimits,
-    SessionId, SessionSequence, TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput,
-    UsageSnapshot,
+    SessionId, SessionSequence, SessionTitle, TimestampMillis, ToolCallId, ToolCallSpec,
+    ToolOutput, UsageSnapshot,
 };
 
 /// The only event schema emitted by the initial engine slice.
@@ -113,6 +113,15 @@ impl EventEnvelope {
 pub enum EventPayload {
     /// A session was created and can accept subsequent events.
     SessionCreated,
+    /// The session's user-facing title changed.
+    SessionRenamed {
+        /// Validated replacement title.
+        title: SessionTitle,
+    },
+    /// The session stopped accepting ordinary commands but remains readable.
+    SessionArchived,
+    /// An archived session returned to ordinary command eligibility.
+    SessionUnarchived,
     /// The session's selected model changed.
     ModelSelected {
         /// Provider-neutral selected model.

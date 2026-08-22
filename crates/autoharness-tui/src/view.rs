@@ -42,11 +42,120 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
     if model.focus == Focus::Permission {
         render_permission(frame, area, model);
+    } else if model.browser.open {
+        render_browser(frame, area, model);
     } else if model.credential.open {
         render_credential(frame, area, model);
     } else if model.picker.open {
         render_picker(frame, area, model);
     }
+}
+
+/// Renders the searchable session-browser overlay from local state only.
+fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Sessions ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let search_height = 1.min(inner.height);
+    let help_height = u16::from(inner.height >= 3);
+    let list_height = inner.height.saturating_sub(search_height + help_height);
+    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
+    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
+    let help = Rect::new(
+        inner.x,
+        inner.y + search_height + list_height,
+        inner.width,
+        help_height,
+    );
+
+    let search_line = if model.browser.renaming {
+        format!("Rename: {}", display_safe(&model.browser.rename_buffer))
+    } else {
+        format!("Filter: {}", display_safe(&model.browser.query))
+    };
+    frame.render_widget(
+        Paragraph::new(search_line).style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        search,
+    );
+
+    let entries = model.browser_entries();
+    if entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No sessions match this filter.")
+                .style(MUTED_STYLE)
+                .wrap(Wrap { trim: false }),
+            list,
+        );
+    } else {
+        let selected_index = model
+            .browser
+            .selected
+            .as_ref()
+            .and_then(|selected| {
+                entries
+                    .iter()
+                    .position(|entry| &entry.session_id == selected)
+            })
+            .unwrap_or(0);
+        let visible = usize::from(list.height);
+        let start = selected_index
+            .saturating_add(1)
+            .saturating_sub(visible)
+            .min(entries.len().saturating_sub(visible));
+        let items = entries
+            .iter()
+            .skip(start)
+            .take(visible)
+            .map(|entry| browser_item(entry, model))
+            .collect::<Vec<_>>();
+        frame.render_widget(List::new(items), list);
+    }
+
+    if help.height > 0 && !model.browser.renaming {
+        let confirming = model.browser.confirming_delete.is_some();
+        let hints = if confirming {
+            "Y delete permanently  N/Esc cancel"
+        } else {
+            "↑/↓ choose  Enter open  Ctrl+R rename  Ctrl+A archive  Ctrl+D delete  Esc close"
+        };
+        frame.render_widget(Paragraph::new(hints).style(MUTED_STYLE), help);
+    }
+}
+
+fn browser_item(entry: &crate::model::SessionBrowserEntry, model: &Model) -> ListItem<'static> {
+    let selected = model
+        .browser
+        .selected
+        .as_ref()
+        .is_some_and(|candidate| candidate == &entry.session_id);
+    let prefix = if selected { "›" } else { " " };
+    let mut label = format!("{prefix} {}", display_safe(&entry.title));
+    if entry.active {
+        label.push_str("  [active]");
+    }
+    if entry.archived {
+        label.push_str("  [archived]");
+    }
+    let style = if selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if entry.archived {
+        MUTED_STYLE
+    } else {
+        Style::default().fg(Color::White)
+    };
+    ListItem::new(Line::styled(label, style))
 }
 
 fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -392,6 +501,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         Span::raw("new"),
     ]);
+    if area.width >= 88 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            " Ctrl+L ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ));
+        spans.push(Span::raw("sessions"));
+    }
     if area.width >= 100 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(

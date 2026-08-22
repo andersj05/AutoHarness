@@ -35,6 +35,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0008](0008-defer-modeled-cost-authority.md) | Accepted | Defer modeled cost authority until trusted pricing exists |
 | [0009](0009-use-os-backed-provider-credential-profiles.md) | Proposed | Store opted-in provider credentials in the operating-system credential vault and retain only opaque profile references |
 | [0010](0010-use-mit-license.md) | Accepted | Use the MIT License |
+| [0011](0011-use-event-sourced-session-lifecycle.md) | Accepted | Use event-sourced session lifecycle with archive guards and export-before-delete |
 
 ## When an ADR is not needed
 

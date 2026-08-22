@@ -24,6 +24,21 @@ pub enum CommandRejection {
         /// Missing session identity.
         session_id: SessionId,
     },
+    /// An ordinary command targeted an archived session.
+    SessionArchived {
+        /// Archived session identity.
+        session_id: SessionId,
+    },
+    /// A lifecycle command contradicted the session's current state.
+    InvalidSessionState {
+        /// Target session identity.
+        session_id: SessionId,
+    },
+    /// Archive was requested while provider or tool work remained unsettled.
+    SessionHasUnsettledWork {
+        /// Target session identity.
+        session_id: SessionId,
+    },
     /// An input identity was already admitted to the session.
     DuplicateInput {
         /// Owning session identity.
@@ -129,6 +144,18 @@ impl Display for CommandRejection {
             Self::SessionNotFound { session_id } => {
                 write!(formatter, "session {session_id} does not exist")
             }
+            Self::SessionArchived { session_id } => write!(
+                formatter,
+                "session {session_id} is archived and accepts no ordinary commands"
+            ),
+            Self::InvalidSessionState { session_id } => write!(
+                formatter,
+                "session {session_id} is not in a state that permits that lifecycle command"
+            ),
+            Self::SessionHasUnsettledWork { session_id } => write!(
+                formatter,
+                "session {session_id} still has unsettled provider or tool work"
+            ),
             Self::DuplicateInput {
                 session_id,
                 input_id,
@@ -229,6 +256,9 @@ impl ClassifiedError for CommandRejection {
             Self::ToolCallNotFound { .. } => ErrorClass::NotFound,
             Self::DuplicateCommand { .. }
             | Self::SessionAlreadyExists { .. }
+            | Self::SessionArchived { .. }
+            | Self::InvalidSessionState { .. }
+            | Self::SessionHasUnsettledWork { .. }
             | Self::DuplicateInput { .. }
             | Self::InputAlreadyPromoted { .. }
             | Self::DuplicateAttempt { .. }
@@ -400,6 +430,13 @@ pub enum ReplayError {
         /// Event being validated.
         event_id: EventId,
     },
+    /// A lifecycle event contradicted the session's replayed state.
+    IllegalSessionTransition {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Event being validated.
+        event_id: EventId,
+    },
     /// An input identity appears more than once in a session's history.
     DuplicateInput {
         /// Owning session identity.
@@ -472,6 +509,13 @@ impl Display for ReplayError {
             } => write!(
                 formatter,
                 "event {event_id} precedes creation of session {session_id}"
+            ),
+            Self::IllegalSessionTransition {
+                session_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} contradicts the replayed lifecycle state of session {session_id}"
             ),
             Self::DuplicateInput {
                 session_id,
