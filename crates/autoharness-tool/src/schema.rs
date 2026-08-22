@@ -45,6 +45,7 @@ pub struct IncomingToolCall {
 /// Trusted parsed operation retained only in process memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Operation {
+    RejectInvalid,
     ReadFile {
         path: PathBuf,
     },
@@ -89,6 +90,10 @@ impl PlannedToolCall {
 
     pub(crate) fn into_parts(self) -> (ToolCallSpec, Operation) {
         (self.spec, self.operation)
+    }
+
+    pub(crate) const fn rejects_execution(&self) -> bool {
+        matches!(self.operation, Operation::RejectInvalid)
     }
 }
 
@@ -148,10 +153,38 @@ pub fn definitions() -> Vec<ToolDefinition> {
 }
 
 /// Strictly parses one registered schema and derives its exact capability.
+///
+/// Unknown or invalid model calls become a deterministic no-authority plan so they can be
+/// rejected durably and returned to the provider for bounded repair.
 pub fn plan(incoming: IncomingToolCall) -> Result<PlannedToolCall, ToolError> {
     let name = incoming.tool_name.as_str();
     let value = incoming.arguments.to_value();
-    let (operation, capability) = match name {
+    let (operation, capability) = plan_supported(name, value).unwrap_or_else(|_| {
+        (
+            Operation::RejectInvalid,
+            CapabilityRequest {
+                kind: CapabilityKind::InvalidToolCall,
+                resource: ResourceRef::new("tool-call:invalid")
+                    .expect("static invalid-call resource is valid"),
+            },
+        )
+    });
+
+    Ok(PlannedToolCall {
+        spec: ToolCallSpec {
+            tool_call_id: incoming.tool_call_id,
+            provider_call_id: incoming.provider_call_id,
+            tool_name: incoming.tool_name,
+            schema_version: TOOL_SCHEMA_V1,
+            arguments: incoming.arguments,
+            capability,
+        },
+        operation,
+    })
+}
+
+fn plan_supported(name: &str, value: Value) -> Result<(Operation, CapabilityRequest), ToolError> {
+    let planned = match name {
         "fs_read" => {
             let arguments: FileReadArguments = parse(value)?;
             let path = workspace_path(&arguments.path)?;
@@ -248,18 +281,7 @@ pub fn plan(incoming: IncomingToolCall) -> Result<PlannedToolCall, ToolError> {
         }
         _ => return Err(invalid_call()),
     };
-
-    Ok(PlannedToolCall {
-        spec: ToolCallSpec {
-            tool_call_id: incoming.tool_call_id,
-            provider_call_id: incoming.provider_call_id,
-            tool_name: incoming.tool_name,
-            schema_version: TOOL_SCHEMA_V1,
-            arguments: incoming.arguments,
-            capability,
-        },
-        operation,
-    })
+    Ok(planned)
 }
 
 /// Rebuilds a trusted in-memory plan from a durable frozen call and rejects drift.
@@ -283,6 +305,7 @@ pub fn replan(spec: ToolCallSpec) -> Result<PlannedToolCall, ToolError> {
 pub fn permission_details(spec: &ToolCallSpec) -> Result<Vec<PermissionDetail>, ToolError> {
     let planned = replan(spec.clone())?;
     let details = match planned.operation {
+        Operation::RejectInvalid => Vec::new(),
         Operation::ReadFile { path } => vec![PermissionDetail {
             label: "Path",
             value: display_relative(&path),
@@ -483,19 +506,39 @@ mod tests {
             call.spec().capability.resource.as_str(),
             "workspace:src/lib.rs"
         );
-        assert!(plan(incoming("fs_read", json!({"path":"../secret"}))).is_err());
-        assert!(plan(incoming("fs_read", json!({"path":"ok","extra":true}))).is_err());
+        for rejected in [
+            incoming("fs_read", json!({"path":"../secret"})),
+            incoming("fs_read", json!({"path":"ok","extra":true})),
+            incoming("unknown_tool", json!({"value":true})),
+        ] {
+            let rejected = plan(rejected).expect("invalid calls become no-authority plans");
+            assert_eq!(
+                rejected.spec().capability.kind,
+                CapabilityKind::InvalidToolCall
+            );
+            assert_eq!(
+                rejected.spec().capability.resource.as_str(),
+                "tool-call:invalid"
+            );
+        }
     }
 
     #[test]
     fn process_never_accepts_a_shell_command_as_program() {
-        assert!(plan(incoming("process_run", json!({"program":"cmd /c whoami"}))).is_err());
-        assert!(
-            plan(incoming(
-                "process_run",
-                json!({"program":"sh","arguments":["-c","whoami"]})
-            ))
-            .is_err()
+        let command = plan(incoming("process_run", json!({"program":"cmd /c whoami"})))
+            .expect("rejected plan");
+        let shell = plan(incoming(
+            "process_run",
+            json!({"program":"sh","arguments":["-c","whoami"]}),
+        ))
+        .expect("rejected plan");
+        assert_eq!(
+            command.spec().capability.kind,
+            CapabilityKind::InvalidToolCall
+        );
+        assert_eq!(
+            shell.spec().capability.kind,
+            CapabilityKind::InvalidToolCall
         );
         assert!(
             plan(incoming(
@@ -542,8 +585,14 @@ mod tests {
 
     #[test]
     fn windows_batch_programs_are_rejected_on_every_platform() {
-        assert!(plan(incoming("process_run", json!({"program":"build.bat"}))).is_err());
-        assert!(plan(incoming("process_run", json!({"program":"build.cmd"}))).is_err());
+        for program in ["build.bat", "build.cmd"] {
+            let planned = plan(incoming("process_run", json!({"program":program})))
+                .expect("batch call becomes no-authority plan");
+            assert_eq!(
+                planned.spec().capability.kind,
+                CapabilityKind::InvalidToolCall
+            );
+        }
         assert!(plan(incoming("process_run", json!({"program":"cargo"}))).is_ok());
     }
 }

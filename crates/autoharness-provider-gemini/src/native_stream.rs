@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use autoharness_domain::{ProviderCallId, RetryAdvice, ToolArguments, ToolName};
 use autoharness_provider::{
@@ -23,13 +23,23 @@ pub(crate) enum Transport {
 pub(crate) struct NativeStreamState {
     transport: Transport,
     model_output_steps: HashSet<u64>,
-    emitted_tool_steps: HashSet<u64>,
+    pending_tool_steps: BTreeMap<u64, PendingToolCall>,
+    emitted_tool_steps: BTreeSet<u64>,
     tool_argument_bytes: usize,
     observed_tool_call: bool,
     text_secret_accumulator: SecretAccumulator,
     tool_id_secret_accumulator: SecretAccumulator,
     tool_name_secret_accumulator: SecretAccumulator,
+    tool_argument_fragment_secret_accumulator: SecretAccumulator,
     tool_argument_secret_accumulator: SecretAccumulator,
+}
+
+#[derive(Default)]
+struct PendingToolCall {
+    id: Option<String>,
+    name: Option<String>,
+    complete_arguments: Option<Value>,
+    partial_arguments: String,
 }
 
 impl NativeStreamState {
@@ -37,12 +47,14 @@ impl NativeStreamState {
         Self {
             transport,
             model_output_steps: HashSet::new(),
-            emitted_tool_steps: HashSet::new(),
+            pending_tool_steps: BTreeMap::new(),
+            emitted_tool_steps: BTreeSet::new(),
             tool_argument_bytes: 0,
             observed_tool_call: false,
             text_secret_accumulator: SecretAccumulator::new(),
             tool_id_secret_accumulator: SecretAccumulator::new(),
             tool_name_secret_accumulator: SecretAccumulator::new(),
+            tool_argument_fragment_secret_accumulator: SecretAccumulator::new(),
             tool_argument_secret_accumulator: SecretAccumulator::new(),
         }
     }
@@ -81,7 +93,8 @@ impl NativeStreamState {
             "interaction.status_update" => status_update(value),
             "step.start" => {
                 if step_type(value) == Some("function_call") {
-                    return self.function_call_event(value, key);
+                    self.start_function_call(value, key)?;
+                    return Ok(Vec::new());
                 }
                 if step_type(value) != Some("model_output") {
                     return Ok(Vec::new());
@@ -97,6 +110,13 @@ impl NativeStreamState {
                 model_output_start_text(value, key, &mut self.text_secret_accumulator)
             }
             "step.delta" => {
+                if matches!(
+                    value.pointer("/delta/type").and_then(Value::as_str),
+                    Some("arguments" | "function_call_arguments")
+                ) {
+                    self.append_function_arguments(value, key)?;
+                    return Ok(Vec::new());
+                }
                 let index = step_index(value);
                 let belongs_to_model_output = index
                     .is_some_and(|index| self.model_output_steps.contains(&index))
@@ -120,11 +140,12 @@ impl NativeStreamState {
                     .map(|event| event.into_iter().collect())
             }
             "step.stop" => {
-                let mut events = if step_type(value) == Some("function_call") {
-                    self.function_call_event(value, key)?
-                } else {
-                    Vec::new()
-                };
+                let mut events = step_index(value)
+                    .filter(|index| self.pending_tool_steps.contains_key(index))
+                    .map_or_else(
+                        || Ok(Vec::new()),
+                        |index| self.complete_function_call(index, value, key),
+                    )?;
                 let usage = value
                     .get("step_usage")
                     .or_else(|| value.get("usage"))
@@ -153,7 +174,7 @@ impl NativeStreamState {
                     .get("interaction")
                     .and_then(|interaction| interaction.get("usage"))
                     .or_else(|| value.get("usage"));
-                let mut events = Vec::new();
+                let mut events = self.complete_pending_function_calls(key)?;
                 if let Some(usage) = usage.and_then(interactions_usage) {
                     events.push(ProviderStreamEvent::Usage(usage));
                 }
@@ -176,16 +197,22 @@ impl NativeStreamState {
         }
     }
 
-    fn function_call_event(
+    fn start_function_call(
         &mut self,
         value: &Value,
         key: &GeminiApiKey,
-    ) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
+    ) -> Result<(), ProviderError> {
         let index = step_index(value).ok_or_else(protocol_error)?;
         if self.emitted_tool_steps.contains(&index) {
-            return Ok(Vec::new());
+            return Ok(());
         }
-        if self.emitted_tool_steps.len() >= MAX_INTERACTION_STEPS_PER_TURN {
+        if !self.pending_tool_steps.contains_key(&index)
+            && self
+                .pending_tool_steps
+                .len()
+                .saturating_add(self.emitted_tool_steps.len())
+                >= MAX_INTERACTION_STEPS_PER_TURN
+        {
             return Err(protocol_error());
         }
         let step = value.get("step").unwrap_or(value);
@@ -198,16 +225,153 @@ impl NativeStreamState {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(protocol_error)?;
-        let arguments = step.get("arguments").cloned().ok_or_else(protocol_error)?;
-        let argument_bytes = arguments.to_string().len();
-        let total_argument_bytes = self.tool_argument_bytes.saturating_add(argument_bytes);
-        if total_argument_bytes > MAX_TOOL_ARGUMENT_BYTES_PER_TURN {
+        let pending = self.pending_tool_steps.entry(index).or_default();
+        if pending.id.as_deref().is_some_and(|existing| existing != id)
+            || pending
+                .name
+                .as_deref()
+                .is_some_and(|existing| existing != name)
+        {
             return Err(protocol_error());
         }
-        if key.observe_text(&mut self.tool_id_secret_accumulator, id)
-            || key.observe_text(&mut self.tool_name_secret_accumulator, name)
-            || key.observe_structured(&mut self.tool_argument_secret_accumulator, &arguments)
+        if pending.id.is_none() {
+            if key.observe_text(&mut self.tool_id_secret_accumulator, id) {
+                return Err(protocol_error());
+            }
+            pending.id = Some(id.to_owned());
+        }
+        if pending.name.is_none() {
+            if key.observe_text(&mut self.tool_name_secret_accumulator, name) {
+                return Err(protocol_error());
+            }
+            pending.name = Some(name.to_owned());
+        }
+        if let Some(arguments) = step.get("arguments") {
+            self.set_complete_arguments(index, arguments.clone())?;
+        }
+        Ok(())
+    }
+
+    fn append_function_arguments(
+        &mut self,
+        value: &Value,
+        key: &GeminiApiKey,
+    ) -> Result<(), ProviderError> {
+        let index = step_index(value).ok_or_else(protocol_error)?;
+        if self.emitted_tool_steps.contains(&index) {
+            return Err(protocol_error());
+        }
+        let delta = value.get("delta").ok_or_else(protocol_error)?;
+        if let Some(fragment) = delta
+            .get("partial_arguments")
+            .or_else(|| delta.get("arguments"))
+            .and_then(Value::as_str)
         {
+            let total = self.tool_argument_bytes.saturating_add(fragment.len());
+            if total > MAX_TOOL_ARGUMENT_BYTES_PER_TURN
+                || key.observe_text(
+                    &mut self.tool_argument_fragment_secret_accumulator,
+                    fragment,
+                )
+            {
+                return Err(protocol_error());
+            }
+            let pending = self
+                .pending_tool_steps
+                .get_mut(&index)
+                .ok_or_else(protocol_error)?;
+            pending.partial_arguments.push_str(fragment);
+            self.tool_argument_bytes = total;
+            return Ok(());
+        }
+        if let Some(arguments) = delta.get("arguments") {
+            return self.set_complete_arguments(index, arguments.clone());
+        }
+        Err(protocol_error())
+    }
+
+    fn set_complete_arguments(
+        &mut self,
+        index: u64,
+        arguments: Value,
+    ) -> Result<(), ProviderError> {
+        let pending = self
+            .pending_tool_steps
+            .get_mut(&index)
+            .ok_or_else(protocol_error)?;
+        if pending
+            .complete_arguments
+            .as_ref()
+            .is_some_and(|existing| existing != &arguments)
+        {
+            return Err(protocol_error());
+        }
+        if pending.complete_arguments.is_none() && pending.partial_arguments.is_empty() {
+            let bytes = serde_json::to_vec(&arguments)
+                .map_err(|_| protocol_error())?
+                .len();
+            let total = self.tool_argument_bytes.saturating_add(bytes);
+            if total > MAX_TOOL_ARGUMENT_BYTES_PER_TURN {
+                return Err(protocol_error());
+            }
+            self.tool_argument_bytes = total;
+        }
+        pending.complete_arguments = Some(arguments);
+        Ok(())
+    }
+
+    fn complete_pending_function_calls(
+        &mut self,
+        key: &GeminiApiKey,
+    ) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
+        let indexes = self.pending_tool_steps.keys().copied().collect::<Vec<_>>();
+        let mut events = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            events.extend(self.complete_function_call(index, &Value::Null, key)?);
+        }
+        Ok(events)
+    }
+
+    fn complete_function_call(
+        &mut self,
+        index: u64,
+        value: &Value,
+        key: &GeminiApiKey,
+    ) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
+        if self.emitted_tool_steps.contains(&index) {
+            return Ok(Vec::new());
+        }
+        if let Some(arguments) = value
+            .get("step")
+            .and_then(|step| step.get("arguments"))
+            .cloned()
+        {
+            self.set_complete_arguments(index, arguments)?;
+        }
+        let pending = self
+            .pending_tool_steps
+            .remove(&index)
+            .ok_or_else(protocol_error)?;
+        let id = pending.id.ok_or_else(protocol_error)?;
+        let name = pending.name.ok_or_else(protocol_error)?;
+        let arguments = if pending.partial_arguments.is_empty() {
+            pending
+                .complete_arguments
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
+        } else {
+            let partial: Value =
+                serde_json::from_str(&pending.partial_arguments).map_err(|_| protocol_error())?;
+            if pending.complete_arguments.as_ref().is_some_and(|complete| {
+                complete
+                    .as_object()
+                    .is_some_and(|object| !object.is_empty())
+                    && complete != &partial
+            }) {
+                return Err(protocol_error());
+            }
+            partial
+        };
+        if key.observe_structured(&mut self.tool_argument_secret_accumulator, &arguments) {
             return Err(protocol_error());
         }
         let event = ProviderStreamEvent::ToolCall(ProviderToolCall {
@@ -215,7 +379,6 @@ impl NativeStreamState {
             tool_name: ToolName::new(name).map_err(|_| protocol_error())?,
             arguments: ToolArguments::new(arguments).map_err(|_| protocol_error())?,
         });
-        self.tool_argument_bytes = total_argument_bytes;
         self.emitted_tool_steps.insert(index);
         self.observed_tool_call = true;
         Ok(vec![event])
@@ -653,13 +816,26 @@ mod tests {
                 "arguments":{"path":"split-","content":"key"}
             }
         });
-
+        let mut state = NativeStreamState::new(Transport::Interactions);
         assert!(
-            NativeStreamState::new(Transport::Interactions)
+            state
                 .handle(
                     SseFrame {
                         event: None,
                         data: frame.to_string(),
+                    },
+                    &key,
+                )
+                .expect("start is buffered")
+                .is_empty()
+        );
+        assert!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: r#"{"event_type":"interaction.completed","interaction":{"status":"completed"}}"#
+                            .to_owned(),
                     },
                     &key,
                 )
@@ -737,25 +913,43 @@ mod tests {
             }
         });
 
+        state
+            .handle(
+                SseFrame {
+                    event: None,
+                    data: first.to_string(),
+                },
+                &key,
+            )
+            .expect("first safe call start");
         assert_eq!(
             state
                 .handle(
                     SseFrame {
                         event: None,
-                        data: first.to_string(),
+                        data: r#"{"event_type":"step.stop","index":1}"#.to_owned(),
                     },
                     &key,
                 )
-                .expect("first safe call")
+                .expect("first safe call completion")
                 .len(),
             1
         );
+        state
+            .handle(
+                SseFrame {
+                    event: None,
+                    data: second.to_string(),
+                },
+                &key,
+            )
+            .expect("second call start");
         assert!(
             state
                 .handle(
                     SseFrame {
                         event: None,
-                        data: second.to_string(),
+                        data: r#"{"event_type":"step.stop","index":2}"#.to_owned(),
                     },
                     &key,
                 )
@@ -786,7 +980,20 @@ mod tests {
                 &key,
             );
             if index == 1 {
-                assert_eq!(result.expect("first safe call").len(), 1);
+                assert!(result.expect("first safe call start").is_empty());
+                assert_eq!(
+                    state
+                        .handle(
+                            SseFrame {
+                                event: None,
+                                data: r#"{"event_type":"step.stop","index":1}"#.to_owned(),
+                            },
+                            &key,
+                        )
+                        .expect("first call completion")
+                        .len(),
+                    1
+                );
             } else {
                 assert!(result.is_err());
             }
@@ -845,6 +1052,29 @@ mod tests {
     }
 
     #[test]
+    fn recorded_function_call_stream_waits_for_all_argument_bytes() {
+        let fixture = include_bytes!("../tests/fixtures/interactions-tool-stream.sse");
+        let one_byte = fixture.iter().map(std::slice::from_ref).collect::<Vec<_>>();
+        let events = decode_fixture(&one_byte);
+
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::Started,
+                ProviderStreamEvent::ToolCall(ProviderToolCall {
+                    provider_call_id: ProviderCallId::new("call-read-1").expect("provider call ID"),
+                    tool_name: ToolName::new("fs_read").expect("tool name"),
+                    arguments: ToolArguments::new(serde_json::json!({"path":"README.md"}))
+                        .expect("tool arguments"),
+                }),
+                ProviderStreamEvent::Completed {
+                    reason: CompletionReason::ToolCalls,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn done_without_completed_is_a_protocol_failure() {
         let key = GeminiApiKey::new("gemini-secret-sentinel").expect("key");
         let mut state = NativeStreamState::new(Transport::Interactions);
@@ -866,7 +1096,7 @@ mod tests {
     fn interaction_function_call_is_normalized_and_changes_completion_reason() {
         let key = GeminiApiKey::new("gemini-secret-sentinel").expect("key");
         let mut state = NativeStreamState::new(Transport::Interactions);
-        let call = state
+        let start = state
             .handle(
                 SseFrame {
                     event: Some("step.start".to_owned()),
@@ -875,7 +1105,8 @@ mod tests {
                 },
                 &key,
             )
-            .expect("function call");
+            .expect("function call start");
+        assert!(start.is_empty());
         let completed = state
             .handle(
                 SseFrame {
@@ -887,7 +1118,7 @@ mod tests {
             )
             .expect("completion");
 
-        let ProviderStreamEvent::ToolCall(call) = &call[0] else {
+        let ProviderStreamEvent::ToolCall(call) = &completed[0] else {
             panic!("expected normalized tool call");
         };
         assert_eq!(call.provider_call_id.as_str(), "call-1");
@@ -896,10 +1127,66 @@ mod tests {
             serde_json::json!({"path":"README.md"})
         );
         assert_eq!(
-            completed,
-            vec![ProviderStreamEvent::Completed {
-                reason: CompletionReason::ToolCalls
-            }]
+            completed.last(),
+            Some(&ProviderStreamEvent::Completed {
+                reason: CompletionReason::ToolCalls,
+            })
+        );
+    }
+
+    #[test]
+    fn interaction_function_call_waits_for_streamed_argument_fragments() {
+        let key = GeminiApiKey::new("gemini-secret-sentinel").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        let start = state
+            .handle(
+                SseFrame {
+                    event: Some("step.start".to_owned()),
+                    data: r#"{"event_type":"step.start","index":2,"step":{"type":"function_call","id":"call-1","name":"http_request","arguments":{}}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("function call start");
+        let first = state
+            .handle(
+                SseFrame {
+                    event: Some("step.delta".to_owned()),
+                    data: r#"{"event_type":"step.delta","index":2,"delta":{"type":"arguments","partial_arguments":"{\"method\":\"GET\",\"url\":\"https://"}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("first argument fragment");
+        let second = state
+            .handle(
+                SseFrame {
+                    event: Some("step.delta".to_owned()),
+                    data: r#"{"event_type":"step.delta","index":2,"delta":{"type":"arguments","partial_arguments":"example.com/news\"}"}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("second argument fragment");
+        let stopped = state
+            .handle(
+                SseFrame {
+                    event: Some("step.stop".to_owned()),
+                    data: r#"{"event_type":"step.stop","index":2}"#.to_owned(),
+                },
+                &key,
+            )
+            .expect("function call completion");
+
+        assert!(start.is_empty());
+        assert!(first.is_empty());
+        assert!(second.is_empty());
+        let ProviderStreamEvent::ToolCall(call) = &stopped[0] else {
+            panic!("expected complete normalized tool call");
+        };
+        assert_eq!(
+            call.arguments.to_value(),
+            serde_json::json!({"method":"GET","url":"https://example.com/news"})
         );
     }
 }

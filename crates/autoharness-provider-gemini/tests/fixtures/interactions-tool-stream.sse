@@ -1,0 +1,19 @@
+event: interaction.created
+data: {"event_type":"interaction.created","interaction":{"id":"interaction-tool-1","status":"in_progress"}}
+
+event: step.start
+data: {"event_type":"step.start","index":0,"step":{"type":"function_call","id":"call-read-1","name":"fs_read","arguments":{}}}
+
+event: step.delta
+data: {"event_type":"step.delta","index":0,"delta":{"type":"arguments","partial_arguments":"{\"path\":"}}
+
+event: step.delta
+data: {"event_type":"step.delta","index":0,"delta":{"type":"arguments","partial_arguments":"\"README.md\"}"}}
+
+event: step.stop
+data: {"event_type":"step.stop","index":0}
+
+event: interaction.completed
+data: {"event_type":"interaction.completed","interaction":{"status":"completed"}}
+
+data: [DONE]

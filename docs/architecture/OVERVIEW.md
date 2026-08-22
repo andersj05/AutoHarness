@@ -140,8 +140,8 @@ Large content moves to an artifact store while the event log retains identity, m
 
 ### Tool execution
 
-1. The application exposes the same versioned provider-neutral tool registry through each provider adapter's native function-calling format.
-2. A complete provider tool call is strictly parsed by the trusted registry, which freezes the model arguments and derives the exact capability and canonical resource.
+1. The application exposes the same versioned provider-neutral tool registry through each provider adapter's native function-calling format only after the selected model positively reports support for that exact dialect.
+2. A complete provider tool call is strictly parsed by the trusted registry, which freezes valid model arguments and derives the exact capability and canonical resource.
 3. The engine commits the proposed call and the deny, ask, or allow policy result.
 4. An ask result pauses at a durable permission state and the terminal displays a scrollable trusted summary of the exact security-critical invocation fields.
 5. A human allow answer applies once to that exact frozen call, while a denial settles without execution.
@@ -154,6 +154,7 @@ Large content moves to an artifact store while the event log retains identity, m
 
 Gemini Interactions function calls and OpenAI-compatible streamed `tool_calls` normalize into the same complete internal call.
 Arbitrarily fragmented provider arguments cannot produce a partial durable call.
+Gemini placeholder arguments from `step.start` remain buffered until streamed argument deltas form the final bounded JSON object.
 Each provider turn has hard tool-call count and aggregate argument-buffer bounds before durable admission.
 Provider output that could reconstruct a configured credential within one structured value or across an ordered sequence of normalized text, identity, or argument values is rejected before the completing value enters provider-neutral state.
 Turn-scoped sequence checks retain only a zeroized credential-length suffix.
@@ -161,6 +162,8 @@ The application reconstructs subsequent native tool-result messages from the aut
 
 The default local policy asks before workspace-confined reads, writes, direct process execution, and HTTP requests.
 Unmatched tools, capabilities, and resources deny by default.
+A provider call that fails the registered name or argument schema is frozen with a no-authority invalid-call capability, force-denied, and returned as a deterministic tool result for bounded repair.
+No policy or replay evidence can authorize that invalid-call capability.
 The model never selects the capability field and cannot expand authority by adding arguments or changing JSON shape.
 
 Run limits are immutable per attempt and cover provider turns, elapsed wall time, cumulative reported tokens, total provider and tool output bytes, and concurrent tool effects.

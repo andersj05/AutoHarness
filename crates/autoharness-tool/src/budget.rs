@@ -47,8 +47,10 @@ impl RunBudget {
         output_bytes: u64,
         active_tools: u32,
     ) -> Result<Self, ToolError> {
-        if turns > limits.max_turns
-            || tokens > limits.max_tokens
+        if turns > limits.max_turns {
+            return Err(limit(ToolErrorKind::TurnLimit));
+        }
+        if tokens > limits.max_tokens
             || output_bytes > limits.max_output_bytes
             || active_tools > limits.max_concurrency
         {
@@ -83,7 +85,7 @@ impl RunBudget {
         self.check_time()?;
         let next = self.turns.saturating_add(1);
         if next > self.limits.max_turns {
-            return Err(limit(ToolErrorKind::OutputLimit));
+            return Err(limit(ToolErrorKind::TurnLimit));
         }
         self.turns = next;
         Ok(next)

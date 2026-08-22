@@ -94,6 +94,13 @@ pub struct ModelCapabilities {
     pub managed_interactions: CapabilitySupport,
     /// The discovery protocol explicitly describes thinking support.
     pub thinking: CapabilitySupport,
+    /// The model accepts the adapter's exact custom-function dialect.
+    #[serde(default = "unknown_capability")]
+    pub tool_calling: CapabilitySupport,
+}
+
+const fn unknown_capability() -> CapabilitySupport {
+    CapabilitySupport::Unknown
 }
 
 impl Default for ModelCapabilities {
@@ -103,6 +110,7 @@ impl Default for ModelCapabilities {
             streaming: CapabilitySupport::Unknown,
             managed_interactions: CapabilitySupport::Unknown,
             thinking: CapabilitySupport::Unknown,
+            tool_calling: CapabilitySupport::Unknown,
         }
     }
 }
@@ -113,6 +121,12 @@ impl ModelCapabilities {
     pub const fn supports_streamed_chat(&self) -> bool {
         !matches!(self.chat, CapabilitySupport::Unsupported)
             && !matches!(self.streaming, CapabilitySupport::Unsupported)
+    }
+
+    /// Returns whether known model metadata permits custom-function advertisement.
+    #[must_use]
+    pub const fn supports_tool_calling(&self) -> bool {
+        matches!(self.tool_calling, CapabilitySupport::Supported)
     }
 }
 
@@ -150,5 +164,24 @@ impl Debug for ModelDescriptor {
             .field("output_token_limit", &self.output_token_limit)
             .field("capabilities", &self.capabilities)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_cached_capabilities_default_tool_calling_to_unknown() {
+        let capabilities: ModelCapabilities = serde_json::from_value(serde_json::json!({
+            "chat":"supported",
+            "streaming":"supported",
+            "managed_interactions":"unknown",
+            "thinking":"unknown"
+        }))
+        .expect("older capability snapshot");
+
+        assert_eq!(capabilities.tool_calling, CapabilitySupport::Unknown);
+        assert!(!capabilities.supports_tool_calling());
     }
 }

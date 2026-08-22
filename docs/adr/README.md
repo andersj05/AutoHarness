@@ -33,6 +33,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0006](0006-use-openai-compatible-router-boundary.md) | Accepted | Use an OpenAI-compatible router boundary with shared provider policy and caching |
 | [0007](0007-use-durable-capability-tool-runtime.md) | Accepted | Use a durable capability-based tool runtime |
 | [0008](0008-defer-modeled-cost-authority.md) | Accepted | Defer modeled cost authority until trusted pricing exists |
+| [0009](0009-use-os-backed-provider-credential-profiles.md) | Proposed | Store opted-in provider credentials in the operating-system credential vault and retain only opaque profile references |
 
 ## When an ADR is not needed
 

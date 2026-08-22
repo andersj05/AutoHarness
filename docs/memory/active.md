@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-22
 
-**Phase:** 4 - Persistent context and memory
+**Phase:** 3.1 - Live protocol reliability and recovery
 
-**Status:** Phase 3 complete and security remediated - Phase 4 ready for design and implementation
+**Status:** Phase 3.1 local implementation and fixture gates pass - live-provider exit evidence remains open
 
 ## Current objective
 
-Add the safe monotonic benchmark markers and choose a reference machine, then begin deterministic context epochs and untrusted memory proposal contracts without weakening the durable tool boundary.
+Run the opt-in live Gemini and configured-router compatibility probes, verify the real terminal plain-chat and approved HTTP-tool flows, and then proceed to Phase 3.2 session lifecycle work.
 
 ## Current repository state
 
@@ -22,16 +22,31 @@ Add the safe monotonic benchmark markers and choose a reference machine, then be
 - `autoharness-store` and `autoharness-store-sqlite` provide an event-authoritative store, transactional projections, WAL-mode local durability, idempotent append, migration verification, projection rebuilding, and an integrity-checked provider-neutral model-catalog cache.
 - `autoharness-tui` provides a Ratatui model/update/view client with masked zeroizing API-key entry, a searchable model picker, Unicode multiline composer, streaming transcript, scoped tool permission overlay, cancellation, retry, usage, errors, scrolling, and compact rendering.
 - `autoharness-app` selects Gemini or the configured router, composes both through the same managed provider and coordinator path, runs durable provider and tool turns, accepts runtime credentials, owns dedicated SQLite work, performs conservative startup recovery, propagates process cancellation, emits structured tracing, discovers the data and workspace directories, and holds an exclusive writer lease.
-- Formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite pass locally across the complete Phase 3 slice.
+- Tool definitions are advertised only for positively identified model support, and the current single safe-agent interaction mode enables the exact built-in registry.
+- Gemini Interactions function-call arguments are buffered across streamed deltas and emitted only after a complete bounded JSON object is available.
+- Unknown names and invalid argument shapes become durable `InvalidToolCall` no-authority proposals, are force-denied even under permissive policy, and return a deterministic result for bounded model repair.
+- Provider request history includes completed turns and the current input while excluding unrelated prior failed or cancelled prompts.
+- `Ctrl+N` creates and activates a fresh durable session even when credentials or the catalog are unavailable, but browsing, switching, renaming, archiving, exporting, and deleting sessions remain Phase 3.2 work.
+- Non-secret runtime configuration is environment-driven, and the in-app credential overlay is intentionally session-only under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
+- The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
+- Stable failure codes, compact safe attempt references, retry actions, and the global fresh-session action are rendered in failed transcript rows and fixed-size golden buffers.
+- Formatting, strict Clippy, full workspace tests, warning-denied rustdoc, doctests, fixed-size renders, and the actual credential-free `Ctrl+N` PTY flow pass locally after Phase 3.1 documentation reconciliation.
 - A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined all application files to an isolated data directory, exited successfully, and restored the terminal.
 - A credential-overlay PTY smoke run masked a bracketed-paste sentinel, cleared it on dismissal, reopened an empty editor, found no sentinel bytes in application files, and restored the terminal.
 - A Phase 2 PTY smoke run discovered and selected a model through a local router fixture, streamed a completed response, restarted with the fixture offline, restored the selected model and transcript through replay plus the fresh catalog cache, found no credential bytes in application files, and restored the terminal on both exits.
-- The tests use local HTTP fixtures and fake providers; no live Gemini network request has been exercised.
+- The automated tests use local HTTP fixtures and fake providers; no successful live Gemini compatibility run is part of the reviewed test evidence.
 - A checked-in isolated benchmark environment measures durable append, projection reads, and warm SQLite recovery without provider requests, and includes an idle resident-memory sampler.
 - Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, plus separate formatting, Clippy, and test gates for the isolated benchmark workspace.
 
 ## Recently completed
 
+- Buffered Gemini Interactions function calls until every streamed `partial_arguments` fragment forms the complete bounded JSON object.
+- Added capability-aware tool advertisement with backward-compatible catalog decoding and positive support required before exposing functions.
+- Added durable force-denied invalid-call proposals, deterministic provider repair results, no-authority authorization checks, and content-free rejection telemetry.
+- Excluded prior failed and cancelled prompts from unrelated future provider requests while preserving explicit retry and completed history behavior.
+- Added a global typed `Ctrl+N` intent, durable session creation, session-identity-aware TUI projection replacement, fixed-size footer affordances, and a successful credential-overlay PTY smoke run.
+- Added stable UI failure codes, compact safe attempt references, and concrete retry or fresh-session recovery actions.
+- Added opt-in ignored Gemini plain-chat, Gemini HTTP-function, and configured-router HTTP-function compatibility probes that retain only structural assertions.
 - Completed the Phase 3 safe agent execution path without adding provider-native payloads or concrete capabilities to the engine.
 - Added strict schema-v1 filesystem read, filesystem write, direct process, and HTTP tools whose trusted registry derives authority from bounded model arguments.
 - Added durable call, permission, human-answer, effect-start, result, denial, cancellation, unknown, pause, resume, turn, and run-budget events.
@@ -66,22 +81,26 @@ Add the safe monotonic benchmark markers and choose a reference machine, then be
 
 ## Immediate next actions
 
-1. Add the safe monotonic markers required to measure startup, dispatch, and rendered-delta latency.
-2. Record the checked-in benchmark suite on an approved reference machine.
-3. Decide the license and contribution policy before the first public release.
-4. Define Phase 4 context epochs, deterministic context construction, and untrusted memory proposal contracts.
+1. Run the opt-in Gemini plain-chat and HTTP-function compatibility probes with a runtime credential, then verify approval, execution, continuation, and durable replay through the real terminal.
+2. Run the configured-router HTTP-function probe against the intended router project and record only the pass or fail matrix and version provenance.
+3. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates after any live compatibility correction.
+4. Complete Phase 3.2 session browsing, switching, lifecycle metadata, offline navigation, export, and deletion semantics.
+5. Proceed through Phase 3.3 profiles and settings, Phase 3.4 TUI usability, and Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
 
 ## Open questions
 
 - Which open-source license should govern the repository?
 - What reference machine should define startup and stream-overhead benchmarks?
+- Should [the proposed operating-system credential profile decision](../adr/0009-use-os-backed-provider-credential-profiles.md) be accepted as written before Phase 3.3?
+- What exact export, retention, hard-deletion, and artifact-cleanup semantics should govern sessions?
 
 ## Blockers
 
-None for beginning Phase 4 design or adding the benchmark markers.
-An approved reference machine is required before recording authoritative latency results.
+None for the completed local Phase 3.1 implementation or Phase 3.2 design work.
+A runtime Gemini credential and configured router endpoint plus credential are required for the remaining Phase 3.1 live-provider exit evidence.
+An approved reference machine is required before recording authoritative latency results in Phase 3.5.
 
 ## Handoff note
 
-The next implementation task should follow Phase 4 of [the project plan](../PROJECT_PLAN.md) and start with deterministic context epoch and memory proposal contracts inward of retrieval and storage adapters.
-Preserve the Phase 3 rule that model-authored data is untrusted and cannot grant authority.
+The Phase 3.1 local implementation is on `feat/phase-3-1-reliability` and keeps the live network matrix open until runtime credentials are available.
+Use the ignored structural compatibility probes first, then verify the same plain-chat and approved HTTP-tool paths through the real terminal without retaining provider content or credentials.

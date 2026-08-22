@@ -34,6 +34,9 @@ impl PermissionPolicy {
     /// Evaluates the exact trusted call and canonical resource.
     #[must_use]
     pub fn evaluate(&self, call: &ToolCallSpec) -> PermissionOutcome {
+        if call.capability.kind == CapabilityKind::InvalidToolCall {
+            return PermissionOutcome::Deny;
+        }
         self.rules
             .iter()
             .find(|rule| {
@@ -104,6 +107,12 @@ pub fn authorize(
     policy_outcome: PermissionOutcome,
     answer: Option<PermissionAnswer>,
 ) -> Result<(AuthorizedToolCall, PermissionEvidence), ToolError> {
+    if planned.rejects_execution() {
+        return Err(ToolError::new(
+            ToolErrorKind::InvalidCall,
+            RetryAdvice::Never,
+        ));
+    }
     let evidence = match (policy_outcome, answer) {
         (PermissionOutcome::Allow, None) => PermissionEvidence::PolicyAllow,
         (PermissionOutcome::Ask, Some(PermissionAnswer::AllowOnce)) => {
@@ -162,5 +171,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn invalid_calls_are_always_denied_and_cannot_be_authorized() {
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ToolCallId::new("call-invalid").expect("ID"),
+            provider_call_id: ProviderCallId::new("provider-invalid").expect("ID"),
+            tool_name: ToolName::new("not_registered").expect("name"),
+            arguments: ToolArguments::new(json!({"path":"README.md"})).expect("arguments"),
+        })
+        .expect("invalid call is durably plannable");
+        let permissive = PermissionPolicy::new(vec![PermissionRule {
+            tool_name: None,
+            capability: CapabilityKind::InvalidToolCall,
+            resource_prefix: ResourceRef::new("tool-call:").expect("resource"),
+            outcome: PermissionOutcome::Allow,
+        }]);
+
+        assert_eq!(permissive.evaluate(planned.spec()), PermissionOutcome::Deny);
+        assert!(authorize(planned, PermissionOutcome::Allow, None).is_err());
     }
 }

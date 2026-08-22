@@ -262,6 +262,7 @@ mod tests {
     fn model_with_draft() -> Model {
         let selected = selected_model();
         let session = Arc::new(SessionProjection {
+            session_id: "session-fixture".to_owned(),
             revision: 1,
             selected_model: Some(selected.clone()),
             transcript: Vec::new(),
