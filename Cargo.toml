@@ -9,6 +9,7 @@ members = [
     "crates/autoharness-store",
     "crates/autoharness-store-sqlite",
     "crates/autoharness-tui",
+    "crates/autoharness-tool",
 ]
 resolver = "3"
 
@@ -28,6 +29,7 @@ autoharness-provider-openai = { path = "crates/autoharness-provider-openai" }
 autoharness-store = { path = "crates/autoharness-store" }
 autoharness-store-sqlite = { path = "crates/autoharness-store-sqlite" }
 autoharness-tui = { path = "crates/autoharness-tui" }
+autoharness-tool = { path = "crates/autoharness-tool" }
 async-stream = "0.3"
 async-trait = "0.1"
 bytes = "1"

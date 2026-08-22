@@ -2,8 +2,9 @@ use autoharness_domain::{ErrorClass, ModelRef};
 use autoharness_engine::{AttemptStatus as EngineAttemptStatus, SessionAggregate};
 use autoharness_provider::{CapabilitySupport, ModelDescriptor};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, ModelSummary, RetryPolicy, SessionProjection,
-    TranscriptItem, UiFailure, UsageView,
+    AttemptKey, AttemptStatus, CatalogProjection, ModelSummary, PermissionDetailView,
+    PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, TranscriptItem, UiFailure,
+    UsageView,
 };
 
 /// Converts the authoritative aggregate into the complete visible TUI state.
@@ -26,9 +27,9 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
                 .retry_of()
                 .map(|prior| AttemptKey::new(prior.as_str()).expect("domain IDs are non-empty"));
             let status = match attempt.status() {
-                EngineAttemptStatus::Prepared | EngineAttemptStatus::InFlight => {
-                    AttemptStatus::Streaming
-                }
+                EngineAttemptStatus::Prepared
+                | EngineAttemptStatus::InFlight
+                | EngineAttemptStatus::AwaitingTools => AttemptStatus::Streaming,
                 EngineAttemptStatus::CancellationRequested => AttemptStatus::Cancelling,
                 EngineAttemptStatus::Completed => AttemptStatus::Completed,
                 EngineAttemptStatus::Cancelled => AttemptStatus::Cancelled,
@@ -59,12 +60,43 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
         }
     }
 
+    let permission_requests = aggregate
+        .tool_calls()
+        .iter()
+        .filter(|call| call.status() == autoharness_engine::ToolCallStatus::PermissionPending)
+        .map(|call| PermissionRequestView {
+            tool_call_id: ToolCallKey::new(call.call().tool_call_id.as_str())
+                .expect("domain tool-call IDs are non-empty"),
+            tool_name: call.call().tool_name.as_str().to_owned(),
+            capability: capability_name(call.call().capability.kind).to_owned(),
+            resource: call.call().capability.resource.as_str().to_owned(),
+            details: autoharness_tool::permission_details(call.call())
+                .expect("durable tool calls must replan")
+                .into_iter()
+                .map(|detail| PermissionDetailView {
+                    label: detail.label.to_owned(),
+                    value: detail.value,
+                })
+                .collect(),
+        })
+        .collect();
+
     SessionProjection {
         revision: aggregate
             .last_sequence()
             .map_or(0, |sequence| sequence.get()),
         selected_model: aggregate.selected_model().cloned(),
         transcript,
+        permission_requests,
+    }
+}
+
+const fn capability_name(kind: autoharness_domain::CapabilityKind) -> &'static str {
+    match kind {
+        autoharness_domain::CapabilityKind::FilesystemRead => "filesystem read",
+        autoharness_domain::CapabilityKind::FilesystemWrite => "filesystem write",
+        autoharness_domain::CapabilityKind::ProcessExecute => "process execute",
+        autoharness_domain::CapabilityKind::HttpRequest => "HTTP request",
     }
 }
 

@@ -1,15 +1,18 @@
 use std::collections::HashSet;
 
-use autoharness_domain::RetryAdvice;
+use autoharness_domain::{ProviderCallId, RetryAdvice, ToolArguments, ToolName};
 use autoharness_provider::{
-    CompletionReason, ProviderError, ProviderErrorKind, ProviderStreamEvent, TextDelta,
-    UsageSnapshot,
+    CompletionReason, ProviderError, ProviderErrorKind, ProviderStreamEvent, ProviderToolCall,
+    SecretAccumulator, TextDelta, UsageSnapshot,
 };
 use serde_json::Value;
 
 use crate::GeminiApiKey;
 use crate::client::classify_error_value;
 use autoharness_provider::SseFrame;
+
+const MAX_INTERACTION_STEPS_PER_TURN: usize = 64;
+const MAX_TOOL_ARGUMENT_BYTES_PER_TURN: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Transport {
@@ -20,6 +23,13 @@ pub(crate) enum Transport {
 pub(crate) struct NativeStreamState {
     transport: Transport,
     model_output_steps: HashSet<u64>,
+    emitted_tool_steps: HashSet<u64>,
+    tool_argument_bytes: usize,
+    observed_tool_call: bool,
+    text_secret_accumulator: SecretAccumulator,
+    tool_id_secret_accumulator: SecretAccumulator,
+    tool_name_secret_accumulator: SecretAccumulator,
+    tool_argument_secret_accumulator: SecretAccumulator,
 }
 
 impl NativeStreamState {
@@ -27,6 +37,13 @@ impl NativeStreamState {
         Self {
             transport,
             model_output_steps: HashSet::new(),
+            emitted_tool_steps: HashSet::new(),
+            tool_argument_bytes: 0,
+            observed_tool_call: false,
+            text_secret_accumulator: SecretAccumulator::new(),
+            tool_id_secret_accumulator: SecretAccumulator::new(),
+            tool_name_secret_accumulator: SecretAccumulator::new(),
+            tool_argument_secret_accumulator: SecretAccumulator::new(),
         }
     }
 
@@ -63,13 +80,21 @@ impl NativeStreamState {
             "interaction.created" => Ok(Vec::new()),
             "interaction.status_update" => status_update(value),
             "step.start" => {
+                if step_type(value) == Some("function_call") {
+                    return self.function_call_event(value, key);
+                }
                 if step_type(value) != Some("model_output") {
                     return Ok(Vec::new());
                 }
                 if let Some(index) = step_index(value) {
+                    if !self.model_output_steps.contains(&index)
+                        && self.model_output_steps.len() >= MAX_INTERACTION_STEPS_PER_TURN
+                    {
+                        return Err(protocol_error());
+                    }
                     self.model_output_steps.insert(index);
                 }
-                Ok(model_output_start_text(value, key))
+                model_output_start_text(value, key, &mut self.text_secret_accumulator)
             }
             "step.delta" => {
                 let index = step_index(value);
@@ -91,17 +116,23 @@ impl NativeStreamState {
                 let Some(text) = delta.get("text").and_then(Value::as_str) else {
                     return Ok(Vec::new());
                 };
-                normalized_text_event(text, key)
-                    .map_or_else(|| Ok(Vec::new()), |event| Ok(vec![event]))
+                normalized_text_event(text, key, &mut self.text_secret_accumulator)
+                    .map(|event| event.into_iter().collect())
             }
             "step.stop" => {
+                let mut events = if step_type(value) == Some("function_call") {
+                    self.function_call_event(value, key)?
+                } else {
+                    Vec::new()
+                };
                 let usage = value
                     .get("step_usage")
                     .or_else(|| value.get("usage"))
                     .or_else(|| value.get("step").and_then(|step| step.get("usage")));
-                Ok(usage
-                    .and_then(interactions_usage)
-                    .map_or_else(Vec::new, |usage| vec![ProviderStreamEvent::Usage(usage)]))
+                if let Some(usage) = usage.and_then(interactions_usage) {
+                    events.push(ProviderStreamEvent::Usage(usage));
+                }
+                Ok(events)
             }
             "interaction.completed" => {
                 let status = value
@@ -127,7 +158,11 @@ impl NativeStreamState {
                     events.push(ProviderStreamEvent::Usage(usage));
                 }
                 events.push(ProviderStreamEvent::Completed {
-                    reason: CompletionReason::Stop,
+                    reason: if self.observed_tool_call {
+                        CompletionReason::ToolCalls
+                    } else {
+                        CompletionReason::Stop
+                    },
                 });
                 Ok(events)
             }
@@ -141,8 +176,53 @@ impl NativeStreamState {
         }
     }
 
+    fn function_call_event(
+        &mut self,
+        value: &Value,
+        key: &GeminiApiKey,
+    ) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
+        let index = step_index(value).ok_or_else(protocol_error)?;
+        if self.emitted_tool_steps.contains(&index) {
+            return Ok(Vec::new());
+        }
+        if self.emitted_tool_steps.len() >= MAX_INTERACTION_STEPS_PER_TURN {
+            return Err(protocol_error());
+        }
+        let step = value.get("step").unwrap_or(value);
+        let id = step
+            .get("id")
+            .or_else(|| step.get("call_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(protocol_error)?;
+        let name = step
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(protocol_error)?;
+        let arguments = step.get("arguments").cloned().ok_or_else(protocol_error)?;
+        let argument_bytes = arguments.to_string().len();
+        let total_argument_bytes = self.tool_argument_bytes.saturating_add(argument_bytes);
+        if total_argument_bytes > MAX_TOOL_ARGUMENT_BYTES_PER_TURN {
+            return Err(protocol_error());
+        }
+        if key.observe_text(&mut self.tool_id_secret_accumulator, id)
+            || key.observe_text(&mut self.tool_name_secret_accumulator, name)
+            || key.observe_structured(&mut self.tool_argument_secret_accumulator, &arguments)
+        {
+            return Err(protocol_error());
+        }
+        let event = ProviderStreamEvent::ToolCall(ProviderToolCall {
+            provider_call_id: ProviderCallId::new(id).map_err(|_| protocol_error())?,
+            tool_name: ToolName::new(name).map_err(|_| protocol_error())?,
+            arguments: ToolArguments::new(arguments).map_err(|_| protocol_error())?,
+        });
+        self.tool_argument_bytes = total_argument_bytes;
+        self.emitted_tool_steps.insert(index);
+        self.observed_tool_call = true;
+        Ok(vec![event])
+    }
+
     fn handle_generate_content(
-        &self,
+        &mut self,
         value: &Value,
         key: &GeminiApiKey,
     ) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
@@ -162,7 +242,8 @@ impl NativeStreamState {
                 {
                     for part in parts {
                         if let Some(text) = part.get("text").and_then(Value::as_str)
-                            && let Some(event) = normalized_text_event(text, key)
+                            && let Some(event) =
+                                normalized_text_event(text, key, &mut self.text_secret_accumulator)?
                         {
                             events.push(event);
                         }
@@ -212,18 +293,31 @@ fn status_update(value: &Value) -> Result<Vec<ProviderStreamEvent>, ProviderErro
     }
 }
 
-fn normalized_text_event(text: &str, key: &GeminiApiKey) -> Option<ProviderStreamEvent> {
+fn normalized_text_event(
+    text: &str,
+    key: &GeminiApiKey,
+    accumulator: &mut SecretAccumulator,
+) -> Result<Option<ProviderStreamEvent>, ProviderError> {
     let redacted = key.redact(text);
     if redacted.is_empty() {
-        return None;
+        return Ok(None);
+    }
+    if key.observe_text(accumulator, &redacted) {
+        return Err(protocol_error());
     }
     TextDelta::new(redacted)
         .ok()
         .map(ProviderStreamEvent::TextDelta)
+        .map_or(Ok(None), |event| Ok(Some(event)))
 }
 
-fn model_output_start_text(value: &Value, key: &GeminiApiKey) -> Vec<ProviderStreamEvent> {
-    value
+fn model_output_start_text(
+    value: &Value,
+    key: &GeminiApiKey,
+    accumulator: &mut SecretAccumulator,
+) -> Result<Vec<ProviderStreamEvent>, ProviderError> {
+    let mut events = Vec::new();
+    for text in value
         .get("step")
         .and_then(|step| step.get("content"))
         .and_then(Value::as_array)
@@ -231,8 +325,12 @@ fn model_output_start_text(value: &Value, key: &GeminiApiKey) -> Vec<ProviderStr
         .flatten()
         .filter(|content| content.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|content| content.get("text").and_then(Value::as_str))
-        .filter_map(|text| normalized_text_event(text, key))
-        .collect()
+    {
+        if let Some(event) = normalized_text_event(text, key, accumulator)? {
+            events.push(event);
+        }
+    }
+    Ok(events)
 }
 
 fn step_type(value: &Value) -> Option<&str> {
@@ -440,6 +538,262 @@ mod tests {
     }
 
     #[test]
+    fn interaction_function_call_count_is_bounded() {
+        let key = GeminiApiKey::new("secret-sentinel").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        for index in 0..MAX_INTERACTION_STEPS_PER_TURN {
+            let frame = serde_json::json!({
+                "event_type":"step.start",
+                "index":index,
+                "step":{
+                    "type":"function_call",
+                    "id":format!("call-{index}"),
+                    "name":"fs_read",
+                    "arguments":{"path":"README.md"}
+                }
+            });
+            assert!(
+                state
+                    .handle(
+                        SseFrame {
+                            event: None,
+                            data: frame.to_string(),
+                        },
+                        &key,
+                    )
+                    .is_ok()
+            );
+        }
+        let overflow = serde_json::json!({
+            "event_type":"step.start",
+            "index":MAX_INTERACTION_STEPS_PER_TURN,
+            "step":{
+                "type":"function_call",
+                "id":"call-overflow",
+                "name":"fs_read",
+                "arguments":{"path":"README.md"}
+            }
+        });
+
+        assert!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: overflow.to_string(),
+                    },
+                    &key,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn interaction_tool_argument_bytes_are_bounded_across_calls() {
+        let key = GeminiApiKey::new("secret-sentinel").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        let content = "a".repeat(60 * 1024);
+        for index in 0..4 {
+            let frame = serde_json::json!({
+                "event_type":"step.start",
+                "index":index,
+                "step":{
+                    "type":"function_call",
+                    "id":format!("call-{index}"),
+                    "name":"fs_write",
+                    "arguments":{"path":format!("file-{index}"),"content":content}
+                }
+            });
+            assert!(
+                state
+                    .handle(
+                        SseFrame {
+                            event: None,
+                            data: frame.to_string(),
+                        },
+                        &key,
+                    )
+                    .is_ok()
+            );
+        }
+        let overflow = serde_json::json!({
+            "event_type":"step.start",
+            "index":4,
+            "step":{
+                "type":"function_call",
+                "id":"call-overflow",
+                "name":"fs_write",
+                "arguments":{"path":"overflow","content":content}
+            }
+        });
+
+        assert!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: overflow.to_string(),
+                    },
+                    &key,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn structured_key_fragments_are_rejected_before_emission() {
+        let key = GeminiApiKey::new("split-key").expect("key");
+        let frame = serde_json::json!({
+            "event_type":"step.start",
+            "index":0,
+            "step":{
+                "type":"function_call",
+                "id":"call-1",
+                "name":"fs_write",
+                "arguments":{"path":"split-","content":"key"}
+            }
+        });
+
+        assert!(
+            NativeStreamState::new(Transport::Interactions)
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: frame.to_string(),
+                    },
+                    &key,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn key_split_across_text_events_is_rejected_before_second_emission() {
+        let key = GeminiApiKey::new("split-key").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        state
+            .handle(
+                SseFrame {
+                    event: None,
+                    data: r#"{"event_type":"step.start","index":1,"step":{"type":"model_output"}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("model output start");
+        let first = state
+            .handle(
+                SseFrame {
+                    event: None,
+                    data: r#"{"event_type":"step.delta","index":1,"delta":{"type":"text","text":"split-"}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("first safe fragment");
+
+        assert_eq!(
+            first,
+            vec![ProviderStreamEvent::TextDelta(
+                TextDelta::new("split-").expect("text")
+            )]
+        );
+        assert!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: r#"{"event_type":"step.delta","index":1,"delta":{"type":"text","text":"key"}}"#
+                            .to_owned(),
+                    },
+                    &key,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn key_split_across_tool_calls_is_rejected_before_second_emission() {
+        let key = GeminiApiKey::new("split-key").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        let first = serde_json::json!({
+            "event_type":"step.start",
+            "index":1,
+            "step":{
+                "type":"function_call",
+                "id":"call-1",
+                "name":"fs_read",
+                "arguments":{"path":"split-"}
+            }
+        });
+        let second = serde_json::json!({
+            "event_type":"step.start",
+            "index":2,
+            "step":{
+                "type":"function_call",
+                "id":"call-2",
+                "name":"fs_read",
+                "arguments":{"path":"key"}
+            }
+        });
+
+        assert_eq!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: first.to_string(),
+                    },
+                    &key,
+                )
+                .expect("first safe call")
+                .len(),
+            1
+        );
+        assert!(
+            state
+                .handle(
+                    SseFrame {
+                        event: None,
+                        data: second.to_string(),
+                    },
+                    &key,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn key_split_across_provider_call_ids_is_rejected_before_second_emission() {
+        let key = GeminiApiKey::new("split-credential").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        for (index, id) in [(1, "split-"), (2, "credential")] {
+            let frame = serde_json::json!({
+                "event_type":"step.start",
+                "index":index,
+                "step":{
+                    "type":"function_call",
+                    "id":id,
+                    "name":"fs_read",
+                    "arguments":{"path":"README.md"}
+                }
+            });
+            let result = state.handle(
+                SseFrame {
+                    event: None,
+                    data: frame.to_string(),
+                },
+                &key,
+            );
+            if index == 1 {
+                assert_eq!(result.expect("first safe call").len(), 1);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
     fn usage_is_a_snapshot_not_a_derived_total() {
         let value: Value = serde_json::from_str(
             r#"{"total_input_tokens":3,"total_output_tokens":5,"total_thought_tokens":7,"total_tokens":19}"#,
@@ -506,5 +860,46 @@ mod tests {
 
         assert_eq!(error.kind(), ProviderErrorKind::Protocol);
         assert_eq!(error.retry_advice(), RetryAdvice::Never);
+    }
+
+    #[test]
+    fn interaction_function_call_is_normalized_and_changes_completion_reason() {
+        let key = GeminiApiKey::new("gemini-secret-sentinel").expect("key");
+        let mut state = NativeStreamState::new(Transport::Interactions);
+        let call = state
+            .handle(
+                SseFrame {
+                    event: Some("step.start".to_owned()),
+                    data: r#"{"event_type":"step.start","index":2,"step":{"type":"function_call","id":"call-1","name":"fs_read","arguments":{"path":"README.md"}}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("function call");
+        let completed = state
+            .handle(
+                SseFrame {
+                    event: Some("interaction.completed".to_owned()),
+                    data: r#"{"event_type":"interaction.completed","interaction":{"status":"completed"}}"#
+                        .to_owned(),
+                },
+                &key,
+            )
+            .expect("completion");
+
+        let ProviderStreamEvent::ToolCall(call) = &call[0] else {
+            panic!("expected normalized tool call");
+        };
+        assert_eq!(call.provider_call_id.as_str(), "call-1");
+        assert_eq!(
+            call.arguments.to_value(),
+            serde_json::json!({"path":"README.md"})
+        );
+        assert_eq!(
+            completed,
+            vec![ProviderStreamEvent::Completed {
+                reason: CompletionReason::ToolCalls
+            }]
+        );
     }
 }

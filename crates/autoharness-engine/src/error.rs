@@ -3,6 +3,7 @@ use std::fmt::{self, Display, Formatter};
 
 use autoharness_domain::{
     AttemptId, ClassifiedError, CommandId, ErrorClass, EventId, InputId, RetryAdvice, SessionId,
+    ToolCallId,
 };
 
 /// Expected rejection of a command that is invalid for current session state.
@@ -62,6 +63,27 @@ pub enum CommandRejection {
         session_id: SessionId,
         /// Missing attempt identity.
         attempt_id: AttemptId,
+    },
+    /// A tool-call identity already exists in the session.
+    DuplicateToolCall {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Conflicting tool-call identity.
+        tool_call_id: ToolCallId,
+    },
+    /// A command referenced an unknown tool call.
+    ToolCallNotFound {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Missing tool-call identity.
+        tool_call_id: ToolCallId,
+    },
+    /// A tool call does not permit the requested lifecycle transition.
+    InvalidToolCallState {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Tool call in incompatible state.
+        tool_call_id: ToolCallId,
     },
     /// An attempt does not permit the requested lifecycle transition.
     InvalidAttemptState {
@@ -152,6 +174,27 @@ impl Display for CommandRejection {
                 formatter,
                 "attempt {attempt_id} cannot make that transition in session {session_id}"
             ),
+            Self::DuplicateToolCall {
+                session_id,
+                tool_call_id,
+            } => write!(
+                formatter,
+                "tool call {tool_call_id} already exists in session {session_id}"
+            ),
+            Self::ToolCallNotFound {
+                session_id,
+                tool_call_id,
+            } => write!(
+                formatter,
+                "tool call {tool_call_id} does not exist in session {session_id}"
+            ),
+            Self::InvalidToolCallState {
+                session_id,
+                tool_call_id,
+            } => write!(
+                formatter,
+                "tool call {tool_call_id} cannot make that transition in session {session_id}"
+            ),
             Self::RetryNotAllowed {
                 session_id,
                 attempt_id,
@@ -183,12 +226,15 @@ impl ClassifiedError for CommandRejection {
             Self::SessionNotFound { .. }
             | Self::InputNotFound { .. }
             | Self::AttemptNotFound { .. } => ErrorClass::NotFound,
+            Self::ToolCallNotFound { .. } => ErrorClass::NotFound,
             Self::DuplicateCommand { .. }
             | Self::SessionAlreadyExists { .. }
             | Self::DuplicateInput { .. }
             | Self::InputAlreadyPromoted { .. }
             | Self::DuplicateAttempt { .. }
             | Self::InvalidAttemptState { .. }
+            | Self::DuplicateToolCall { .. }
+            | Self::InvalidToolCallState { .. }
             | Self::RetryNotAllowed { .. } => ErrorClass::Conflict,
             Self::WrongSession { .. }
             | Self::ModelNotSelected { .. }
@@ -226,6 +272,33 @@ pub enum ReplayError {
         session_id: SessionId,
         /// Repeated attempt identity.
         attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// A tool-call identity appears more than once in session history.
+    DuplicateToolCall {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Repeated tool-call identity.
+        tool_call_id: ToolCallId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// A tool lifecycle event referenced an unknown call.
+    UnknownToolCall {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Missing tool-call identity.
+        tool_call_id: ToolCallId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// Tool-call history contains an invalid lifecycle transition.
+    IllegalToolCallTransition {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Tool call in incompatible state.
+        tool_call_id: ToolCallId,
         /// Event being validated.
         event_id: EventId,
     },
@@ -423,6 +496,30 @@ impl Display for ReplayError {
             } => write!(
                 formatter,
                 "event {event_id} references unknown input {input_id} in session {session_id}"
+            ),
+            Self::DuplicateToolCall {
+                session_id,
+                tool_call_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} creates duplicate tool call {tool_call_id} in session {session_id}"
+            ),
+            Self::UnknownToolCall {
+                session_id,
+                tool_call_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} references unknown tool call {tool_call_id} in session {session_id}"
+            ),
+            Self::IllegalToolCallTransition {
+                session_id,
+                tool_call_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} makes an illegal transition for tool call {tool_call_id} in session {session_id}"
             ),
             Self::UnknownAttempt {
                 session_id,

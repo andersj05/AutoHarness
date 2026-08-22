@@ -17,8 +17,10 @@ autoharness-domain.workspace = true
 futures-core.workspace = true
 futures-util = { workspace = true, optional = true }
 serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
+zeroize.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

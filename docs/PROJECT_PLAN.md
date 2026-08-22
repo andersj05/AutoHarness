@@ -143,13 +143,20 @@ Deliverables:
 - Filesystem, process, and HTTP capability interfaces.
 - Bounded output capture and artifact storage.
 - Durable tool-call lifecycle and crash recovery.
-- Per-run limits for turns, time, tokens, cost, output, and concurrency.
+- Per-run limits for turns, time, reported tokens, output, and concurrency.
+- Explicit deferral of monetary limits until trusted durable pricing snapshots exist.
 
 Exit criteria:
 
 - Every external side effect is attributable to a durable tool call and permission decision.
 - Interrupted calls settle deterministically as completed, failed, cancelled, or unknown with an explicit recovery policy.
 - A model cannot acquire a capability merely by emitting a differently shaped tool call.
+
+**Completion:** Implemented and locally verified on 2026-08-21.
+
+Completion is supported by stable schema-shape tests, engine lifecycle and replay tests, filesystem, process, HTTP, permission, budget, and artifact tests, fragmented and aggregate-bounded Gemini and OpenAI-compatible function-call fixtures, scrollable exact-detail terminal permission tests, explicit interruption recovery tests, and composed SQLite-backed allow, execute, continue, shutdown, and reopen tests.
+The security-remediated slice asks before every default local capability, conservatively marks ambiguous started effects unknown, prevents child tool authority from outliving its attempt during live execution and recovery, rejects Windows batch programs, and blocks reconstructable provider credentials within or across normalized events.
+No live Gemini or router function-calling request has been exercised, so live service compatibility remains separate pre-release evidence.
 
 ### Phase 4: Persistent context and memory
 
@@ -212,12 +219,12 @@ Exit criteria:
 
 ## Next implementation order
 
-Phases 1 and 2 established the local terminal, Gemini and router adapters, shared provider policy, durable storage and catalog caching, replay, and tracing paths.
+Phases 1 through 3 established the local terminal, Gemini and router adapters, shared provider policy, durable storage and catalog caching, replay, tracing, and safe resumable tool execution paths.
 Proceed in this order:
 
 1. Add safe monotonic markers for deferred startup, dispatch, and rendered-delta latency, then record the checked-in benchmark suite on an approved reference machine.
 2. Decide the license and contribution policy before the first public release.
-3. Begin Phase 3 with versioned tool schemas and the capability-based permission boundary.
+3. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 

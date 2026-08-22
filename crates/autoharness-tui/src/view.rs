@@ -40,11 +40,67 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         render_standard(frame, area, model);
     }
 
-    if model.credential.open {
+    if model.focus == Focus::Permission {
+        render_permission(frame, area, model);
+    } else if model.credential.open {
         render_credential(frame, area, model);
     } else if model.picker.open {
         render_picker(frame, area, model);
     }
+}
+
+fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = credential_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Tool permission ")
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let Some(request) = model.session.permission_requests.first() else {
+        return;
+    };
+    let pending = model.answering_permissions.contains(&request.tool_call_id);
+    let help = if pending {
+        "Saving answer..."
+    } else {
+        "Up/Down inspect  Y allow this exact call once  N/Esc deny"
+    };
+    let mut lines = vec![
+        Line::styled(
+            "A model requested an external capability.",
+            Style::default().fg(Color::White),
+        ),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Tool: ", MUTED_STYLE),
+            Span::raw(display_safe(&request.tool_name)),
+        ]),
+        Line::from(vec![
+            Span::styled("Capability: ", MUTED_STYLE),
+            Span::raw(display_safe(&request.capability)),
+        ]),
+        Line::from(vec![
+            Span::styled("Resource: ", MUTED_STYLE),
+            Span::raw(display_safe(&request.resource)),
+        ]),
+        Line::from(""),
+    ];
+    lines.extend(request.details.iter().map(|detail| {
+        Line::from(vec![
+            Span::styled(format!("{}: ", display_safe(&detail.label)), MUTED_STYLE),
+            Span::raw(display_safe(&detail.value)),
+        ])
+    }));
+    lines.push(Line::from(""));
+    lines.push(Line::styled(help, Style::default().fg(Color::Yellow)));
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .scroll((model.permission_scroll, 0)),
+        inner,
+    );
 }
 
 fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {

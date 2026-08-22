@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use autoharness_domain::{
     AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload, DeliveryMode,
-    EVENT_SCHEMA_V1, EventEnvelope, EventId, EventPayload, InputId, ModelRef, PromptText,
-    ResponseText, RetryAdvice, SessionId, SessionSequence, UsageSnapshot,
+    EVENT_SCHEMA_V1, EventEnvelope, EventId, EventPayload, InputId, ModelRef, PermissionAnswer,
+    PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RetryAdvice, RunLimits,
+    SessionId, SessionSequence, TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput,
+    UsageSnapshot,
 };
 
 use crate::{CommandRejection, ReplayError};
@@ -50,6 +52,8 @@ pub enum AttemptStatus {
     Prepared,
     /// The provider request was dispatched and may be producing output.
     InFlight,
+    /// A provider turn completed and durable tool calls are awaiting settlement.
+    AwaitingTools,
     /// Cancellation is durable and the provider task is being stopped.
     CancellationRequested,
     /// The provider interaction completed successfully.
@@ -73,6 +77,98 @@ impl AttemptStatus {
     }
 }
 
+/// Durable lifecycle of one exact tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallStatus {
+    /// The model call and trusted capability plan are durable.
+    Proposed,
+    /// Policy requires a human answer.
+    PermissionPending,
+    /// The exact call has permission to execute once.
+    Authorized,
+    /// Denial is durable and terminal settlement is pending.
+    DeniedPending,
+    /// The external effect crossed its durable start boundary.
+    Running,
+    /// Execution completed successfully.
+    Completed,
+    /// Execution failed with safe durable details.
+    Failed,
+    /// Permission denied the call before execution.
+    Denied,
+    /// Cooperative cancellation settled the call.
+    Cancelled,
+    /// Recovery cannot determine the external outcome.
+    Unknown,
+}
+
+impl ToolCallStatus {
+    /// Returns whether no further lifecycle event may apply.
+    #[must_use]
+    pub const fn is_settled(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Denied | Self::Cancelled | Self::Unknown
+        )
+    }
+}
+
+/// One tool call reconstructed only from durable session events.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolCallProjection {
+    attempt_id: AttemptId,
+    call: ToolCallSpec,
+    status: ToolCallStatus,
+    policy_decision: Option<(PermissionDecisionId, PermissionOutcome)>,
+    human_answer: Option<(PermissionDecisionId, PermissionAnswer)>,
+    output: Option<ToolOutput>,
+    failure: Option<AttemptFailure>,
+}
+
+impl ToolCallProjection {
+    /// Returns the owning agent attempt.
+    #[must_use]
+    pub const fn attempt_id(&self) -> &AttemptId {
+        &self.attempt_id
+    }
+
+    /// Returns the exact frozen model call and trusted capability.
+    #[must_use]
+    pub const fn call(&self) -> &ToolCallSpec {
+        &self.call
+    }
+
+    /// Returns current durable lifecycle state.
+    #[must_use]
+    pub const fn status(&self) -> ToolCallStatus {
+        self.status
+    }
+
+    /// Returns the trusted policy decision when evaluated.
+    #[must_use]
+    pub const fn policy_decision(&self) -> Option<&(PermissionDecisionId, PermissionOutcome)> {
+        self.policy_decision.as_ref()
+    }
+
+    /// Returns the human answer for an `ask` decision.
+    #[must_use]
+    pub const fn human_answer(&self) -> Option<&(PermissionDecisionId, PermissionAnswer)> {
+        self.human_answer.as_ref()
+    }
+
+    /// Returns bounded successful output.
+    #[must_use]
+    pub const fn output(&self) -> Option<&ToolOutput> {
+        self.output.as_ref()
+    }
+
+    /// Returns a safe terminal failure.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&AttemptFailure> {
+        self.failure.as_ref()
+    }
+}
+
 /// One provider attempt reconstructed exclusively from ordered session events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttemptProjection {
@@ -84,6 +180,9 @@ pub struct AttemptProjection {
     text: Vec<ResponseText>,
     usage: Option<UsageSnapshot>,
     failure: Option<AttemptFailure>,
+    run_limits: Option<RunLimits>,
+    turns_started: u32,
+    started_at: Option<TimestampMillis>,
 }
 
 impl AttemptProjection {
@@ -146,6 +245,24 @@ impl AttemptProjection {
         self.failure.as_ref()
     }
 
+    /// Returns immutable run limits once configured.
+    #[must_use]
+    pub const fn run_limits(&self) -> Option<RunLimits> {
+        self.run_limits
+    }
+
+    /// Returns the number of durable provider-turn dispatch boundaries.
+    #[must_use]
+    pub const fn turns_started(&self) -> u32 {
+        self.turns_started
+    }
+
+    /// Returns the durable wall-clock start used to reconstruct elapsed run time.
+    #[must_use]
+    pub const fn started_at(&self) -> Option<TimestampMillis> {
+        self.started_at
+    }
+
     fn can_retry(&self) -> bool {
         match self.status {
             AttemptStatus::Failed => self
@@ -155,6 +272,7 @@ impl AttemptProjection {
             AttemptStatus::Cancelled | AttemptStatus::Unknown => true,
             AttemptStatus::Prepared
             | AttemptStatus::InFlight
+            | AttemptStatus::AwaitingTools
             | AttemptStatus::CancellationRequested
             | AttemptStatus::Completed => false,
         }
@@ -171,6 +289,8 @@ pub struct SessionAggregate {
     admitted_input_ids: BTreeSet<InputId>,
     attempts: Vec<AttemptProjection>,
     attempt_indexes: BTreeMap<AttemptId, usize>,
+    tool_calls: Vec<ToolCallProjection>,
+    tool_call_indexes: BTreeMap<ToolCallId, usize>,
     applied_event_ids: BTreeSet<EventId>,
     applied_command_ids: BTreeSet<CommandId>,
     last_sequence: Option<SessionSequence>,
@@ -188,6 +308,8 @@ impl SessionAggregate {
             admitted_input_ids: BTreeSet::new(),
             attempts: Vec::new(),
             attempt_indexes: BTreeMap::new(),
+            tool_calls: Vec::new(),
+            tool_call_indexes: BTreeMap::new(),
             applied_event_ids: BTreeSet::new(),
             applied_command_ids: BTreeSet::new(),
             last_sequence: None,
@@ -374,7 +496,10 @@ impl SessionAggregate {
                 }
             }
             CommandPayload::RequestAttemptCancellation { attempt_id, .. } => {
-                self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
+                self.require_attempt_status(
+                    attempt_id,
+                    &[AttemptStatus::InFlight, AttemptStatus::AwaitingTools],
+                )?;
                 EventPayload::AttemptCancellationRequested {
                     attempt_id: attempt_id.clone(),
                 }
@@ -384,9 +509,11 @@ impl SessionAggregate {
                     attempt_id,
                     &[
                         AttemptStatus::InFlight,
+                        AttemptStatus::AwaitingTools,
                         AttemptStatus::CancellationRequested,
                     ],
                 )?;
+                self.require_attempt_tool_calls_settled(attempt_id)?;
                 EventPayload::AttemptCompleted {
                     attempt_id: attempt_id.clone(),
                 }
@@ -401,9 +528,11 @@ impl SessionAggregate {
                     &[
                         AttemptStatus::Prepared,
                         AttemptStatus::InFlight,
+                        AttemptStatus::AwaitingTools,
                         AttemptStatus::CancellationRequested,
                     ],
                 )?;
+                self.require_attempt_tool_calls_settled(attempt_id)?;
                 EventPayload::AttemptFailed {
                     attempt_id: attempt_id.clone(),
                     failure: failure.clone(),
@@ -411,6 +540,7 @@ impl SessionAggregate {
             }
             CommandPayload::CancelAttempt { attempt_id, .. } => {
                 self.require_attempt_status(attempt_id, &[AttemptStatus::CancellationRequested])?;
+                self.require_attempt_tool_calls_settled(attempt_id)?;
                 EventPayload::AttemptCancelled {
                     attempt_id: attempt_id.clone(),
                 }
@@ -423,7 +553,187 @@ impl SessionAggregate {
                         AttemptStatus::CancellationRequested,
                     ],
                 )?;
+                self.require_attempt_tool_calls_settled(attempt_id)?;
                 EventPayload::AttemptMarkedUnknown {
+                    attempt_id: attempt_id.clone(),
+                }
+            }
+            CommandPayload::ConfigureRunBudget {
+                attempt_id, limits, ..
+            } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::Prepared])?;
+                if self
+                    .attempt(attempt_id)
+                    .is_some_and(|attempt| attempt.run_limits.is_some())
+                {
+                    return Err(CommandRejection::InvalidAttemptState {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    });
+                }
+                EventPayload::RunBudgetConfigured {
+                    attempt_id: attempt_id.clone(),
+                    limits: *limits,
+                }
+            }
+            CommandPayload::StartRunTurn { attempt_id, .. } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
+                let attempt = self
+                    .attempt(attempt_id)
+                    .expect("attempt status validation guarantees presence");
+                let turn = attempt.turns_started.checked_add(1).ok_or_else(|| {
+                    CommandRejection::InvalidAttemptState {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    }
+                })?;
+                if attempt
+                    .run_limits
+                    .is_some_and(|limits| turn > limits.max_turns)
+                {
+                    return Err(CommandRejection::InvalidAttemptState {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    });
+                }
+                EventPayload::RunTurnStarted {
+                    attempt_id: attempt_id.clone(),
+                    turn,
+                }
+            }
+            CommandPayload::ProposeToolCall {
+                attempt_id, call, ..
+            } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
+                if self.tool_call_indexes.contains_key(&call.tool_call_id) {
+                    return Err(CommandRejection::DuplicateToolCall {
+                        session_id: self.session_id.clone(),
+                        tool_call_id: call.tool_call_id.clone(),
+                    });
+                }
+                EventPayload::ToolCallProposed {
+                    attempt_id: attempt_id.clone(),
+                    call: call.clone(),
+                }
+            }
+            CommandPayload::RecordToolPermission {
+                tool_call_id,
+                decision_id,
+                outcome,
+                ..
+            } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::Proposed])?;
+                EventPayload::ToolPermissionRecorded {
+                    tool_call_id: tool_call_id.clone(),
+                    decision_id: decision_id.clone(),
+                    outcome: *outcome,
+                }
+            }
+            CommandPayload::AnswerToolPermission {
+                tool_call_id,
+                decision_id,
+                answer,
+                ..
+            } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::PermissionPending])?;
+                EventPayload::ToolPermissionAnswered {
+                    tool_call_id: tool_call_id.clone(),
+                    decision_id: decision_id.clone(),
+                    answer: *answer,
+                }
+            }
+            CommandPayload::StartToolCall { tool_call_id, .. } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::Authorized])?;
+                let attempt_id = self
+                    .tool_call(tool_call_id)
+                    .expect("tool-call status validation guarantees presence")
+                    .attempt_id()
+                    .clone();
+                self.require_attempt_status(
+                    &attempt_id,
+                    &[AttemptStatus::InFlight, AttemptStatus::AwaitingTools],
+                )?;
+                EventPayload::ToolCallStarted {
+                    tool_call_id: tool_call_id.clone(),
+                }
+            }
+            CommandPayload::CompleteToolCall {
+                tool_call_id,
+                output,
+                ..
+            } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::Running])?;
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: tool_call_id.clone(),
+                    output: output.clone(),
+                }
+            }
+            CommandPayload::FailToolCall {
+                tool_call_id,
+                failure,
+                ..
+            } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::Running])?;
+                EventPayload::ToolCallFailed {
+                    tool_call_id: tool_call_id.clone(),
+                    failure: failure.clone(),
+                }
+            }
+            CommandPayload::DenyToolCall { tool_call_id, .. } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::DeniedPending])?;
+                EventPayload::ToolCallDenied {
+                    tool_call_id: tool_call_id.clone(),
+                }
+            }
+            CommandPayload::CancelToolCall { tool_call_id, .. } => {
+                self.require_tool_call_status(
+                    tool_call_id,
+                    &[
+                        ToolCallStatus::Proposed,
+                        ToolCallStatus::PermissionPending,
+                        ToolCallStatus::Authorized,
+                        ToolCallStatus::Running,
+                    ],
+                )?;
+                EventPayload::ToolCallCancelled {
+                    tool_call_id: tool_call_id.clone(),
+                }
+            }
+            CommandPayload::MarkToolCallUnknown { tool_call_id, .. } => {
+                self.require_tool_call_status(tool_call_id, &[ToolCallStatus::Running])?;
+                EventPayload::ToolCallMarkedUnknown {
+                    tool_call_id: tool_call_id.clone(),
+                }
+            }
+            CommandPayload::PauseAttemptForTools { attempt_id, .. } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
+                if !self
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.attempt_id == *attempt_id)
+                {
+                    return Err(CommandRejection::InvalidAttemptState {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    });
+                }
+                EventPayload::AttemptPausedForTools {
+                    attempt_id: attempt_id.clone(),
+                }
+            }
+            CommandPayload::ResumeAttemptAfterTools { attempt_id, .. } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::AwaitingTools])?;
+                if self
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.attempt_id == *attempt_id && !call.status.is_settled())
+                {
+                    return Err(CommandRejection::InvalidAttemptState {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    });
+                }
+                EventPayload::AttemptResumedAfterTools {
                     attempt_id: attempt_id.clone(),
                 }
             }
@@ -490,6 +800,20 @@ impl SessionAggregate {
             .and_then(|index| self.attempts.get(*index))
     }
 
+    /// Returns tool calls in durable proposal order.
+    #[must_use]
+    pub fn tool_calls(&self) -> &[ToolCallProjection] {
+        &self.tool_calls
+    }
+
+    /// Returns one tool call by stable local identity.
+    #[must_use]
+    pub fn tool_call(&self, tool_call_id: &ToolCallId) -> Option<&ToolCallProjection> {
+        self.tool_call_indexes
+            .get(tool_call_id)
+            .and_then(|index| self.tool_calls.get(*index))
+    }
+
     /// Returns the last applied event sequence.
     #[must_use]
     pub const fn last_sequence(&self) -> Option<SessionSequence> {
@@ -530,6 +854,45 @@ impl SessionAggregate {
                 session_id: self.session_id.clone(),
                 attempt_id: attempt_id.clone(),
             })
+        }
+    }
+
+    fn require_tool_call_status(
+        &self,
+        tool_call_id: &ToolCallId,
+        allowed: &[ToolCallStatus],
+    ) -> Result<(), CommandRejection> {
+        let call =
+            self.tool_call(tool_call_id)
+                .ok_or_else(|| CommandRejection::ToolCallNotFound {
+                    session_id: self.session_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                })?;
+        if allowed.contains(&call.status) {
+            Ok(())
+        } else {
+            Err(CommandRejection::InvalidToolCallState {
+                session_id: self.session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+            })
+        }
+    }
+
+    fn require_attempt_tool_calls_settled(
+        &self,
+        attempt_id: &AttemptId,
+    ) -> Result<(), CommandRejection> {
+        if self
+            .tool_calls
+            .iter()
+            .any(|call| call.attempt_id() == attempt_id && !call.status().is_settled())
+        {
+            Err(CommandRejection::InvalidAttemptState {
+                session_id: self.session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -648,6 +1011,9 @@ impl SessionAggregate {
                     text: Vec::new(),
                     usage: None,
                     failure: None,
+                    run_limits: None,
+                    turns_started: 0,
+                    started_at: None,
                 });
                 self.attempt_indexes.insert(attempt_id.clone(), index);
             }
@@ -658,6 +1024,7 @@ impl SessionAggregate {
                     &[AttemptStatus::Prepared],
                     |attempt| {
                         attempt.status = AttemptStatus::InFlight;
+                        attempt.started_at = Some(event.occurred_at());
                     },
                 )?;
             }
@@ -687,18 +1054,20 @@ impl SessionAggregate {
                 self.transition_attempt(
                     event,
                     attempt_id,
-                    &[AttemptStatus::InFlight],
+                    &[AttemptStatus::InFlight, AttemptStatus::AwaitingTools],
                     |attempt| {
                         attempt.status = AttemptStatus::CancellationRequested;
                     },
                 )?;
             }
             EventPayload::AttemptCompleted { attempt_id } => {
+                self.require_replay_attempt_tool_calls_settled(event, attempt_id)?;
                 self.transition_attempt(
                     event,
                     attempt_id,
                     &[
                         AttemptStatus::InFlight,
+                        AttemptStatus::AwaitingTools,
                         AttemptStatus::CancellationRequested,
                     ],
                     |attempt| attempt.status = AttemptStatus::Completed,
@@ -708,12 +1077,14 @@ impl SessionAggregate {
                 attempt_id,
                 failure,
             } => {
+                self.require_replay_attempt_tool_calls_settled(event, attempt_id)?;
                 self.transition_attempt(
                     event,
                     attempt_id,
                     &[
                         AttemptStatus::Prepared,
                         AttemptStatus::InFlight,
+                        AttemptStatus::AwaitingTools,
                         AttemptStatus::CancellationRequested,
                     ],
                     |attempt| {
@@ -723,6 +1094,7 @@ impl SessionAggregate {
                 )?;
             }
             EventPayload::AttemptCancelled { attempt_id } => {
+                self.require_replay_attempt_tool_calls_settled(event, attempt_id)?;
                 self.transition_attempt(
                     event,
                     attempt_id,
@@ -731,6 +1103,7 @@ impl SessionAggregate {
                 )?;
             }
             EventPayload::AttemptMarkedUnknown { attempt_id } => {
+                self.require_replay_attempt_tool_calls_settled(event, attempt_id)?;
                 self.transition_attempt(
                     event,
                     attempt_id,
@@ -739,6 +1112,240 @@ impl SessionAggregate {
                         AttemptStatus::CancellationRequested,
                     ],
                     |attempt| attempt.status = AttemptStatus::Unknown,
+                )?;
+            }
+            EventPayload::RunBudgetConfigured { attempt_id, limits } => {
+                if self
+                    .attempt(attempt_id)
+                    .is_some_and(|attempt| attempt.run_limits.is_some())
+                {
+                    return Err(ReplayError::IllegalAttemptTransition {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_attempt(
+                    event,
+                    attempt_id,
+                    &[AttemptStatus::Prepared],
+                    |attempt| {
+                        attempt.run_limits = Some(*limits);
+                    },
+                )?;
+            }
+            EventPayload::RunTurnStarted { attempt_id, turn } => {
+                let expected = self
+                    .attempt(attempt_id)
+                    .and_then(|attempt| attempt.turns_started.checked_add(1));
+                if expected != Some(*turn)
+                    || self.attempt(attempt_id).is_some_and(|attempt| {
+                        attempt
+                            .run_limits
+                            .is_some_and(|limits| *turn > limits.max_turns)
+                    })
+                {
+                    return Err(ReplayError::IllegalAttemptTransition {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_attempt(
+                    event,
+                    attempt_id,
+                    &[AttemptStatus::InFlight],
+                    |attempt| {
+                        attempt.turns_started = *turn;
+                    },
+                )?;
+            }
+            EventPayload::ToolCallProposed { attempt_id, call } => {
+                self.require_created_for_replay(event)?;
+                if self.tool_call_indexes.contains_key(&call.tool_call_id) {
+                    return Err(ReplayError::DuplicateToolCall {
+                        session_id: self.session_id.clone(),
+                        tool_call_id: call.tool_call_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                if self
+                    .attempt(attempt_id)
+                    .is_none_or(|attempt| attempt.status != AttemptStatus::InFlight)
+                {
+                    return Err(ReplayError::IllegalAttemptTransition {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                let index = self.tool_calls.len();
+                self.tool_calls.push(ToolCallProjection {
+                    attempt_id: attempt_id.clone(),
+                    call: call.clone(),
+                    status: ToolCallStatus::Proposed,
+                    policy_decision: None,
+                    human_answer: None,
+                    output: None,
+                    failure: None,
+                });
+                self.tool_call_indexes
+                    .insert(call.tool_call_id.clone(), index);
+            }
+            EventPayload::ToolPermissionRecorded {
+                tool_call_id,
+                decision_id,
+                outcome,
+            } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::Proposed],
+                    |call| {
+                        call.policy_decision = Some((decision_id.clone(), *outcome));
+                        call.status = match outcome {
+                            PermissionOutcome::Deny => ToolCallStatus::DeniedPending,
+                            PermissionOutcome::Ask => ToolCallStatus::PermissionPending,
+                            PermissionOutcome::Allow => ToolCallStatus::Authorized,
+                        };
+                    },
+                )?;
+            }
+            EventPayload::ToolPermissionAnswered {
+                tool_call_id,
+                decision_id,
+                answer,
+            } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::PermissionPending],
+                    |call| {
+                        call.human_answer = Some((decision_id.clone(), *answer));
+                        call.status = match answer {
+                            PermissionAnswer::AllowOnce => ToolCallStatus::Authorized,
+                            PermissionAnswer::Deny => ToolCallStatus::DeniedPending,
+                        };
+                    },
+                )?;
+            }
+            EventPayload::ToolCallStarted { tool_call_id } => {
+                let parent_is_active = self
+                    .tool_call(tool_call_id)
+                    .and_then(|call| self.attempt(call.attempt_id()))
+                    .is_some_and(|attempt| {
+                        matches!(
+                            attempt.status(),
+                            AttemptStatus::InFlight | AttemptStatus::AwaitingTools
+                        )
+                    });
+                if !parent_is_active {
+                    return Err(ReplayError::IllegalToolCallTransition {
+                        session_id: self.session_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::Authorized],
+                    |call| call.status = ToolCallStatus::Running,
+                )?;
+            }
+            EventPayload::ToolCallCompleted {
+                tool_call_id,
+                output,
+            } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::Running],
+                    |call| {
+                        call.status = ToolCallStatus::Completed;
+                        call.output = Some(output.clone());
+                    },
+                )?;
+            }
+            EventPayload::ToolCallFailed {
+                tool_call_id,
+                failure,
+            } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::Running],
+                    |call| {
+                        call.status = ToolCallStatus::Failed;
+                        call.failure = Some(failure.clone());
+                    },
+                )?;
+            }
+            EventPayload::ToolCallDenied { tool_call_id } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::DeniedPending],
+                    |call| call.status = ToolCallStatus::Denied,
+                )?;
+            }
+            EventPayload::ToolCallCancelled { tool_call_id } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[
+                        ToolCallStatus::Proposed,
+                        ToolCallStatus::PermissionPending,
+                        ToolCallStatus::Authorized,
+                        ToolCallStatus::Running,
+                    ],
+                    |call| call.status = ToolCallStatus::Cancelled,
+                )?;
+            }
+            EventPayload::ToolCallMarkedUnknown { tool_call_id } => {
+                self.transition_tool_call(
+                    event,
+                    tool_call_id,
+                    &[ToolCallStatus::Running],
+                    |call| call.status = ToolCallStatus::Unknown,
+                )?;
+            }
+            EventPayload::AttemptPausedForTools { attempt_id } => {
+                if !self
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.attempt_id == *attempt_id)
+                {
+                    return Err(ReplayError::IllegalAttemptTransition {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_attempt(
+                    event,
+                    attempt_id,
+                    &[AttemptStatus::InFlight],
+                    |attempt| attempt.status = AttemptStatus::AwaitingTools,
+                )?;
+            }
+            EventPayload::AttemptResumedAfterTools { attempt_id } => {
+                if self
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.attempt_id == *attempt_id && !call.status.is_settled())
+                {
+                    return Err(ReplayError::IllegalAttemptTransition {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_attempt(
+                    event,
+                    attempt_id,
+                    &[AttemptStatus::AwaitingTools],
+                    |attempt| attempt.status = AttemptStatus::InFlight,
                 )?;
             }
         }
@@ -776,6 +1383,54 @@ impl SessionAggregate {
             });
         }
         transition(attempt);
+        Ok(())
+    }
+
+    fn require_replay_attempt_tool_calls_settled(
+        &self,
+        event: &EventEnvelope,
+        attempt_id: &AttemptId,
+    ) -> Result<(), ReplayError> {
+        if self
+            .tool_calls
+            .iter()
+            .any(|call| call.attempt_id() == attempt_id && !call.status().is_settled())
+        {
+            Err(ReplayError::IllegalAttemptTransition {
+                session_id: self.session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                event_id: event.event_id().clone(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn transition_tool_call(
+        &mut self,
+        event: &EventEnvelope,
+        tool_call_id: &ToolCallId,
+        allowed: &[ToolCallStatus],
+        transition: impl FnOnce(&mut ToolCallProjection),
+    ) -> Result<(), ReplayError> {
+        let index = self
+            .tool_call_indexes
+            .get(tool_call_id)
+            .copied()
+            .ok_or_else(|| ReplayError::UnknownToolCall {
+                session_id: self.session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                event_id: event.event_id().clone(),
+            })?;
+        let call = &mut self.tool_calls[index];
+        if !allowed.contains(&call.status) {
+            return Err(ReplayError::IllegalToolCallTransition {
+                session_id: self.session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                event_id: event.event_id().clone(),
+            });
+        }
+        transition(call);
         Ok(())
     }
 

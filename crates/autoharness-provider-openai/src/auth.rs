@@ -2,7 +2,8 @@ use std::env;
 use std::fmt::{self, Debug, Formatter};
 
 use autoharness_domain::RetryAdvice;
-use autoharness_provider::{ProviderError, ProviderErrorKind};
+use autoharness_provider::{ProviderError, ProviderErrorKind, SecretAccumulator};
+use serde_json::Value;
 use zeroize::Zeroizing;
 
 /// Environment variable containing the configured router credential.
@@ -60,6 +61,32 @@ impl RouterCredential {
         value.contains(self.expose())
             || value.contains(self.percent_encoded.as_str())
             || value.contains(self.percent_encoded_lower_hex.as_str())
+    }
+
+    pub(crate) fn observe_text(&self, accumulator: &mut SecretAccumulator, value: &str) -> bool {
+        accumulator.observe_text(
+            value,
+            &[
+                self.expose(),
+                self.percent_encoded.as_str(),
+                self.percent_encoded_lower_hex.as_str(),
+            ],
+        )
+    }
+
+    pub(crate) fn observe_structured(
+        &self,
+        accumulator: &mut SecretAccumulator,
+        value: &Value,
+    ) -> bool {
+        accumulator.observe_structured(
+            value,
+            &[
+                self.expose(),
+                self.percent_encoded.as_str(),
+                self.percent_encoded_lower_hex.as_str(),
+            ],
+        )
     }
 
     pub(crate) fn redact(&self, value: &str) -> String {

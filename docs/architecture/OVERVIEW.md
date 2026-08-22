@@ -2,7 +2,7 @@
 
 **Status:** Proposed baseline
 
-**Last updated:** 2026-08-20
+**Last updated:** 2026-08-21
 
 ## System shape
 
@@ -16,12 +16,12 @@ AutoHarness begins as a modular monolith distributed as one native executable. T
                                          │      │
                               ports      │      │ ports
                                          v      v
-                                  ┌──────────┐ ┌──────────────┐
-                                  │ Provider │ │ Durable store │
-                                  │ adapters │ │ + artifacts   │
-                                  └────┬─────┘ └──────────────┘
-                                       │
-                              Gemini / router / future providers
+                         ┌──────────────┐ ┌──────────────┐
+                         │ Providers +  │ │ Durable store │
+                         │ tool runtime │ │ + artifacts   │
+                         └──────┬───────┘ └──────────────┘
+                                │
+             Gemini / router / filesystem / process / HTTP
 
 Durable events ──> context + memory ──> evaluations ──> candidates
       ^                                                    │
@@ -44,6 +44,7 @@ Durable events ──> context + memory ──> evaluations ──> candidates
 crates/
   autoharness-domain/              # IDs, values, commands, events, errors
   autoharness-engine/              # session state machines and scheduling
+  autoharness-tool/                # permission policy, budgets, capability ports
   autoharness-protocol/            # versioned external/daemon contracts
   autoharness-provider/            # provider ports and conformance suite
   autoharness-provider-gemini/     # Google AI Studio adapter
@@ -71,6 +72,7 @@ Commands express requested intent, not assumed success. Representative commands 
 - Admit a user prompt.
 - Cancel or retry an attempt.
 - Answer a permission request.
+- Propose, authorize, start, and settle a tool call.
 - Inspect, accept, retract, or delete memory.
 
 Each accepted command returns or emits a durable identifier so callers can correlate later events.
@@ -82,6 +84,8 @@ The normalized event stream must represent lifecycle rather than a provider's wi
 - Session created, updated, archived, or selected.
 - Input admitted and promoted.
 - Provider attempt started, delta received, usage reported, completed, failed, or cancelled.
+- Run budget configured and provider turn started, paused for tools, or resumed.
+- Tool call proposed, permission recorded or answered, started, completed, failed, denied, cancelled, or marked unknown.
 - Text, reasoning, tool-call, artifact, warning, and metadata deltas.
 - Catalog refreshed and model availability changed.
 - Memory proposed, admitted, superseded, retracted, or deleted.
@@ -112,6 +116,7 @@ Initial durable records include:
 - Sessions and selected provider/model snapshots.
 - Admitted inputs.
 - Provider attempts and normalized events.
+- Immutable run limits and provider-neutral tool lifecycle events.
 - Transcript projections.
 - Schema-versioned catalog snapshots and refresh metadata keyed by provider-project identity.
 - Context epochs and admissions.
@@ -132,6 +137,35 @@ Large content moves to an artifact store while the event log retains identity, m
 6. Provider chunks are decoded to normalized events, persisted in bounded batches, and published to clients through bounded channels.
 7. Completion, failure, or cancellation settles the attempt and updates projections.
 8. Restart reconstructs the session from durable inputs, attempt state, and events rather than assuming the prior process finished cleanly.
+
+### Tool execution
+
+1. The application exposes the same versioned provider-neutral tool registry through each provider adapter's native function-calling format.
+2. A complete provider tool call is strictly parsed by the trusted registry, which freezes the model arguments and derives the exact capability and canonical resource.
+3. The engine commits the proposed call and the deny, ask, or allow policy result.
+4. An ask result pauses at a durable permission state and the terminal displays a scrollable trusted summary of the exact security-critical invocation fields.
+5. A human allow answer applies once to that exact frozen call, while a denial settles without execution.
+6. The engine commits `ToolCallStarted` before the application invokes a filesystem, process, or HTTP capability port.
+7. The capability adapter enforces workspace or origin confinement, cancellation, deadlines, byte bounds, an empty child-process environment, no Windows batch programs, and no ambient HTTP proxy.
+8. Bounded inline output and optional content-addressed artifact metadata settle the call before the result enters another provider turn.
+9. The attempt resumes only when every call from the paused turn is settled and the next durable turn and budget checks succeed.
+10. A started effect that returns without proof of completion or rollback settles as unknown, and no parent attempt may settle while owned tool authority remains live.
+11. Startup recovery settles every live child of an interrupted parent before marking that parent unknown, while preserving unanswered permissions only for parents already durably awaiting tools.
+
+Gemini Interactions function calls and OpenAI-compatible streamed `tool_calls` normalize into the same complete internal call.
+Arbitrarily fragmented provider arguments cannot produce a partial durable call.
+Each provider turn has hard tool-call count and aggregate argument-buffer bounds before durable admission.
+Provider output that could reconstruct a configured credential within one structured value or across an ordered sequence of normalized text, identity, or argument values is rejected before the completing value enters provider-neutral state.
+Turn-scoped sequence checks retain only a zeroized credential-length suffix.
+The application reconstructs subsequent native tool-result messages from the authoritative event stream.
+
+The default local policy asks before workspace-confined reads, writes, direct process execution, and HTTP requests.
+Unmatched tools, capabilities, and resources deny by default.
+The model never selects the capability field and cannot expand authority by adding arguments or changing JSON shape.
+
+Run limits are immutable per attempt and cover provider turns, elapsed wall time, cumulative reported tokens, total provider and tool output bytes, and concurrent tool effects.
+Elapsed time and durable counters are reconstructed after restart.
+Monetary limits are intentionally absent until trusted versioned pricing snapshots can make modeled cost enforceable and recoverable, as recorded in [ADR-0008](../adr/0008-defer-modeled-cost-authority.md).
 
 ### Terminal rendering
 
@@ -164,6 +198,8 @@ Generation, evaluation, and promotion must not share mutable authority.
 - In-memory run/drain objects coordinate work but are not treated as durable business entities.
 - Crash recovery derives pending work from durable inputs and settled/unknown attempts.
 - Retrying an external effect requires an explicit idempotency or reconciliation strategy.
+- Unanswered permission requests remain pending after restart.
+- A tool effect interrupted after its durable start boundary becomes unknown and is never automatically replayed.
 
 ## Configuration and secrets
 
@@ -174,6 +210,7 @@ Generation, evaluation, and promotion must not share mutable authority.
 - Debug views render a redacted configuration projection.
 - Base URLs are validated; redirect behavior must not forward credentials to an untrusted origin.
 - Provider and plugin network access is governed by an allow policy in security-sensitive modes.
+- Local tool filesystem access is confined to `AUTOHARNESS_WORKSPACE`, which defaults to the canonical process working directory.
 
 ## Extension model
 

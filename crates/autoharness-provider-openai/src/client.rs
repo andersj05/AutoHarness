@@ -363,12 +363,56 @@ struct NativeChatRequest<'a> {
     messages: Vec<NativeMessage>,
     stream: bool,
     stream_options: StreamOptions,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<NativeToolDefinition<'a>>,
 }
 
 #[derive(Serialize)]
-struct NativeMessage {
-    role: &'static str,
-    content: String,
+#[serde(untagged)]
+enum NativeMessage {
+    Text {
+        role: &'static str,
+        content: String,
+    },
+    ToolCall {
+        role: &'static str,
+        content: Option<String>,
+        tool_calls: [NativeToolCall; 1],
+    },
+    ToolResult {
+        role: &'static str,
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+#[derive(Serialize)]
+struct NativeToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: NativeFunctionCall,
+}
+
+#[derive(Serialize)]
+struct NativeFunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Serialize)]
+struct NativeToolDefinition<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: NativeFunctionDefinition<'a>,
+}
+
+#[derive(Serialize)]
+struct NativeFunctionDefinition<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
+    strict: bool,
 }
 
 #[derive(Serialize)]
@@ -384,12 +428,49 @@ fn chat_body(
     let messages = request
         .messages
         .iter()
-        .map(|message| NativeMessage {
-            role: match message.role {
-                ChatRole::User => "user",
-                ChatRole::Assistant => "assistant",
+        .map(|message| match message {
+            autoharness_provider::ChatMessage::Text { role, content } => NativeMessage::Text {
+                role: match role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                },
+                content: credential.redact(content.as_str()),
             },
-            content: credential.redact(message.content.as_str()),
+            autoharness_provider::ChatMessage::ToolCall(call) => NativeMessage::ToolCall {
+                role: "assistant",
+                content: None,
+                tool_calls: [NativeToolCall {
+                    id: call.provider_call_id.as_str().to_owned(),
+                    kind: "function",
+                    function: NativeFunctionCall {
+                        name: call.tool_name.as_str().to_owned(),
+                        arguments: serde_json::to_string(&call.arguments.to_value())
+                            .unwrap_or_else(|_| "{}".to_owned()),
+                    },
+                }],
+            },
+            autoharness_provider::ChatMessage::ToolResult {
+                provider_call_id,
+                content,
+                ..
+            } => NativeMessage::ToolResult {
+                role: "tool",
+                tool_call_id: provider_call_id.as_str().to_owned(),
+                content: credential.redact(content.as_str()),
+            },
+        })
+        .collect();
+    let tools = request
+        .tools
+        .iter()
+        .map(|tool| NativeToolDefinition {
+            kind: "function",
+            function: NativeFunctionDefinition {
+                name: tool.name.as_str(),
+                description: &tool.description,
+                parameters: &tool.parameters,
+                strict: true,
+            },
         })
         .collect();
     serde_json::to_vec(&NativeChatRequest {
@@ -399,6 +480,7 @@ fn chat_body(
         stream_options: StreamOptions {
             include_usage: true,
         },
+        tools,
     })
     .map_err(|_| internal_error())
 }
@@ -494,14 +576,14 @@ mod tests {
         ChatRequest::new(
             ModelId::new("model-a").expect("model"),
             vec![
-                ChatMessage {
-                    role: ChatRole::User,
-                    content: ChatContent::new("first router-secret").expect("content"),
-                },
-                ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: ChatContent::new("second").expect("content"),
-                },
+                ChatMessage::text(
+                    ChatRole::User,
+                    ChatContent::new("first router-secret").expect("content"),
+                ),
+                ChatMessage::text(
+                    ChatRole::Assistant,
+                    ChatContent::new("second").expect("content"),
+                ),
             ],
         )
         .expect("request")
@@ -525,14 +607,11 @@ mod tests {
         let request = ChatRequest::new(
             ModelId::new("model-a").expect("model"),
             vec![
-                ChatMessage {
-                    role: ChatRole::User,
-                    content: ChatContent::new("first").expect("content"),
-                },
-                ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: ChatContent::new("second").expect("content"),
-                },
+                ChatMessage::text(ChatRole::User, ChatContent::new("first").expect("content")),
+                ChatMessage::text(
+                    ChatRole::Assistant,
+                    ChatContent::new("second").expect("content"),
+                ),
             ],
         )
         .expect("request");

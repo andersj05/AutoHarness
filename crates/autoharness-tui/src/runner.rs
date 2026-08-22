@@ -265,6 +265,7 @@ mod tests {
             revision: 1,
             selected_model: Some(selected.clone()),
             transcript: Vec::new(),
+            permission_requests: Vec::new(),
         });
         let catalog = Arc::new(CatalogProjection::Ready {
             models: vec![ModelSummary {

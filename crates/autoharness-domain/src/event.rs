@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, EventId, InputId, ModelRef,
-    PromptText, ResponseText, SessionId, SessionSequence, TimestampMillis, UsageSnapshot,
+    PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RunLimits,
+    SessionId, SessionSequence, TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput,
+    UsageSnapshot,
 };
 
 /// The only event schema emitted by the initial engine slice.
@@ -180,6 +182,89 @@ pub enum EventPayload {
     /// Recovery found a dispatched attempt with an ambiguous provider outcome.
     AttemptMarkedUnknown {
         /// Ambiguous attempt.
+        attempt_id: AttemptId,
+    },
+    /// Immutable run limits were frozen before provider dispatch.
+    RunBudgetConfigured {
+        /// Owning attempt.
+        attempt_id: AttemptId,
+        /// Bounded authority dimensions.
+        limits: RunLimits,
+    },
+    /// A provider turn crossed its durable pre-dispatch boundary.
+    RunTurnStarted {
+        /// Owning attempt.
+        attempt_id: AttemptId,
+        /// One-based turn number derived and checked by the engine.
+        turn: u32,
+    },
+    /// A model-authored call and trusted derived capability became durable.
+    ToolCallProposed {
+        /// Owning provider attempt.
+        attempt_id: AttemptId,
+        /// Frozen call specification.
+        call: ToolCallSpec,
+    },
+    /// Trusted policy evaluated the exact frozen call and resource.
+    ToolPermissionRecorded {
+        /// Tool call evaluated.
+        tool_call_id: ToolCallId,
+        /// Stable policy-decision identity.
+        decision_id: PermissionDecisionId,
+        /// Deny, ask, or allow result.
+        outcome: PermissionOutcome,
+    },
+    /// A human resolved a prior `ask` decision.
+    ToolPermissionAnswered {
+        /// Tool call resolved.
+        tool_call_id: ToolCallId,
+        /// Stable answer identity.
+        decision_id: PermissionDecisionId,
+        /// Allow once or deny answer.
+        answer: PermissionAnswer,
+    },
+    /// An authorized tool call may perform its external effect after this commit.
+    ToolCallStarted {
+        /// Tool call entering execution.
+        tool_call_id: ToolCallId,
+    },
+    /// A tool call settled successfully with bounded output.
+    ToolCallCompleted {
+        /// Settled tool call.
+        tool_call_id: ToolCallId,
+        /// Bounded result projection.
+        output: ToolOutput,
+    },
+    /// A tool call settled with a sanitized failure.
+    ToolCallFailed {
+        /// Settled tool call.
+        tool_call_id: ToolCallId,
+        /// Safe durable failure.
+        failure: AttemptFailure,
+    },
+    /// Policy or a human denied the call before execution.
+    ToolCallDenied {
+        /// Settled tool call.
+        tool_call_id: ToolCallId,
+    },
+    /// Cooperative cancellation settled the tool call.
+    ToolCallCancelled {
+        /// Settled tool call.
+        tool_call_id: ToolCallId,
+    },
+    /// Recovery could not reconcile a previously started external effect.
+    ToolCallMarkedUnknown {
+        /// Ambiguous tool call.
+        tool_call_id: ToolCallId,
+    },
+    /// A provider turn completed and the attempt is durably waiting for tools.
+    AttemptPausedForTools {
+        /// Waiting attempt.
+        attempt_id: AttemptId,
+    },
+    /// Settled tools were admitted before another provider dispatch.
+    AttemptResumedAfterTools {
+        /// Resuming attempt.
         attempt_id: AttemptId,
     },
 }

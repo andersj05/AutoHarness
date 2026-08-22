@@ -20,6 +20,7 @@ const PROVIDER_RATE_REQUESTS_ENV: &str = "AUTOHARNESS_PROVIDER_RATE_REQUESTS";
 const PROVIDER_RATE_WINDOW_MS_ENV: &str = "AUTOHARNESS_PROVIDER_RATE_WINDOW_MS";
 const CATALOG_REFRESH_MS_ENV: &str = "AUTOHARNESS_CATALOG_REFRESH_MS";
 const CATALOG_MAX_STALE_MS_ENV: &str = "AUTOHARNESS_CATALOG_MAX_STALE_MS";
+const WORKSPACE_ENV: &str = "AUTOHARNESS_WORKSPACE";
 
 /// Configured production provider adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +105,19 @@ pub fn provider_policy() -> Result<ProviderPolicy, AppError> {
     Ok(policy)
 }
 
+/// Resolves and canonicalizes the only workspace visible to local tool capabilities.
+pub fn workspace_root() -> Result<PathBuf, AppError> {
+    let configured = env::var_os(WORKSPACE_ENV)
+        .map(PathBuf::from)
+        .map_or_else(std::env::current_dir, Ok)
+        .map_err(|_| AppError::Configuration)?;
+    let root = std::fs::canonicalize(configured).map_err(|_| AppError::Configuration)?;
+    if !root.is_absolute() || !root.is_dir() {
+        return Err(AppError::Configuration);
+    }
+    Ok(root)
+}
+
 impl AppPaths {
     /// Resolves and creates the application data directory.
     pub fn prepare() -> Result<Self, AppError> {
@@ -131,6 +145,12 @@ impl AppPaths {
     #[must_use]
     pub fn log(&self) -> PathBuf {
         self.data_dir.join(LOG_FILE)
+    }
+
+    /// Returns the content-addressed tool artifact directory.
+    #[must_use]
+    pub fn artifacts(&self) -> PathBuf {
+        self.data_dir.join("artifacts")
     }
 }
 
@@ -255,6 +275,10 @@ mod tests {
         assert_eq!(
             paths.log(),
             PathBuf::from("C:/fixture/autoharness/autoharness.log")
+        );
+        assert_eq!(
+            paths.artifacts(),
+            PathBuf::from("C:/fixture/autoharness/artifacts")
         );
     }
 

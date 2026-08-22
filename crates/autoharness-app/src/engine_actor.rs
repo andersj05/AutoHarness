@@ -5,7 +5,9 @@ use autoharness_domain::{
     AttemptFailure, CommandEnvelope, CommandPayload, ErrorClass, ErrorCode, PublicMessage,
     RetryAdvice, SessionId,
 };
-use autoharness_engine::{AttemptStatus, DurableEngine, DurableEngineError, SessionAggregate};
+use autoharness_engine::{
+    AttemptStatus, DurableEngine, DurableEngineError, SessionAggregate, ToolCallStatus,
+};
 use autoharness_store::{SessionStatus, SessionStore};
 use autoharness_store_sqlite::SqliteStore;
 use tokio::sync::{mpsc, oneshot};
@@ -25,7 +27,7 @@ pub struct EngineReply {
 
 enum Request {
     Execute {
-        command: CommandEnvelope,
+        command: Box<CommandEnvelope>,
         reply: oneshot::Sender<Result<EngineReply, DurableEngineError>>,
     },
     Shutdown,
@@ -45,7 +47,10 @@ impl EngineHandle {
     ) -> Result<EngineReply, DurableEngineError> {
         let (reply, response) = oneshot::channel();
         self.requests
-            .send(Request::Execute { command, reply })
+            .send(Request::Execute {
+                command: Box::new(command),
+                reply,
+            })
             .await
             .map_err(|_| DurableEngineError::StoreInvariant)?;
         response
@@ -179,6 +184,61 @@ fn reconcile_interrupted_attempts(
     let mut failed_before_dispatch = 0_usize;
     let mut marked_unknown = 0_usize;
     for session_id in session_ids {
+        let interrupted_tools: Vec<_> = engine
+            .session(session_id)
+            .ok_or(AppError::Configuration)?
+            .tool_calls()
+            .iter()
+            .filter(|call| !call.status().is_settled())
+            .map(|call| {
+                let attempt_status = engine
+                    .session(session_id)
+                    .and_then(|session| session.attempt(call.attempt_id()))
+                    .map(autoharness_engine::AttemptProjection::status)
+                    .ok_or(AppError::Configuration)?;
+                Ok((
+                    call.call().tool_call_id.clone(),
+                    call.status(),
+                    attempt_status,
+                ))
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        for (tool_call_id, status, attempt_status) in interrupted_tools {
+            let payload = match status {
+                ToolCallStatus::Running => CommandPayload::MarkToolCallUnknown {
+                    session_id: session_id.clone(),
+                    tool_call_id,
+                },
+                ToolCallStatus::DeniedPending => CommandPayload::DenyToolCall {
+                    session_id: session_id.clone(),
+                    tool_call_id,
+                },
+                ToolCallStatus::Proposed | ToolCallStatus::Authorized => {
+                    CommandPayload::CancelToolCall {
+                        session_id: session_id.clone(),
+                        tool_call_id,
+                    }
+                }
+                ToolCallStatus::PermissionPending
+                    if matches!(
+                        attempt_status,
+                        AttemptStatus::InFlight | AttemptStatus::CancellationRequested
+                    ) =>
+                {
+                    CommandPayload::CancelToolCall {
+                        session_id: session_id.clone(),
+                        tool_call_id,
+                    }
+                }
+                ToolCallStatus::PermissionPending
+                | ToolCallStatus::Completed
+                | ToolCallStatus::Failed
+                | ToolCallStatus::Denied
+                | ToolCallStatus::Cancelled
+                | ToolCallStatus::Unknown => continue,
+            };
+            engine.execute(&ids::command(payload))?;
+        }
         let interrupted: Vec<_> = engine
             .session(session_id)
             .ok_or(AppError::Configuration)?
@@ -200,6 +260,7 @@ fn reconcile_interrupted_attempts(
                         attempt_id,
                     }
                 }
+                AttemptStatus::AwaitingTools => continue,
                 AttemptStatus::Completed
                 | AttemptStatus::Failed
                 | AttemptStatus::Cancelled
@@ -210,6 +271,7 @@ fn reconcile_interrupted_attempts(
                 AttemptStatus::InFlight | AttemptStatus::CancellationRequested => {
                     marked_unknown += 1;
                 }
+                AttemptStatus::AwaitingTools => {}
                 AttemptStatus::Completed
                 | AttemptStatus::Failed
                 | AttemptStatus::Cancelled
@@ -233,7 +295,11 @@ fn interrupted_before_dispatch() -> AttemptFailure {
 
 #[cfg(test)]
 mod tests {
-    use autoharness_domain::{DeliveryMode, InputId, ModelId, ModelRef, PromptText, ProviderId};
+    use autoharness_domain::{
+        DeliveryMode, InputId, ModelId, ModelRef, PermissionDecisionId, PermissionOutcome,
+        PromptText, ProviderCallId, ProviderId, ToolArguments, ToolName,
+    };
+    use autoharness_tool::{IncomingToolCall, plan};
 
     use super::*;
 
@@ -273,6 +339,93 @@ mod tests {
         (session_id, attempt_id)
     }
 
+    fn seed_tool_state(
+        database: PathBuf,
+        outcome: PermissionOutcome,
+        start_tool: bool,
+        pause_attempt: bool,
+    ) -> (
+        SessionId,
+        autoharness_domain::AttemptId,
+        autoharness_domain::ToolCallId,
+    ) {
+        let (mut engine, session_id, _) = open(database).expect("open fixture store");
+        let model = ModelRef::new(
+            ProviderId::new("gemini").expect("provider ID"),
+            ModelId::new("models/gemini-fixture").expect("model ID"),
+        );
+        engine
+            .execute(&ids::command(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model,
+            }))
+            .expect("select model");
+        let attempt_id = ids::attempt_id();
+        engine
+            .execute(&ids::command(
+                CommandPayload::AdmitPromptAndPrepareAttempt {
+                    session_id: session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    input_id: InputId::new("input-tool-recovery").expect("input ID"),
+                    prompt: PromptText::new("recover the tool").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ))
+            .expect("admit prompt and prepare attempt");
+        engine
+            .execute(&ids::command(CommandPayload::StartAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("start attempt");
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ids::tool_call_id(),
+            provider_call_id: ProviderCallId::new("provider-call-recovery")
+                .expect("provider call ID"),
+            tool_name: ToolName::new("fs_write").expect("tool name"),
+            arguments: ToolArguments::new(serde_json::json!({
+                "path": "recovered.txt",
+                "content": "durable"
+            }))
+            .expect("tool arguments"),
+        })
+        .expect("planned tool call");
+        let tool_call_id = planned.spec().tool_call_id.clone();
+        engine
+            .execute(&ids::command(CommandPayload::ProposeToolCall {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                call: planned.spec().clone(),
+            }))
+            .expect("propose tool call");
+        engine
+            .execute(&ids::command(CommandPayload::RecordToolPermission {
+                session_id: session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                decision_id: PermissionDecisionId::new("permission-recovery")
+                    .expect("permission ID"),
+                outcome,
+            }))
+            .expect("record permission");
+        if start_tool {
+            engine
+                .execute(&ids::command(CommandPayload::StartToolCall {
+                    session_id: session_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                }))
+                .expect("start tool call");
+        }
+        if pause_attempt {
+            engine
+                .execute(&ids::command(CommandPayload::PauseAttemptForTools {
+                    session_id: session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                }))
+                .expect("pause attempt");
+        }
+        (session_id, attempt_id, tool_call_id)
+    }
+
     #[test]
     fn recovery_fails_prepared_attempt_once_and_keeps_it_retryable() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -306,6 +459,88 @@ mod tests {
 
         let (engine, _, recovered) = open(database.clone()).expect("recover store");
 
+        assert_eq!(
+            recovered
+                .attempt(&attempt_id)
+                .expect("recovered attempt")
+                .status(),
+            AttemptStatus::Unknown
+        );
+        let settled_sequence = recovered.last_sequence();
+        drop(engine);
+
+        let (_, _, recovered_again) = open(database).expect("recover settled store");
+        assert_eq!(recovered_again.last_sequence(), settled_sequence);
+    }
+
+    #[test]
+    fn recovery_marks_started_tool_unknown_and_preserves_resumable_attempt() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("tool-running-recovery.sqlite3");
+        let (_, attempt_id, tool_call_id) =
+            seed_tool_state(database.clone(), PermissionOutcome::Allow, true, true);
+
+        let (engine, _, recovered) = open(database.clone()).expect("recover store");
+        assert_eq!(
+            recovered
+                .attempt(&attempt_id)
+                .expect("recovered attempt")
+                .status(),
+            AttemptStatus::AwaitingTools
+        );
+        assert_eq!(
+            recovered
+                .tool_call(&tool_call_id)
+                .expect("recovered tool call")
+                .status(),
+            ToolCallStatus::Unknown
+        );
+        let settled_sequence = recovered.last_sequence();
+        drop(engine);
+
+        let (_, _, recovered_again) = open(database).expect("recover settled store");
+        assert_eq!(recovered_again.last_sequence(), settled_sequence);
+    }
+
+    #[test]
+    fn recovery_preserves_unanswered_permission_without_executing_the_tool() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("tool-ask-recovery.sqlite3");
+        let (_, attempt_id, tool_call_id) =
+            seed_tool_state(database.clone(), PermissionOutcome::Ask, false, true);
+
+        let (_, _, recovered) = open(database).expect("recover store");
+        assert_eq!(
+            recovered
+                .attempt(&attempt_id)
+                .expect("recovered attempt")
+                .status(),
+            AttemptStatus::AwaitingTools
+        );
+        assert_eq!(
+            recovered
+                .tool_call(&tool_call_id)
+                .expect("recovered tool call")
+                .status(),
+            ToolCallStatus::PermissionPending
+        );
+    }
+
+    #[test]
+    fn recovery_cancels_unanswered_permission_before_marking_parent_unknown() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("tool-ask-inflight-recovery.sqlite3");
+        let (_, attempt_id, tool_call_id) =
+            seed_tool_state(database.clone(), PermissionOutcome::Ask, false, false);
+
+        let (engine, _, recovered) = open(database.clone()).expect("recover store");
+        assert_eq!(
+            recovered
+                .tool_call(&tool_call_id)
+                .expect("recovered tool call")
+                .status(),
+            ToolCallStatus::Cancelled
+        );
         assert_eq!(
             recovered
                 .attempt(&attempt_id)

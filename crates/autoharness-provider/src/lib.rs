@@ -9,6 +9,7 @@ mod catalog;
 mod error;
 mod managed;
 mod port;
+mod secret;
 mod sse;
 mod stream;
 
@@ -23,9 +24,10 @@ pub use catalog::{
 pub use error::{ProviderError, ProviderErrorKind};
 pub use managed::{ManagedProvider, ProviderPolicy};
 pub use port::{Catalog, Chat, Provider, ProviderEventStream, ProviderMetadata, SecretRedactor};
+pub use secret::{SecretAccumulator, structured_value_may_contain_secret};
 pub use sse::{SseDecoder, SseFrame};
 pub use stream::{
     ChatContent, ChatMessage, ChatRequest, ChatRole, CompletionReason, ProviderStreamEvent,
-    TextDelta, UsageSnapshot,
+    ProviderToolCall, ProviderToolDefinition, TextDelta, UsageSnapshot,
 };
 pub use tokio_util::sync::CancellationToken;
