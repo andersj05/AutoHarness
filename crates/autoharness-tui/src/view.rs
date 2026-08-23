@@ -501,15 +501,81 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "ready".to_owned()
     };
+
+    // Status surface segments degrade left to right: identity and work state
+    // survive at every width; provider, credential, catalog, and usage detail
+    // appear as space allows. Credential wording never claims a connection
+    // that is not effective.
+    let provider = model.settings.provider_label();
+    let credential = header_credential_label(model);
+    let catalog = match &*model.catalog {
+        CatalogProjection::Ready { stale: true, .. } => "catalog stale",
+        CatalogProjection::Failed(_) => "catalog error",
+        CatalogProjection::Ready { stale: false, .. }
+        | CatalogProjection::Loading
+        | CatalogProjection::CredentialRequired => "",
+    };
+    let usage = session_usage(model);
+    let usage_segment = (!usage.is_empty()).then(|| format!(" | {usage}"));
+    let usage = usage_segment.as_deref().unwrap_or_default();
+
     let title = if area.width < 50 {
         format!(" AutoHarness | {state} ")
-    } else {
+    } else if area.width < 72 {
         format!(" AutoHarness  |  {selected}  |  {state} ")
+    } else {
+        let mut title =
+            format!(" AutoHarness  |  {provider}  |  {credential}  |  {selected}  |  {state}");
+        if !catalog.is_empty() {
+            title.push_str(&format!("  |  {catalog}"));
+        }
+        title.push_str(usage);
+        title.push_str(" ");
+        title
     };
     frame.render_widget(
         Paragraph::new(display_safe(&title)).style(HEADER_STYLE),
         area,
     );
+}
+
+/// Safe credential label for the status surface.
+///
+/// A vault or environment source only displays when a credential is actually
+/// connected; otherwise the disconnected state is named explicitly so the
+/// status line can never overclaim.
+fn header_credential_label(model: &Model) -> String {
+    let status = &model.settings.provider_status;
+    if status.credential_connected {
+        status.credential_source.as_str().to_owned()
+    } else if status.active_profile.is_some() {
+        // A profile exists but no credential resolved from any source.
+        "disconnected".to_owned()
+    } else {
+        // The documented default: nothing persisted, session-only entry.
+        "session only".to_owned()
+    }
+}
+
+/// Aggregate token usage across completed attempts in the active session.
+fn session_usage(model: &Model) -> String {
+    let (input, output) = model
+        .session
+        .transcript
+        .iter()
+        .fold((0_u64, 0_u64), |acc, item| match item {
+            TranscriptItem::Assistant {
+                usage: Some(usage), ..
+            } => (
+                acc.0.saturating_add(usage.input_tokens),
+                acc.1.saturating_add(usage.output_tokens),
+            ),
+            _ => acc,
+        });
+    if input == 0 && output == 0 {
+        return String::new();
+    }
+    format!("{} tok", input.saturating_add(output))
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
