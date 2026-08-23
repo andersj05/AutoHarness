@@ -47,6 +47,11 @@ pub enum StorageRequest {
         expected_last_sequence: u64,
         reply: oneshot::Sender<Result<Option<std::path::PathBuf>, AppError>>,
     },
+    /// Writes the active session transcript as Markdown beside the database.
+    ExportTranscriptMarkdown {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<std::path::PathBuf, AppError>>,
+    },
     Shutdown,
 }
 
@@ -93,6 +98,21 @@ impl EngineHandle {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(StorageRequest::LoadEvents { session_id, reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Writes the active session transcript as Markdown beside the database.
+    ///
+    /// Returns the written file path. The session itself is untouched.
+    pub async fn export_transcript_markdown(
+        &self,
+        session_id: SessionId,
+    ) -> Result<std::path::PathBuf, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::ExportTranscriptMarkdown { session_id, reply })
             .await
             .map_err(|_| AppError::WorkerStopped)?;
         response.await.map_err(|_| AppError::WorkerStopped)?
@@ -208,6 +228,41 @@ fn run(
             }
             StorageRequest::LoadEvents { session_id, reply } => {
                 let result = load_all_events(&mut engine, &session_id);
+                let _ = reply.send(result);
+            }
+            StorageRequest::ExportTranscriptMarkdown { session_id, reply } => {
+                // Markdown rendering shares the JSON archive's source of
+                // truth (durable events) and destination (beside the
+                // database) while leaving the session untouched.
+                let result = (|| -> Result<std::path::PathBuf, AppError> {
+                    let summaries = engine.store().list_sessions().map_err(AppError::from)?;
+                    let Some(summary) = summaries
+                        .iter()
+                        .find(|summary| summary.session_id() == &session_id)
+                        .cloned()
+                    else {
+                        return Err(AppError::Store(
+                            autoharness_store::StoreError::VersionConflict {
+                                session_id: session_id.clone(),
+                                expected: 0,
+                                actual: 0,
+                            },
+                        ));
+                    };
+                    let events = load_all_events(&mut engine, &session_id)?;
+                    let bytes = autoharness_app::export_markdown::render_markdown(
+                        &session_id,
+                        &summary,
+                        &events,
+                    );
+                    let file_name = format!(
+                        "autoharness-transcript-{}.md",
+                        summary.session_id().as_str()
+                    );
+                    let destination = export_directory.join(file_name);
+                    std::fs::write(&destination, bytes).map_err(|_| AppError::FileSystem)?;
+                    Ok(destination)
+                })();
                 let _ = reply.send(result);
             }
             StorageRequest::ExportAndDeleteSession {

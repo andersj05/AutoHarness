@@ -318,6 +318,43 @@ fn doubled_leading_slash_escapes_into_a_literal_prompt() {
 }
 
 #[test]
+fn slash_copy_places_the_transcript_on_the_clipboard_via_the_runner() {
+    let mut model = empty_model();
+    type_text(&mut model, "/copy");
+    let effects = update(&mut model, Message::Input(enter()));
+
+    assert!(
+        matches!(effects.as_slice(), [UiEffect::CopyTranscript(_)]),
+        "copy must emit the runner effect carrying transcript text"
+    );
+    assert!(model.composer.is_blank());
+}
+
+#[test]
+fn slash_export_dispatches_the_durable_export_intent() {
+    let mut model = empty_model();
+    type_text(&mut model, "/export");
+    let effects = update(&mut model, Message::Input(enter()));
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [UiEffect::Dispatch(UiIntent::ExportTranscript { .. })]
+        ),
+        "export must dispatch the typed durable intent"
+    );
+    assert!(model.composer.is_blank());
+}
+
+#[test]
+fn palette_rows_include_copy_and_export() {
+    let ids: Vec<&str> = autoharness_tui::COMMANDS.iter().map(|c| c.id).collect();
+    for id in ["copy", "export"] {
+        assert!(ids.contains(&id), "{id} must be a first-class command");
+    }
+}
+
+#[test]
 fn palette_renders_at_small_sizes_without_panicking() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));

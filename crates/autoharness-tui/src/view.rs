@@ -631,6 +631,16 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     frame.render_widget(paragraph.scroll((top, 0)), inner);
 }
 
+/// Plain text of the whole transcript for clipboard copy.
+///
+/// The output is display-safe (control characters escaped) and identical to
+/// what search matches against.
+pub(crate) fn transcript_plain_text(model: &Model) -> String {
+    let mut lines = transcript_display_lines(model);
+    lines.push(String::new());
+    lines.join("\n")
+}
+
 /// Plain display text of every transcript line, shared by rendering and
 /// search so match counts always describe what is actually visible.
 pub(crate) fn transcript_display_lines(model: &Model) -> Vec<String> {

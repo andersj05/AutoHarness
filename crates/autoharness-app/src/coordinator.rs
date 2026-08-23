@@ -287,6 +287,12 @@ impl Coordinator {
             } => {
                 self.delete_session(request_id, session_id).await?;
             }
+            UiIntent::ExportTranscript {
+                request_id,
+                session_id,
+            } => {
+                self.export_transcript(request_id, session_id).await?;
+            }
         }
         Ok(())
     }
@@ -566,6 +572,60 @@ impl Coordinator {
                     UiFailure::new(
                         ErrorClass::Storage,
                         "The session could not be deleted from local storage",
+                        RetryPolicy::Now,
+                    ),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the active session transcript as Markdown beside the database.
+    ///
+    /// The session is read-only for this operation, so it is allowed even
+    /// while other work is active; a concurrent export is deduplicated by
+    /// the terminal's pending-request tracking.
+    async fn export_transcript(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+    ) -> Result<(), AppError> {
+        let Ok(session_id) = SessionId::new(raw_session_id) else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "That session identity is invalid",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        if session_id != self.session_id {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "Only the active session can be exported from here",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        match self.engine.export_transcript_markdown(session_id).await {
+            Ok(path) => {
+                let _ = path;
+                self.commit(request_id).await?;
+            }
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Storage,
+                        "The transcript could not be written to local storage",
                         RetryPolicy::Now,
                     ),
                 )
@@ -3167,6 +3227,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn slash_export_writes_markdown_beside_the_database_without_touching_history() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("export-md.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let provider_for_factory = Arc::new(FakeProvider::default());
+        let factory: ProviderFactory = Arc::new(move |_credential| {
+            Ok(Arc::clone(&provider_for_factory) as Arc<dyn autoharness_provider::Provider>)
+        });
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: None,
+                factory,
+            },
+            test_tool_runtime(),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        // Connect the fake provider through the same in-app path users take.
+        let connect_id = RequestId::new(9);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id: connect_id,
+                credential: ApiCredential::new("export-fixture-key".to_owned())
+                    .expect("fixture credential"),
+            })
+            .await
+            .expect("credential intent");
+        expect_commit(&mut ui, connect_id).await;
+        wait_for_catalog(&mut ui).await;
+
+        // Select the fake catalog's model so submissions are admitted.
+        let select_request = RequestId::new(8);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+
+        // Admit one prompt so the transcript has content.
+        let submit_id = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_id,
+                prompt: "export me".to_owned(),
+            })
+            .await
+            .expect("submit intent");
+        expect_commit(&mut ui, submit_id).await;
+
+        // Export through the same typed intent the terminal dispatches.
+        let export_id = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::ExportTranscript {
+                request_id: export_id,
+                session_id: session_id.as_str().to_owned(),
+            })
+            .await
+            .expect("export intent");
+        expect_commit(&mut ui, export_id).await;
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        let entries: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("read data directory")
+            .collect();
+        let markdown = entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().ok())
+            .find(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".md"))
+            })
+            .map(|entry| entry.path())
+            .expect("a Markdown transcript must exist beside the database");
+        let contents = std::fs::read_to_string(&markdown).expect("read export");
+        assert!(contents.contains("# "));
+        assert!(contents.contains("export me"));
+
+        // The exported session is untouched and still lists durably.
+        let store =
+            SqliteStore::open(directory.path().join("export-md.sqlite3")).expect("reopen store");
+        assert_eq!(store.list_sessions().expect("sessions").len(), 1);
     }
 
     #[tokio::test]

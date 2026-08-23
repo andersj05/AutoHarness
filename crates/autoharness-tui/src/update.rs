@@ -263,6 +263,13 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             follow_tail(model);
             Vec::new()
         }
+        Input {
+            key: Key::Char('y' | 'Y'),
+            ctrl: true,
+            ..
+        } => vec![UiEffect::CopyTranscript(
+            crate::view::transcript_plain_text(model),
+        )],
         input => {
             // Slash commands give keyboard-first access to every command
             // through the shared table without opening the palette overlay.
@@ -366,8 +373,34 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_palette(model);
             Vec::new()
         }
+        "copy" => vec![UiEffect::CopyTranscript(
+            crate::view::transcript_plain_text(model),
+        )],
+        "export" => export_transcript(model),
         unknown => unreachable!("command table contains an unhandled entry: {unknown}"),
     }
+}
+
+/// Dispatches the durable Markdown-export intent for the active session.
+fn export_transcript(model: &mut Model) -> Vec<UiEffect> {
+    if model
+        .pending
+        .values()
+        .any(|pending| matches!(pending, PendingKind::ExportTranscript))
+    {
+        return Vec::new();
+    }
+    let session_id = model.session.session_id.clone();
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ExportTranscript);
+    model.notice = Some(Notice::Info("Exporting transcript...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ExportTranscript {
+        request_id,
+        session_id,
+    })]
 }
 
 /// Submits exact prompt text through the same pending-request path as a
@@ -923,7 +956,8 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::SubmitPrompt(_)
         | PendingKind::CancelAttempt(_)
         | PendingKind::RetryAttempt(_)
-        | PendingKind::AnswerPermission(_) => false,
+        | PendingKind::AnswerPermission(_)
+        | PendingKind::ExportTranscript => false,
     })
 }
 
@@ -1439,6 +1473,9 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         close_browser(model);
                         model.notice = Some(Notice::Info("Session opened".to_owned()));
                     }
+                    PendingKind::ExportTranscript => {
+                        model.notice = Some(Notice::Info("Transcript exported".to_owned()));
+                    }
                 }
             }
         }
@@ -1463,7 +1500,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     | PendingKind::ArchiveSession(_)
                     | PendingKind::UnarchiveSession(_)
                     | PendingKind::DeleteSession(_)
-                    | PendingKind::OpenSession(_),
+                    | PendingKind::OpenSession(_)
+                    | PendingKind::ExportTranscript,
                 )
                 | None => {}
             }
@@ -1925,7 +1963,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::ArchiveSession(_)
             | PendingKind::UnarchiveSession(_)
             | PendingKind::DeleteSession(_)
-            | PendingKind::OpenSession(_) => false,
+            | PendingKind::OpenSession(_)
+            | PendingKind::ExportTranscript => false,
         })
 }
 

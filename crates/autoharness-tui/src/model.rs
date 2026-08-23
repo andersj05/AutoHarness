@@ -631,6 +631,19 @@ pub enum PendingKind {
     DeleteSession(String),
     /// Opening one durable session as the active session.
     OpenSession(String),
+    /// Markdown export of the active session transcript.
+    ExportTranscript,
+}
+
+/// Runner-side side effects the pure update layer cannot perform itself.
+#[derive(Debug)]
+pub enum UiEffect {
+    /// Dispatch an intent through the bounded application mailbox.
+    Dispatch(UiIntent),
+    /// Copy exact text to the system clipboard through OSC 52.
+    CopyTranscript(String),
+    /// Exit the terminal client.
+    Quit,
 }
 
 /// Intent emitted by pure update logic and handled by application composition.
@@ -697,6 +710,11 @@ pub enum UiIntent {
         request_id: RequestId,
         session_id: String,
     },
+    /// Write the active session transcript to a Markdown file.
+    ExportTranscript {
+        request_id: RequestId,
+        session_id: String,
+    },
 }
 
 impl UiIntent {
@@ -716,18 +734,10 @@ impl UiIntent {
             | Self::RenameSession { request_id, .. }
             | Self::ArchiveSession { request_id, .. }
             | Self::UnarchiveSession { request_id, .. }
-            | Self::DeleteSession { request_id, .. } => *request_id,
+            | Self::DeleteSession { request_id, .. }
+            | Self::ExportTranscript { request_id, .. } => *request_id,
         }
     }
-}
-
-/// Effect returned by update logic.
-#[derive(Debug)]
-pub enum UiEffect {
-    /// Dispatch an intent through the bounded application mailbox.
-    Dispatch(UiIntent),
-    /// Exit the terminal client.
-    Quit,
 }
 
 /// Application acknowledgement for a UI request.
@@ -983,6 +993,18 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Help",
         description: "Show keybindings and guidance for the current focus",
         key_hint: Some("F1"),
+    },
+    CommandEntry {
+        id: "copy",
+        label: "Copy transcript",
+        description: "Copy the visible transcript to the system clipboard",
+        key_hint: Some("Ctrl+Y"),
+    },
+    CommandEntry {
+        id: "export",
+        label: "Export transcript",
+        description: "Save this session as Markdown beside the database",
+        key_hint: None,
     },
     CommandEntry {
         id: "commands",

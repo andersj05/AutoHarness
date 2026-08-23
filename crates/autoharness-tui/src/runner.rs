@@ -220,6 +220,14 @@ fn dispatch_effects(
     for effect in effects {
         match effect {
             UiEffect::Quit => return true,
+            UiEffect::CopyTranscript(text) => {
+                // OSC 52 copy; failure is non-fatal because terminals may
+                // simply not advertise clipboard support.
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+                );
+            }
             UiEffect::Dispatch(intent) => {
                 let request_id = intent.request_id();
                 if let Err(error) = intents.try_send(intent) {
