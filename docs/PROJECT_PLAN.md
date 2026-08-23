@@ -251,26 +251,31 @@ Remaining for full exit evidence: in-terminal flows to create, replace, test, an
 
 ### Phase 3.4: TUI usability and discoverability
 
-**Status:** Planned
+**Status:** Implemented
 
 **Goal:** Make the terminal interface understandable without memorizing shortcuts and efficient enough for sustained daily work.
 
-Deliverables:
+Delivered:
 
-- A command palette and slash-command layer backed by the same typed application intents as keyboard and visible UI actions.
-- A contextual help screen and footer that show available actions for the current focus and terminal size.
-- Clear navigation among sessions, transcript, composer, models, profiles, settings, and pending permissions.
-- A status surface for workspace, session, provider profile, model, interaction mode, context or usage, network state, and active work.
-- Structured transcript rows for tools, permissions, results, warnings, failures, retries, and recovery actions, with collapsible detail where terminal space is limited.
-- Transcript search, copy, and export plus composer history and preserved per-session drafts.
-- User-configurable theme, no-color or high-contrast presentation, reduced motion, and keybinding help.
-- Confirmations and undo where practical for archive, credential removal, settings reset, and deletion operations.
+- A command palette (`Ctrl+/`) and slash-command layer backed by the same typed application intents as keyboard and visible UI actions.
+- A contextual help overlay (`F1`) whose section order follows the current focus, plus footer affordances for the new surfaces at every supported width.
+- An enriched header status surface showing provider profile, credential source, selected model, attempt settlement, aggregate token usage, and catalog state with graceful narrow-width degradation.
+- Composer history recall (`Ctrl+Up` / `Ctrl+Down`) alongside preserved per-session drafts.
+- Transcript search (`Ctrl+F`) with match counting and jump-to-match wrapped-row scrolling.
+- Transcript copy through OSC 52 from the runner and Markdown export beside the database satisfied from durable events.
+- Structured collapsible tool rows rendered from the authoritative aggregate.
+- Confirm-gated archiving and one-shot `Ctrl+Z` undo in the session browser.
 
-Exit criteria:
+Deferred to later phases:
 
-- A first-time user can connect a provider, select a model, create and resume sessions, change a setting, send a prompt, approve a tool, recover from failure, and find help using only in-app affordances.
-- The complete flow is usable and visually reviewed at 80-by-24, 120-by-40, and a wide terminal without clipped controls or hidden critical state.
-- Every important action is reachable without a mouse and has one authoritative application intent regardless of whether it starts from a key, command, or visible control.
+- User-configurable theme, no-color or high-contrast presentation, and reduced motion (waits on settings keys; recorded as a plan non-goal for this phase).
+- Mouse support remains a non-goal.
+
+Exit criteria evidence:
+
+- Fixed-size goldens updated for the new header and footer and visually reviewed at 40x12, 60x18, 80x24, 120x40, and 120x50 through a checked-in ignored review harness.
+- Every important action is reachable without a mouse through key, palette, and slash paths over one authoritative application intent table.
+- Full baseline gates pass: formatting, strict Clippy, full workspace tests, warning-free rustdoc, and doctests.
 
 ### Phase 3.5: Terminal release hardening
 

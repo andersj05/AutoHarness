@@ -1,4 +1,4 @@
- AutoHarness  |  Gemini 2.5 Pro  |  failed
+ AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed
 ┌ Transcript ──────────────────────────────────────────────────────────────────┐
 │Keep it practical.                                                            │
 │                                                                              │

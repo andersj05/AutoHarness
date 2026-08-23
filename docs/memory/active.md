@@ -1,14 +1,14 @@
 # Active memory
 
-**Last reviewed:** 2026-08-22
+**Last reviewed:** 2026-08-23
 
-**Phase:** 3.3 - User profiles, settings, and secure credentials
+**Phase:** 3.4 - TUI usability and discoverability
 
-**Status:** Phase 3.3 implemented locally on `feat/phase-3-3-profiles-settings`; in-terminal credential flows and platform vault smoke coverage remain open
+**Status:** Phase 3.4 implemented locally on `feat/phase-3-4-tui-usability`; all slices land behind tests with baseline gates green, promotion into `dev` remains open
 
 ## Current objective
 
-Reconcile Phase 3.3 into `dev`, then proceed through Phase 3.4 TUI usability and discoverability.
+Promote Phase 3.4 from `feat/phase-3-4-tui-usability` into `dev`, then proceed through Phase 3.5 terminal release hardening.
 
 ## Current repository state
 
@@ -28,6 +28,7 @@ Reconcile Phase 3.3 into `dev`, then proceed through Phase 3.4 TUI usability and
 - The terminal receives a safe settings projection and renders a non-modal `Ctrl+,` overlay naming the effective provider and credential source (`environment`, `credential vault`, or `session only`).
 - Sentinel tests seed a unique marker secret through save, rotate, disconnect, and delete flows and scan every durable file plus rendered debug output to prove no leakage.
 - `autoharness-tui` provides a Ratatui model/update/view client with masked zeroizing API-key entry, a searchable model picker, Unicode multiline composer, streaming transcript, scoped tool permission overlay, cancellation, retry, usage, errors, scrolling, compact rendering, a searchable session browser, per-session drafts, and settings provenance display.
+- Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Tool definitions are advertised only for positively identified model support, and the current single safe-agent interaction mode enables the exact built-in registry.
 - Gemini Interactions function-call arguments are buffered across streamed deltas and emitted only after a complete bounded JSON object is available.
 - Unknown names and invalid argument shapes become durable `InvalidToolCall` no-authority proposals, are force-denied even under permissive policy, and return a deterministic result for bounded model repair.
@@ -46,6 +47,8 @@ Reconcile Phase 3.3 into `dev`, then proceed through Phase 3.4 TUI usability and
 
 ## Recently completed
 
+- Implemented Phase 3.4 across eight test-first slices: command palette with generalized slash commands, contextual help overlay and footer affordances, enriched header status surface, composer history recall, transcript search, OSC 52 copy plus Markdown export intent satisfied from durable events in the coordinator and engine actor, structured collapsible tool rows, and archive confirmation with `Ctrl+Z` undo.
+- Verified Phase 3.4 surfaces visually at 120x50, 120x40, 80x24, 60x18, and 40x12 through a checked-in ignored review harness, and updated the fixed-size goldens for the new header and footer.
 - Implemented Phase 3.3: layered typed settings resolution with provenance, validated provider profiles with atomic durable storage, the operating-system credential-vault port, startup credential resolution with safe degradation, TUI settings provenance display, and secret sentinel coverage.
 - Accepted ADR-0009 (operating-system-backed credential profiles) and recorded ADR-0012 (typed settings resolver with layered precedence).
 - Added the `autoharness-settings` crate with fixed-order layer merging, workspace allowlist enforcement, schema-version handling, and unknown-active-profile validation.
@@ -67,24 +70,24 @@ Reconcile Phase 3.3 into `dev`, then proceed through Phase 3.4 TUI usability and
 
 ## Immediate next actions
 
-1. Add in-terminal flows to create, replace, test, and disconnect provider credentials from the settings overlay so the full Phase 3.3 exit criteria close without shell access.
-2. Run the opt-in configured-router plain-chat and HTTP-function compatibility probes against the intended router project and record only the pass or fail matrix and version provenance.
-3. Re-run all baseline Rust, rustdoc, doctest, full-workspace, secret-scan, and documentation-link gates, then promote Phase 3.3 from `feat/phase-3-3-profiles-settings` into `dev`.
-4. Proceed through Phase 3.4 TUI usability and Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
+1. Open the Phase 3.4 pull request from `feat/phase-3-4-tui-usability` into `dev` and wait for green CI.
+2. Add in-terminal flows to create, replace, test, and disconnect provider credentials from the settings overlay so the full Phase 3.3 exit criteria close without shell access.
+3. Run the opt-in configured-router plain-chat and HTTP-function compatibility probes against the intended router project and record only the pass or fail matrix and version provenance.
+4. Proceed through Phase 3.5 release hardening in [the revised project plan](../PROJECT_PLAN.md).
 
 ## Open questions
 
 - What reference machine should define startup and stream-overhead benchmarks?
-- Should the settings overlay grow direct profile editing before Phase 3.4 navigation work lands?
+- Should the settings overlay grow direct profile editing before the remaining credential flows land?
 
 ## Blockers
 
-None for the completed local Phase 3.3 implementation.
+None for the completed local Phase 3.4 implementation.
 A configured router endpoint plus credential is required for the remaining Phase 3.1 live-provider exit evidence; the Gemini half closed on 2026-08-22.
 An approved reference machine is required before recording authoritative latency results in Phase 3.5.
 
 ## Handoff note
 
-Phase 3.3 is complete locally on `feat/phase-3-3-profiles-settings` with all baseline gates passing; merge through a pull request into `dev` per [ADR-0003](../adr/0003-use-main-dev-feature-branches.md).
+Phase 3.4 is complete locally on `feat/phase-3-4-tui-usability` with all baseline gates passing; merge through a pull request into `dev` per [ADR-0003](../adr/0003-use-main-dev-feature-branches.md).
 The Phase 3.1 configured-router live matrix stays open until runtime credentials are available.
 Use the ignored structural compatibility probes first, then verify the same plain-chat and approved HTTP-tool paths through the real terminal without retaining provider content or credentials.

@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-08-22
+**Last reviewed:** 2026-08-23
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -15,7 +15,7 @@
 | 3.1. Live protocol reliability and recovery | Active | Gemini argument aggregation, durable invalid-call repair, failed-turn isolation, capability gating, stable diagnostics, and durable `Ctrl+N` recovery pass local fixture, integration, render, replay, and PTY tests; live Gemini plain-chat and function-call probes passed on 2026-08-22 while the configured router remains open |
 | 3.2. Complete session lifecycle | Complete | Event-sourced rename, archive, unarchive, guarded switching, atomic version-checked deletion with pre-deletion export, schema-v3 titles, a searchable `Ctrl+L` browser with slash commands and per-session drafts, and the composed two-session restart replay-equivalence path pass domain, engine, store, TUI, app, and render tests |
 | 3.3. User profiles, settings, and secure credentials | Implemented | Layered typed settings with provenance, validated profiles in an atomic schema-versioned document, the OS credential-vault port over Windows Credential Manager, macOS Keychain, and Linux Secret Service, startup reconnect from environment or vault with session-only degradation, a `Ctrl+,` settings overlay naming each source, and sentinel tests proving no credential bytes reach durable files pass resolver, vault, profile-store, startup-reconnect, TUI, and sentinel tests |
-| 3.4. TUI usability and discoverability | Planned | The focused chat controls exist; full navigation, command discovery, help, and settings surfaces do not |
+| 3.4. TUI usability and discoverability | Implemented | A `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay, an enriched header status surface with graceful narrow-width degradation, composer history recall, `Ctrl+F` transcript search with jump-to-match scrolling, OSC 52 transcript copy, durable-event Markdown export beside the database, structured collapsible tool rows, and confirm-gated archiving with `Ctrl+Z` undo pass palette, help, search, tool-row, archive-undo, export, render, and full-workspace tests |
 | 3.5. Terminal release hardening | Planned | Existing fixture, PTY, and security gates remain; the complete terminal product gate is not implemented |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.x |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
@@ -94,6 +94,14 @@
 - The `autoharness.profiles.json` document stores validated named profiles atomically with schema version 1 and a `.bad` backup on corruption; credential linkage writes only opaque references such as `autoharness/profile/<name>`.
 - Startup resolves one effective credential source in precedence order (environment, then active-profile vault entry, then session-only) before provider construction, and publishes safe provenance labels to the terminal's non-modal `Ctrl+,` settings overlay.
 - Sentinel tests scan every durable file plus debug output across save, rotate, disconnect, and delete flows with a unique marker secret and find no leakage.
+- A searchable `Ctrl+/` command palette and bare composer slash commands execute one shared typed command table so keyboard, palette, and slash paths converge on identical application intents, with unknown commands rejected without clearing the draft.
+- The `F1` help overlay orders its sections by the surface help was opened from and the footer advertises `F1` at wide widths while preserving state-dependent retry affordances.
+- The header renders provider profile, credential source, selected model, attempt settlement, aggregate token usage, and catalog state, degrading through width bands down to a two-item 40-column line verified by updated fixed-size goldens.
+- `Ctrl+Up` and `Ctrl+Down` recall recently submitted prompts in run order, stashing the live draft on walk start and restoring it on return, while per-session drafts stay independent.
+- `Ctrl+F` opens a transcript search bar with live match counting, Enter and Shift+Tab stepping through matches, wrapped-row jump-to-match scrolling consistent with the renderer, and Esc closing without losing scroll position rules.
+- `Ctrl+Y` copies the visible transcript through OSC 52 emitted from the runner without new dependencies, and `/export` dispatches a durable export intent the engine actor satisfies by writing human-readable Markdown beside the database from authoritative events only, leaving history untouched.
+- Durable tool calls render as structured collapsed rows (name, status, bounded summary) that expand to include the canonical resource under a global `Ctrl+X` toggle, and retry lineage stays visible alongside them.
+- Archiving arms for explicit Y confirmation like deletion, unarchiving runs immediately as the safe direction, and the most recent committed archive or unarchive stays reversible with exactly one `Ctrl+Z` until superseded.
 
 ## Known gaps
 
@@ -101,7 +109,7 @@
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
 - Phase 3.3 profiles, settings, and the vault port are implemented locally, but creating, replacing, testing, and disconnecting credentials still requires either an existing profile document or shell setup because the in-terminal management flows are not built yet.
 - Platform vault smoke coverage beyond the fake vault is not implemented; keyring-backed save and load have no automated Windows, macOS, or Linux service verification.
-- Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session.
+- Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
 - No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
 
 ## Next milestone exit target
