@@ -384,6 +384,8 @@ pub enum Focus {
     Permission,
     /// The session-browser overlay owns key input.
     Browser,
+    /// The command-palette overlay owns key input.
+    Palette,
 }
 
 /// One searchable row in the session browser.
@@ -797,6 +799,85 @@ pub(crate) struct BrowserState {
     pub confirming_delete: Option<String>,
 }
 
+/// Command-palette local state.
+#[derive(Debug, Default)]
+pub(crate) struct PaletteState {
+    pub open: bool,
+    pub query: String,
+    /// Stable identity of the highlighted command.
+    pub selected: Option<&'static str>,
+    /// Focus restored when the palette closes without running a command.
+    pub return_focus: Focus,
+}
+
+/// One executable command shared by the palette, slash commands, and keys.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandEntry {
+    /// Stable command identity, also the slash spelling without the slash.
+    pub id: &'static str,
+    /// Human-oriented palette label.
+    pub label: &'static str,
+    /// One-line description shown in the palette.
+    pub description: &'static str,
+    /// Primary key chord that runs the same action, when one exists.
+    pub key_hint: Option<&'static str>,
+}
+
+/// The complete, ordered command table.
+///
+/// Every user-facing action path (key, palette row, slash command) resolves to
+/// one entry here so all paths converge on the same behavior and intents.
+pub const COMMANDS: &[CommandEntry] = &[
+    CommandEntry {
+        id: "sessions",
+        label: "Sessions",
+        description: "Browse, rename, archive, or delete sessions",
+        key_hint: Some("Ctrl+L"),
+    },
+    CommandEntry {
+        id: "new-session",
+        label: "New session",
+        description: "Create and activate a fresh durable session",
+        key_hint: Some("Ctrl+N"),
+    },
+    CommandEntry {
+        id: "models",
+        label: "Models",
+        description: "Choose a model from the catalog",
+        key_hint: Some("Ctrl+P"),
+    },
+    CommandEntry {
+        id: "refresh-models",
+        label: "Refresh models",
+        description: "Reload the model catalog from the provider",
+        key_hint: Some("Ctrl+R in the picker"),
+    },
+    CommandEntry {
+        id: "connect-api-key",
+        label: "Connect API key",
+        description: "Enter or replace the provider API key",
+        key_hint: Some("Ctrl+K"),
+    },
+    CommandEntry {
+        id: "settings",
+        label: "Settings",
+        description: "Show effective provider, profile, and credential source",
+        key_hint: Some("Ctrl+,"),
+    },
+    CommandEntry {
+        id: "help",
+        label: "Help",
+        description: "Show keybindings and guidance for the current focus",
+        key_hint: Some("F1"),
+    },
+    CommandEntry {
+        id: "commands",
+        label: "Commands",
+        description: "Open this command palette",
+        key_hint: Some("Ctrl+/"),
+    },
+];
+
 /// Safe provider-kind label surfaced by application composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKindLabel {
@@ -935,6 +1016,7 @@ pub struct Model {
     pub(crate) picker: PickerState,
     pub(crate) credential: CredentialState,
     pub(crate) browser: BrowserState,
+    pub(crate) palette: PaletteState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
@@ -1001,6 +1083,7 @@ impl Model {
                 ..CredentialState::default()
             },
             browser: BrowserState::default(),
+            palette: PaletteState::default(),
             drafts: SessionDrafts::default(),
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
@@ -1100,6 +1183,40 @@ impl Model {
     #[must_use]
     pub const fn picker_open(&self) -> bool {
         self.picker.open
+    }
+
+    /// Returns whether the command palette is open.
+    #[must_use]
+    pub const fn palette_open(&self) -> bool {
+        self.palette.open
+    }
+
+    /// Returns the current palette filter query.
+    #[must_use]
+    pub fn palette_query(&self) -> &str {
+        &self.palette.query
+    }
+
+    /// Returns palette rows matching the query in table order.
+    #[must_use]
+    pub fn palette_entries(&self) -> Vec<CommandEntry> {
+        let query = self.palette.query.to_lowercase();
+        COMMANDS
+            .iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.id.contains(&query)
+                    || entry.label.to_lowercase().contains(&query)
+                    || entry.description.to_lowercase().contains(&query)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Returns the highlighted palette command identity.
+    #[must_use]
+    pub const fn palette_selection(&self) -> Option<&'static str> {
+        self.palette.selected
     }
 
     /// Returns the filtered session-browser rows in durable order.

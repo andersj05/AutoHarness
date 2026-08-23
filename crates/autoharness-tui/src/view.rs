@@ -42,6 +42,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
     if model.focus == Focus::Permission {
         render_permission(frame, area, model);
+    } else if model.palette.open {
+        render_palette(frame, area, model);
     } else if model.browser.open {
         render_browser(frame, area, model);
     } else if model.credential.open {
@@ -51,6 +53,96 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     } else if model.settings_open {
         render_settings(frame, area, model);
     }
+}
+
+/// Renders the searchable command-palette overlay from local state only.
+fn render_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Commands ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let search_height = 1.min(inner.height);
+    let help_height = u16::from(inner.height >= 3);
+    let list_height = inner.height.saturating_sub(search_height + help_height);
+    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
+    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
+    let help = Rect::new(
+        inner.x,
+        inner.y + search_height + list_height,
+        inner.width,
+        help_height,
+    );
+
+    frame.render_widget(
+        Paragraph::new(format!("Filter: {}", display_safe(&model.palette.query)))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        search,
+    );
+
+    let entries = model.palette_entries();
+    if entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No commands match this filter.").style(MUTED_STYLE),
+            list,
+        );
+    } else {
+        let selected = model.palette.selected;
+        let selected_index = selected
+            .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+            .unwrap_or(0);
+        let visible = usize::from(list.height);
+        let start = selected_index
+            .saturating_add(1)
+            .saturating_sub(visible)
+            .min(entries.len().saturating_sub(visible));
+        let items = entries
+            .iter()
+            .skip(start)
+            .take(visible)
+            .map(|entry| palette_item(entry, selected))
+            .collect::<Vec<_>>();
+        frame.render_widget(List::new(items), list);
+    }
+
+    if help.height > 0 {
+        frame.render_widget(
+            Paragraph::new("↑/↓ choose  Enter run  Esc close").style(MUTED_STYLE),
+            help,
+        );
+    }
+}
+
+fn palette_item(
+    entry: &crate::model::CommandEntry,
+    selected: Option<&'static str>,
+) -> ListItem<'static> {
+    let is_selected = selected == Some(entry.id);
+    let prefix = if is_selected { "›" } else { " " };
+    let mut label = format!(
+        "{prefix} /{} - {}",
+        entry.id,
+        display_safe(entry.description)
+    );
+    if let Some(hint) = entry.key_hint {
+        let _ = write!(label, "  [{hint}]");
+    }
+    let style = if is_selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    ListItem::new(Line::styled(label, style))
 }
 
 /// Renders the non-modal settings overlay from local state only.

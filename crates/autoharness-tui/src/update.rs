@@ -4,8 +4,9 @@ use autoharness_domain::ErrorClass;
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AttemptKey, CatalogProjection, Focus, Message, Model, Notice, PendingKind, RetryPolicy,
-    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, Message, Model, Notice,
+    PendingKind, RetryPolicy, SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent,
+    UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -90,6 +91,25 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         model.settings_open = !model.settings_open;
         model.dirty = true;
         return Vec::new();
+    }
+
+    // Ctrl+/ opens the modal command palette from any focus except the
+    // permission decision, which owns the keyboard exclusively.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('/' | '?'),
+            ctrl: true,
+            ..
+        }
+    ) && model.focus != Focus::Permission
+    {
+        open_palette(model);
+        return Vec::new();
+    }
+
+    if model.focus == Focus::Palette {
+        return handle_palette_input(model, input);
     }
 
     if model.focus == Focus::Permission {
@@ -208,8 +228,8 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         input => {
-            // Slash commands give keyboard-first access to the session
-            // lifecycle without opening the browser overlay.
+            // Slash commands give keyboard-first access to every command
+            // through the shared table without opening the palette overlay.
             if !has_pending_submission(model)
                 && let Some(effects) = maybe_slash_command(model, &input)
             {
@@ -224,18 +244,286 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 
-/// Recognizes exact slash commands typed into an otherwise empty composer.
+/// Recognizes slash commands typed into an otherwise empty composer.
+///
+/// The composer content is interpreted as a single command token:
+///
+/// - `/name` runs the shared command table entry and clears the composer.
+/// - `//text` escapes into the literal prompt `/text` on Enter.
+/// - Anything else, including multiline text, falls through to ordinary input.
 fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>> {
-    if model.composer.lines() != ["/sessions"] {
+    if !matches!(input.key, Key::Enter if !input.ctrl) {
         return None;
     }
-    match input.key {
-        Key::Enter if !input.ctrl => {
-            model.composer.reset();
-            open_browser(model);
+    let first = model.composer.lines().first().cloned()?;
+    let command = first
+        .strip_prefix('/')
+        .map(str::to_owned)
+        .filter(|command| !command.is_empty())?;
+
+    // A doubled leading slash escapes command interpretation entirely; the
+    // prompt is submitted with exactly one slash stripped.
+    if let Some(literal) = command.strip_prefix('/').map(str::to_owned) {
+        let text = format!("/{literal}");
+        model.composer.reset();
+        return Some(submit_prompt_text(model, text));
+    }
+
+    match run_command_by_id(model, &command) {
+        Err(rejection) => {
+            // A rejected command keeps its text editable so a typo costs one
+            // backspace, not a retyped line.
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                autoharness_domain::ErrorClass::Validation,
+                rejection,
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
             Some(Vec::new())
         }
-        _ => None,
+        Ok(effects) => {
+            model.composer.reset();
+            Some(effects)
+        }
+    }
+}
+
+/// Runs one shared command by its stable table identity.
+fn run_command_by_id(model: &mut Model, id: &str) -> Result<Vec<UiEffect>, String> {
+    let entry = COMMANDS
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("Unknown command '/{id}'. Press Ctrl+/ to list commands."))?;
+    Ok(execute_command(model, *entry))
+}
+
+/// Executes one shared command through the same local actions and intents
+/// that the corresponding keyboard chord uses, returning any intents that
+/// must cross into application composition.
+pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiEffect> {
+    match entry.id {
+        "sessions" => {
+            open_browser(model);
+            Vec::new()
+        }
+        "models" => {
+            open_picker(model);
+            Vec::new()
+        }
+        "connect-api-key" => {
+            open_credential(model);
+            Vec::new()
+        }
+        "settings" => {
+            model.settings_open = !model.settings_open;
+            model.dirty = true;
+            Vec::new()
+        }
+        "refresh-models" => refresh_catalog(model),
+        "new-session" => create_session(model),
+        "help" => {
+            open_help(model);
+            Vec::new()
+        }
+        "commands" => {
+            open_palette(model);
+            Vec::new()
+        }
+        unknown => unreachable!("command table contains an unhandled entry: {unknown}"),
+    }
+}
+
+/// Submits exact prompt text through the same pending-request path as a
+/// composer submission.
+fn submit_prompt_text(model: &mut Model, prompt: String) -> Vec<UiEffect> {
+    if has_pending_submission(model) || prompt.trim().is_empty() {
+        return Vec::new();
+    }
+    if !selected_model_available(model) {
+        model.notice = Some(Notice::Info(
+            "Choose a model from the current catalog before sending".to_owned(),
+        ));
+        open_picker(model);
+        return Vec::new();
+    }
+    if model.session.active_attempt().is_some() {
+        model.notice = Some(Notice::Info(
+            "Cancel or wait for the active response before sending".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::SubmitPrompt(prompt.clone()));
+    model.notice = Some(Notice::Info("Saving prompt...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::SubmitPrompt {
+        request_id,
+        prompt,
+    })]
+}
+
+/// Opens the modal command-palette overlay, remembering where the keyboard
+/// came from so Esc restores it exactly.
+fn open_palette(model: &mut Model) {
+    if !model.palette.open {
+        model.palette.return_focus = model.focus;
+    }
+    model.palette.open = true;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    normalize_palette_selection(model);
+    model.focus = Focus::Palette;
+    model.dirty = true;
+}
+
+fn close_palette(model: &mut Model) {
+    model.palette.open = false;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    model.focus = match model.palette.return_focus {
+        Focus::Palette | Focus::Permission => Focus::Composer,
+        restored => restored,
+    };
+    model.dirty = true;
+}
+
+fn filtered_palette_commands(model: &Model) -> Vec<CommandEntry> {
+    let query = model.palette.query.to_lowercase();
+    COMMANDS
+        .iter()
+        .filter(|entry| {
+            query.is_empty()
+                || entry.id.contains(&query)
+                || entry.label.to_lowercase().contains(&query)
+                || entry.description.to_lowercase().contains(&query)
+        })
+        .copied()
+        .collect()
+}
+
+fn normalize_palette_selection(model: &mut Model) {
+    let entries = filtered_palette_commands(model);
+    let valid = model
+        .palette
+        .selected
+        .is_some_and(|selected| entries.iter().any(|entry| entry.id == selected));
+    if !valid {
+        model.palette.selected = entries.first().map(|entry| entry.id);
+    } else if entries.is_empty() {
+        model.palette.selected = None;
+    }
+}
+
+fn move_palette_selection(model: &mut Model, direction: isize) {
+    let entries = filtered_palette_commands(model);
+    if entries.is_empty() {
+        model.palette.selected = None;
+        return;
+    }
+    let current = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let next = if direction < 0 {
+        current.checked_sub(1).unwrap_or(entries.len() - 1)
+    } else {
+        (current + 1) % entries.len()
+    };
+    model.palette.selected = Some(entries[next].id);
+    model.dirty = true;
+}
+
+fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
+    let Some(selected) = model.palette.selected else {
+        return Vec::new();
+    };
+    let Some(entry) = COMMANDS.iter().find(|entry| entry.id == selected).copied() else {
+        return Vec::new();
+    };
+    model.palette.open = false;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    let effects = execute_command(model, entry);
+    // A command that opened another modal overlay keeps its focus there;
+    // otherwise the keyboard returns to the remembered focus.
+    if !model.palette.open && model.focus == Focus::Palette {
+        model.focus = match model.palette.return_focus {
+            Focus::Palette | Focus::Permission => Focus::Composer,
+            restored => restored,
+        };
+        model.dirty = true;
+    }
+    effects
+}
+
+/// Applies keyboard input while the command palette owns focus.
+///
+/// Quit and fresh-session chords stay global so power users never lose
+/// them; plain characters extend the filter query.
+fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('n' | 'N'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        return create_session(model);
+    }
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_palette(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => execute_palette_selection(model),
+        Input { key: Key::Up, .. } => {
+            move_palette_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_palette_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.palette.query.pop();
+            normalize_palette_selection(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.palette.query.push(character);
+            normalize_palette_selection(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -1226,6 +1514,12 @@ fn open_picker(model: &mut Model) {
     model.focus = Focus::Picker;
     normalize_picker_selection(model);
     model.dirty = true;
+}
+
+/// Placeholder until the contextual help overlay lands later in this phase;
+/// the command table entry already exists so every path stays wired.
+fn open_help(model: &mut Model) {
+    open_palette(model);
 }
 
 fn open_credential(model: &mut Model) {
