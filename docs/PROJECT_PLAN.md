@@ -312,14 +312,14 @@ Exit criteria:
 
 ### Phase 3.6: Local profile and provider connection center
 
-**Status:** Planned
+**Status:** Implemented locally; cross-platform pull-request evidence pending
 
 **Goal:** Give users one safe in-terminal place to understand their local profile, manage every supported provider connection, and save distinct API keys without shell setup.
 
 Deliverables:
 
-- A full-screen Profiles and Providers surface reachable from persistent navigation, the command palette, and settings.
-- A local user profile summary derived from typed user settings, including an optional display label, active workspace, default provider profile, default model and mode, and appearance and accessibility summary.
+- A full-screen Profiles and Providers surface reachable from the global `Ctrl+G` shortcut, command palette, and settings provenance surface.
+- A local-only user summary showing the active workspace, default provider profile, default model, and current safe-agent mode; display-label and appearance editing remain in Phase 3.8.
 - The local user profile is not a hosted account or authentication identity, and it never owns provider secrets.
 - A searchable provider-profile list showing provider kind, active and default state, credential source, connection health, default model, and last safe test result.
 - Guided create, edit, duplicate, activate, and delete flows for multiple Gemini and OpenAI-compatible router profiles.
@@ -337,6 +337,18 @@ Exit criteria:
 - Environment, vault, and session-only precedence is visible and deterministic, including when the vault is locked or unavailable.
 - Every management action has keyboard, palette, and visible-control paths that converge on the same typed application intent.
 - Fake-vault integration tests cover complete and interrupted workflows, and platform vault smoke tests exercise save, retrieve, replace, and delete without printing secret values.
+
+**Local implementation evidence:** Implemented and verified on Windows on 2026-08-23.
+
+[ADR-0013](adr/0013-use-durable-credential-mutation-recovery.md) defines deterministic recovery records and operation ordering across the atomic profile document and operating-system vault.
+Settings schema 2 adds non-secret recovery state and optional profile default models while schema-v1 documents migrate on their next mutation.
+The application-owned `ProfileManager` serializes create, edit, duplicate, activate, save, replace, disconnect, delete, and restart reconciliation without exposing the vault or profile file to the TUI.
+The `Ctrl+G` full-screen surface shows local defaults, searchable Gemini and router profiles, active and credential-source state, content-free connection health, responsive detail panes, masked credential entry, destructive confirmations, and keyboard help.
+Typed TUI intents drive the same coordinator operations as command-palette and visible actions, and runtime profile switches rebuild the correct provider adapter without crossing provider credentials.
+Focused fault-injection and sentinel tests cover interrupted saves, failed cleanup, idempotent recovery, scoped replacement and deletion, duplication without credential linkage, default-model persistence, and raw-secret exclusion.
+A composed coordinator test creates distinct Gemini and router profiles and keys, switches and tests both, assigns a default model, deletes only the router, restarts, and proves the Gemini profile and credential remain.
+An actual PTY journey creates, switches, duplicates, cancels and confirms deletion, exits cleanly, and resolves the surviving profiles without shell setup.
+The opt-in operating-system vault smoke passed save, load, replace, and delete against Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains part of the cross-platform pull-request and Phase 3.9 release matrix.
 
 ### Phase 3.7: Unified TUI shell and navigation
 
@@ -473,15 +485,14 @@ Exit criteria:
 ## Next implementation order
 
 Phases 1 through 3 established the engine, provider, storage, replay, and safe tool-execution substrates.
-Phases 3.2 through 3.5 established durable session, settings, profile, navigation, and release-test foundations, but the current read-only settings overlay does not satisfy ordinary in-terminal profile and credential management.
+Phases 3.2 through 3.6 now provide durable sessions, settings, multiple provider profiles, operating-system-vault credentials, navigation primitives, and release-test foundations entirely inside the terminal.
 Proceed in this order:
 
-1. Promote the Phase 3.5 implementation through green baseline and cross-platform PTY pull-request gates.
-2. Implement Phase 3.6 as a complete profile and provider-connection vertical slice over the existing settings and operating-system vault ports.
-3. Implement Phase 3.7 by replacing overlay-led navigation with the responsive route-based shell while preserving typed intents and application-owned effects.
-4. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable shell.
-5. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, vault, visual, benchmark, migration, and rollback evidence.
-6. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+1. Promote the Phase 3.5 and Phase 3.6 implementations through green baseline and cross-platform PTY pull-request gates.
+2. Implement Phase 3.7 by replacing overlay-led navigation with the responsive route-based shell while preserving the stable profile read models, typed intents, and application-owned effects.
+3. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable shell.
+4. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
+5. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
