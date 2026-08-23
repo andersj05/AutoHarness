@@ -44,6 +44,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         render_permission(frame, area, model);
     } else if model.palette.open {
         render_palette(frame, area, model);
+    } else if model.help.open {
+        render_help(frame, area, model);
     } else if model.browser.open {
         render_browser(frame, area, model);
     } else if model.credential.open {
@@ -143,6 +145,74 @@ fn palette_item(
         Style::default().fg(Color::White)
     };
     ListItem::new(Line::styled(label, style))
+}
+
+/// Renders the contextual help overlay from local state only.
+///
+/// The section matching the surface help was requested from is rendered
+/// first and highlighted, and content scrolls without clipping the frame.
+fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Help ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // The surface help was opened from leads; everything else follows in
+    // table order so context is never below the fold on small terminals.
+    // The always-true Global section never leads.
+    let origin = model.help.return_focus;
+    let mut ordered: Vec<&crate::model::HelpSection> = Vec::new();
+    if let Some(first) = crate::model::HELP_SECTIONS
+        .iter()
+        .find(|section| section.title != "Global" && section.matches_focus(origin))
+    {
+        ordered.push(first);
+    }
+    for section in crate::model::HELP_SECTIONS {
+        if !ordered.iter().any(|placed| std::ptr::eq(*placed, section)) {
+            ordered.push(section);
+        }
+    }
+
+    let mut lines = Vec::new();
+    for (position, section) in ordered.iter().enumerate() {
+        let style = if position == 0 {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::styled(section.title.to_owned(), style));
+        for (key, description) in section.rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {key}"), MUTED_STYLE),
+                Span::raw(format!("  {description}")),
+            ]));
+        }
+    }
+
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height - hint_height;
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph.scroll((model.help.scroll, 0)), content);
+
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new("↑/↓ scroll  Esc close").style(MUTED_STYLE),
+            hint,
+        );
+    }
 }
 
 /// Renders the non-modal settings overlay from local state only.
@@ -644,6 +714,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Style::default().fg(Color::Black).bg(Color::DarkGray),
         ));
         spans.push(Span::raw("API key"));
+    }
+    if area.width >= 104 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            " F1 ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ));
+        spans.push(Span::raw("help"));
     }
     if let Some((attempt_id, status)) = model.session.active_attempt() {
         spans.push(Span::raw("  "));

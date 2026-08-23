@@ -94,7 +94,8 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 
     // Ctrl+/ opens the modal command palette from any focus except the
-    // permission decision, which owns the keyboard exclusively.
+    // permission decision, which owns the keyboard exclusively. F1 opens
+    // contextual help under the same rule.
     if matches!(
         input,
         Input {
@@ -107,9 +108,17 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         open_palette(model);
         return Vec::new();
     }
+    if matches!(input, Input { key: Key::F(1), .. }) && model.focus != Focus::Permission {
+        open_help(model);
+        return Vec::new();
+    }
 
     if model.focus == Focus::Palette {
         return handle_palette_input(model, input);
+    }
+
+    if model.focus == Focus::Help {
+        return handle_help_input(model, input);
     }
 
     if model.focus == Focus::Permission {
@@ -1516,10 +1525,73 @@ fn open_picker(model: &mut Model) {
     model.dirty = true;
 }
 
-/// Placeholder until the contextual help overlay lands later in this phase;
-/// the command table entry already exists so every path stays wired.
+/// Opens the modal contextual help overlay, remembering where the keyboard
+/// came from so Esc restores it exactly.
 fn open_help(model: &mut Model) {
-    open_palette(model);
+    if !model.help.open {
+        model.help.return_focus = model.focus;
+    }
+    model.help.open = true;
+    model.help.scroll = 0;
+    model.focus = Focus::Help;
+    model.dirty = true;
+}
+
+fn close_help(model: &mut Model) {
+    model.help.open = false;
+    model.help.scroll = 0;
+    model.focus = match model.help.return_focus {
+        Focus::Help | Focus::Permission => Focus::Composer,
+        restored => restored,
+    };
+    model.dirty = true;
+}
+
+fn scroll_help(model: &mut Model, rows: i32) {
+    let next = i32::from(model.help.scroll)
+        .saturating_add(rows)
+        .clamp(0, i32::from(u16::MAX));
+    model.help.scroll = next as u16;
+    model.dirty = true;
+}
+
+/// Applies keyboard input while the help overlay owns focus.
+///
+/// Quit stays global; every other key is either navigation or ignored so
+/// drafts and durable state stay untouched.
+fn handle_help_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    match input {
+        Input { key: Key::Esc, .. } | Input { key: Key::F(1), .. } => {
+            close_help(model);
+            Vec::new()
+        }
+        Input { key: Key::Up, .. }
+        | Input {
+            key: Key::PageUp, ..
+        } => {
+            scroll_help(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. }
+        | Input {
+            key: Key::PageDown, ..
+        } => {
+            scroll_help(model, 1);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn open_credential(model: &mut Model) {

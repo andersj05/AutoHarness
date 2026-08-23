@@ -386,6 +386,8 @@ pub enum Focus {
     Browser,
     /// The command-palette overlay owns key input.
     Palette,
+    /// The contextual help overlay owns key input.
+    Help,
 }
 
 /// One searchable row in the session browser.
@@ -810,6 +812,105 @@ pub(crate) struct PaletteState {
     pub return_focus: Focus,
 }
 
+/// Contextual help local state.
+#[derive(Debug, Default)]
+pub(crate) struct HelpState {
+    pub open: bool,
+    /// Rows scrolled from the top of the help content.
+    pub scroll: u16,
+    /// Focus restored when help closes.
+    pub return_focus: Focus,
+}
+
+/// One contextual help section shown in the help overlay.
+#[derive(Clone, Copy)]
+pub(crate) struct HelpSection {
+    /// Section heading, such as `Global` or `Composer`.
+    pub title: &'static str,
+    /// Ordered key-and-description rows.
+    pub rows: &'static [(&'static str, &'static str)],
+}
+
+/// The complete static help content.
+///
+/// Sections are rendered in order; the focused surface's section is
+/// highlighted by presentation logic.
+pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
+    HelpSection {
+        title: "Global",
+        rows: &[
+            ("Ctrl+S", "send the prompt"),
+            ("Ctrl+N", "create a fresh session"),
+            ("Ctrl+L", "open the session browser"),
+            ("Ctrl+P", "choose a model"),
+            ("Ctrl+K", "connect or replace the API key"),
+            ("Ctrl+,", "show settings provenance"),
+            ("Ctrl+R", "retry the failed attempt"),
+            ("Esc", "cancel streaming output"),
+            ("Alt+Up / Alt+Down", "scroll the transcript"),
+            ("Ctrl+End", "follow live output again"),
+            ("Ctrl+/", "command palette"),
+            ("F1", "this help"),
+            ("Ctrl+C", "quit"),
+        ],
+    },
+    HelpSection {
+        title: "Composer",
+        rows: &[
+            ("Enter", "new line"),
+            ("Type", "write the prompt"),
+            ("Paste", "insert multiline text"),
+            ("Esc", "cancel streaming output"),
+            ("Alt+Up / Alt+Down", "scroll the transcript"),
+        ],
+    },
+    HelpSection {
+        title: "Browser",
+        rows: &[
+            ("Type", "filter sessions"),
+            ("Up/Down", "choose a session"),
+            ("Enter", "open the session"),
+            ("Ctrl+R", "rename the session"),
+            ("Ctrl+A", "archive or unarchive"),
+            ("Ctrl+D", "delete with confirmation"),
+            ("Esc", "close the browser"),
+        ],
+    },
+    HelpSection {
+        title: "Models",
+        rows: &[
+            ("Type", "filter models"),
+            ("Up/Down", "choose a model"),
+            ("Enter", "select the model"),
+            ("Ctrl+R", "refresh the catalog"),
+            ("Esc", "close the picker"),
+        ],
+    },
+    HelpSection {
+        title: "Permission",
+        rows: &[
+            ("Y", "allow this exact call once"),
+            ("N or Esc", "deny"),
+            ("Up/Down", "inspect request details"),
+        ],
+    },
+];
+
+impl HelpSection {
+    /// Returns whether this section describes the given focus surface.
+    #[must_use]
+    pub(crate) fn matches_focus(&self, focus: Focus) -> bool {
+        match self.title {
+            "Global" => true,
+            "Composer" => matches!(focus, Focus::Composer | Focus::Credential | Focus::Help),
+            "Browser" => focus == Focus::Browser,
+            "Models" => focus == Focus::Picker,
+            "Permission" => focus == Focus::Permission,
+            _ => false,
+        }
+    }
+}
+
 /// One executable command shared by the palette, slash commands, and keys.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandEntry {
@@ -1017,6 +1118,7 @@ pub struct Model {
     pub(crate) credential: CredentialState,
     pub(crate) browser: BrowserState,
     pub(crate) palette: PaletteState,
+    pub(crate) help: HelpState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
@@ -1084,6 +1186,7 @@ impl Model {
             },
             browser: BrowserState::default(),
             palette: PaletteState::default(),
+            help: HelpState::default(),
             drafts: SessionDrafts::default(),
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
@@ -1217,6 +1320,18 @@ impl Model {
     #[must_use]
     pub const fn palette_selection(&self) -> Option<&'static str> {
         self.palette.selected
+    }
+
+    /// Returns whether the contextual help overlay is open.
+    #[must_use]
+    pub const fn help_open(&self) -> bool {
+        self.help.open
+    }
+
+    /// Returns the current help scroll offset in rows.
+    #[must_use]
+    pub const fn help_scroll(&self) -> u16 {
+        self.help.scroll
     }
 
     /// Returns the filtered session-browser rows in durable order.
