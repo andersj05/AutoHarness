@@ -8,7 +8,7 @@ use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 const CTRL_G: [u8; 1] = [0x07];
 const ALT_N: [u8; 2] = [0x1b, b'n'];
 const ALT_D: [u8; 2] = [0x1b, b'd'];
-const TAB: [u8; 1] = [b'\t'];
+const TAB: [u8; 1] = *b"\t";
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 const DELETE: [u8; 4] = [0x1b, b'[', b'3', b'~'];
 

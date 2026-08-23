@@ -703,6 +703,8 @@ pub enum PendingKind {
     ReplaceProfileCredential(String),
     /// Safe provider connection test.
     TestProfile(String),
+    /// Selection of the active session model as this profile's default.
+    SetProfileDefaultModel(String),
     /// Stored credential disconnection.
     DisconnectProfile(String),
     /// Confirmed profile deletion.
@@ -760,6 +762,11 @@ pub enum UiIntent {
     },
     /// Tests one profile without retaining provider content.
     TestProfile {
+        request_id: RequestId,
+        profile_id: String,
+    },
+    /// Uses the active session's selected model as the profile default.
+    SetProfileDefaultModel {
         request_id: RequestId,
         profile_id: String,
     },
@@ -847,6 +854,7 @@ impl UiIntent {
             | Self::SaveProfileCredential { request_id, .. }
             | Self::ReplaceProfileCredential { request_id, .. }
             | Self::TestProfile { request_id, .. }
+            | Self::SetProfileDefaultModel { request_id, .. }
             | Self::DisconnectProfile { request_id, .. }
             | Self::DeleteProfile { request_id, .. }
             | Self::RefreshCatalog { request_id }
@@ -1158,6 +1166,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Alt+N / Alt+E", "create or edit"),
             ("Alt+D", "duplicate without a credential"),
             ("Alt+K / Alt+T", "manage credential or test"),
+            ("Alt+M", "use the selected model as profile default"),
             ("Alt+X / Delete", "disconnect or delete"),
             ("Esc", "close or cancel the current form"),
         ],

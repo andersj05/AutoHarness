@@ -1103,6 +1103,11 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } => test_selected_profile(model),
         Input {
+            key: Key::Char('m' | 'M'),
+            alt: true,
+            ..
+        } => set_selected_profile_default_model(model),
+        Input {
             key: Key::Char('x' | 'X'),
             alt: true,
             ..
@@ -1250,10 +1255,10 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
                 .editor
                 .as_mut()
                 .expect("profile editor is open");
-            if let Some(field) = profile_editor_field(editor) {
-                if field.len() < 2_048 {
-                    field.push(character);
-                }
+            if let Some(field) = profile_editor_field(editor)
+                && field.len() < 2_048
+            {
+                field.push(character);
             }
             model.dirty = true;
             Vec::new()
@@ -1505,6 +1510,24 @@ fn test_selected_profile(model: &mut Model) -> Vec<UiEffect> {
         profile_id,
     })]
 }
+fn set_selected_profile_default_model(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
+        return Vec::new();
+    };
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::SetProfileDefaultModel(profile_id.clone()),
+    );
+    model.notice = Some(Notice::Info(
+        "Saving the current selected model as this profile's default...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::SetProfileDefaultModel {
+        request_id,
+        profile_id,
+    })]
+}
 
 fn request_disconnect_profile(model: &mut Model) {
     let Some(profile) = model.selected_profile() else {
@@ -1679,6 +1702,7 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::SaveProfileCredential(_)
         | PendingKind::ReplaceProfileCredential(_)
         | PendingKind::TestProfile(_)
+        | PendingKind::SetProfileDefaultModel(_)
         | PendingKind::DisconnectProfile(_)
         | PendingKind::DeleteProfile(_)
         | PendingKind::RefreshCatalog
@@ -2252,6 +2276,9 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                             "Provider connection test completed".to_owned(),
                         ));
                     }
+                    PendingKind::SetProfileDefaultModel(_) => {
+                        model.notice = Some(Notice::Info("Profile default model saved".to_owned()));
+                    }
                     PendingKind::DisconnectProfile(_) => {
                         model.notice =
                             Some(Notice::Info("Stored credential disconnected".to_owned()));
@@ -2392,6 +2419,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                 Some(
                     PendingKind::ActivateProfile(_)
                     | PendingKind::TestProfile(_)
+                    | PendingKind::SetProfileDefaultModel(_)
                     | PendingKind::DisconnectProfile(_)
                     | PendingKind::DeleteProfile(_)
                     | PendingKind::RefreshCatalog
@@ -2862,6 +2890,7 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::SaveProfileCredential(_)
             | PendingKind::ReplaceProfileCredential(_)
             | PendingKind::TestProfile(_)
+            | PendingKind::SetProfileDefaultModel(_)
             | PendingKind::DisconnectProfile(_)
             | PendingKind::DeleteProfile(_)
             | PendingKind::RefreshCatalog

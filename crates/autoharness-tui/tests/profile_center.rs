@@ -212,6 +212,11 @@ fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
         [UiEffect::Dispatch(UiIntent::TestProfile { profile_id, .. })]
             if profile_id == "personal-gemini"
     ));
+    assert!(matches!(
+        update(&mut model, Message::Input(alt('m'))).as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefaultModel { profile_id, .. })]
+            if profile_id == "personal-gemini"
+    ));
 
     let _ = update(&mut model, Message::Input(alt('x')));
     assert!(update(&mut model, Message::Input(key(Key::Char('n')))).is_empty());
@@ -230,4 +235,17 @@ fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
         [UiEffect::Dispatch(UiIntent::DeleteProfile { profile_id, .. })]
             if profile_id == "personal-gemini"
     ));
+}
+
+#[test]
+#[ignore = "visual review harness for the Phase 3.6 profile center"]
+fn render_profile_center_review_sizes() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
+        println!(
+            "=== profiles {width}x{height} ===\n{}",
+            render_text(&model, width, height)
+        );
+    }
 }

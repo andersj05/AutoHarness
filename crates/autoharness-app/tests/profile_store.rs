@@ -181,6 +181,33 @@ fn duplicate_copies_configuration_without_sharing_credential() {
     );
 }
 
+#[test]
+fn profile_default_model_persists_without_disturbing_credential_linkage() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    let (_, _, manager, id) = manager(&path);
+    manager
+        .save_credential(&id, "profile-default-secret")
+        .expect("save credential");
+
+    manager
+        .set_default_model(&id, Some("router-default-model".to_owned()))
+        .expect("set default model");
+
+    let profile = manager
+        .snapshot()
+        .expect("snapshot")
+        .profiles
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .expect("profile");
+    assert_eq!(
+        profile.profile.default_model(),
+        Some("router-default-model")
+    );
+    assert_eq!(profile.credential_state, StoredCredentialState::Stored);
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum Fault {
     #[default]

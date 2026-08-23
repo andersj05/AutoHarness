@@ -143,6 +143,8 @@ pub struct ProviderProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) chat_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) credential: Option<CredentialDocument>,
 }
 
@@ -157,6 +159,7 @@ impl ProviderProfile {
             auth_header: None,
             models_path: None,
             chat_path: None,
+            default_model: None,
             credential: None,
         }
     }
@@ -186,6 +189,7 @@ impl ProviderProfile {
             auth_header,
             models_path: None,
             chat_path: None,
+            default_model: None,
             credential: None,
         })
     }
@@ -195,6 +199,25 @@ impl ProviderProfile {
     pub fn without_credential(mut self) -> Self {
         self.credential = None;
         self
+    }
+    /// Replaces the optional default model identifier.
+    pub fn with_default_model(
+        mut self,
+        default_model: Option<String>,
+    ) -> Result<Self, &'static str> {
+        if let Some(model) = &default_model
+            && (model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control))
+        {
+            return Err("default model identifier is invalid");
+        }
+        self.default_model = default_model;
+        Ok(self)
+    }
+
+    /// Returns the configured default model identifier.
+    #[must_use]
+    pub fn default_model(&self) -> Option<&str> {
+        self.default_model.as_deref()
     }
 
     /// Returns the provider adapter this profile selects.

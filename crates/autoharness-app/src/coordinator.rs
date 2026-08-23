@@ -100,6 +100,11 @@ impl ProfileRuntime {
         }
     }
 }
+pub(crate) struct RuntimeComposition {
+    pub(crate) provider: ProviderComposition,
+    pub(crate) profiles: Option<ProfileRuntime>,
+    pub(crate) tool_runtime: Arc<ToolRuntime>,
+}
 
 #[cfg(test)]
 fn gemini_provider(credential: ApiCredential) -> Result<Arc<dyn Provider>, ProviderError> {
@@ -196,25 +201,25 @@ impl Coordinator {
         ports: AppPorts,
         shutdown: CancellationToken,
     ) -> Self {
-        Self::with_profile_runtime(
+        Self::with_runtime(
             session_id,
             session,
             engine,
-            provider,
-            None,
-            tool_runtime,
+            RuntimeComposition {
+                provider,
+                profiles: None,
+                tool_runtime,
+            },
             ports,
             shutdown,
         )
     }
 
-    pub(crate) fn with_profile_runtime(
+    pub(crate) fn with_runtime(
         session_id: SessionId,
         session: SessionAggregate,
         engine: EngineHandle,
-        provider: ProviderComposition,
-        profiles: Option<ProfileRuntime>,
-        tool_runtime: Arc<ToolRuntime>,
+        runtime: RuntimeComposition,
         ports: AppPorts,
         shutdown: CancellationToken,
     ) -> Self {
@@ -224,10 +229,10 @@ impl Coordinator {
             session_id,
             session,
             engine,
-            provider: provider.initial,
-            provider_factory: provider.factory,
-            profiles,
-            tool_runtime,
+            provider: runtime.provider.initial,
+            provider_factory: runtime.provider.factory,
+            profiles: runtime.profiles,
+            tool_runtime: runtime.tool_runtime,
             ports,
             messages,
             message_rx,
@@ -330,6 +335,13 @@ impl Coordinator {
                 profile_id,
             } => {
                 self.test_profile(request_id, profile_id).await?;
+            }
+            UiIntent::SetProfileDefaultModel {
+                request_id,
+                profile_id,
+            } => {
+                self.set_profile_default_model(request_id, profile_id)
+                    .await?;
             }
             UiIntent::DisconnectProfile {
                 request_id,
@@ -483,11 +495,10 @@ impl Coordinator {
         let Ok(snapshot) = runtime.manager.snapshot() else {
             return;
         };
-        let selected_model = self
-            .session
-            .selected_model()
-            .map(|model| model.model_id().as_str().to_owned());
         let active_profile = snapshot.profiles.iter().find(|profile| profile.active);
+        let active_default_model = active_profile
+            .and_then(|profile| profile.profile.default_model())
+            .map(str::to_owned);
         let profiles = snapshot
             .profiles
             .iter()
@@ -522,7 +533,7 @@ impl Coordinator {
                         .get(managed.id.as_str())
                         .cloned()
                         .unwrap_or_default(),
-                    default_model: managed.active.then(|| selected_model.clone()).flatten(),
+                    default_model: managed.profile.default_model().map(str::to_owned),
                     default_mode: "safe agent".to_owned(),
                 }
             })
@@ -535,7 +546,7 @@ impl Coordinator {
                     display_label: None,
                     workspace: runtime.workspace.clone(),
                     default_profile: active_id.clone(),
-                    default_model: selected_model,
+                    default_model: active_default_model,
                     default_mode: "safe agent".to_owned(),
                 },
                 profiles,
@@ -839,6 +850,84 @@ impl Coordinator {
                 })
                 .await;
         });
+        Ok(())
+    }
+    async fn set_profile_default_model(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(selected_model) = self.session.selected_model().cloned() else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Select a model before saving a profile default",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        if !self.model_is_available(&selected_model) {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Choose a model from the active profile's current catalog first",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        let model_id = selected_model.model_id().as_str().to_owned();
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let active = manager
+            .snapshot()
+            .ok()
+            .and_then(|snapshot| {
+                snapshot
+                    .profiles
+                    .into_iter()
+                    .find(|profile| profile.id == id)
+            })
+            .is_some_and(|profile| profile.active);
+        if !active {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Activate this profile before assigning the selected model",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        match manager.set_default_model(&id, Some(model_id)) {
+            Ok(()) => {
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, profile_failure(&error)).await?,
+        }
         Ok(())
     }
 
@@ -1846,6 +1935,36 @@ impl Coordinator {
                 self.ports
                     .catalogs
                     .send_replace(Arc::new(projection::catalog(models, stale)));
+                let default_model = self.profiles.as_ref().and_then(|runtime| {
+                    runtime.manager.snapshot().ok().and_then(|snapshot| {
+                        snapshot
+                            .profiles
+                            .into_iter()
+                            .find(|profile| profile.active)
+                            .and_then(|profile| profile.profile.default_model().map(str::to_owned))
+                    })
+                });
+                if let Some(default_model) = default_model
+                    && let Some(model) = self
+                        .catalog_models
+                        .iter()
+                        .find(|model| model.model_id.as_str() == default_model)
+                        .map(|model| {
+                            autoharness_domain::ModelRef::new(
+                                model.provider_id.clone(),
+                                model.model_id.clone(),
+                            )
+                        })
+                    && self.session.selected_model() != Some(&model)
+                {
+                    let _ = self
+                        .execute(CommandPayload::SelectModel {
+                            session_id: self.session_id.clone(),
+                            model,
+                        })
+                        .await;
+                }
+                self.publish_profiles();
                 if let Some(request_id) = request_id {
                     self.commit(request_id).await?;
                 }
@@ -3697,24 +3816,26 @@ mod tests {
             Arc::new(CatalogProjection::CredentialRequired),
         );
         let shutdown = CancellationToken::new();
-        let coordinator = Coordinator::with_profile_runtime(
+        let coordinator = Coordinator::with_runtime(
             session_id,
             session,
             actor.handle(),
-            ProviderComposition {
-                initial: None,
-                factory: fallback_factory,
-            },
-            Some(ProfileRuntime::new(
-                Arc::clone(&manager),
-                profile_factory,
-                EnvironmentCredentials {
-                    gemini: None,
-                    router: None,
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: None,
+                    factory: fallback_factory,
                 },
-                "workspace-fixture".to_owned(),
-            )),
-            test_tool_runtime(),
+                profiles: Some(ProfileRuntime::new(
+                    Arc::clone(&manager),
+                    profile_factory,
+                    EnvironmentCredentials {
+                        gemini: None,
+                        router: None,
+                    },
+                    "workspace-fixture".to_owned(),
+                )),
+                tool_runtime: test_tool_runtime(),
+            },
             app,
             shutdown.clone(),
         );
@@ -3781,6 +3902,33 @@ mod tests {
             .expect("activate Gemini");
         expect_commit(&mut ui, RequestId::new(5)).await;
         wait_for_catalog(&mut ui).await;
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: RequestId::new(100),
+                model: fixture_model(),
+            })
+            .await
+            .expect("select Gemini default model");
+        expect_commit(&mut ui, RequestId::new(100)).await;
+        ui.intents
+            .send(UiIntent::SetProfileDefaultModel {
+                request_id: RequestId::new(101),
+                profile_id: "personal-gemini".to_owned(),
+            })
+            .await
+            .expect("set Gemini default model");
+        expect_commit(&mut ui, RequestId::new(101)).await;
+        assert_eq!(
+            manager
+                .snapshot()
+                .expect("default snapshot")
+                .profiles
+                .into_iter()
+                .find(|profile| profile.id.as_str() == "personal-gemini")
+                .and_then(|profile| profile.profile.default_model().map(str::to_owned))
+                .as_deref(),
+            Some("models/gemini-fixture")
+        );
         ui.intents
             .send(UiIntent::TestProfile {
                 request_id: RequestId::new(6),

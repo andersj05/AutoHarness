@@ -36,6 +36,7 @@ use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, WriterLease};
 use coordinator::{
     Coordinator, EnvironmentCredentials, ProfileProviderFactory, ProfileRuntime, ProviderFactory,
+    RuntimeComposition,
 };
 use engine_actor::EngineActor;
 use error::AppError;
@@ -106,13 +107,15 @@ async fn run() -> Result<(), AppError> {
         }
     };
 
-    let coordinator = Coordinator::with_profile_runtime(
+    let coordinator = Coordinator::with_runtime(
         session_id,
         session,
         engine_actor.handle(),
-        provider.composition,
-        Some(profile_runtime),
-        tool_runtime,
+        RuntimeComposition {
+            provider: provider.composition,
+            profiles: Some(profile_runtime),
+            tool_runtime,
+        },
         app_ports,
         shutdown.clone(),
     );

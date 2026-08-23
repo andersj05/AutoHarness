@@ -245,7 +245,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "Ctrl+, close - Ctrl+K connect key - Ctrl+P choose model",
+            "Ctrl+, close - Ctrl+G manage profiles - Ctrl+K session-only key",
             MUTED_STYLE,
         )),
     ];
@@ -309,8 +309,14 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             "Y disconnect credential  N/Esc cancel"
         } else if model.profile_center.confirming_delete.is_some() {
             "Y delete profile and credential  N/Esc cancel"
+        } else if rows[3].width >= 100 {
+            "↑/↓ choose Enter active Alt+N new Alt+E edit Alt+K key Alt+T test Alt+M default Esc"
+        } else if rows[3].width >= 70 {
+            "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Alt+T test  Esc"
+        } else if rows[3].width >= 50 {
+            "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Esc"
         } else {
-            "↑/↓ choose  Enter activate  Alt+N new  Alt+E edit  Alt+K key  Alt+T test  Esc close"
+            "↑/↓  Enter active  Alt+N new  Esc"
         };
         frame.render_widget(Paragraph::new(hints).style(MUTED_STYLE), rows[3]);
     }
@@ -389,12 +395,16 @@ fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .iter()
         .skip(start)
         .take(visible)
-        .map(|profile| profile_list_item(profile, model))
+        .map(|profile| profile_list_item(profile, model, inner.width))
         .collect::<Vec<_>>();
     frame.render_widget(List::new(items), inner);
 }
 
-fn profile_list_item(profile: &ProviderProfileProjection, model: &Model) -> ListItem<'static> {
+fn profile_list_item(
+    profile: &ProviderProfileProjection,
+    model: &Model,
+    width: u16,
+) -> ListItem<'static> {
     let selected = model.profile_selection() == Some(profile.id.as_str());
     let marker = if selected { ">" } else { " " };
     let active = if profile.active { "*" } else { " " };
@@ -407,14 +417,24 @@ fn profile_list_item(profile: &ProviderProfileProjection, model: &Model) -> List
     } else {
         Style::default()
     };
-    ListItem::new(Line::from(format!(
-        "{marker}{active} {:<18} {:<6} {:<14} {}",
-        display_safe(&profile.id),
-        profile.kind.as_str(),
-        profile.credential_state.as_str(),
-        profile.connection.label(),
-    )))
-    .style(style)
+    let id = display_safe(&profile.id);
+    let label = if width >= 44 {
+        format!(
+            "{marker}{active} {id}  {}  {}  {}",
+            profile.kind.as_str(),
+            profile.credential_state.as_str(),
+            profile.connection.label(),
+        )
+    } else if width >= 32 {
+        format!(
+            "{marker}{active} {id}  {}  {}",
+            profile.kind.as_str(),
+            profile.credential_state.as_str(),
+        )
+    } else {
+        format!("{marker}{active} {id}  {}", profile.kind.as_str())
+    };
+    ListItem::new(Line::from(label)).style(style)
 }
 
 fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -468,7 +488,11 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         MUTED_STYLE,
     )));
     lines.push(Line::from(Span::styled(
-        "Alt+T test  Alt+X disconnect  Delete remove",
+        "Alt+T test  Alt+M set current model default",
+        MUTED_STYLE,
+    )));
+    lines.push(Line::from(Span::styled(
+        "Alt+X disconnect  Delete remove",
         MUTED_STYLE,
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);

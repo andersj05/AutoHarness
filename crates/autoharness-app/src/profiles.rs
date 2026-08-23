@@ -474,6 +474,20 @@ impl ProfileManager {
     pub fn activate(&self, profile: Option<&ProfileId>) -> Result<(), ProfileManagementError> {
         self.store.set_active_profile(profile).map_err(Into::into)
     }
+    /// Sets or clears one profile's default model identifier.
+    pub fn set_default_model(
+        &self,
+        profile: &ProfileId,
+        model: Option<String>,
+    ) -> Result<(), ProfileManagementError> {
+        let configured = self
+            .store
+            .profile(profile)?
+            .with_default_model(model)
+            .map_err(ProfileStoreError::Invalid)?;
+        self.store.upsert_profile(profile, &configured)?;
+        Ok(())
+    }
 
     /// Saves a first credential through the restart-safe three-step protocol.
     pub fn save_credential(
