@@ -530,7 +530,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             title.push_str(&format!("  |  {catalog}"));
         }
         title.push_str(usage);
-        title.push_str(" ");
+        title.push(' ');
         title
     };
     frame.render_widget(
