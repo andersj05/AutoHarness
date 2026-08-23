@@ -30,6 +30,10 @@ This index routes humans and agents to the smallest authoritative document for a
 
 - [Agent memory patterns](research/agent-memory-patterns.md): source review and the conventions adopted for AutoHarness.
 
+## Release
+
+- [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
+
 ## Validation
 
 - [`scripts/check_docs_links.py`](../scripts/check_docs_links.py): verifies that every relative link in every Markdown file resolves and that every ADR is indexed; runs in CI and locally from the repository root.

@@ -1,5 +1,8 @@
 //! Provider-neutral terminal client state, updates, rendering, and runner ports.
 
+#[cfg(feature = "benchmark-instrumentation")]
+pub mod benchmark;
+
 mod model;
 mod runner;
 mod text;

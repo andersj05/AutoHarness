@@ -1,24 +1,25 @@
-# Phase 1 benchmark environment
+# Phase 1 and Phase 3.5 benchmark environment
 
-This directory is the checked-in benchmark environment required by the Phase 1 performance gate.
-The core runner uses only AutoHarness path crates and Rust's standard library.
-It performs no provider requests and does not read `GEMINI_API_KEY`.
+This directory contains the checked-in storage and terminal latency benchmark runners required by the Phase 1 performance gate and Phase 3.5 terminal release hardening.
+The storage runner uses only AutoHarness path crates and Rust's standard library.
+The terminal runner uses a real pseudo-terminal, a loopback structural router fixture, and the opt-in benchmark marker channel.
+Neither runner reads a real provider credential or records prompt or response content.
 
 ## Coverage
 
 | Required metric | Current automation | Network treatment |
 | --- | --- | --- |
-| Cold process start to first terminal draw | Deferred until the runtime exposes an externally observable first-draw marker | No network work belongs in the interval |
+| Cold process start to first terminal draw | Automated by the `terminal_latency` runner against the instrumented release binary | No provider request starts before the first draw |
 | Idle resident memory | Automated for an already idle process by [`scripts/sample-idle-memory.ps1`](scripts/sample-idle-memory.ps1) | The operator waits for catalog activity to settle before sampling |
-| Input-to-request dispatch overhead | Deferred until input acceptance and provider dispatch have correlated monotonic markers | Stops immediately before provider I/O |
-| Provider-chunk receipt to rendered-delta latency | Deferred until provider receipt and completed draw have correlated monotonic markers | Starts after network receipt, so network time is excluded |
-| Event append and transcript projection throughput | Automated by the Rust runner against production SQLite settings | No network requests occur |
+| Input-to-request dispatch overhead | Automated from correlated `input_accepted` and `provider_dispatch_started` monotonic markers | Stops immediately before provider I/O |
+| Provider-chunk receipt to rendered-delta latency | Automated from correlated `provider_chunk_received` and `rendered_delta` monotonic markers | Starts after a decoded loopback-provider chunk, so network time is excluded |
+| Event append and transcript projection throughput | Automated by the storage runner against production SQLite settings | No network requests occur |
 | Recovery time for representative session sizes | Automated by the Rust runner for 10, 100, and 1,000 completed turns by default | No network requests occur |
 | LLM network latency | Explicitly reported as not measured by this environment | Must be reported as a separate metric |
 
-The deferred metrics cannot be derived honestly from current logs or from a piped terminal.
-Estimating them from `attempt_started` and `response_segment_committed` would mix storage and network boundaries, so this environment refuses to do that.
-The required future marker contract is in [instrumentation-contract.md](instrumentation-contract.md).
+The terminal metrics cannot be derived honestly from ordinary logs or from a piped terminal.
+The opt-in application feature emits only numeric structural markers over loopback UDP according to [instrumentation-contract.md](instrumentation-contract.md).
+The process-start metric includes one loopback datagram delivery because the launcher and application cannot serialize a shared `std::time::Instant`; the report names that side-channel interval explicitly.
 
 ## Representative benchmark run
 
@@ -39,6 +40,20 @@ Recovery is a warm reopen with operating-system-managed caches because portable 
 
 The JSON report records minimum, median, nearest-rank p95, mean, and maximum values.
 It also records the workload shape and labels every unavailable metric instead of emitting a placeholder number.
+
+## Terminal latency run
+
+Build the release application with instrumentation, then launch the terminal runner against that exact executable:
+
+```text
+cargo build --release --locked -p autoharness-app --features benchmark-instrumentation
+cargo run --release --locked --manifest-path benchmarks/Cargo.toml --bin terminal_latency -- --executable target/release/autoharness --samples 20
+```
+
+Use `target/release/autoharness.exe` on Windows.
+Set `AUTOHARNESS_TERMINAL_BENCHMARK_OUTPUT` to a new result path when collecting evidence; the runner refuses to replace an existing report.
+The runner starts a loopback OpenAI-compatible structural fixture, drives model selection and one prompt through a real PTY, and reports startup, input-to-dispatch, and decoded-chunk-to-render latency separately from network time.
+The instrumented binary emits no content, credentials, provider payloads, paths, or durable identifiers through the marker channel.
 
 ## Fast validation
 

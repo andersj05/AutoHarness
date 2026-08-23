@@ -144,15 +144,15 @@ The isolated SQLite, log, and lock files contained no router credential bytes, a
 
 ## Performance evidence
 
-The checked-in [Phase 1 benchmark environment](benchmarks/README.md) measures durable event append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes.
-It also includes a PowerShell idle resident-memory sampler and a reference-machine record template.
+The checked-in [benchmark environment](benchmarks/README.md) measures durable event append with synchronous projections, transcript-read throughput, warm SQLite reopen with strict replay, and the three terminal harness latency boundaries required before Phase 4.
+It also includes a PowerShell idle resident-memory sampler, an opt-in instrumented PTY runner, and a reference-machine record template.
 
 ```text
 cargo run --release --locked --manifest-path benchmarks/Cargo.toml -- --output benchmarks/results/phase1-<machine>-<date>.json
 ```
 
-The benchmark report excludes network requests and records LLM latency separately as not measured.
-Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-render latency remain unmeasured until the application exposes the exact monotonic markers defined by the [instrumentation contract](benchmarks/instrumentation-contract.md).
+The terminal runner correlates first draw, input acceptance, provider dispatch, decoded provider chunks, and rendered revisions over a content-free loopback side channel defined by the [instrumentation contract](benchmarks/instrumentation-contract.md).
+Harness overhead and provider-network time remain separate, and unavailable network metrics are never represented as zero.
 
 ## Project documentation
 
@@ -161,6 +161,7 @@ Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-rend
 - [Persistent memory architecture](docs/architecture/PERSISTENT_MEMORY.md)
 - [Repository memory](docs/memory/README.md)
 - [Architecture decision records](docs/adr/README.md)
+- [Terminal release checklist](docs/release/TERMINAL_RELEASE_CHECKLIST.md)
 - [Reference-project research](docs/research/agent-memory-patterns.md)
 
 ## Guiding principles

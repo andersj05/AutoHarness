@@ -53,6 +53,7 @@ enum AsyncMessage {
     Stream {
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
+        benchmark_chunk_sequence: Option<u64>,
     },
     Tool {
         tool_call_id: ToolCallId,
@@ -782,7 +783,7 @@ impl Coordinator {
             return Ok(());
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(attempt_id).await {
+        if let Err(error) = self.start_attempt(attempt_id, Some(request_id)).await {
             self.reject(request_id, start_attempt_failure(&error))
                 .await?;
             return Ok(());
@@ -872,7 +873,7 @@ impl Coordinator {
             return Ok(());
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(retry).await {
+        if let Err(error) = self.start_attempt(retry, None).await {
             self.reject(request_id, start_attempt_failure(&error))
                 .await?;
             return Ok(());
@@ -966,7 +967,11 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn start_attempt(&mut self, attempt_id: AttemptId) -> Result<(), StartAttemptError> {
+    async fn start_attempt(
+        &mut self,
+        attempt_id: AttemptId,
+        benchmark_request_id: Option<RequestId>,
+    ) -> Result<(), StartAttemptError> {
         let limits = RunLimits::default();
         let advertise_tools = self
             .session
@@ -1007,7 +1012,12 @@ impl Coordinator {
         .map_err(StartAttemptError::Engine)?;
         telemetry::attempt_started();
         let cancellation = self.shutdown.child_token();
-        self.spawn_stream(attempt_id.clone(), request, cancellation.clone());
+        self.spawn_stream(
+            attempt_id.clone(),
+            request,
+            cancellation.clone(),
+            benchmark_request_id,
+        );
         let mut budget = RunBudget::new(limits);
         budget
             .start_turn()
@@ -1028,8 +1038,13 @@ impl Coordinator {
                 request_id,
                 result,
             } => self.handle_catalog(generation, request_id, result).await,
-            AsyncMessage::Stream { attempt_id, result } => {
-                self.handle_stream(attempt_id, result).await
+            AsyncMessage::Stream {
+                attempt_id,
+                result,
+                benchmark_chunk_sequence,
+            } => {
+                self.handle_stream(attempt_id, result, benchmark_chunk_sequence)
+                    .await
             }
             AsyncMessage::Tool {
                 tool_call_id,
@@ -1098,6 +1113,7 @@ impl Coordinator {
         &mut self,
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
+        _benchmark_chunk_sequence: Option<u64>,
     ) -> Result<(), AppError> {
         let Some(active) = &self.active else {
             return Ok(());
@@ -1118,12 +1134,15 @@ impl Coordinator {
                     self.fail_run_budget(attempt_id, error).await?;
                     return Ok(());
                 }
-                self.execute(CommandPayload::AppendAttemptText {
-                    session_id: self.session_id.clone(),
-                    attempt_id,
-                    text: ResponseText::new(delta.as_str())
-                        .expect("provider contract excludes empty deltas"),
-                })
+                self.execute_and_publish(
+                    CommandPayload::AppendAttemptText {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        text: ResponseText::new(delta.as_str())
+                            .expect("provider contract excludes empty deltas"),
+                    },
+                    _benchmark_chunk_sequence.map(|sequence| (attempt_id, sequence)),
+                )
                 .await?;
                 telemetry::response_segment_committed(bytes);
             }
@@ -1541,7 +1560,7 @@ impl Coordinator {
             .expect("active checked")
             .cancellation
             .clone();
-        self.spawn_stream(attempt_id, request, cancellation);
+        self.spawn_stream(attempt_id, request, cancellation, None);
         Ok(())
     }
 
@@ -1673,8 +1692,32 @@ impl Coordinator {
     }
 
     async fn execute(&mut self, payload: CommandPayload) -> Result<(), DurableEngineError> {
+        self.execute_and_publish(payload, None).await
+    }
+
+    async fn execute_and_publish(
+        &mut self,
+        payload: CommandPayload,
+        _benchmark_chunk: Option<(AttemptId, u64)>,
+    ) -> Result<(), DurableEngineError> {
         let reply = self.engine.execute(ids::command(payload)).await?;
+        if reply.session.session_id() != &self.session_id {
+            return Ok(());
+        }
         self.session = reply.session;
+        #[cfg(feature = "benchmark-instrumentation")]
+        if let Some((attempt_id, chunk_sequence)) = _benchmark_chunk {
+            let revision = self
+                .session
+                .last_sequence()
+                .map_or(0, autoharness_domain::SessionSequence::get);
+            autoharness_tui::benchmark::projection_committed(
+                self.session_id.as_str(),
+                revision,
+                attempt_id.as_str(),
+                chunk_sequence,
+            );
+        }
         self.ports
             .sessions
             .send_replace(Arc::new(projection::session(&self.session)));
@@ -1732,6 +1775,7 @@ impl Coordinator {
         attempt_id: AttemptId,
         request: ChatRequest,
         cancellation: CancellationToken,
+        _benchmark_request_id: Option<RequestId>,
     ) {
         let provider = Arc::clone(
             self.provider
@@ -1740,9 +1784,28 @@ impl Coordinator {
         );
         let messages = self.messages.clone();
         tokio::spawn(async move {
+            #[cfg(feature = "benchmark-instrumentation")]
+            if let Some(request_id) = _benchmark_request_id {
+                autoharness_tui::benchmark::provider_dispatch_started(
+                    request_id,
+                    attempt_id.as_str(),
+                );
+            }
             match provider.stream_chat(request, cancellation).await {
                 Ok(mut stream) => {
                     while let Some(result) = stream.next().await {
+                        #[cfg(feature = "benchmark-instrumentation")]
+                        let benchmark_chunk_sequence = match &result {
+                            Ok(ProviderStreamEvent::TextDelta(delta)) => {
+                                autoharness_tui::benchmark::provider_chunk_received(
+                                    attempt_id.as_str(),
+                                    delta.as_str().len(),
+                                )
+                            }
+                            _ => None,
+                        };
+                        #[cfg(not(feature = "benchmark-instrumentation"))]
+                        let benchmark_chunk_sequence = None;
                         let terminal = match &result {
                             Err(_) => true,
                             Ok(event) => matches!(
@@ -1755,6 +1818,7 @@ impl Coordinator {
                             .send(AsyncMessage::Stream {
                                 attempt_id: attempt_id.clone(),
                                 result,
+                                benchmark_chunk_sequence,
                             })
                             .await
                             .is_err()
@@ -1772,6 +1836,7 @@ impl Coordinator {
                                 ProviderErrorKind::Protocol,
                                 RetryAdvice::Never,
                             )),
+                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -1780,6 +1845,7 @@ impl Coordinator {
                         .send(AsyncMessage::Stream {
                             attempt_id,
                             result: Err(error),
+                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -2880,6 +2946,11 @@ mod tests {
         })
         .await;
         assert_eq!(archived.len(), 2);
+        assert_eq!(
+            ui.sessions.borrow().session_id,
+            second_id.as_str(),
+            "mutating an inactive session must not replace the active projection"
+        );
 
         // Switch back into the first session; unarchive it first because an
         // archived session accepts no ordinary commands after activation.
@@ -3784,6 +3855,15 @@ mod tests {
         })
         .await;
         assert!(completed.permission_requests.is_empty());
+        assert!(completed.transcript.iter().any(|item| {
+            matches!(
+                item,
+                TranscriptItem::Tool(row)
+                    if row.tool_name == "fs_write"
+                        && row.status == "completed"
+                        && row.resource == "workspace:result.txt"
+            )
+        }));
         assert_eq!(
             std::fs::read_to_string(workspace.join("result.txt")).expect("tool output file"),
             "written by tool"

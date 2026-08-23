@@ -785,6 +785,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_archive = None;
+                model.notice = None;
                 model.dirty = true;
                 return Vec::new();
             }
@@ -807,6 +808,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_delete = None;
+                model.notice = None;
                 model.dirty = true;
                 return Vec::new();
             }

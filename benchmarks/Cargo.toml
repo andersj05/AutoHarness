@@ -1,6 +1,6 @@
 [package]
 name = "autoharness-phase1-benchmarks"
-description = "Dependency-neutral Phase 1 performance benchmark runner for AutoHarness"
+description = "Phase 1 storage and terminal latency benchmark runners for AutoHarness"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97.1"
@@ -13,6 +13,10 @@ autoharness-domain = { path = "../crates/autoharness-domain" }
 autoharness-engine = { path = "../crates/autoharness-engine" }
 autoharness-store = { path = "../crates/autoharness-store" }
 autoharness-store-sqlite = { path = "../crates/autoharness-store-sqlite" }
+portable-pty = "0.9.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+vt100 = "0.15.2"
 
 [lints.rust]
 unsafe_code = "forbid"

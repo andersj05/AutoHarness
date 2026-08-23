@@ -16,7 +16,7 @@
 | 3.2. Complete session lifecycle | Complete | Event-sourced rename, archive, unarchive, guarded switching, atomic version-checked deletion with pre-deletion export, schema-v3 titles, a searchable `Ctrl+L` browser with slash commands and per-session drafts, and the composed two-session restart replay-equivalence path pass domain, engine, store, TUI, app, and render tests |
 | 3.3. User profiles, settings, and secure credentials | Implemented | Layered typed settings with provenance, validated profiles in an atomic schema-versioned document, the OS credential-vault port over Windows Credential Manager, macOS Keychain, and Linux Secret Service, startup reconnect from environment or vault with session-only degradation, a `Ctrl+,` settings overlay naming each source, and sentinel tests proving no credential bytes reach durable files pass resolver, vault, profile-store, startup-reconnect, TUI, and sentinel tests |
 | 3.4. TUI usability and discoverability | Implemented | A `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay, an enriched header status surface with graceful narrow-width degradation, composer history recall, `Ctrl+F` transcript search with jump-to-match scrolling, OSC 52 transcript copy, durable-event Markdown export beside the database, structured collapsible tool rows, and confirm-gated archiving with `Ctrl+Z` undo pass palette, help, search, tool-row, archive-undo, export, render, and full-workspace tests |
-| 3.5. Terminal release hardening | Planned | Existing fixture, PTY, and security gates remain; the complete terminal product gate is not implemented |
+| 3.5. Terminal release hardening | Implemented | Six real-PTY release scenarios, serial cross-platform CI routing, Windows cursor reporting, inactive-session isolation, causation-safe deletion, durable tool rows, locked-vault and corrupt-cache recovery, provider-matched environment credentials, structural live-probe definitions, content-free monotonic terminal markers, a PTY latency runner, and the terminal release checklist pass local baseline, benchmark, documentation, real Windows router smoke, and six-scenario Windows PTY validation; refreshed cross-platform PTY, live-provider, and reference-machine evidence remains open |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.x |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
 | 6. Extension and distributed runtime | Planned | Target boundaries are documented; runtime is not implemented |
@@ -102,6 +102,16 @@
 - `Ctrl+Y` copies the visible transcript through OSC 52 emitted from the runner without new dependencies, and `/export` dispatches a durable export intent the engine actor satisfies by writing human-readable Markdown beside the database from authoritative events only, leaving history untouched.
 - Durable tool calls render as structured collapsed rows (name, status, bounded summary) that expand to include the canonical resource under a global `Ctrl+X` toggle, and retry lineage stays visible alongside them.
 - Archiving arms for explicit Y confirmation like deletion, unarchiving runs immediately as the safe direction, and the most recent committed archive or unarchive stays reversible with exactly one `Ctrl+Z` until superseded.
+- Six ignored real-PTY scenarios drive the actual binary for first run and restoration, returning-profile offline replay with resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with durable replay, and forced-shutdown recovery.
+- The Windows, macOS, and Linux test matrix runs the PTY group serially after the ordinary workspace suite, while non-terminal test hosts keep the baseline deterministic.
+- Locked or unavailable vault access now has an explicit safe error and degrades to session-only operation, and corrupt catalog-cache reads are discarded before live replacement.
+- Environment credentials are selected only for the effective provider, so simultaneous Gemini and router variables cannot cross-configure an adapter and an environment override no longer hides the active profile.
+- The configured-router live matrix includes plain chat beside the existing function-call probe, matching the Gemini plain-chat and function-call coverage with structural assertions only.
+- The `benchmark-instrumentation` feature emits monotonic first-draw, input, dispatch, decoded-chunk, and rendered-revision markers over content-free loopback UDP with process-local correlation.
+- The isolated `terminal_latency` runner launches the instrumented binary in a real PTY, drives a loopback structural router, validates marker correlation, separates harness from network intervals, and produces distribution reports covered by unit and Clippy gates.
+- The terminal release checklist gates secret scanning, accessibility, restoration, documentation accuracy, benchmark provenance, database backup, rollback preparation, defect severity, and promotion approval.
+- A real Windows terminal smoke selected the loopback router, durably completed one prompt, emitted one complete correlated marker chain, exited successfully, and restored the terminal.
+- PTY hardening now answers Windows cursor-position reports, prevents inactive rename and archive commands from replacing the active projection, deletes event-causation DAGs in reverse sequence, clears cancelled confirmation notices, and projects durable tool calls into structured transcript rows.
 
 ## Known gaps
 
@@ -110,8 +120,10 @@
 - Phase 3.3 profiles, settings, and the vault port are implemented locally, but creating, replacing, testing, and disconnecting credentials still requires either an existing profile document or shell setup because the in-terminal management flows are not built yet.
 - Platform vault smoke coverage beyond the fake vault is not implemented; keyring-backed save and load have no automated Windows, macOS, or Linux service verification.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
-- No reviewed reference-machine benchmark report exists, and cold-start, input-to-dispatch, and provider-chunk-to-render latency still lack runtime markers.
+- No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
+- All six dedicated PTY scenarios pass locally on Windows; Linux, macOS, and refreshed Windows evidence awaits the updated release-candidate CI run.
+- The checked-in release checklist has not been executed against a committed release candidate.
 
 ## Next milestone exit target
 
-Phase 3.1 must run the compiled opt-in configured-router probes and verify real terminal plain-chat and approved HTTP-tool continuation paths for at least one live provider, then record secret-free pass or fail evidence.
+Phase 3.5 must pass the dedicated PTY matrix on Windows, macOS, and Linux, repeat the Gemini and configured-router live matrix on the release candidate, record approved reference-machine benchmark evidence, close the remaining Phase 3.3 in-terminal credential-management gap, and complete the release checklist without an open P0 or P1 defect.
