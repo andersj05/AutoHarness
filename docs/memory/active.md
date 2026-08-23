@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-23
 
-**Phase:** 3.5 - Terminal release hardening
+**Phase:** 3.5 closeout, followed by 3.6 local profile and provider connection center
 
-**Status:** Phase 3.5 implementation is complete locally on `feat/phase-3-5-release-hardening`; baseline gates and a real instrumented router terminal smoke pass, while cross-platform PTY CI, release-candidate live providers, and approved reference-machine evidence remain open
+**Status:** Phase 3.5 implementation is complete locally on `feat/phase-3-5-release-hardening`; green baseline and cross-platform PTY pull-request evidence precede the newly planned Phases 3.6 through 3.9
 
 ## Current objective
 
-Promote the Phase 3.5 implementation through cross-platform CI, close the release-candidate evidence matrix, and execute the terminal release checklist before Phase 4.
+Promote the Phase 3.5 reliability substrate, then make complete multi-provider profile and operating-system-vault credential management the next runnable terminal vertical slice before redesigning the wider shell.
 
 ## Current repository state
 
@@ -28,6 +28,7 @@ Promote the Phase 3.5 implementation through cross-platform CI, close the releas
 - The terminal receives a safe settings projection and renders a non-modal `Ctrl+,` overlay naming the effective provider and credential source (`environment`, `credential vault`, or `session only`).
 - Sentinel tests seed a unique marker secret through save, rotate, disconnect, and delete flows and scan every durable file plus rendered debug output to prove no leakage.
 - `autoharness-tui` provides a Ratatui model/update/view client with masked zeroizing API-key entry, a searchable model picker, Unicode multiline composer, streaming transcript, scoped tool permission overlay, cancellation, retry, usage, errors, scrolling, compact rendering, a searchable session browser, per-session drafts, and settings provenance display.
+- The current `Ctrl+,` settings overlay is read-only and exposes only effective provider and credential-source labels; the TUI has no intents for provider-profile creation or persistent vault credential lifecycle actions.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
 - The PTY scenarios are ignored in ordinary non-terminal test hosts and run serially in a dedicated Windows, macOS, and Linux CI matrix step.
@@ -54,6 +55,7 @@ Promote the Phase 3.5 implementation through cross-platform CI, close the releas
 ## Recently completed
 
 - Implemented the Phase 3.5 PTY scenario harness and six release scenarios covering all planned terminal paths without live credentials.
+- Expanded the roadmap with Phase 3.6 profile and provider management, Phase 3.7 unified TUI shell and navigation, Phase 3.8 personalization and accessibility, and Phase 3.9 integrated terminal product validation.
 - Added monotonic benchmark markers, the real-PTY terminal latency runner, report validation, reference-machine fields, and content-free loopback correlation.
 - Added the configured-router plain-chat live probe, locked-vault degradation, corrupt-cache live replacement coverage, and provider-matched environment credential resolution.
 - Added and routed the terminal release checklist, updated benchmark and root documentation, and kept the baseline and isolated benchmark gates green.
@@ -81,24 +83,23 @@ Promote the Phase 3.5 implementation through cross-platform CI, close the releas
 ## Immediate next actions
 
 1. Open the Phase 3.5 pull request from `feat/phase-3-5-release-hardening` into `dev` and require green baseline plus serial PTY matrix jobs on Windows, macOS, and Linux.
-2. Run the Gemini and configured-router plain-chat and HTTP-function probes against the release candidate and record only pass or fail, adapter version, model identifier, and date.
-3. Designate the reference machine, collect storage and instrumented terminal reports from the release candidate, and complete the provenance record.
-4. Add in-terminal create, replace, test, disconnect, and session-only credential controls so the remaining Phase 3.3 UI exit evidence no longer requires shell setup.
-5. Execute the [terminal release checklist](../release/TERMINAL_RELEASE_CHECKLIST.md), triage every P0 and P1 finding, and promote through `dev` only after all required evidence passes.
+2. Before Phase 3.6 implementation, accept a focused ADR for ordering, rollback, and user-visible repair across profile-document and operating-system-vault mutations.
+3. Define application-owned profile and credential-management commands and safe read models for the full-screen Profiles and Providers surface.
+4. Implement the fresh-launch vertical slice that creates distinct Gemini and router profiles, saves distinct credentials, tests them safely, switches the active profile, and reconnects after restart without shell setup.
+5. Preserve live-provider, platform-vault, reference-machine, visual, migration, and release-checklist evidence for the integrated Phase 3.9 release candidate.
 
 ## Open questions
 
-- What reference machine should define startup and stream-overhead benchmarks?
-- Should the settings overlay grow direct profile editing before the remaining credential flows land?
+- What reference machine should define the final Phase 3.9 startup and stream-overhead budgets?
 
 ## Blockers
 
-The six dedicated PTY scenarios pass locally on Windows; cross-platform release evidence still requires the refreshed CI matrix on the committed candidate.
-A configured router endpoint plus credential is required for the router live matrix, and the Gemini probes must be repeated on the release candidate.
-An approved reference machine is required before recording authoritative Phase 3.5 storage and terminal latency results.
+The six dedicated PTY scenarios pass locally on Windows; Phase 3.5 promotion still requires the refreshed cross-platform CI matrix on the pull-request commit.
+Phase 3.6 implementation depends on an accepted cross-store credential mutation and recovery decision, but the existing typed settings resolver and vault port provide the required substrate.
+A configured router endpoint, platform vault environments, and an approved reference machine are required only for the final Phase 3.9 evidence matrix.
 
 ## Handoff note
 
-Phase 3.5 implementation is complete locally on `feat/phase-3-5-release-hardening`; merge only after the dedicated cross-platform PTY step and ordinary baseline jobs pass.
-The actual Windows router terminal smoke and all six Windows PTY release scenarios pass locally, but local development-machine timings are not release evidence.
-Use the ignored structural live probes and the terminal release checklist without retaining provider content, credentials, private endpoints, or raw payloads.
+Finish and promote Phase 3.5 before beginning Phase 3.6.
+The authoritative expanded sequence and exit criteria are in [PROJECT_PLAN](../PROJECT_PLAN.md), and [progress memory](progress.md) records the current implemented and planned milestone states.
+Phase 3.6 must use the existing operating-system vault and opaque profile references, keep the TUI behind typed application intents and safe read models, and never introduce plaintext fallback storage.
