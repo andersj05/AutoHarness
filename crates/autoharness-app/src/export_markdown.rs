@@ -1,8 +1,8 @@
 //! Human-readable Markdown transcript export.
 //!
 //! The export is derived only from authoritative durable events and shares
-//! its source of truth with the [JSON archive](crate::export) format; this
-//! module renders the same history for people instead of machines.
+//! its source of truth with the JSON archive format used by session export;
+//! this module renders the same history for people instead of machines.
 
 use autoharness_domain::{EventEnvelope, EventPayload};
 
