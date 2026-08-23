@@ -229,6 +229,11 @@ pub enum TranscriptItem {
         /// Exact user-authored text.
         text: String,
     },
+    /// One durable tool call rendered as a structured row.
+    Tool(
+        /// Provider-neutral presentation row for one tool call.
+        ToolRowView,
+    ),
     /// One model attempt, including retry lineage and settlement.
     Assistant {
         /// Stable attempt identity.
@@ -242,6 +247,21 @@ pub enum TranscriptItem {
         /// Prior attempt when this is a retry.
         retry_of: Option<AttemptKey>,
     },
+}
+
+/// One durable tool-call row suitable for collapsed transcript display.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolRowView {
+    /// Stable tool-call identity.
+    pub tool_call_id: ToolCallKey,
+    /// Registered versioned tool name.
+    pub tool_name: String,
+    /// Canonical scoped resource, shown only when expanded.
+    pub resource: String,
+    /// Safe settled or running state label.
+    pub status: String,
+    /// One-line bounded summary of the outcome, when any exists.
+    pub summary: Option<String>,
 }
 
 /// One durable human permission request.
@@ -362,7 +382,7 @@ impl SessionProjection {
             TranscriptItem::Assistant {
                 attempt_id, status, ..
             } => Some((attempt_id, status)),
-            TranscriptItem::User { .. } => None,
+            TranscriptItem::User { .. } | TranscriptItem::Tool(_) => None,
         })
     }
 }
@@ -1237,6 +1257,8 @@ pub struct Model {
     pub(crate) history: ComposerHistory,
     /// Active transcript search state.
     pub(crate) search: SearchState,
+    /// Whether transcript tool rows render expanded with resources.
+    pub(crate) tools_expanded: bool,
     /// Wrapped transcript row pinned into view by an active search jump.
     pub(crate) search_pinned_row: Option<usize>,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
@@ -1308,6 +1330,7 @@ impl Model {
             drafts: SessionDrafts::default(),
             history: ComposerHistory::default(),
             search: SearchState::default(),
+            tools_expanded: false,
             search_pinned_row: None,
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
@@ -1453,6 +1476,12 @@ impl Model {
     #[must_use]
     pub const fn help_scroll(&self) -> u16 {
         self.help.scroll
+    }
+
+    /// Returns whether tool rows currently render expanded.
+    #[must_use]
+    pub const fn tools_expanded(&self) -> bool {
+        self.tools_expanded
     }
 
     /// Returns whether the transcript search bar is open.

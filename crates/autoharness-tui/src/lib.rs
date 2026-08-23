@@ -11,8 +11,8 @@ pub use model::{
     ComposerState, CredentialSourceLabel, Focus, Message, Model, ModelSummary, Notice, PendingKind,
     PermissionDetailView, PermissionRequestView, ProviderKindLabel, ProviderStatusProjection,
     RequestId, RetryPolicy, SessionBrowserEntry, SessionProjection, SessionsProjection,
-    SettingsProjection, ToolCallKey, TranscriptItem, TranscriptState, UiEffect, UiFailure,
-    UiIntent, UiNotice, UsageView,
+    SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiEffect,
+    UiFailure, UiIntent, UiNotice, UsageView,
 };
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,

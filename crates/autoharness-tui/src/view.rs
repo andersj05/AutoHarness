@@ -26,6 +26,7 @@ const ASSISTANT_STYLE: Style = Style::new()
 const ERROR_STYLE: Style = Style::new()
     .fg(Color::LightRed)
     .add_modifier(Modifier::BOLD);
+const TOOL_STYLE: Style = Style::new().fg(Color::Yellow);
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -674,6 +675,24 @@ fn transcript_text(model: &Model) -> Text<'static> {
             TranscriptItem::User { text, .. } => {
                 lines.push(Line::styled("you", USER_STYLE));
                 push_safe_lines(&mut lines, text, Style::default());
+            }
+            TranscriptItem::Tool(row) => {
+                let mut heading = String::from("tool ");
+                heading.push_str(&display_safe(&row.tool_name));
+                if !row.status.is_empty() {
+                    heading.push_str(" · ");
+                    heading.push_str(&display_safe(&row.status));
+                }
+                if let Some(summary) = &row.summary {
+                    heading.push_str(" · ");
+                    heading.push_str(&display_safe(summary));
+                }
+                if model.tools_expanded {
+                    heading.push_str("  [");
+                    heading.push_str(&display_safe(&row.resource));
+                    heading.push(']');
+                }
+                lines.push(Line::styled(heading, TOOL_STYLE));
             }
             TranscriptItem::Assistant {
                 attempt_id,

@@ -270,6 +270,15 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         } => vec![UiEffect::CopyTranscript(
             crate::view::transcript_plain_text(model),
         )],
+        Input {
+            key: Key::Char('x' | 'X'),
+            ctrl: true,
+            ..
+        } => {
+            model.tools_expanded = !model.tools_expanded;
+            model.dirty = true;
+            Vec::new()
+        }
         input => {
             // Slash commands give keyboard-first access to every command
             // through the shared table without opening the palette overlay.
