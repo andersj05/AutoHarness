@@ -16,6 +16,8 @@ use zeroize::Zeroizing;
 pub enum VaultError {
     /// No entry exists under the requested reference.
     MissingEntry,
+    /// The platform credential service is locked or unavailable.
+    Unavailable,
     /// The secret is empty, oversized, or not usable for storage.
     InvalidSecret(&'static str),
     /// The platform vault rejected the operation.
@@ -26,6 +28,7 @@ impl fmt::Display for VaultError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingEntry => formatter.write_str("no stored credential exists"),
+            Self::Unavailable => formatter.write_str("credential vault is unavailable"),
             Self::InvalidSecret(reason) => write!(formatter, "{reason}"),
             Self::Platform(detail) => write!(formatter, "credential vault error: {detail}"),
         }
@@ -65,6 +68,14 @@ fn validate_secret(secret: &str) -> Result<&str, VaultError> {
         ));
     }
     Ok(secret)
+}
+
+fn map_keyring_error(error: keyring::Error) -> VaultError {
+    match error {
+        keyring::Error::NoEntry => VaultError::MissingEntry,
+        keyring::Error::NoStorageAccess(_) => VaultError::Unavailable,
+        other => VaultError::Platform(other.to_string()),
+    }
 }
 
 /// In-process fake vault used by tests and offline composition.
@@ -154,8 +165,7 @@ impl KeyringVault {
     }
 
     fn entry(&self, reference: &str) -> Result<keyring::Entry, VaultError> {
-        keyring::Entry::new(self.service, reference)
-            .map_err(|error| VaultError::Platform(error.to_string()))
+        keyring::Entry::new(self.service, reference).map_err(map_keyring_error)
     }
 }
 
@@ -178,18 +188,13 @@ impl VaultPort for KeyringVault {
         validate_secret(secret)?;
         let stored = CredentialReference::new(reference).map_err(VaultError::InvalidSecret)?;
         let entry = self.entry(stored.as_str())?;
-        entry
-            .set_password(secret)
-            .map_err(|error| VaultError::Platform(error.to_string()))?;
+        entry.set_password(secret).map_err(map_keyring_error)?;
         Ok(stored)
     }
 
     fn load(&self, reference: &CredentialReference) -> Result<Zeroizing<String>, VaultError> {
         let entry = self.entry(reference.as_str())?;
-        let secret = entry.get_password().map_err(|error| match error {
-            keyring::Error::NoEntry => VaultError::MissingEntry,
-            other => VaultError::Platform(other.to_string()),
-        })?;
+        let secret = entry.get_password().map_err(map_keyring_error)?;
         Ok(Zeroizing::new(secret))
     }
 
@@ -199,19 +204,16 @@ impl VaultPort for KeyringVault {
         // Distinguish a missing target from a platform failure.
         match entry.get_password() {
             Ok(_) => {}
-            Err(keyring::Error::NoEntry) => return Err(VaultError::MissingEntry),
-            Err(other) => return Err(VaultError::Platform(other.to_string())),
+            Err(error) => return Err(map_keyring_error(error)),
         }
-        entry
-            .set_password(secret)
-            .map_err(|error| VaultError::Platform(error.to_string()))
+        entry.set_password(secret).map_err(map_keyring_error)
     }
 
     fn delete(&self, reference: &CredentialReference) -> Result<(), VaultError> {
         let entry = self.entry(reference.as_str())?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(other) => Err(VaultError::Platform(other.to_string())),
+            Err(error) => Err(map_keyring_error(error)),
         }
     }
 }

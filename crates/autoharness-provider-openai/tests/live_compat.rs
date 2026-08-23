@@ -21,6 +21,54 @@ fn registry() -> Vec<ProviderToolDefinition> {
 
 #[tokio::test]
 #[ignore = "requires configured AUTOHARNESS_ROUTER_* variables and live router access"]
+async fn live_router_streams_plain_chat_to_completion() {
+    let provider = OpenAiRouterProvider::from_env().expect("configured router provider");
+    let model = provider
+        .list_models(CatalogRequest::Refresh, CancellationToken::new())
+        .await
+        .expect("live router catalog")
+        .into_models()
+        .into_iter()
+        .find(|descriptor| descriptor.capabilities.supports_streamed_chat())
+        .expect("a streaming router model");
+    let request = ChatRequest::new(
+        model.model_id,
+        vec![ChatMessage::text(
+            ChatRole::User,
+            ChatContent::new("Reply with one short greeting.").expect("probe prompt"),
+        )],
+    )
+    .expect("probe request");
+    let mut stream = provider
+        .stream_chat(request, CancellationToken::new())
+        .await
+        .expect("live router stream");
+    let mut started = false;
+    let mut text_bytes = 0_usize;
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        match event.expect("normalized live event") {
+            ProviderStreamEvent::Started => started = true,
+            ProviderStreamEvent::TextDelta(delta) => {
+                text_bytes = text_bytes.saturating_add(delta.as_str().len());
+            }
+            ProviderStreamEvent::Completed {
+                reason: CompletionReason::Stop,
+            } => {
+                completed = true;
+                break;
+            }
+            ProviderStreamEvent::Usage(_)
+            | ProviderStreamEvent::ToolCall(_)
+            | ProviderStreamEvent::Completed { .. }
+            | ProviderStreamEvent::Cancelled => {}
+        }
+    }
+    assert!(started && text_bytes > 0 && completed);
+}
+
+#[tokio::test]
+#[ignore = "requires configured AUTOHARNESS_ROUTER_* variables and live router access"]
 async fn live_router_normalizes_the_http_function_dialect() {
     let provider = OpenAiRouterProvider::from_env().expect("configured router provider");
     let model = provider

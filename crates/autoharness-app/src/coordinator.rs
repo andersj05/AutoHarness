@@ -53,6 +53,7 @@ enum AsyncMessage {
     Stream {
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
+        benchmark_chunk_sequence: Option<u64>,
     },
     Tool {
         tool_call_id: ToolCallId,
@@ -286,6 +287,12 @@ impl Coordinator {
                 session_id,
             } => {
                 self.delete_session(request_id, session_id).await?;
+            }
+            UiIntent::ExportTranscript {
+                request_id,
+                session_id,
+            } => {
+                self.export_transcript(request_id, session_id).await?;
             }
         }
         Ok(())
@@ -575,6 +582,60 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Writes the active session transcript as Markdown beside the database.
+    ///
+    /// The session is read-only for this operation, so it is allowed even
+    /// while other work is active; a concurrent export is deduplicated by
+    /// the terminal's pending-request tracking.
+    async fn export_transcript(
+        &mut self,
+        request_id: RequestId,
+        raw_session_id: String,
+    ) -> Result<(), AppError> {
+        let Ok(session_id) = SessionId::new(raw_session_id) else {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "That session identity is invalid",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        };
+        if session_id != self.session_id {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Validation,
+                    "Only the active session can be exported from here",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        match self.engine.export_transcript_markdown(session_id).await {
+            Ok(path) => {
+                let _ = path;
+                self.commit(request_id).await?;
+            }
+            Err(_) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Storage,
+                        "The transcript could not be written to local storage",
+                        RetryPolicy::Now,
+                    ),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn create_session(&mut self, request_id: RequestId) -> Result<(), AppError> {
         if self.active.is_some() {
             self.reject(
@@ -722,7 +783,7 @@ impl Coordinator {
             return Ok(());
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(attempt_id).await {
+        if let Err(error) = self.start_attempt(attempt_id, Some(request_id)).await {
             self.reject(request_id, start_attempt_failure(&error))
                 .await?;
             return Ok(());
@@ -812,7 +873,7 @@ impl Coordinator {
             return Ok(());
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(retry).await {
+        if let Err(error) = self.start_attempt(retry, None).await {
             self.reject(request_id, start_attempt_failure(&error))
                 .await?;
             return Ok(());
@@ -906,7 +967,11 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn start_attempt(&mut self, attempt_id: AttemptId) -> Result<(), StartAttemptError> {
+    async fn start_attempt(
+        &mut self,
+        attempt_id: AttemptId,
+        benchmark_request_id: Option<RequestId>,
+    ) -> Result<(), StartAttemptError> {
         let limits = RunLimits::default();
         let advertise_tools = self
             .session
@@ -947,7 +1012,12 @@ impl Coordinator {
         .map_err(StartAttemptError::Engine)?;
         telemetry::attempt_started();
         let cancellation = self.shutdown.child_token();
-        self.spawn_stream(attempt_id.clone(), request, cancellation.clone());
+        self.spawn_stream(
+            attempt_id.clone(),
+            request,
+            cancellation.clone(),
+            benchmark_request_id,
+        );
         let mut budget = RunBudget::new(limits);
         budget
             .start_turn()
@@ -968,8 +1038,13 @@ impl Coordinator {
                 request_id,
                 result,
             } => self.handle_catalog(generation, request_id, result).await,
-            AsyncMessage::Stream { attempt_id, result } => {
-                self.handle_stream(attempt_id, result).await
+            AsyncMessage::Stream {
+                attempt_id,
+                result,
+                benchmark_chunk_sequence,
+            } => {
+                self.handle_stream(attempt_id, result, benchmark_chunk_sequence)
+                    .await
             }
             AsyncMessage::Tool {
                 tool_call_id,
@@ -1038,6 +1113,7 @@ impl Coordinator {
         &mut self,
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
+        _benchmark_chunk_sequence: Option<u64>,
     ) -> Result<(), AppError> {
         let Some(active) = &self.active else {
             return Ok(());
@@ -1058,12 +1134,15 @@ impl Coordinator {
                     self.fail_run_budget(attempt_id, error).await?;
                     return Ok(());
                 }
-                self.execute(CommandPayload::AppendAttemptText {
-                    session_id: self.session_id.clone(),
-                    attempt_id,
-                    text: ResponseText::new(delta.as_str())
-                        .expect("provider contract excludes empty deltas"),
-                })
+                self.execute_and_publish(
+                    CommandPayload::AppendAttemptText {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        text: ResponseText::new(delta.as_str())
+                            .expect("provider contract excludes empty deltas"),
+                    },
+                    _benchmark_chunk_sequence.map(|sequence| (attempt_id, sequence)),
+                )
                 .await?;
                 telemetry::response_segment_committed(bytes);
             }
@@ -1481,7 +1560,7 @@ impl Coordinator {
             .expect("active checked")
             .cancellation
             .clone();
-        self.spawn_stream(attempt_id, request, cancellation);
+        self.spawn_stream(attempt_id, request, cancellation, None);
         Ok(())
     }
 
@@ -1613,8 +1692,32 @@ impl Coordinator {
     }
 
     async fn execute(&mut self, payload: CommandPayload) -> Result<(), DurableEngineError> {
+        self.execute_and_publish(payload, None).await
+    }
+
+    async fn execute_and_publish(
+        &mut self,
+        payload: CommandPayload,
+        _benchmark_chunk: Option<(AttemptId, u64)>,
+    ) -> Result<(), DurableEngineError> {
         let reply = self.engine.execute(ids::command(payload)).await?;
+        if reply.session.session_id() != &self.session_id {
+            return Ok(());
+        }
         self.session = reply.session;
+        #[cfg(feature = "benchmark-instrumentation")]
+        if let Some((attempt_id, chunk_sequence)) = _benchmark_chunk {
+            let revision = self
+                .session
+                .last_sequence()
+                .map_or(0, autoharness_domain::SessionSequence::get);
+            autoharness_tui::benchmark::projection_committed(
+                self.session_id.as_str(),
+                revision,
+                attempt_id.as_str(),
+                chunk_sequence,
+            );
+        }
         self.ports
             .sessions
             .send_replace(Arc::new(projection::session(&self.session)));
@@ -1672,6 +1775,7 @@ impl Coordinator {
         attempt_id: AttemptId,
         request: ChatRequest,
         cancellation: CancellationToken,
+        _benchmark_request_id: Option<RequestId>,
     ) {
         let provider = Arc::clone(
             self.provider
@@ -1680,9 +1784,28 @@ impl Coordinator {
         );
         let messages = self.messages.clone();
         tokio::spawn(async move {
+            #[cfg(feature = "benchmark-instrumentation")]
+            if let Some(request_id) = _benchmark_request_id {
+                autoharness_tui::benchmark::provider_dispatch_started(
+                    request_id,
+                    attempt_id.as_str(),
+                );
+            }
             match provider.stream_chat(request, cancellation).await {
                 Ok(mut stream) => {
                     while let Some(result) = stream.next().await {
+                        #[cfg(feature = "benchmark-instrumentation")]
+                        let benchmark_chunk_sequence = match &result {
+                            Ok(ProviderStreamEvent::TextDelta(delta)) => {
+                                autoharness_tui::benchmark::provider_chunk_received(
+                                    attempt_id.as_str(),
+                                    delta.as_str().len(),
+                                )
+                            }
+                            _ => None,
+                        };
+                        #[cfg(not(feature = "benchmark-instrumentation"))]
+                        let benchmark_chunk_sequence = None;
                         let terminal = match &result {
                             Err(_) => true,
                             Ok(event) => matches!(
@@ -1695,6 +1818,7 @@ impl Coordinator {
                             .send(AsyncMessage::Stream {
                                 attempt_id: attempt_id.clone(),
                                 result,
+                                benchmark_chunk_sequence,
                             })
                             .await
                             .is_err()
@@ -1712,6 +1836,7 @@ impl Coordinator {
                                 ProviderErrorKind::Protocol,
                                 RetryAdvice::Never,
                             )),
+                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -1720,6 +1845,7 @@ impl Coordinator {
                         .send(AsyncMessage::Stream {
                             attempt_id,
                             result: Err(error),
+                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -2820,6 +2946,11 @@ mod tests {
         })
         .await;
         assert_eq!(archived.len(), 2);
+        assert_eq!(
+            ui.sessions.borrow().session_id,
+            second_id.as_str(),
+            "mutating an inactive session must not replace the active projection"
+        );
 
         // Switch back into the first session; unarchive it first because an
         // archived session accepts no ordinary commands after activation.
@@ -3167,6 +3298,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn slash_export_writes_markdown_beside_the_database_without_touching_history() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("export-md.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let provider_for_factory = Arc::new(FakeProvider::default());
+        let factory: ProviderFactory = Arc::new(move |_credential| {
+            Ok(Arc::clone(&provider_for_factory) as Arc<dyn autoharness_provider::Provider>)
+        });
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: None,
+                factory,
+            },
+            test_tool_runtime(),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        // Connect the fake provider through the same in-app path users take.
+        let connect_id = RequestId::new(9);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id: connect_id,
+                credential: ApiCredential::new("export-fixture-key".to_owned())
+                    .expect("fixture credential"),
+            })
+            .await
+            .expect("credential intent");
+        expect_commit(&mut ui, connect_id).await;
+        wait_for_catalog(&mut ui).await;
+
+        // Select the fake catalog's model so submissions are admitted.
+        let select_request = RequestId::new(8);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+
+        // Admit one prompt so the transcript has content.
+        let submit_id = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_id,
+                prompt: "export me".to_owned(),
+            })
+            .await
+            .expect("submit intent");
+        expect_commit(&mut ui, submit_id).await;
+
+        // Export through the same typed intent the terminal dispatches.
+        let export_id = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::ExportTranscript {
+                request_id: export_id,
+                session_id: session_id.as_str().to_owned(),
+            })
+            .await
+            .expect("export intent");
+        expect_commit(&mut ui, export_id).await;
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        let entries: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("read data directory")
+            .collect();
+        let markdown = entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().ok())
+            .find(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".md"))
+            })
+            .map(|entry| entry.path())
+            .expect("a Markdown transcript must exist beside the database");
+        let contents = std::fs::read_to_string(&markdown).expect("read export");
+        assert!(contents.contains("# "));
+        assert!(contents.contains("export me"));
+
+        // The exported session is untouched and still lists durably.
+        let store =
+            SqliteStore::open(directory.path().join("export-md.sqlite3")).expect("reopen store");
+        assert_eq!(store.list_sessions().expect("sessions").len(), 1);
     }
 
     #[tokio::test]
@@ -3619,6 +3855,15 @@ mod tests {
         })
         .await;
         assert!(completed.permission_requests.is_empty());
+        assert!(completed.transcript.iter().any(|item| {
+            matches!(
+                item,
+                TranscriptItem::Tool(row)
+                    if row.tool_name == "fs_write"
+                        && row.status == "completed"
+                        && row.resource == "workspace:result.txt"
+            )
+        }));
         assert_eq!(
             std::fs::read_to_string(workspace.join("result.txt")).expect("tool output file"),
             "written by tool"
@@ -4050,7 +4295,7 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 TranscriptItem::Assistant { attempt_id, .. } => Some(attempt_id.clone()),
-                TranscriptItem::User { .. } => None,
+                TranscriptItem::Tool(_) | TranscriptItem::User { .. } => None,
             })
             .expect("streaming attempt");
 
@@ -4212,7 +4457,7 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 TranscriptItem::Assistant { attempt_id, .. } => Some(attempt_id.clone()),
-                TranscriptItem::User { .. } => None,
+                TranscriptItem::Tool(_) | TranscriptItem::User { .. } => None,
             })
             .expect("failed attempt");
 

@@ -1,6 +1,26 @@
-use autoharness_app::vault::{FakeVault, VaultPort};
+use autoharness_app::vault::{FakeVault, VaultError, VaultPort};
 use autoharness_app::{CredentialSourceName, ProfileCredentialResolver};
 use autoharness_settings::{CredentialReference, LayerKind, ProviderKind, SettingsBuilder};
+
+struct UnavailableVault;
+
+impl VaultPort for UnavailableVault {
+    fn save(&self, _: &str, _: &str) -> Result<CredentialReference, VaultError> {
+        Err(VaultError::Unavailable)
+    }
+
+    fn load(&self, _: &CredentialReference) -> Result<zeroize::Zeroizing<String>, VaultError> {
+        Err(VaultError::Unavailable)
+    }
+
+    fn replace(&self, _: &CredentialReference, _: &str) -> Result<(), VaultError> {
+        Err(VaultError::Unavailable)
+    }
+
+    fn delete(&self, _: &CredentialReference) -> Result<(), VaultError> {
+        Err(VaultError::Unavailable)
+    }
+}
 
 fn layers_json(profile: Option<&str>, credential: bool) -> String {
     let credential_block = if credential {
@@ -45,7 +65,40 @@ fn environment_credential_wins_over_everything() {
         "environment must take precedence over the vault"
     );
     assert_eq!(resolved.credential(), "env-secret");
-    assert_eq!(resolved.profile_id(), None);
+    assert_eq!(resolved.profile_id(), Some("home-router"));
+    assert_eq!(resolved.provider_kind(), Some(ProviderKind::Router));
+}
+
+#[test]
+fn environment_credential_must_match_the_effective_provider() {
+    let vault = FakeVault::new();
+    let gemini_settings = SettingsBuilder::new()
+        .with_environment([("AUTOHARNESS_PROVIDER", "gemini")])
+        .resolve()
+        .expect("Gemini settings");
+    let gemini = ProfileCredentialResolver::new(&vault)
+        .with_environment([
+            ("AUTOHARNESS_ROUTER_API_KEY", "router-secret"),
+            ("GEMINI_API_KEY", "gemini-secret"),
+        ])
+        .resolve(&gemini_settings)
+        .expect("Gemini credential");
+    assert_eq!(gemini.credential(), "gemini-secret");
+    assert_eq!(gemini.provider_kind(), Some(ProviderKind::Gemini));
+
+    let router_settings = SettingsBuilder::new()
+        .with_environment([("AUTOHARNESS_PROVIDER", "router")])
+        .resolve()
+        .expect("router settings");
+    let router = ProfileCredentialResolver::new(&vault)
+        .with_environment([
+            ("AUTOHARNESS_ROUTER_API_KEY", "router-secret"),
+            ("GEMINI_API_KEY", "gemini-secret"),
+        ])
+        .resolve(&router_settings)
+        .expect("router credential");
+    assert_eq!(router.credential(), "router-secret");
+    assert_eq!(router.provider_kind(), Some(ProviderKind::Router));
 }
 
 #[test]
@@ -90,6 +143,23 @@ fn missing_vault_entry_degrades_to_session_only_without_failure() {
 }
 
 #[test]
+fn locked_vault_degrades_to_session_only_without_failure() {
+    let settings = SettingsBuilder::new()
+        .with_layer(LayerKind::UserFile, layers_json(Some("home-router"), true))
+        .resolve()
+        .expect("valid settings");
+
+    let resolved = ProfileCredentialResolver::new(&UnavailableVault)
+        .resolve(&settings)
+        .expect("locked vault degrades instead of blocking startup");
+
+    assert_eq!(resolved.source_name(), CredentialSourceName::SessionOnly);
+    assert_eq!(resolved.profile_id(), Some("home-router"));
+    assert_eq!(resolved.provider_kind(), Some(ProviderKind::Router));
+    assert!(resolved.credential().is_empty());
+}
+
+#[test]
 fn profile_without_credential_link_is_session_only() {
     let vault = FakeVault::new();
     let settings = SettingsBuilder::new()
@@ -117,7 +187,7 @@ fn no_active_profile_means_no_provider_credential() {
         .expect("resolution succeeds");
 
     assert_eq!(resolved.source_name(), CredentialSourceName::SessionOnly);
-    assert_eq!(resolved.provider_kind(), None);
+    assert_eq!(resolved.provider_kind(), Some(ProviderKind::Gemini));
 }
 
 #[test]

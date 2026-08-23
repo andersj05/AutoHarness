@@ -3,8 +3,8 @@ use autoharness_engine::{AttemptStatus as EngineAttemptStatus, SessionAggregate}
 use autoharness_provider::{CapabilitySupport, ModelDescriptor};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, ModelSummary, PermissionDetailView,
-    PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, TranscriptItem, UiFailure,
-    UsageView,
+    PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, ToolRowView,
+    TranscriptItem, UiFailure, UsageView,
 };
 
 /// Converts the authoritative aggregate into the complete visible TUI state.
@@ -51,6 +51,20 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
                 input_tokens: usage.input_tokens().unwrap_or_default(),
                 output_tokens: usage.output_tokens().unwrap_or_default(),
             });
+            for call in aggregate
+                .tool_calls()
+                .iter()
+                .filter(|call| call.attempt_id() == attempt.attempt_id())
+            {
+                transcript.push(TranscriptItem::Tool(ToolRowView {
+                    tool_call_id: ToolCallKey::new(call.call().tool_call_id.as_str())
+                        .expect("domain tool-call IDs are non-empty"),
+                    tool_name: call.call().tool_name.as_str().to_owned(),
+                    resource: call.call().capability.resource.as_str().to_owned(),
+                    status: tool_status(call.status()).to_owned(),
+                    summary: tool_summary(call),
+                }));
+            }
             transcript.push(TranscriptItem::Assistant {
                 attempt_id,
                 text: attempt.response_text(),
@@ -91,6 +105,34 @@ pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
         transcript,
         permission_requests,
     }
+}
+
+fn tool_status(status: autoharness_engine::ToolCallStatus) -> &'static str {
+    match status {
+        autoharness_engine::ToolCallStatus::Proposed => "proposed",
+        autoharness_engine::ToolCallStatus::PermissionPending => "permission pending",
+        autoharness_engine::ToolCallStatus::Authorized => "authorized",
+        autoharness_engine::ToolCallStatus::DeniedPending => "denying",
+        autoharness_engine::ToolCallStatus::Running => "running",
+        autoharness_engine::ToolCallStatus::Completed => "completed",
+        autoharness_engine::ToolCallStatus::Failed => "failed",
+        autoharness_engine::ToolCallStatus::Denied => "denied",
+        autoharness_engine::ToolCallStatus::Cancelled => "cancelled",
+        autoharness_engine::ToolCallStatus::Unknown => "unknown",
+    }
+}
+
+fn tool_summary(call: &autoharness_engine::ToolCallProjection) -> Option<String> {
+    if let Some(output) = call.output() {
+        let suffix = if output.truncated() {
+            " retained as artifact"
+        } else {
+            ""
+        };
+        return Some(format!("{} bytes{suffix}", output.original_bytes()));
+    }
+    call.failure()
+        .map(|failure| failure.message().as_str().to_owned())
 }
 
 const fn capability_name(kind: autoharness_domain::CapabilityKind) -> &'static str {

@@ -5,6 +5,7 @@
 //! modules that have no terminal or orchestration state of their own.
 
 pub mod credential;
+pub mod export_markdown;
 pub mod profiles;
 pub mod vault;
 

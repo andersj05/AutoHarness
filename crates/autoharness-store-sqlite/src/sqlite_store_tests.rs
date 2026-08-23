@@ -1206,12 +1206,13 @@ fn deletion_removes_the_session_and_every_dependent_row_atomically() {
             attempt_id: attempt_id("attempt-1"),
         },
     ));
-    history.push(event(
-        "event-6",
-        &session,
-        6,
-        "command-text",
-        70,
+    history.push(EventEnvelope::new_v1(
+        event_id("event-6"),
+        session.clone(),
+        SessionSequence::new(6).expect("sequence"),
+        TimestampMillis::new(70),
+        Causation::Event(event_id("event-5")),
+        correlation_id("correlation-1"),
         EventPayload::AttemptTextAppended {
             attempt_id: attempt_id("attempt-1"),
             text: ResponseText::new("answer").expect("non-empty response"),

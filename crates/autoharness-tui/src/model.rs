@@ -229,6 +229,11 @@ pub enum TranscriptItem {
         /// Exact user-authored text.
         text: String,
     },
+    /// One durable tool call rendered as a structured row.
+    Tool(
+        /// Provider-neutral presentation row for one tool call.
+        ToolRowView,
+    ),
     /// One model attempt, including retry lineage and settlement.
     Assistant {
         /// Stable attempt identity.
@@ -242,6 +247,21 @@ pub enum TranscriptItem {
         /// Prior attempt when this is a retry.
         retry_of: Option<AttemptKey>,
     },
+}
+
+/// One durable tool-call row suitable for collapsed transcript display.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolRowView {
+    /// Stable tool-call identity.
+    pub tool_call_id: ToolCallKey,
+    /// Registered versioned tool name.
+    pub tool_name: String,
+    /// Canonical scoped resource, shown only when expanded.
+    pub resource: String,
+    /// Safe settled or running state label.
+    pub status: String,
+    /// One-line bounded summary of the outcome, when any exists.
+    pub summary: Option<String>,
 }
 
 /// One durable human permission request.
@@ -362,7 +382,7 @@ impl SessionProjection {
             TranscriptItem::Assistant {
                 attempt_id, status, ..
             } => Some((attempt_id, status)),
-            TranscriptItem::User { .. } => None,
+            TranscriptItem::User { .. } | TranscriptItem::Tool(_) => None,
         })
     }
 }
@@ -384,6 +404,12 @@ pub enum Focus {
     Permission,
     /// The session-browser overlay owns key input.
     Browser,
+    /// The command-palette overlay owns key input.
+    Palette,
+    /// The contextual help overlay owns key input.
+    Help,
+    /// The transcript search bar owns key input.
+    Search,
 }
 
 /// One searchable row in the session browser.
@@ -596,6 +622,15 @@ pub enum Notice {
     Failure(UiFailure),
 }
 
+/// One committed reversible lifecycle action awaiting possible undo.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UndoableLifecycle {
+    /// Session the action applied to.
+    pub session_id: String,
+    /// Whether the committed action archived (true) or unarchived (false).
+    pub archived: bool,
+}
+
 /// Kind of request awaiting application acknowledgement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingKind {
@@ -625,6 +660,19 @@ pub enum PendingKind {
     DeleteSession(String),
     /// Opening one durable session as the active session.
     OpenSession(String),
+    /// Markdown export of the active session transcript.
+    ExportTranscript,
+}
+
+/// Runner-side side effects the pure update layer cannot perform itself.
+#[derive(Debug)]
+pub enum UiEffect {
+    /// Dispatch an intent through the bounded application mailbox.
+    Dispatch(UiIntent),
+    /// Copy exact text to the system clipboard through OSC 52.
+    CopyTranscript(String),
+    /// Exit the terminal client.
+    Quit,
 }
 
 /// Intent emitted by pure update logic and handled by application composition.
@@ -691,6 +739,11 @@ pub enum UiIntent {
         request_id: RequestId,
         session_id: String,
     },
+    /// Write the active session transcript to a Markdown file.
+    ExportTranscript {
+        request_id: RequestId,
+        session_id: String,
+    },
 }
 
 impl UiIntent {
@@ -710,18 +763,10 @@ impl UiIntent {
             | Self::RenameSession { request_id, .. }
             | Self::ArchiveSession { request_id, .. }
             | Self::UnarchiveSession { request_id, .. }
-            | Self::DeleteSession { request_id, .. } => *request_id,
+            | Self::DeleteSession { request_id, .. }
+            | Self::ExportTranscript { request_id, .. } => *request_id,
         }
     }
-}
-
-/// Effect returned by update logic.
-#[derive(Debug)]
-pub enum UiEffect {
-    /// Dispatch an intent through the bounded application mailbox.
-    Dispatch(UiIntent),
-    /// Exit the terminal client.
-    Quit,
 }
 
 /// Application acknowledgement for a UI request.
@@ -795,7 +840,210 @@ pub(crate) struct BrowserState {
     pub rename_buffer: String,
     /// When set, deletion of this identity is awaiting explicit confirmation.
     pub confirming_delete: Option<String>,
+    /// When set, archiving this identity is awaiting explicit confirmation.
+    pub confirming_archive: Option<String>,
 }
+
+/// Command-palette local state.
+#[derive(Debug, Default)]
+pub(crate) struct PaletteState {
+    pub open: bool,
+    pub query: String,
+    /// Stable identity of the highlighted command.
+    pub selected: Option<&'static str>,
+    /// Focus restored when the palette closes without running a command.
+    pub return_focus: Focus,
+}
+
+/// Contextual help local state.
+#[derive(Debug, Default)]
+pub(crate) struct HelpState {
+    pub open: bool,
+    /// Rows scrolled from the top of the help content.
+    pub scroll: u16,
+    /// Focus restored when help closes.
+    pub return_focus: Focus,
+}
+
+/// One contextual help section shown in the help overlay.
+#[derive(Clone, Copy)]
+pub(crate) struct HelpSection {
+    /// Section heading, such as `Global` or `Composer`.
+    pub title: &'static str,
+    /// Ordered key-and-description rows.
+    pub rows: &'static [(&'static str, &'static str)],
+}
+
+/// The complete static help content.
+///
+/// Sections are rendered in order; the focused surface's section is
+/// highlighted by presentation logic.
+pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
+    HelpSection {
+        title: "Global",
+        rows: &[
+            ("Ctrl+S", "send the prompt"),
+            ("Ctrl+N", "create a fresh session"),
+            ("Ctrl+L", "open the session browser"),
+            ("Ctrl+P", "choose a model"),
+            ("Ctrl+K", "connect or replace the API key"),
+            ("Ctrl+,", "show settings provenance"),
+            ("Ctrl+R", "retry the failed attempt"),
+            ("Esc", "cancel streaming output"),
+            ("Alt+Up / Alt+Down", "scroll the transcript"),
+            ("Ctrl+End", "follow live output again"),
+            ("Ctrl+/", "command palette"),
+            ("F1", "this help"),
+            ("Ctrl+C", "quit"),
+        ],
+    },
+    HelpSection {
+        title: "Composer",
+        rows: &[
+            ("Enter", "new line"),
+            ("Type", "write the prompt"),
+            ("Paste", "insert multiline text"),
+            ("Esc", "cancel streaming output"),
+            ("Alt+Up / Alt+Down", "scroll the transcript"),
+        ],
+    },
+    HelpSection {
+        title: "Browser",
+        rows: &[
+            ("Type", "filter sessions"),
+            ("Up/Down", "choose a session"),
+            ("Enter", "open the session"),
+            ("Ctrl+R", "rename the session"),
+            ("Ctrl+A", "archive or unarchive"),
+            ("Ctrl+D", "delete with confirmation"),
+            ("Esc", "close the browser"),
+        ],
+    },
+    HelpSection {
+        title: "Models",
+        rows: &[
+            ("Type", "filter models"),
+            ("Up/Down", "choose a model"),
+            ("Enter", "select the model"),
+            ("Ctrl+R", "refresh the catalog"),
+            ("Esc", "close the picker"),
+        ],
+    },
+    HelpSection {
+        title: "Permission",
+        rows: &[
+            ("Y", "allow this exact call once"),
+            ("N or Esc", "deny"),
+            ("Up/Down", "inspect request details"),
+        ],
+    },
+];
+
+impl HelpSection {
+    /// Returns whether this section describes the given focus surface.
+    #[must_use]
+    pub(crate) fn matches_focus(&self, focus: Focus) -> bool {
+        match self.title {
+            "Global" => true,
+            "Composer" => matches!(focus, Focus::Composer | Focus::Credential | Focus::Help),
+            "Browser" => focus == Focus::Browser,
+            "Models" => focus == Focus::Picker,
+            "Permission" => focus == Focus::Permission,
+            _ => false,
+        }
+    }
+}
+
+/// Transcript search local state.
+#[derive(Debug, Default)]
+pub(crate) struct SearchState {
+    pub open: bool,
+    pub query: String,
+    /// Wrapped row indexes (in renderer coordinates) of matches.
+    pub matches: Vec<usize>,
+    /// Position within `matches`; `None` before the first Enter.
+    pub current: Option<usize>,
+}
+
+/// One executable command shared by the palette, slash commands, and keys.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandEntry {
+    /// Stable command identity, also the slash spelling without the slash.
+    pub id: &'static str,
+    /// Human-oriented palette label.
+    pub label: &'static str,
+    /// One-line description shown in the palette.
+    pub description: &'static str,
+    /// Primary key chord that runs the same action, when one exists.
+    pub key_hint: Option<&'static str>,
+}
+
+/// The complete, ordered command table.
+///
+/// Every user-facing action path (key, palette row, slash command) resolves to
+/// one entry here so all paths converge on the same behavior and intents.
+pub const COMMANDS: &[CommandEntry] = &[
+    CommandEntry {
+        id: "sessions",
+        label: "Sessions",
+        description: "Browse, rename, archive, or delete sessions",
+        key_hint: Some("Ctrl+L"),
+    },
+    CommandEntry {
+        id: "new-session",
+        label: "New session",
+        description: "Create and activate a fresh durable session",
+        key_hint: Some("Ctrl+N"),
+    },
+    CommandEntry {
+        id: "models",
+        label: "Models",
+        description: "Choose a model from the catalog",
+        key_hint: Some("Ctrl+P"),
+    },
+    CommandEntry {
+        id: "refresh-models",
+        label: "Refresh models",
+        description: "Reload the model catalog from the provider",
+        key_hint: Some("Ctrl+R in the picker"),
+    },
+    CommandEntry {
+        id: "connect-api-key",
+        label: "Connect API key",
+        description: "Enter or replace the provider API key",
+        key_hint: Some("Ctrl+K"),
+    },
+    CommandEntry {
+        id: "settings",
+        label: "Settings",
+        description: "Show effective provider, profile, and credential source",
+        key_hint: Some("Ctrl+,"),
+    },
+    CommandEntry {
+        id: "help",
+        label: "Help",
+        description: "Show keybindings and guidance for the current focus",
+        key_hint: Some("F1"),
+    },
+    CommandEntry {
+        id: "copy",
+        label: "Copy transcript",
+        description: "Copy the visible transcript to the system clipboard",
+        key_hint: Some("Ctrl+Y"),
+    },
+    CommandEntry {
+        id: "export",
+        label: "Export transcript",
+        description: "Save this session as Markdown beside the database",
+        key_hint: None,
+    },
+    CommandEntry {
+        id: "commands",
+        label: "Commands",
+        description: "Open this command palette",
+        key_hint: Some("Ctrl+/"),
+    },
+];
 
 /// Safe provider-kind label surfaced by application composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -887,6 +1135,83 @@ impl SettingsProjection {
     }
 }
 
+/// In-run composer history for prompt recall.
+///
+/// Entries are ordered oldest to newest and never persisted; the walk
+/// position is an offset from the end, where `None` means the live draft.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ComposerHistory {
+    entries: Vec<String>,
+    /// Offset back into history: 0 = newest entry, None = not walking.
+    walk: Option<usize>,
+    /// Live composer content stashed while walking, restored at the end.
+    stashed_draft: Option<String>,
+}
+
+impl ComposerHistory {
+    const MAX_ENTRIES: usize = 100;
+
+    pub(crate) fn record(&mut self, prompt: &str) {
+        if prompt.is_empty() {
+            return;
+        }
+        if self.entries.last().is_some_and(|last| last == prompt) {
+            self.walk = None;
+            return;
+        }
+        self.entries.push(prompt.to_owned());
+        if self.entries.len() > Self::MAX_ENTRIES {
+            let overflow = self.entries.len() - Self::MAX_ENTRIES;
+            self.entries.drain(0..overflow);
+        }
+        self.walk = None;
+    }
+
+    /// Steps back (negative) or forward (positive) through history.
+    ///
+    /// Returns the recalled text, or `None` when the step would leave the
+    /// history range. Stepping forward past the newest entry returns the
+    /// stashed draft and ends the walk.
+    pub(crate) fn step(&mut self, direction: isize, draft: &str) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        match direction.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                if self.walk.is_none() {
+                    // Starting a walk stashes the live draft so it can be
+                    // restored when the walk returns past the newest entry.
+                    self.stashed_draft = Some(draft.to_owned());
+                }
+                let next = self
+                    .walk
+                    .map_or(0, |walk| walk.saturating_add((-direction) as usize));
+                if next >= self.entries.len() {
+                    // Saturate at the oldest entry.
+                    self.walk = Some(self.entries.len() - 1);
+                    return Some(self.entries[0].clone());
+                }
+                self.walk = Some(next);
+                Some(self.entries[self.entries.len() - 1 - next].clone())
+            }
+            std::cmp::Ordering::Greater => {
+                let walk = self.walk?;
+                if walk == 0 {
+                    self.walk = None;
+                    return Some(self.stashed_draft.take().unwrap_or_default());
+                }
+                self.walk = Some(walk - 1);
+                Some(self.entries[self.entries.len() - 1 - (walk - 1)].clone())
+            }
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    pub(crate) fn reset_walk(&mut self) {
+        self.walk = None;
+    }
+}
+
 /// Per-session composer draft keyed by stable session identity.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub(crate) struct SessionDrafts {
@@ -935,8 +1260,20 @@ pub struct Model {
     pub(crate) picker: PickerState,
     pub(crate) credential: CredentialState,
     pub(crate) browser: BrowserState,
+    pub(crate) palette: PaletteState,
+    pub(crate) help: HelpState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
+    /// In-run submitted-prompt history for recall.
+    pub(crate) history: ComposerHistory,
+    /// Active transcript search state.
+    pub(crate) search: SearchState,
+    /// Whether transcript tool rows render expanded with resources.
+    pub(crate) tools_expanded: bool,
+    /// Wrapped transcript row pinned into view by an active search jump.
+    pub(crate) search_pinned_row: Option<usize>,
+    /// Most recent committed archive or unarchive available for undo.
+    pub(crate) undoable: Option<UndoableLifecycle>,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -1001,7 +1338,14 @@ impl Model {
                 ..CredentialState::default()
             },
             browser: BrowserState::default(),
+            palette: PaletteState::default(),
+            help: HelpState::default(),
             drafts: SessionDrafts::default(),
+            history: ComposerHistory::default(),
+            search: SearchState::default(),
+            tools_expanded: false,
+            search_pinned_row: None,
+            undoable: None,
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
@@ -1100,6 +1444,98 @@ impl Model {
     #[must_use]
     pub const fn picker_open(&self) -> bool {
         self.picker.open
+    }
+
+    /// Returns whether the command palette is open.
+    #[must_use]
+    pub const fn palette_open(&self) -> bool {
+        self.palette.open
+    }
+
+    /// Returns the current palette filter query.
+    #[must_use]
+    pub fn palette_query(&self) -> &str {
+        &self.palette.query
+    }
+
+    /// Returns palette rows matching the query in table order.
+    #[must_use]
+    pub fn palette_entries(&self) -> Vec<CommandEntry> {
+        let query = self.palette.query.to_lowercase();
+        COMMANDS
+            .iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.id.contains(&query)
+                    || entry.label.to_lowercase().contains(&query)
+                    || entry.description.to_lowercase().contains(&query)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Returns the highlighted palette command identity.
+    #[must_use]
+    pub const fn palette_selection(&self) -> Option<&'static str> {
+        self.palette.selected
+    }
+
+    /// Returns whether the contextual help overlay is open.
+    #[must_use]
+    pub const fn help_open(&self) -> bool {
+        self.help.open
+    }
+
+    /// Returns the current help scroll offset in rows.
+    #[must_use]
+    pub const fn help_scroll(&self) -> u16 {
+        self.help.scroll
+    }
+
+    /// Returns whether tool rows currently render expanded.
+    #[must_use]
+    pub const fn tools_expanded(&self) -> bool {
+        self.tools_expanded
+    }
+
+    /// Returns the identity awaiting confirmed archiving, if any.
+    #[must_use]
+    pub fn browser_archive_confirmation(&self) -> Option<&str> {
+        self.browser.confirming_archive.as_deref()
+    }
+
+    /// Returns whether the transcript search bar is open.
+    #[must_use]
+    pub const fn search_open(&self) -> bool {
+        self.search.open
+    }
+
+    /// Returns the active search query.
+    #[must_use]
+    pub fn search_query(&self) -> &str {
+        &self.search.query
+    }
+
+    /// Returns the number of transcript matches for the query.
+    #[must_use]
+    pub fn search_match_count(&self) -> usize {
+        self.search.matches.len()
+    }
+
+    /// Returns the position of the currently selected match.
+    #[must_use]
+    pub fn search_current_index(&self) -> usize {
+        self.search.current.unwrap_or(0)
+    }
+
+    /// Returns a safe one-line status label such as `2/7 matches`.
+    #[must_use]
+    pub fn search_status_label(&self) -> String {
+        if self.search.matches.is_empty() {
+            return "no matches".to_owned();
+        }
+        let current = self.search.current.map_or(1, |index| index + 1);
+        format!("{}/{} matches", current, self.search.matches.len())
     }
 
     /// Returns the filtered session-browser rows in durable order.

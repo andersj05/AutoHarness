@@ -4,8 +4,9 @@ use autoharness_domain::ErrorClass;
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AttemptKey, CatalogProjection, Focus, Message, Model, Notice, PendingKind, RetryPolicy,
-    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, Message, Model, Notice,
+    PendingKind, RetryPolicy, SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent,
+    UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -92,6 +93,51 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         return Vec::new();
     }
 
+    // Ctrl+/ opens the modal command palette from any focus except the
+    // permission decision, which owns the keyboard exclusively. F1 opens
+    // contextual help under the same rule.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('/' | '?'),
+            ctrl: true,
+            ..
+        }
+    ) && model.focus != Focus::Permission
+    {
+        open_palette(model);
+        return Vec::new();
+    }
+    if matches!(input, Input { key: Key::F(1), .. }) && model.focus != Focus::Permission {
+        open_help(model);
+        return Vec::new();
+    }
+    // Ctrl+F opens the transcript search bar under the same rule.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('f' | 'F'),
+            ctrl: true,
+            ..
+        }
+    ) && model.focus != Focus::Permission
+    {
+        open_search(model);
+        return Vec::new();
+    }
+
+    if model.focus == Focus::Palette {
+        return handle_palette_input(model, input);
+    }
+
+    if model.focus == Focus::Help {
+        return handle_help_input(model, input);
+    }
+
+    if model.focus == Focus::Search {
+        return handle_search_input(model, input);
+    }
+
     if model.focus == Focus::Permission {
         return handle_permission_input(model, input);
     }
@@ -175,6 +221,16 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input {
             key: Key::Up,
+            ctrl: true,
+            ..
+        } => recall_history(model, -1),
+        Input {
+            key: Key::Down,
+            ctrl: true,
+            ..
+        } => recall_history(model, 1),
+        Input {
+            key: Key::Up,
             alt: true,
             ..
         }
@@ -207,15 +263,32 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             follow_tail(model);
             Vec::new()
         }
+        Input {
+            key: Key::Char('y' | 'Y'),
+            ctrl: true,
+            ..
+        } => vec![UiEffect::CopyTranscript(
+            crate::view::transcript_plain_text(model),
+        )],
+        Input {
+            key: Key::Char('x' | 'X'),
+            ctrl: true,
+            ..
+        } => {
+            model.tools_expanded = !model.tools_expanded;
+            model.dirty = true;
+            Vec::new()
+        }
         input => {
-            // Slash commands give keyboard-first access to the session
-            // lifecycle without opening the browser overlay.
+            // Slash commands give keyboard-first access to every command
+            // through the shared table without opening the palette overlay.
             if !has_pending_submission(model)
                 && let Some(effects) = maybe_slash_command(model, &input)
             {
                 return effects;
             }
             if !has_pending_submission(model) && input_composer(&mut model.composer.editor, input) {
+                model.history.reset_walk();
                 model.notice = None;
                 model.dirty = true;
             }
@@ -224,18 +297,312 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 
-/// Recognizes exact slash commands typed into an otherwise empty composer.
+/// Recognizes slash commands typed into an otherwise empty composer.
+///
+/// The composer content is interpreted as a single command token:
+///
+/// - `/name` runs the shared command table entry and clears the composer.
+/// - `//text` escapes into the literal prompt `/text` on Enter.
+/// - Anything else, including multiline text, falls through to ordinary input.
 fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>> {
-    if model.composer.lines() != ["/sessions"] {
+    if !matches!(input.key, Key::Enter if !input.ctrl) {
         return None;
     }
-    match input.key {
-        Key::Enter if !input.ctrl => {
-            model.composer.reset();
-            open_browser(model);
+    let first = model.composer.lines().first().cloned()?;
+    let command = first
+        .strip_prefix('/')
+        .map(str::to_owned)
+        .filter(|command| !command.is_empty())?;
+
+    // A doubled leading slash escapes command interpretation entirely; the
+    // prompt is submitted with exactly one slash stripped.
+    if let Some(literal) = command.strip_prefix('/').map(str::to_owned) {
+        let text = format!("/{literal}");
+        model.composer.reset();
+        return Some(submit_prompt_text(model, text));
+    }
+
+    match run_command_by_id(model, &command) {
+        Err(rejection) => {
+            // A rejected command keeps its text editable so a typo costs one
+            // backspace, not a retyped line.
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                autoharness_domain::ErrorClass::Validation,
+                rejection,
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
             Some(Vec::new())
         }
-        _ => None,
+        Ok(effects) => {
+            model.composer.reset();
+            Some(effects)
+        }
+    }
+}
+
+/// Runs one shared command by its stable table identity.
+fn run_command_by_id(model: &mut Model, id: &str) -> Result<Vec<UiEffect>, String> {
+    let entry = COMMANDS
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("Unknown command '/{id}'. Press Ctrl+/ to list commands."))?;
+    Ok(execute_command(model, *entry))
+}
+
+/// Executes one shared command through the same local actions and intents
+/// that the corresponding keyboard chord uses, returning any intents that
+/// must cross into application composition.
+pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiEffect> {
+    match entry.id {
+        "sessions" => {
+            open_browser(model);
+            Vec::new()
+        }
+        "models" => {
+            open_picker(model);
+            Vec::new()
+        }
+        "connect-api-key" => {
+            open_credential(model);
+            Vec::new()
+        }
+        "settings" => {
+            model.settings_open = !model.settings_open;
+            model.dirty = true;
+            Vec::new()
+        }
+        "refresh-models" => refresh_catalog(model),
+        "new-session" => create_session(model),
+        "help" => {
+            open_help(model);
+            Vec::new()
+        }
+        "commands" => {
+            open_palette(model);
+            Vec::new()
+        }
+        "copy" => vec![UiEffect::CopyTranscript(
+            crate::view::transcript_plain_text(model),
+        )],
+        "export" => export_transcript(model),
+        unknown => unreachable!("command table contains an unhandled entry: {unknown}"),
+    }
+}
+
+/// Dispatches the durable Markdown-export intent for the active session.
+fn export_transcript(model: &mut Model) -> Vec<UiEffect> {
+    if model
+        .pending
+        .values()
+        .any(|pending| matches!(pending, PendingKind::ExportTranscript))
+    {
+        return Vec::new();
+    }
+    let session_id = model.session.session_id.clone();
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ExportTranscript);
+    model.notice = Some(Notice::Info("Exporting transcript...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ExportTranscript {
+        request_id,
+        session_id,
+    })]
+}
+
+/// Submits exact prompt text through the same pending-request path as a
+/// composer submission.
+fn submit_prompt_text(model: &mut Model, prompt: String) -> Vec<UiEffect> {
+    if has_pending_submission(model) || prompt.trim().is_empty() {
+        return Vec::new();
+    }
+    if !selected_model_available(model) {
+        model.notice = Some(Notice::Info(
+            "Choose a model from the current catalog before sending".to_owned(),
+        ));
+        open_picker(model);
+        return Vec::new();
+    }
+    if model.session.active_attempt().is_some() {
+        model.notice = Some(Notice::Info(
+            "Cancel or wait for the active response before sending".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::SubmitPrompt(prompt.clone()));
+    model.notice = Some(Notice::Info("Saving prompt...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::SubmitPrompt {
+        request_id,
+        prompt,
+    })]
+}
+
+/// Opens the modal command-palette overlay, remembering where the keyboard
+/// came from so Esc restores it exactly.
+fn open_palette(model: &mut Model) {
+    if !model.palette.open {
+        model.palette.return_focus = model.focus;
+    }
+    model.palette.open = true;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    normalize_palette_selection(model);
+    model.focus = Focus::Palette;
+    model.dirty = true;
+}
+
+fn close_palette(model: &mut Model) {
+    model.palette.open = false;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    model.focus = match model.palette.return_focus {
+        Focus::Palette | Focus::Permission => Focus::Composer,
+        restored => restored,
+    };
+    model.dirty = true;
+}
+
+fn filtered_palette_commands(model: &Model) -> Vec<CommandEntry> {
+    let query = model.palette.query.to_lowercase();
+    COMMANDS
+        .iter()
+        .filter(|entry| {
+            query.is_empty()
+                || entry.id.contains(&query)
+                || entry.label.to_lowercase().contains(&query)
+                || entry.description.to_lowercase().contains(&query)
+        })
+        .copied()
+        .collect()
+}
+
+fn normalize_palette_selection(model: &mut Model) {
+    let entries = filtered_palette_commands(model);
+    let valid = model
+        .palette
+        .selected
+        .is_some_and(|selected| entries.iter().any(|entry| entry.id == selected));
+    if !valid {
+        model.palette.selected = entries.first().map(|entry| entry.id);
+    } else if entries.is_empty() {
+        model.palette.selected = None;
+    }
+}
+
+fn move_palette_selection(model: &mut Model, direction: isize) {
+    let entries = filtered_palette_commands(model);
+    if entries.is_empty() {
+        model.palette.selected = None;
+        return;
+    }
+    let current = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let next = if direction < 0 {
+        current.checked_sub(1).unwrap_or(entries.len() - 1)
+    } else {
+        (current + 1) % entries.len()
+    };
+    model.palette.selected = Some(entries[next].id);
+    model.dirty = true;
+}
+
+fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
+    let Some(selected) = model.palette.selected else {
+        return Vec::new();
+    };
+    let Some(entry) = COMMANDS.iter().find(|entry| entry.id == selected).copied() else {
+        return Vec::new();
+    };
+    model.palette.open = false;
+    model.palette.query.clear();
+    model.palette.selected = None;
+    let effects = execute_command(model, entry);
+    // A command that opened another modal overlay keeps its focus there;
+    // otherwise the keyboard returns to the remembered focus.
+    if !model.palette.open && model.focus == Focus::Palette {
+        model.focus = match model.palette.return_focus {
+            Focus::Palette | Focus::Permission => Focus::Composer,
+            restored => restored,
+        };
+        model.dirty = true;
+    }
+    effects
+}
+
+/// Applies keyboard input while the command palette owns focus.
+///
+/// Quit and fresh-session chords stay global so power users never lose
+/// them; plain characters extend the filter query.
+fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('n' | 'N'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        return create_session(model);
+    }
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_palette(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => execute_palette_selection(model),
+        Input { key: Key::Up, .. } => {
+            move_palette_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_palette_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.palette.query.pop();
+            normalize_palette_selection(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.palette.query.push(character);
+            normalize_palette_selection(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -403,6 +770,29 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         return handle_browser_rename_input(model, input);
     }
 
+    // While an archiving is armed, Y confirms and N or Esc cancels.
+    if model.browser.confirming_archive.is_some() {
+        match input {
+            Input {
+                key: Key::Char('y' | 'Y'),
+                ctrl: false,
+                ..
+            } => return confirm_archive_selected_session(model),
+            Input {
+                key: Key::Char('n' | 'N'),
+                ctrl: false,
+                ..
+            }
+            | Input { key: Key::Esc, .. } => {
+                model.browser.confirming_archive = None;
+                model.notice = None;
+                model.dirty = true;
+                return Vec::new();
+            }
+            _ => return Vec::new(),
+        }
+    }
+
     // While a deletion is armed, Y confirms and N or Esc cancels.
     if model.browser.confirming_delete.is_some() {
         match input {
@@ -418,6 +808,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_delete = None;
+                model.notice = None;
                 model.dirty = true;
                 return Vec::new();
             }
@@ -451,6 +842,11 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: true,
             ..
         } => toggle_archive_selected_session(model),
+        Input {
+            key: Key::Char('z' | 'Z'),
+            ctrl: true,
+            ..
+        } => undo_last_lifecycle(model),
         Input {
             key: Key::Char('d' | 'D'),
             ctrl: true,
@@ -528,6 +924,7 @@ fn open_browser(model: &mut Model) {
     model.browser.renaming = false;
     model.browser.rename_buffer.clear();
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     if let Some(active) = model
         .sessions
         .sessions
@@ -547,6 +944,7 @@ fn close_browser(model: &mut Model) {
     model.browser.renaming = false;
     model.browser.rename_buffer.clear();
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     model.focus = Focus::Composer;
     model.dirty = true;
 }
@@ -581,6 +979,7 @@ fn move_browser_selection(model: &mut Model, direction: isize) {
     };
     model.browser.selected = Some(entries[next].session_id.clone());
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     model.dirty = true;
 }
 
@@ -598,7 +997,8 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::SubmitPrompt(_)
         | PendingKind::CancelAttempt(_)
         | PendingKind::RetryAttempt(_)
-        | PendingKind::AnswerPermission(_) => false,
+        | PendingKind::AnswerPermission(_)
+        | PendingKind::ExportTranscript => false,
     })
 }
 
@@ -684,32 +1084,79 @@ fn toggle_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
-    let request_id = model.allocate_request();
-    let (kind, intent) = if archived {
-        (
-            PendingKind::UnarchiveSession(session_id.clone()),
-            UiIntent::UnarchiveSession {
-                request_id,
-                session_id: session_id.clone(),
-            },
-        )
-    } else {
-        (
-            PendingKind::ArchiveSession(session_id.clone()),
-            UiIntent::ArchiveSession {
-                request_id,
-                session_id: session_id.clone(),
-            },
-        )
+    // Archiving hides work from the default view, so it arms for explicit
+    // confirmation; unarchiving is the safe direction and runs immediately.
+    if !archived {
+        model.browser.confirming_archive = Some(session_id);
+        model.notice = Some(Notice::Info(
+            "Press Y again to archive; N or Esc cancels".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+    dispatch_unarchive(model, session_id)
+}
+
+fn confirm_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(session_id) = model.browser.confirming_archive.take() else {
+        return Vec::new();
     };
-    model.pending.insert(request_id, kind);
-    model.notice = Some(Notice::Info(if archived {
-        "Unarchiving session...".to_owned()
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ArchiveSession(session_id.clone()));
+    model.notice = Some(Notice::Info("Archiving session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ArchiveSession {
+        request_id,
+        session_id,
+    })]
+}
+
+fn dispatch_unarchive(model: &mut Model, session_id: String) -> Vec<UiEffect> {
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::UnarchiveSession(session_id.clone()),
+    );
+    model.notice = Some(Notice::Info("Unarchiving session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UnarchiveSession {
+        request_id,
+        session_id,
+    })]
+}
+
+/// Reverses the most recent committed archive or unarchive exactly once.
+fn undo_last_lifecycle(model: &mut Model) -> Vec<UiEffect> {
+    let Some(undoable) = model.undoable.take() else {
+        return Vec::new();
+    };
+    model.notice = Some(Notice::Info(if undoable.archived {
+        "Undoing archive...".to_owned()
     } else {
-        "Archiving session...".to_owned()
+        "Undoing unarchive...".to_owned()
     }));
     model.dirty = true;
-    vec![UiEffect::Dispatch(intent)]
+    if undoable.archived {
+        dispatch_unarchive(model, undoable.session_id)
+    } else {
+        let request_id = model.allocate_request();
+        model.pending.insert(
+            request_id,
+            PendingKind::ArchiveSession(undoable.session_id.clone()),
+        );
+        vec![UiEffect::Dispatch(UiIntent::ArchiveSession {
+            request_id,
+            session_id: undoable.session_id,
+        })]
+    }
 }
 
 fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
@@ -775,6 +1222,163 @@ fn handle_paste(model: &mut Model, text: &str) {
         model.notice = None;
         model.dirty = true;
     }
+}
+
+/// Opens the transcript search bar and takes the keyboard.
+fn open_search(model: &mut Model) {
+    model.search.open = true;
+    model.search.query.clear();
+    model.search.matches.clear();
+    model.search.current = None;
+    model.focus = Focus::Search;
+    model.dirty = true;
+}
+
+fn close_search(model: &mut Model) {
+    model.search.open = false;
+    model.search.query.clear();
+    model.search.matches.clear();
+    model.search.current = None;
+    // A closed search no longer pins the scroll position.
+    model.focus = Focus::Composer;
+    model.dirty = true;
+}
+
+/// Recomputes matches for the current query over rendered transcript lines.
+///
+/// Matching runs on the same display text the renderer produces so counts,
+/// jump targets, and visible rows always agree. Case is ignored; queries are
+/// bounded by the composer safety limits through `editable_safe`.
+fn refresh_search_matches(model: &mut Model) {
+    let query = model.search.query.to_lowercase();
+    model.search.matches.clear();
+    model.search.current = None;
+    if query.is_empty() {
+        return;
+    }
+    let lines = crate::view::transcript_display_lines(model);
+    for (row, line) in lines.iter().enumerate() {
+        if line.to_lowercase().contains(&query) {
+            model.search.matches.push(row);
+        }
+    }
+}
+
+/// Advances to the next or previous match and scrolls it into view.
+fn step_search(model: &mut Model, direction: isize) {
+    if model.search.matches.is_empty() {
+        return;
+    }
+    let count = model.search.matches.len();
+    let next = match model.search.current {
+        None => {
+            if direction < 0 {
+                count - 1
+            } else {
+                0
+            }
+        }
+        Some(current) => {
+            let candidate = current as isize + direction;
+            candidate.rem_euclid(count as isize) as usize
+        }
+    };
+    model.search.current = Some(next);
+
+    // Pin the transcript scroll to the matching row: disable tail-follow and
+    // set the offset so the row lands mid-viewport when possible.
+    let row = model.search.matches[next];
+    model.transcript.follow_tail = false;
+    model.search_pinned_row = Some(row);
+    model.dirty = true;
+}
+
+/// Applies keyboard input while the search bar owns the keyboard.
+///
+/// Quit and fresh-session chords stay global; BackTab walks backwards.
+fn handle_search_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('n' | 'N'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        return create_session(model);
+    }
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_search(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => {
+            step_search(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Tab,
+            shift: true,
+            ..
+        } => {
+            step_search(model, -1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.search.query.pop();
+            refresh_search_matches(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.search.query.push(character);
+            refresh_search_matches(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Steps composer history without ever touching durable state.
+///
+/// A successful recall replaces the composer content; any ordinary edit
+/// afterwards ends the walk so Ctrl+Down returns to the edited draft.
+fn recall_history(model: &mut Model, direction: isize) -> Vec<UiEffect> {
+    let draft = model.composer.text();
+    if let Some(recalled) = model.history.step(direction, &draft) {
+        model.composer.reset();
+        if !recalled.is_empty() {
+            let _ = model
+                .composer
+                .editor
+                .insert_str(crate::text::editable_safe(&recalled));
+        }
+        model.notice = None;
+        model.dirty = true;
+    }
+    Vec::new()
 }
 
 fn input_composer(editor: &mut ratatui_textarea::TextArea<'static>, input: Input) -> bool {
@@ -917,7 +1521,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::ConfigureCredential => {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
                     }
-                    PendingKind::SubmitPrompt(_) => {
+                    PendingKind::SubmitPrompt(prompt) => {
+                        model.history.record(&prompt);
                         model.composer.reset();
                         model.notice = None;
                     }
@@ -943,11 +1548,22 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::RenameSession(_) => {
                         model.notice = Some(Notice::Info("Title saved".to_owned()));
                     }
-                    PendingKind::ArchiveSession(_) => {
-                        model.notice = Some(Notice::Info("Session archived".to_owned()));
+                    PendingKind::ArchiveSession(session_id) => {
+                        model.undoable = Some(crate::model::UndoableLifecycle {
+                            session_id,
+                            archived: true,
+                        });
+                        model.notice =
+                            Some(Notice::Info("Session archived - Ctrl+Z to undo".to_owned()));
                     }
-                    PendingKind::UnarchiveSession(_) => {
-                        model.notice = Some(Notice::Info("Session unarchived".to_owned()));
+                    PendingKind::UnarchiveSession(session_id) => {
+                        model.undoable = Some(crate::model::UndoableLifecycle {
+                            session_id,
+                            archived: false,
+                        });
+                        model.notice = Some(Notice::Info(
+                            "Session unarchived - Ctrl+Z to undo".to_owned(),
+                        ));
                     }
                     PendingKind::DeleteSession(_) => {
                         model.notice = Some(Notice::Info("Session deleted".to_owned()));
@@ -955,6 +1571,9 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::OpenSession(_) => {
                         close_browser(model);
                         model.notice = Some(Notice::Info("Session opened".to_owned()));
+                    }
+                    PendingKind::ExportTranscript => {
+                        model.notice = Some(Notice::Info("Transcript exported".to_owned()));
                     }
                 }
             }
@@ -980,7 +1599,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     | PendingKind::ArchiveSession(_)
                     | PendingKind::UnarchiveSession(_)
                     | PendingKind::DeleteSession(_)
-                    | PendingKind::OpenSession(_),
+                    | PendingKind::OpenSession(_)
+                    | PendingKind::ExportTranscript,
                 )
                 | None => {}
             }
@@ -1228,6 +1848,75 @@ fn open_picker(model: &mut Model) {
     model.dirty = true;
 }
 
+/// Opens the modal contextual help overlay, remembering where the keyboard
+/// came from so Esc restores it exactly.
+fn open_help(model: &mut Model) {
+    if !model.help.open {
+        model.help.return_focus = model.focus;
+    }
+    model.help.open = true;
+    model.help.scroll = 0;
+    model.focus = Focus::Help;
+    model.dirty = true;
+}
+
+fn close_help(model: &mut Model) {
+    model.help.open = false;
+    model.help.scroll = 0;
+    model.focus = match model.help.return_focus {
+        Focus::Help | Focus::Permission => Focus::Composer,
+        restored => restored,
+    };
+    model.dirty = true;
+}
+
+fn scroll_help(model: &mut Model, rows: i32) {
+    let next = i32::from(model.help.scroll)
+        .saturating_add(rows)
+        .clamp(0, i32::from(u16::MAX));
+    model.help.scroll = next as u16;
+    model.dirty = true;
+}
+
+/// Applies keyboard input while the help overlay owns focus.
+///
+/// Quit stays global; every other key is either navigation or ignored so
+/// drafts and durable state stay untouched.
+fn handle_help_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    match input {
+        Input { key: Key::Esc, .. } | Input { key: Key::F(1), .. } => {
+            close_help(model);
+            Vec::new()
+        }
+        Input { key: Key::Up, .. }
+        | Input {
+            key: Key::PageUp, ..
+        } => {
+            scroll_help(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. }
+        | Input {
+            key: Key::PageDown, ..
+        } => {
+            scroll_help(model, 1);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn open_credential(model: &mut Model) {
     if has_pending_credential(model) {
         model.notice = Some(Notice::Info(
@@ -1373,7 +2062,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::ArchiveSession(_)
             | PendingKind::UnarchiveSession(_)
             | PendingKind::DeleteSession(_)
-            | PendingKind::OpenSession(_) => false,
+            | PendingKind::OpenSession(_)
+            | PendingKind::ExportTranscript => false,
         })
 }
 

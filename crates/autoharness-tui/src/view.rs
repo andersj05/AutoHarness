@@ -26,6 +26,7 @@ const ASSISTANT_STYLE: Style = Style::new()
 const ERROR_STYLE: Style = Style::new()
     .fg(Color::LightRed)
     .add_modifier(Modifier::BOLD);
+const TOOL_STYLE: Style = Style::new().fg(Color::Yellow);
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -42,6 +43,10 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
     if model.focus == Focus::Permission {
         render_permission(frame, area, model);
+    } else if model.palette.open {
+        render_palette(frame, area, model);
+    } else if model.help.open {
+        render_help(frame, area, model);
     } else if model.browser.open {
         render_browser(frame, area, model);
     } else if model.credential.open {
@@ -50,6 +55,164 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         render_picker(frame, area, model);
     } else if model.settings_open {
         render_settings(frame, area, model);
+    }
+}
+
+/// Renders the searchable command-palette overlay from local state only.
+fn render_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Commands ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let search_height = 1.min(inner.height);
+    let help_height = u16::from(inner.height >= 3);
+    let list_height = inner.height.saturating_sub(search_height + help_height);
+    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
+    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
+    let help = Rect::new(
+        inner.x,
+        inner.y + search_height + list_height,
+        inner.width,
+        help_height,
+    );
+
+    frame.render_widget(
+        Paragraph::new(format!("Filter: {}", display_safe(&model.palette.query)))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        search,
+    );
+
+    let entries = model.palette_entries();
+    if entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No commands match this filter.").style(MUTED_STYLE),
+            list,
+        );
+    } else {
+        let selected = model.palette.selected;
+        let selected_index = selected
+            .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+            .unwrap_or(0);
+        let visible = usize::from(list.height);
+        let start = selected_index
+            .saturating_add(1)
+            .saturating_sub(visible)
+            .min(entries.len().saturating_sub(visible));
+        let items = entries
+            .iter()
+            .skip(start)
+            .take(visible)
+            .map(|entry| palette_item(entry, selected))
+            .collect::<Vec<_>>();
+        frame.render_widget(List::new(items), list);
+    }
+
+    if help.height > 0 {
+        frame.render_widget(
+            Paragraph::new("↑/↓ choose  Enter run  Esc close").style(MUTED_STYLE),
+            help,
+        );
+    }
+}
+
+fn palette_item(
+    entry: &crate::model::CommandEntry,
+    selected: Option<&'static str>,
+) -> ListItem<'static> {
+    let is_selected = selected == Some(entry.id);
+    let prefix = if is_selected { "›" } else { " " };
+    let mut label = format!(
+        "{prefix} /{} - {}",
+        entry.id,
+        display_safe(entry.description)
+    );
+    if let Some(hint) = entry.key_hint {
+        let _ = write!(label, "  [{hint}]");
+    }
+    let style = if is_selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    ListItem::new(Line::styled(label, style))
+}
+
+/// Renders the contextual help overlay from local state only.
+///
+/// The section matching the surface help was requested from is rendered
+/// first and highlighted, and content scrolls without clipping the frame.
+fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Help ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // The surface help was opened from leads; everything else follows in
+    // table order so context is never below the fold on small terminals.
+    // The always-true Global section never leads.
+    let origin = model.help.return_focus;
+    let mut ordered: Vec<&crate::model::HelpSection> = Vec::new();
+    if let Some(first) = crate::model::HELP_SECTIONS
+        .iter()
+        .find(|section| section.title != "Global" && section.matches_focus(origin))
+    {
+        ordered.push(first);
+    }
+    for section in crate::model::HELP_SECTIONS {
+        if !ordered.iter().any(|placed| std::ptr::eq(*placed, section)) {
+            ordered.push(section);
+        }
+    }
+
+    let mut lines = Vec::new();
+    for (position, section) in ordered.iter().enumerate() {
+        let style = if position == 0 {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::styled(section.title.to_owned(), style));
+        for (key, description) in section.rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {key}"), MUTED_STYLE),
+                Span::raw(format!("  {description}")),
+            ]));
+        }
+    }
+
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height - hint_height;
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph.scroll((model.help.scroll, 0)), content);
+
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new("↑/↓ scroll  Esc close").style(MUTED_STYLE),
+            hint,
+        );
     }
 }
 
@@ -254,12 +417,14 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .saturating_add(2)
         .clamp(3, 8);
     let notice_height = if model.notice.is_some() { 2 } else { 0 };
+    let search_height = u16::from(model.search.open);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(notice_height),
+            Constraint::Length(search_height),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
@@ -270,9 +435,23 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if notice_height > 0 {
         render_notice(frame, chunks[2], model);
     }
-    frame.render_widget(&model.composer.editor, chunks[3]);
-    render_footer(frame, chunks[4], model);
-    set_composer_cursor(frame, chunks[3], model, true);
+    if search_height > 0 {
+        render_search_bar(frame, chunks[3], model);
+    }
+    frame.render_widget(&model.composer.editor, chunks[4]);
+    render_footer(frame, chunks[5], model);
+    set_composer_cursor(frame, chunks[4], model, true);
+}
+
+/// Renders the one-row transcript search bar.
+fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let status = model.search_status_label();
+    let query = display_safe(&model.search.query);
+    frame.render_widget(
+        Paragraph::new(format!(" Search: /{query} - {status} "))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        area,
+    );
 }
 
 fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -339,15 +518,81 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "ready".to_owned()
     };
+
+    // Status surface segments degrade left to right: identity and work state
+    // survive at every width; provider, credential, catalog, and usage detail
+    // appear as space allows. Credential wording never claims a connection
+    // that is not effective.
+    let provider = model.settings.provider_label();
+    let credential = header_credential_label(model);
+    let catalog = match &*model.catalog {
+        CatalogProjection::Ready { stale: true, .. } => "catalog stale",
+        CatalogProjection::Failed(_) => "catalog error",
+        CatalogProjection::Ready { stale: false, .. }
+        | CatalogProjection::Loading
+        | CatalogProjection::CredentialRequired => "",
+    };
+    let usage = session_usage(model);
+    let usage_segment = (!usage.is_empty()).then(|| format!(" | {usage}"));
+    let usage = usage_segment.as_deref().unwrap_or_default();
+
     let title = if area.width < 50 {
         format!(" AutoHarness | {state} ")
-    } else {
+    } else if area.width < 72 {
         format!(" AutoHarness  |  {selected}  |  {state} ")
+    } else {
+        let mut title =
+            format!(" AutoHarness  |  {provider}  |  {credential}  |  {selected}  |  {state}");
+        if !catalog.is_empty() {
+            title.push_str(&format!("  |  {catalog}"));
+        }
+        title.push_str(usage);
+        title.push(' ');
+        title
     };
     frame.render_widget(
         Paragraph::new(display_safe(&title)).style(HEADER_STYLE),
         area,
     );
+}
+
+/// Safe credential label for the status surface.
+///
+/// A vault or environment source only displays when a credential is actually
+/// connected; otherwise the disconnected state is named explicitly so the
+/// status line can never overclaim.
+fn header_credential_label(model: &Model) -> String {
+    let status = &model.settings.provider_status;
+    if status.credential_connected {
+        status.credential_source.as_str().to_owned()
+    } else if status.active_profile.is_some() {
+        // A profile exists but no credential resolved from any source.
+        "disconnected".to_owned()
+    } else {
+        // The documented default: nothing persisted, session-only entry.
+        "session only".to_owned()
+    }
+}
+
+/// Aggregate token usage across completed attempts in the active session.
+fn session_usage(model: &Model) -> String {
+    let (input, output) = model
+        .session
+        .transcript
+        .iter()
+        .fold((0_u64, 0_u64), |acc, item| match item {
+            TranscriptItem::Assistant {
+                usage: Some(usage), ..
+            } => (
+                acc.0.saturating_add(usage.input_tokens),
+                acc.1.saturating_add(usage.output_tokens),
+            ),
+            _ => acc,
+        });
+    if input == 0 && output == 0 {
+        return String::new();
+    }
+    format!("{} tok", input.saturating_add(output))
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
@@ -373,14 +618,43 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let total_rows = paragraph.line_count(inner.width);
     let viewport_rows = usize::from(inner.height);
     let maximum_scroll = total_rows.saturating_sub(viewport_rows);
-    let rows_from_bottom = if model.transcript.follow_tail {
-        0
+
+    // An active search jump pins its row into view; ordinary scrolling and
+    // tail-follow apply otherwise.
+    let top: usize = if let Some(pinned) = model.search_pinned_row.filter(|_| model.search.open) {
+        pinned.saturating_sub(viewport_rows / 4).min(maximum_scroll)
+    } else if model.transcript.follow_tail {
+        maximum_scroll
     } else {
-        model.transcript.rows_from_bottom.min(maximum_scroll)
+        maximum_scroll.saturating_sub(model.transcript.rows_from_bottom.min(maximum_scroll))
     };
-    let top = maximum_scroll.saturating_sub(rows_from_bottom);
     let top = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((top, 0)), inner);
+}
+
+/// Plain text of the whole transcript for clipboard copy.
+///
+/// The output is display-safe (control characters escaped) and identical to
+/// what search matches against.
+pub(crate) fn transcript_plain_text(model: &Model) -> String {
+    let mut lines = transcript_display_lines(model);
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+/// Plain display text of every transcript line, shared by rendering and
+/// search so match counts always describe what is actually visible.
+pub(crate) fn transcript_display_lines(model: &Model) -> Vec<String> {
+    let text = transcript_text(model);
+    text.lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 fn transcript_text(model: &Model) -> Text<'static> {
@@ -401,6 +675,24 @@ fn transcript_text(model: &Model) -> Text<'static> {
             TranscriptItem::User { text, .. } => {
                 lines.push(Line::styled("you", USER_STYLE));
                 push_safe_lines(&mut lines, text, Style::default());
+            }
+            TranscriptItem::Tool(row) => {
+                let mut heading = String::from("tool ");
+                heading.push_str(&display_safe(&row.tool_name));
+                if !row.status.is_empty() {
+                    heading.push_str(" · ");
+                    heading.push_str(&display_safe(&row.status));
+                }
+                if let Some(summary) = &row.summary {
+                    heading.push_str(" · ");
+                    heading.push_str(&display_safe(summary));
+                }
+                if model.tools_expanded {
+                    heading.push_str("  [");
+                    heading.push_str(&display_safe(&row.resource));
+                    heading.push(']');
+                }
+                lines.push(Line::styled(heading, TOOL_STYLE));
             }
             TranscriptItem::Assistant {
                 attempt_id,
@@ -552,6 +844,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Style::default().fg(Color::Black).bg(Color::DarkGray),
         ));
         spans.push(Span::raw("API key"));
+    }
+    if area.width >= 104 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            " F1 ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        ));
+        spans.push(Span::raw("help"));
     }
     if let Some((attempt_id, status)) = model.session.active_attempt() {
         spans.push(Span::raw("  "));
