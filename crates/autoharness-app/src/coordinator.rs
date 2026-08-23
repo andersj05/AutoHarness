@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use autoharness_domain::{
@@ -15,18 +16,27 @@ use autoharness_provider::{
 };
 #[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
+use autoharness_settings::{ProfileId, ProviderKind, ProviderProfile};
 use autoharness_store::SessionStatus;
 use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
 use autoharness_tui::{
-    ApiCredential, AppPorts, AttemptKey, CatalogProjection, RequestId, RetryPolicy,
-    SessionBrowserEntry, SessionsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
+    ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
+    LocalUserProfileProjection, ProfileConnectionState, ProfileCredentialStateLabel,
+    ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, ProviderProfileProjection,
+    RequestId, RetryPolicy, SessionBrowserEntry, SessionsProjection, SettingsProjection,
+    ToolCallKey, UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
+use zeroize::Zeroizing;
 
 use crate::engine_actor::EngineHandle;
 use crate::error::AppError;
 use crate::{ids, projection, telemetry};
+use autoharness_app::profiles::{
+    ProfileManagementError, ProfileManager, ProfileStoreError, StoredCredentialState,
+};
+use autoharness_app::vault::VaultError;
 
 const PROVIDER_MESSAGE_CAPACITY: usize = 128;
 
@@ -36,6 +46,59 @@ pub(crate) type ProviderFactory =
 pub(crate) struct ProviderComposition {
     pub(crate) initial: Option<Arc<dyn Provider>>,
     pub(crate) factory: ProviderFactory,
+}
+pub(crate) type ProfileProviderFactory = Arc<
+    dyn Fn(&ProviderProfile, ApiCredential) -> Result<Arc<dyn Provider>, ProviderError>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+/// Environment credentials retained only in zeroizing process memory.
+pub(crate) struct EnvironmentCredentials {
+    pub(crate) gemini: Option<Zeroizing<String>>,
+    pub(crate) router: Option<Zeroizing<String>>,
+}
+
+impl EnvironmentCredentials {
+    fn credential(&self, kind: ProviderKind) -> Option<Zeroizing<String>> {
+        match kind {
+            ProviderKind::Gemini => self.gemini.clone(),
+            ProviderKind::Router => self.router.clone(),
+        }
+    }
+
+    fn has(&self, kind: ProviderKind) -> bool {
+        match kind {
+            ProviderKind::Gemini => self.gemini.is_some(),
+            ProviderKind::Router => self.router.is_some(),
+        }
+    }
+}
+
+pub(crate) struct ProfileRuntime {
+    pub(crate) manager: Arc<ProfileManager>,
+    pub(crate) factory: ProfileProviderFactory,
+    pub(crate) environment: EnvironmentCredentials,
+    pub(crate) workspace: String,
+    connection: BTreeMap<String, ProfileConnectionState>,
+}
+
+impl ProfileRuntime {
+    pub(crate) fn new(
+        manager: Arc<ProfileManager>,
+        factory: ProfileProviderFactory,
+        environment: EnvironmentCredentials,
+        workspace: String,
+    ) -> Self {
+        Self {
+            manager,
+            factory,
+            environment,
+            workspace,
+            connection: BTreeMap::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -59,6 +122,11 @@ enum AsyncMessage {
         tool_call_id: ToolCallId,
         result: Result<autoharness_domain::ToolOutput, ToolError>,
     },
+    ProfileTest {
+        profile_id: String,
+        request_id: RequestId,
+        result: Result<ModelCatalog, ProviderError>,
+    },
 }
 
 struct ActiveAttempt {
@@ -80,6 +148,7 @@ pub struct Coordinator {
     engine: EngineHandle,
     provider: Option<Arc<dyn Provider>>,
     provider_factory: ProviderFactory,
+    profiles: Option<ProfileRuntime>,
     tool_runtime: Arc<ToolRuntime>,
     ports: AppPorts,
     messages: mpsc::Sender<AsyncMessage>,
@@ -117,11 +186,34 @@ impl Coordinator {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn with_provider_factory(
         session_id: SessionId,
         session: SessionAggregate,
         engine: EngineHandle,
         provider: ProviderComposition,
+        tool_runtime: Arc<ToolRuntime>,
+        ports: AppPorts,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self::with_profile_runtime(
+            session_id,
+            session,
+            engine,
+            provider,
+            None,
+            tool_runtime,
+            ports,
+            shutdown,
+        )
+    }
+
+    pub(crate) fn with_profile_runtime(
+        session_id: SessionId,
+        session: SessionAggregate,
+        engine: EngineHandle,
+        provider: ProviderComposition,
+        profiles: Option<ProfileRuntime>,
         tool_runtime: Arc<ToolRuntime>,
         ports: AppPorts,
         shutdown: CancellationToken,
@@ -134,6 +226,7 @@ impl Coordinator {
             engine,
             provider: provider.initial,
             provider_factory: provider.factory,
+            profiles,
             tool_runtime,
             ports,
             messages,
@@ -149,6 +242,10 @@ impl Coordinator {
     /// Runs until terminal shutdown or application-channel closure.
     pub async fn run(mut self) -> Result<(), AppError> {
         self.publish_sessions().await?;
+        if let Some(profiles) = &self.profiles {
+            let _ = profiles.manager.recover_pending();
+        }
+        self.publish_profiles();
         if self.provider.is_some() {
             self.refresh_catalog(None);
             self.maybe_resume_after_tools().await?;
@@ -191,6 +288,60 @@ impl Coordinator {
                 credential,
             } => {
                 self.configure_credential(request_id, credential).await?;
+            }
+            UiIntent::UpsertProfile {
+                request_id,
+                profile,
+            } => {
+                self.upsert_profile(request_id, profile).await?;
+            }
+            UiIntent::DuplicateProfile {
+                request_id,
+                source,
+                destination,
+            } => {
+                self.duplicate_profile(request_id, source, destination)
+                    .await?;
+            }
+            UiIntent::ActivateProfile {
+                request_id,
+                profile_id,
+            } => {
+                self.activate_profile(request_id, profile_id).await?;
+            }
+            UiIntent::SaveProfileCredential {
+                request_id,
+                profile_id,
+                credential,
+            } => {
+                self.save_profile_credential(request_id, profile_id, credential, false)
+                    .await?;
+            }
+            UiIntent::ReplaceProfileCredential {
+                request_id,
+                profile_id,
+                credential,
+            } => {
+                self.save_profile_credential(request_id, profile_id, credential, true)
+                    .await?;
+            }
+            UiIntent::TestProfile {
+                request_id,
+                profile_id,
+            } => {
+                self.test_profile(request_id, profile_id).await?;
+            }
+            UiIntent::DisconnectProfile {
+                request_id,
+                profile_id,
+            } => {
+                self.disconnect_profile(request_id, profile_id).await?;
+            }
+            UiIntent::DeleteProfile {
+                request_id,
+                profile_id,
+            } => {
+                self.delete_profile(request_id, profile_id).await?;
             }
             UiIntent::RefreshCatalog { request_id } => {
                 if self.provider.is_some() {
@@ -323,6 +474,542 @@ impl Coordinator {
             .session_lists
             .send_replace(Arc::new(SessionsProjection { sessions }));
         Ok(())
+    }
+
+    fn publish_profiles(&self) {
+        let Some(runtime) = &self.profiles else {
+            return;
+        };
+        let Ok(snapshot) = runtime.manager.snapshot() else {
+            return;
+        };
+        let selected_model = self
+            .session
+            .selected_model()
+            .map(|model| model.model_id().as_str().to_owned());
+        let active_profile = snapshot.profiles.iter().find(|profile| profile.active);
+        let profiles = snapshot
+            .profiles
+            .iter()
+            .map(|managed| {
+                let kind = provider_kind_label(managed.profile.kind());
+                let credential_source = if runtime.environment.has(managed.profile.kind()) {
+                    CredentialSourceLabel::Environment
+                } else if managed.credential_state == StoredCredentialState::Stored {
+                    CredentialSourceLabel::CredentialVault
+                } else {
+                    CredentialSourceLabel::SessionOnly
+                };
+                ProviderProfileProjection {
+                    id: managed.id.as_str().to_owned(),
+                    kind,
+                    active: managed.active,
+                    base_url: managed.profile.base_url().unwrap_or_default().to_owned(),
+                    project: managed.profile.project().unwrap_or_default().to_owned(),
+                    auth_header: managed.profile.auth_header().unwrap_or_default().to_owned(),
+                    credential_state: match managed.credential_state {
+                        StoredCredentialState::Disconnected => {
+                            ProfileCredentialStateLabel::Disconnected
+                        }
+                        StoredCredentialState::Stored => ProfileCredentialStateLabel::Stored,
+                        StoredCredentialState::RecoveryPending => {
+                            ProfileCredentialStateLabel::RecoveryPending
+                        }
+                    },
+                    credential_source,
+                    connection: runtime
+                        .connection
+                        .get(managed.id.as_str())
+                        .cloned()
+                        .unwrap_or_default(),
+                    default_model: managed.active.then(|| selected_model.clone()).flatten(),
+                    default_mode: "safe agent".to_owned(),
+                }
+            })
+            .collect();
+        let active_id = active_profile.map(|profile| profile.id.as_str().to_owned());
+        self.ports
+            .profiles
+            .send_replace(Arc::new(ProfilesProjection {
+                user: LocalUserProfileProjection {
+                    display_label: None,
+                    workspace: runtime.workspace.clone(),
+                    default_profile: active_id.clone(),
+                    default_model: selected_model,
+                    default_mode: "safe agent".to_owned(),
+                },
+                profiles,
+                pending_recovery: snapshot.pending_recovery,
+            }));
+        let active_kind = active_profile.map(|profile| profile.profile.kind());
+        let credential_source =
+            active_profile.map_or(CredentialSourceLabel::SessionOnly, |profile| {
+                if runtime.environment.has(profile.profile.kind()) {
+                    CredentialSourceLabel::Environment
+                } else if profile.credential_state == StoredCredentialState::Stored {
+                    CredentialSourceLabel::CredentialVault
+                } else {
+                    CredentialSourceLabel::SessionOnly
+                }
+            });
+        let credential_connected = active_profile.is_some_and(|profile| {
+            runtime.environment.has(profile.profile.kind())
+                || profile.credential_state == StoredCredentialState::Stored
+        });
+        self.ports
+            .settings
+            .send_replace(Arc::new(SettingsProjection {
+                provider_status: autoharness_tui::ProviderStatusProjection {
+                    active_profile: active_id,
+                    provider_kind: active_kind.map(provider_kind_label),
+                    credential_source,
+                    credential_connected,
+                },
+            }));
+    }
+
+    async fn upsert_profile(
+        &mut self,
+        request_id: RequestId,
+        draft: ProviderProfileDraft,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(&draft.id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let profile = match provider_profile_from_draft(draft) {
+            Ok(profile) => profile,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        match manager.upsert(&id, &profile) {
+            Ok(()) => {
+                if manager
+                    .snapshot()
+                    .ok()
+                    .and_then(|snapshot| {
+                        snapshot
+                            .profiles
+                            .into_iter()
+                            .find(|profile| profile.id == id)
+                    })
+                    .is_some_and(|profile| profile.active)
+                {
+                    self.configure_active_profile(&id);
+                }
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => {
+                self.publish_profiles();
+                self.reject(request_id, profile_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn duplicate_profile(
+        &mut self,
+        request_id: RequestId,
+        source: String,
+        destination: String,
+    ) -> Result<(), AppError> {
+        let source = match ProfileId::new(source) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let destination = match ProfileId::new(destination) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        match manager.duplicate(&source, &destination) {
+            Ok(()) => {
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, profile_failure(&error)).await?,
+        }
+        Ok(())
+    }
+
+    async fn activate_profile(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+    ) -> Result<(), AppError> {
+        if self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Cancel or finish the active response before switching provider profiles",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        match manager.activate(Some(&id)) {
+            Ok(()) => {
+                self.configure_active_profile(&id);
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => self.reject(request_id, profile_failure(&error)).await?,
+        }
+        Ok(())
+    }
+
+    async fn save_profile_credential(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+        credential: ApiCredential,
+        replace: bool,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let secret = Zeroizing::new(credential.into_string());
+        let result = if replace {
+            manager.replace_credential(&id, &secret)
+        } else {
+            manager.save_credential(&id, &secret).map(|_| ())
+        };
+        match result {
+            Ok(()) => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime
+                        .connection
+                        .insert(id.as_str().to_owned(), ProfileConnectionState::Untested);
+                }
+                if manager
+                    .snapshot()
+                    .ok()
+                    .and_then(|snapshot| {
+                        snapshot
+                            .profiles
+                            .into_iter()
+                            .find(|profile| profile.id == id)
+                    })
+                    .is_some_and(|profile| profile.active)
+                {
+                    self.configure_active_profile(&id);
+                }
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => {
+                self.publish_profiles();
+                self.reject(request_id, profile_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn test_profile(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id.clone()) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let provider = match self.provider_for_profile(&id) {
+            Ok(Some(provider)) => provider,
+            Ok(None) => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.insert(
+                        profile_id,
+                        ProfileConnectionState::Failed(
+                            "No effective credential is available".to_owned(),
+                        ),
+                    );
+                }
+                self.publish_profiles();
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Authentication,
+                        "No effective credential is available for this profile",
+                        RetryPolicy::Never,
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(failure) => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.insert(
+                        profile_id,
+                        ProfileConnectionState::Failed(failure.message.clone()),
+                    );
+                }
+                self.publish_profiles();
+                self.reject(request_id, failure).await?;
+                return Ok(());
+            }
+        };
+        if let Some(runtime) = self.profiles.as_mut() {
+            runtime
+                .connection
+                .insert(profile_id.clone(), ProfileConnectionState::Testing);
+        }
+        self.publish_profiles();
+        let messages = self.messages.clone();
+        let cancellation = self.shutdown.child_token();
+        tokio::spawn(async move {
+            let result = provider
+                .list_models(CatalogRequest::Refresh, cancellation)
+                .await;
+            let _ = messages
+                .send(AsyncMessage::ProfileTest {
+                    profile_id,
+                    request_id,
+                    result,
+                })
+                .await;
+        });
+        Ok(())
+    }
+
+    async fn disconnect_profile(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let was_active = manager
+            .snapshot()
+            .ok()
+            .and_then(|snapshot| {
+                snapshot
+                    .profiles
+                    .into_iter()
+                    .find(|profile| profile.id == id)
+            })
+            .is_some_and(|profile| profile.active);
+        match manager.disconnect(&id) {
+            Ok(()) => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime
+                        .connection
+                        .insert(id.as_str().to_owned(), ProfileConnectionState::Untested);
+                }
+                if was_active {
+                    self.configure_active_profile(&id);
+                }
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => {
+                self.publish_profiles();
+                self.reject(request_id, profile_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_profile(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let was_active = manager
+            .snapshot()
+            .ok()
+            .and_then(|snapshot| {
+                snapshot
+                    .profiles
+                    .into_iter()
+                    .find(|profile| profile.id == id)
+            })
+            .is_some_and(|profile| profile.active);
+        match manager.delete(&id) {
+            Ok(()) => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.remove(id.as_str());
+                }
+                if was_active {
+                    self.provider = None;
+                    self.catalog_models.clear();
+                    self.ports
+                        .catalogs
+                        .send_replace(Arc::new(CatalogProjection::CredentialRequired));
+                }
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => {
+                self.publish_profiles();
+                self.reject(request_id, profile_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn configure_active_profile(&mut self, id: &ProfileId) {
+        match self.provider_for_profile(id) {
+            Ok(Some(provider)) => {
+                self.provider = Some(provider);
+                self.catalog_models.clear();
+                self.ports
+                    .catalogs
+                    .send_replace(Arc::new(CatalogProjection::Loading));
+                self.refresh_catalog(None);
+            }
+            Ok(None) => {
+                self.provider = None;
+                self.catalog_models.clear();
+                self.ports
+                    .catalogs
+                    .send_replace(Arc::new(CatalogProjection::CredentialRequired));
+            }
+            Err(failure) => {
+                self.provider = None;
+                self.catalog_models.clear();
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.insert(
+                        id.as_str().to_owned(),
+                        ProfileConnectionState::Failed(failure.message),
+                    );
+                }
+                self.ports
+                    .catalogs
+                    .send_replace(Arc::new(CatalogProjection::CredentialRequired));
+            }
+        }
+    }
+
+    fn provider_for_profile(&self, id: &ProfileId) -> Result<Option<Arc<dyn Provider>>, UiFailure> {
+        let runtime = self
+            .profiles
+            .as_ref()
+            .ok_or_else(profile_unavailable_failure)?;
+        let snapshot = runtime
+            .manager
+            .snapshot()
+            .map_err(|error| profile_failure(&error))?;
+        let managed = snapshot
+            .profiles
+            .into_iter()
+            .find(|profile| profile.id == *id)
+            .ok_or_else(|| profile_validation_failure("that profile does not exist"))?;
+        let mut secret = match runtime.environment.credential(managed.profile.kind()) {
+            Some(secret) => secret,
+            None => match runtime.manager.credential_for_test(id) {
+                Ok(secret) => secret,
+                Err(ProfileManagementError::CredentialNotStored) => return Ok(None),
+                Err(error) => return Err(profile_failure(&error)),
+            },
+        };
+        let credential =
+            ApiCredential::new(std::mem::take(&mut *secret)).map_err(profile_validation_failure)?;
+        (runtime.factory)(&managed.profile, credential)
+            .map(Some)
+            .map_err(|error| provider_failure(&error))
     }
 
     /// Opens a different durable session after verifying it is switch-safe.
@@ -1050,7 +1737,83 @@ impl Coordinator {
                 tool_call_id,
                 result,
             } => self.handle_tool_result(tool_call_id, result).await,
+            AsyncMessage::ProfileTest {
+                profile_id,
+                request_id,
+                result,
+            } => {
+                self.handle_profile_test(profile_id, request_id, result)
+                    .await
+            }
         }
+    }
+
+    async fn handle_profile_test(
+        &mut self,
+        profile_id: String,
+        request_id: RequestId,
+        result: Result<ModelCatalog, ProviderError>,
+    ) -> Result<(), AppError> {
+        let exists = self
+            .profiles
+            .as_ref()
+            .and_then(|runtime| runtime.manager.snapshot().ok())
+            .is_some_and(|snapshot| {
+                snapshot
+                    .profiles
+                    .iter()
+                    .any(|profile| profile.id.as_str() == profile_id)
+            });
+        if !exists {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Cancelled,
+                    "The tested profile no longer exists",
+                    RetryPolicy::Never,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        match result {
+            Ok(catalog) if !catalog.is_stale() && !catalog.models().is_empty() => {
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime
+                        .connection
+                        .insert(profile_id, ProfileConnectionState::Ready);
+                }
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Ok(_) => {
+                let failure = UiFailure::new(
+                    ErrorClass::Unavailable,
+                    "The provider test did not return a live compatible model catalog",
+                    RetryPolicy::Now,
+                );
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.insert(
+                        profile_id,
+                        ProfileConnectionState::Failed(failure.message.clone()),
+                    );
+                }
+                self.publish_profiles();
+                self.reject(request_id, failure).await?;
+            }
+            Err(error) => {
+                let failure = provider_failure(&error);
+                if let Some(runtime) = self.profiles.as_mut() {
+                    runtime.connection.insert(
+                        profile_id,
+                        ProfileConnectionState::Failed(failure.message.clone()),
+                    );
+                }
+                self.publish_profiles();
+                self.reject(request_id, failure).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn handle_catalog(
@@ -2213,6 +2976,83 @@ fn provider_code(kind: ProviderErrorKind) -> &'static str {
         ProviderErrorKind::Protocol => "protocol",
         ProviderErrorKind::LimitExceeded => "limit_exceeded",
         ProviderErrorKind::Internal => "internal",
+    }
+}
+
+fn provider_kind_label(kind: ProviderKind) -> ProviderKindLabel {
+    match kind {
+        ProviderKind::Gemini => ProviderKindLabel::Gemini,
+        ProviderKind::Router => ProviderKindLabel::Router,
+    }
+}
+
+fn provider_profile_from_draft(
+    draft: ProviderProfileDraft,
+) -> Result<ProviderProfile, &'static str> {
+    match draft.kind {
+        ProviderKindLabel::Gemini => Ok(ProviderProfile::gemini()),
+        ProviderKindLabel::Router => ProviderProfile::router(
+            draft.base_url.trim().to_owned(),
+            nonempty(draft.project),
+            nonempty(draft.auth_header),
+        ),
+    }
+}
+
+fn nonempty(value: String) -> Option<String> {
+    let value = value.trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+fn profile_validation_failure(reason: impl Into<String>) -> UiFailure {
+    UiFailure::new(ErrorClass::Validation, reason.into(), RetryPolicy::Never)
+}
+
+fn profile_unavailable_failure() -> UiFailure {
+    UiFailure::new(
+        ErrorClass::Unavailable,
+        "Profile management is unavailable in this application mode",
+        RetryPolicy::Never,
+    )
+}
+
+fn profile_failure(error: &ProfileManagementError) -> UiFailure {
+    match error {
+        ProfileManagementError::Store(ProfileStoreError::Invalid(reason)) => {
+            profile_validation_failure(*reason)
+        }
+        ProfileManagementError::Store(ProfileStoreError::UnknownProfile) => {
+            profile_validation_failure("that profile does not exist")
+        }
+        ProfileManagementError::Store(ProfileStoreError::Io) => UiFailure::new(
+            ErrorClass::Unavailable,
+            "The profile settings document could not be updated",
+            RetryPolicy::Now,
+        ),
+        ProfileManagementError::Vault(VaultError::InvalidSecret(reason)) => {
+            profile_validation_failure(*reason)
+        }
+        ProfileManagementError::Vault(VaultError::MissingEntry)
+        | ProfileManagementError::CredentialNotStored => UiFailure::new(
+            ErrorClass::Authentication,
+            "The selected profile has no stored credential",
+            RetryPolicy::Never,
+        ),
+        ProfileManagementError::Vault(VaultError::Unavailable | VaultError::Platform(_)) => {
+            UiFailure::new(
+                ErrorClass::Unavailable,
+                "The operating-system credential vault is unavailable",
+                RetryPolicy::Now,
+            )
+        }
+        ProfileManagementError::Conflict(reason) => {
+            UiFailure::new(ErrorClass::Conflict, *reason, RetryPolicy::Never)
+        }
+        ProfileManagementError::RecoveryPending => UiFailure::new(
+            ErrorClass::Unavailable,
+            "The profile is safe, but credential-vault repair remains pending",
+            RetryPolicy::Now,
+        ),
     }
 }
 

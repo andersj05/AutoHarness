@@ -7,8 +7,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AttemptStatus, CatalogProjection, Focus, Model, ModelSummary, Notice, PendingKind, RetryPolicy,
-    TranscriptItem,
+    AttemptStatus, CatalogProjection, Focus, Model, ModelSummary, Notice, PendingKind,
+    ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
+    ProviderProfileProjection, RetryPolicy, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -43,6 +44,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
     if model.focus == Focus::Permission {
         render_permission(frame, area, model);
+    } else if model.profile_center.open {
+        render_profile_center(frame, area, model);
     } else if model.palette.open {
         render_palette(frame, area, model);
     } else if model.help.open {
@@ -248,6 +251,333 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     ];
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
+}
+/// Renders the full-screen local profile and provider connection center.
+fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    frame.render_widget(Clear, area);
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" Profiles & Providers ")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let notice_height = if model.notice.is_some() && inner.height >= 8 {
+        2
+    } else {
+        0
+    };
+    let user_height = if inner.height >= 12 { 4 } else { 2 };
+    let help_height = u16::from(inner.height >= 4);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(notice_height),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
+    render_local_profile(frame, rows[0], model);
+
+    if rows[1].width >= 78 && rows[1].height >= 7 {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(rows[1]);
+        render_profile_list(frame, columns[0], model);
+        render_profile_detail(frame, columns[1], model);
+    } else if rows[1].height >= 9 {
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(rows[1]);
+        render_profile_list(frame, panes[0], model);
+        render_profile_detail(frame, panes[1], model);
+    } else {
+        render_profile_list(frame, rows[1], model);
+    }
+
+    if notice_height > 0 {
+        render_notice(frame, rows[2], model);
+    }
+    if help_height > 0 {
+        let hints = if model.profile_center.confirming_disconnect.is_some() {
+            "Y disconnect credential  N/Esc cancel"
+        } else if model.profile_center.confirming_delete.is_some() {
+            "Y delete profile and credential  N/Esc cancel"
+        } else {
+            "↑/↓ choose  Enter activate  Alt+N new  Alt+E edit  Alt+K key  Alt+T test  Esc close"
+        };
+        frame.render_widget(Paragraph::new(hints).style(MUTED_STYLE), rows[3]);
+    }
+
+    if model.profile_center.editor.is_some() {
+        render_profile_editor(frame, area, model);
+    } else if model.profile_center.credential.is_some() {
+        render_profile_credential(frame, area, model);
+    }
+}
+
+fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let user = &model.profiles().user;
+    let label = user.display_label.as_deref().unwrap_or("Local user");
+    let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let first = Line::from(vec![
+        Span::styled(format!(" {} ", display_safe(label)), HEADER_STYLE),
+        Span::raw("  "),
+        Span::styled("Default ", MUTED_STYLE),
+        Span::raw(display_safe(default_profile)),
+        Span::styled("  Mode ", MUTED_STYLE),
+        Span::raw(display_safe(&user.default_mode)),
+    ]);
+    let workspace = Line::from(vec![
+        Span::styled(" Workspace ", MUTED_STYLE),
+        Span::raw(display_safe(&user.workspace)),
+    ]);
+    let mut lines = vec![first];
+    if area.height >= 2 {
+        lines.push(workspace);
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::BOTTOM))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let title = format!(
+        " Provider profiles - filter: {} ",
+        display_safe(&model.profile_center.query)
+    );
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let profiles = model.filtered_profiles().collect::<Vec<_>>();
+    if profiles.is_empty() {
+        let empty = if model.profiles().profiles.is_empty() {
+            "No provider profiles yet.\nPress Alt+N to create Gemini or router access."
+        } else {
+            "No profiles match this filter."
+        };
+        frame.render_widget(
+            Paragraph::new(empty)
+                .style(MUTED_STYLE)
+                .wrap(Wrap { trim: false }),
+            inner,
+        );
+        return;
+    }
+    let selected_index = model
+        .profile_selection()
+        .and_then(|selected| profiles.iter().position(|profile| profile.id == selected))
+        .unwrap_or(0);
+    let visible = usize::from(inner.height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(profiles.len().saturating_sub(visible));
+    let items = profiles
+        .iter()
+        .skip(start)
+        .take(visible)
+        .map(|profile| profile_list_item(profile, model))
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(items), inner);
+}
+
+fn profile_list_item(profile: &ProviderProfileProjection, model: &Model) -> ListItem<'static> {
+    let selected = model.profile_selection() == Some(profile.id.as_str());
+    let marker = if selected { ">" } else { " " };
+    let active = if profile.active { "*" } else { " " };
+    let style = if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else if profile.active {
+        Style::default()
+            .fg(Color::LightCyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    ListItem::new(Line::from(format!(
+        "{marker}{active} {:<18} {:<6} {:<14} {}",
+        display_safe(&profile.id),
+        profile.kind.as_str(),
+        profile.credential_state.as_str(),
+        profile.connection.label(),
+    )))
+    .style(style)
+}
+
+fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let block = Block::default().borders(Borders::ALL).title(" Connection ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let Some(profile) = model.selected_profile() else {
+        frame.render_widget(
+            Paragraph::new("Select or create a profile.").style(MUTED_STYLE),
+            inner,
+        );
+        return;
+    };
+    let mut lines = vec![
+        detail_line("Name", &profile.id),
+        detail_line("Provider", profile.kind.as_str()),
+        detail_line("Credential", profile.credential_state.as_str()),
+        detail_line("Source", profile.credential_source.as_str()),
+        detail_line("Connection", profile.connection.label()),
+    ];
+    if profile.kind == ProviderKindLabel::Router {
+        lines.push(detail_line("Base URL", &profile.base_url));
+        if !profile.project.is_empty() {
+            lines.push(detail_line("Project", &profile.project));
+        }
+        if !profile.auth_header.is_empty() {
+            lines.push(detail_line("Auth header", &profile.auth_header));
+        }
+    }
+    if let ProfileConnectionState::Failed(reason) = &profile.connection {
+        lines.push(Line::from(vec![
+            Span::styled("Reason      ", ERROR_STYLE),
+            Span::raw(display_safe(reason)),
+        ]));
+    }
+    if model.profiles().pending_recovery > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} credential repair operation(s) pending",
+                model.profiles().pending_recovery
+            ),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Alt+N new  Alt+E edit  Alt+D duplicate  Alt+K save/replace",
+        MUTED_STYLE,
+    )));
+    lines.push(Line::from(Span::styled(
+        "Alt+T test  Alt+X disconnect  Delete remove",
+        MUTED_STYLE,
+    )));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn detail_line(label: &'static str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<12}"), MUTED_STYLE),
+        Span::raw(display_safe(value)),
+    ])
+}
+
+fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let editor = model
+        .profile_center
+        .editor
+        .as_ref()
+        .expect("profile editor is open");
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let title = match editor.mode {
+        ProfileEditorMode::Create => " Create provider profile ",
+        ProfileEditorMode::Edit => " Edit provider profile ",
+        ProfileEditorMode::Duplicate => " Duplicate provider profile ",
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let rows = [
+        ("Name", editor.id.as_str()),
+        ("Provider", editor.kind.as_str()),
+        ("Base URL", editor.base_url.as_str()),
+        ("Project", editor.project.as_str()),
+        ("Auth header", editor.auth_header.as_str()),
+    ];
+    let visible = if editor.mode == ProfileEditorMode::Duplicate {
+        1
+    } else {
+        editor.field_count()
+    };
+    let mut lines = Vec::new();
+    for (index, (label, value)) in rows.into_iter().take(visible).enumerate() {
+        let selected = editor.field == index;
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        let marker = if selected { ">" } else { " " };
+        lines.push(Line::styled(
+            format!("{marker} {label:<12} {}", display_safe(value)),
+            style,
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Tab next field  Left/Right provider  Enter save  Esc cancel",
+        MUTED_STYLE,
+    )));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let editor = model
+        .profile_center
+        .credential
+        .as_ref()
+        .expect("profile credential editor is open");
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let action = match editor.action {
+        ProfileCredentialAction::Save => "Save",
+        ProfileCredentialAction::Replace => "Replace",
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " {action} credential - {} ",
+            display_safe(&editor.profile_id)
+        ))
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let masked = if editor.has_value() {
+        "••••••••"
+    } else {
+        "paste or type API key"
+    };
+    let lines = vec![
+        Line::from(Span::styled(
+            masked,
+            Style::default().fg(Color::LightYellow),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Stored only in the operating-system vault. Enter save  Esc cancel",
+            MUTED_STYLE,
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// Renders the searchable session-browser overlay from local state only.

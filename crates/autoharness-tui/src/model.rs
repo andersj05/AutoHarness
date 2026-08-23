@@ -404,6 +404,8 @@ pub enum Focus {
     Permission,
     /// The session-browser overlay owns key input.
     Browser,
+    /// The Profiles and Providers surface owns key input.
+    Profiles,
     /// The command-palette overlay owns key input.
     Palette,
     /// The contextual help overlay owns key input.
@@ -427,6 +429,33 @@ pub struct SessionBrowserEntry {
     pub updated_at_ms: i64,
     /// Whether this row is the currently active session.
     pub active: bool,
+}
+/// Non-secret provider form transferred from the TUI to application composition.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProviderProfileDraft {
+    /// Stable profile identity entered by the user.
+    pub id: String,
+    /// Selected provider adapter.
+    pub kind: ProviderKindLabel,
+    /// Router base URL; empty for Gemini.
+    pub base_url: String,
+    /// Optional router project identity.
+    pub project: String,
+    /// Optional router authentication header name.
+    pub auth_header: String,
+}
+
+impl Debug for ProviderProfileDraft {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderProfileDraft")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("has_base_url", &!self.base_url.is_empty())
+            .field("has_project", &!self.project.is_empty())
+            .field("has_auth_header", &!self.auth_header.is_empty())
+            .finish()
+    }
 }
 
 /// Read model for every durable session known to the application.
@@ -662,6 +691,22 @@ pub enum PendingKind {
     OpenSession(String),
     /// Markdown export of the active session transcript.
     ExportTranscript,
+    /// One profile create or edit request.
+    UpsertProfile(ProviderProfileDraft),
+    /// One profile duplication request.
+    DuplicateProfile { source: String, destination: String },
+    /// Active profile selection.
+    ActivateProfile(String),
+    /// First save of a profile credential.
+    SaveProfileCredential(String),
+    /// Replacement of a profile credential.
+    ReplaceProfileCredential(String),
+    /// Safe provider connection test.
+    TestProfile(String),
+    /// Stored credential disconnection.
+    DisconnectProfile(String),
+    /// Confirmed profile deletion.
+    DeleteProfile(String),
 }
 
 /// Runner-side side effects the pure update layer cannot perform itself.
@@ -684,6 +729,49 @@ pub enum UiIntent {
     ConfigureCredential {
         request_id: RequestId,
         credential: ApiCredential,
+    },
+    /// Creates or edits one non-secret provider profile.
+    UpsertProfile {
+        request_id: RequestId,
+        profile: ProviderProfileDraft,
+    },
+    /// Duplicates non-secret configuration without sharing a credential.
+    DuplicateProfile {
+        request_id: RequestId,
+        source: String,
+        destination: String,
+    },
+    /// Selects one profile as the active runtime provider.
+    ActivateProfile {
+        request_id: RequestId,
+        profile_id: String,
+    },
+    /// Saves a first credential into the operating-system vault.
+    SaveProfileCredential {
+        request_id: RequestId,
+        profile_id: String,
+        credential: ApiCredential,
+    },
+    /// Replaces one exact stored profile credential.
+    ReplaceProfileCredential {
+        request_id: RequestId,
+        profile_id: String,
+        credential: ApiCredential,
+    },
+    /// Tests one profile without retaining provider content.
+    TestProfile {
+        request_id: RequestId,
+        profile_id: String,
+    },
+    /// Disconnects one stored profile credential.
+    DisconnectProfile {
+        request_id: RequestId,
+        profile_id: String,
+    },
+    /// Deletes one confirmed provider profile and its vault entry.
+    DeleteProfile {
+        request_id: RequestId,
+        profile_id: String,
     },
     /// Refresh the model catalog.
     RefreshCatalog { request_id: RequestId },
@@ -753,6 +841,14 @@ impl UiIntent {
         match self {
             Self::CreateSession { request_id }
             | Self::ConfigureCredential { request_id, .. }
+            | Self::UpsertProfile { request_id, .. }
+            | Self::DuplicateProfile { request_id, .. }
+            | Self::ActivateProfile { request_id, .. }
+            | Self::SaveProfileCredential { request_id, .. }
+            | Self::ReplaceProfileCredential { request_id, .. }
+            | Self::TestProfile { request_id, .. }
+            | Self::DisconnectProfile { request_id, .. }
+            | Self::DeleteProfile { request_id, .. }
             | Self::RefreshCatalog { request_id }
             | Self::SelectModel { request_id, .. }
             | Self::SubmitPrompt { request_id, .. }
@@ -793,6 +889,10 @@ pub enum Message {
     SessionsChanged(Arc<SessionsProjection>),
     /// Newest model catalog projection.
     CatalogChanged(Arc<CatalogProjection>),
+    /// Newest local profile and provider connection projection.
+    ProfilesChanged(Arc<ProfilesProjection>),
+    /// Newest resolved settings and provenance projection.
+    SettingsChanged(Arc<SettingsProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
     /// Deterministic monotonic time update.
@@ -816,9 +916,17 @@ impl Debug for Message {
                 .debug_tuple("SessionsChanged")
                 .field(sessions)
                 .finish(),
+            Self::ProfilesChanged(profiles) => formatter
+                .debug_tuple("ProfilesChanged")
+                .field(profiles)
+                .finish(),
             Self::CatalogChanged(catalog) => formatter
                 .debug_tuple("CatalogChanged")
                 .field(catalog)
+                .finish(),
+            Self::SettingsChanged(settings) => formatter
+                .debug_tuple("SettingsChanged")
+                .field(settings)
                 .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
             Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
@@ -844,6 +952,127 @@ pub(crate) struct BrowserState {
     pub confirming_archive: Option<String>,
 }
 
+/// Profile editor operation currently shown inside the profile center.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProfileEditorMode {
+    Create,
+    Edit,
+    Duplicate,
+}
+
+/// Non-secret profile form state.
+#[derive(Debug)]
+pub(crate) struct ProfileEditorState {
+    pub mode: ProfileEditorMode,
+    pub source_id: Option<String>,
+    pub field: usize,
+    pub id: String,
+    pub kind: ProviderKindLabel,
+    pub base_url: String,
+    pub project: String,
+    pub auth_header: String,
+}
+
+impl ProfileEditorState {
+    pub fn field_count(&self) -> usize {
+        match self.kind {
+            ProviderKindLabel::Gemini => 2,
+            ProviderKindLabel::Router => 5,
+        }
+    }
+}
+
+/// Whether credential entry saves a first value or replaces an existing one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProfileCredentialAction {
+    Save,
+    Replace,
+}
+
+/// Masked profile credential editor state.
+pub(crate) struct ProfileCredentialEditor {
+    pub profile_id: String,
+    pub action: ProfileCredentialAction,
+    raw: Zeroizing<String>,
+}
+
+impl Debug for ProfileCredentialEditor {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProfileCredentialEditor")
+            .field("profile_id", &self.profile_id)
+            .field("action", &self.action)
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ProfileCredentialEditor {
+    pub fn new(profile_id: String, action: ProfileCredentialAction) -> Self {
+        Self {
+            profile_id,
+            action,
+            raw: Zeroizing::new(String::new()),
+        }
+    }
+
+    pub fn has_value(&self) -> bool {
+        !self.raw.is_empty()
+    }
+
+    pub fn append_character(&mut self, character: char) -> Result<(), &'static str> {
+        if !character.is_ascii_graphic() {
+            return Err("API keys must contain visible ASCII characters only");
+        }
+        if self.raw.len().saturating_add(character.len_utf8()) > MAX_CREDENTIAL_BYTES {
+            return Err("API key is too long");
+        }
+        self.raw.push(character);
+        Ok(())
+    }
+
+    pub fn append_paste(&mut self, value: &str) -> Result<(), &'static str> {
+        let value = value.trim_matches(char::is_whitespace);
+        if value.is_empty() {
+            return Err("Paste a non-empty API key");
+        }
+        if !value.chars().all(|character| character.is_ascii_graphic()) {
+            return Err("API keys must contain visible ASCII characters only");
+        }
+        if self.raw.len().saturating_add(value.len()) > MAX_CREDENTIAL_BYTES {
+            return Err("API key is too long");
+        }
+        self.raw.push_str(value);
+        Ok(())
+    }
+
+    pub fn pop(&mut self) {
+        self.raw.pop();
+    }
+
+    pub fn take(&mut self) -> Result<ApiCredential, &'static str> {
+        let raw = std::mem::take(&mut *self.raw);
+        ApiCredential::new(raw)
+    }
+}
+
+impl Drop for ProfileCredentialEditor {
+    fn drop(&mut self) {
+        self.raw.zeroize();
+    }
+}
+
+/// Full-screen Profiles and Providers local interaction state.
+#[derive(Debug, Default)]
+pub(crate) struct ProfileCenterState {
+    pub open: bool,
+    pub query: String,
+    pub selected: Option<String>,
+    pub confirming_disconnect: Option<String>,
+    pub editor: Option<ProfileEditorState>,
+    pub credential: Option<ProfileCredentialEditor>,
+    pub confirming_delete: Option<String>,
+}
 /// Command-palette local state.
 #[derive(Debug, Default)]
 pub(crate) struct PaletteState {
@@ -885,6 +1114,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+S", "send the prompt"),
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open the session browser"),
+            ("Ctrl+G", "open Profiles and Providers"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
@@ -920,6 +1150,19 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         ],
     },
     HelpSection {
+        title: "Profiles",
+        rows: &[
+            ("Type", "filter provider profiles"),
+            ("Up/Down", "choose a profile"),
+            ("Enter", "activate the profile"),
+            ("Alt+N / Alt+E", "create or edit"),
+            ("Alt+D", "duplicate without a credential"),
+            ("Alt+K / Alt+T", "manage credential or test"),
+            ("Alt+X / Delete", "disconnect or delete"),
+            ("Esc", "close or cancel the current form"),
+        ],
+    },
+    HelpSection {
         title: "Models",
         rows: &[
             ("Type", "filter models"),
@@ -947,6 +1190,7 @@ impl HelpSection {
             "Global" => true,
             "Composer" => matches!(focus, Focus::Composer | Focus::Credential | Focus::Help),
             "Browser" => focus == Focus::Browser,
+            "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
             "Permission" => focus == Focus::Permission,
             _ => false,
@@ -988,6 +1232,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Sessions",
         description: "Browse, rename, archive, or delete sessions",
         key_hint: Some("Ctrl+L"),
+    },
+    CommandEntry {
+        id: "profiles",
+        label: "Profiles and Providers",
+        description: "Manage providers, API keys, connection tests, and defaults",
+        key_hint: Some("Ctrl+G"),
     },
     CommandEntry {
         id: "new-session",
@@ -1046,9 +1296,10 @@ pub const COMMANDS: &[CommandEntry] = &[
 ];
 
 /// Safe provider-kind label surfaced by application composition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProviderKindLabel {
     /// Google AI Studio Gemini.
+    #[default]
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
@@ -1133,6 +1384,141 @@ impl SettingsProjection {
             (source, _) => source.as_str().to_owned(),
         }
     }
+}
+/// Stored credential status for one named provider profile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProfileCredentialStateLabel {
+    /// No operating-system vault entry is linked.
+    #[default]
+    Disconnected,
+    /// One operating-system vault entry is linked.
+    Stored,
+    /// A restart-safe cross-store operation still needs cleanup.
+    RecoveryPending,
+}
+
+impl ProfileCredentialStateLabel {
+    /// Returns the stable user-facing status label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disconnected => "disconnected",
+            Self::Stored => "stored",
+            Self::RecoveryPending => "repair pending",
+        }
+    }
+}
+
+/// Safe result of the latest connection test for one profile.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ProfileConnectionState {
+    /// This profile has not been tested in the current process.
+    #[default]
+    Untested,
+    /// A content-free catalog test is in flight.
+    Testing,
+    /// The selected provider accepted the profile and credential.
+    Ready,
+    /// The test failed with one bounded safe reason.
+    Failed(String),
+}
+
+impl ProfileConnectionState {
+    /// Returns a compact connection label.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Untested => "not tested",
+            Self::Testing => "testing",
+            Self::Ready => "connected",
+            Self::Failed(_) => "test failed",
+        }
+    }
+}
+
+/// One safe named provider profile projected into the terminal.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProviderProfileProjection {
+    /// Validated profile identity.
+    pub id: String,
+    /// Selected provider adapter.
+    pub kind: ProviderKindLabel,
+    /// Whether this profile selects the runtime provider.
+    pub active: bool,
+    /// Router base URL, or empty for Gemini.
+    pub base_url: String,
+    /// Optional router project identity.
+    pub project: String,
+    /// Optional router sensitive-header name.
+    pub auth_header: String,
+    /// Whether a vault credential is linked or needs repair.
+    pub credential_state: ProfileCredentialStateLabel,
+    /// Effective credential source for this provider in safe terms.
+    pub credential_source: CredentialSourceLabel,
+    /// Latest content-free connection test result.
+    pub connection: ProfileConnectionState,
+    /// Optional default model label.
+    pub default_model: Option<String>,
+    /// Default interaction mode label.
+    pub default_mode: String,
+}
+
+impl Debug for ProviderProfileProjection {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderProfileProjection")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("active", &self.active)
+            .field("has_base_url", &!self.base_url.is_empty())
+            .field("has_project", &!self.project.is_empty())
+            .field("has_auth_header", &!self.auth_header.is_empty())
+            .field("credential_state", &self.credential_state)
+            .field("credential_source", &self.credential_source)
+            .field("connection", &self.connection)
+            .field("default_model", &self.default_model)
+            .field("default_mode", &self.default_mode)
+            .finish()
+    }
+}
+
+/// Local-only user profile summary; this is not a hosted identity.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct LocalUserProfileProjection {
+    /// Optional local display label from typed user settings.
+    pub display_label: Option<String>,
+    /// Active workspace shown to the local user.
+    pub workspace: String,
+    /// Default provider profile when configured.
+    pub default_profile: Option<String>,
+    /// Default model when configured.
+    pub default_model: Option<String>,
+    /// Default interaction mode.
+    pub default_mode: String,
+}
+
+impl Debug for LocalUserProfileProjection {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalUserProfileProjection")
+            .field("display_label", &self.display_label)
+            .field("has_workspace", &!self.workspace.is_empty())
+            .field("default_profile", &self.default_profile)
+            .field("default_model", &self.default_model)
+            .field("default_mode", &self.default_mode)
+            .finish()
+    }
+}
+
+/// Full local profile and provider-connection read model.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProfilesProjection {
+    /// Local preferences summary.
+    pub user: LocalUserProfileProjection,
+    /// Named provider connections in stable profile order.
+    pub profiles: Vec<ProviderProfileProjection>,
+    /// Number of restart-safe recovery operations awaiting cleanup.
+    pub pending_recovery: usize,
 }
 
 /// In-run composer history for prompt recall.
@@ -1243,6 +1629,8 @@ pub struct Model {
     pub(crate) sessions: Arc<SessionsProjection>,
     /// Newest resolved-settings read model.
     pub(crate) settings: Arc<SettingsProjection>,
+    /// Newest safe local profile and provider-connection read model.
+    pub(crate) profiles: Arc<ProfilesProjection>,
     /// Whether the settings overlay is visible.
     pub(crate) settings_open: bool,
     /// Multiline prompt composer.
@@ -1260,6 +1648,7 @@ pub struct Model {
     pub(crate) picker: PickerState,
     pub(crate) credential: CredentialState,
     pub(crate) browser: BrowserState,
+    pub(crate) profile_center: ProfileCenterState,
     pub(crate) palette: PaletteState,
     pub(crate) help: HelpState,
     /// Composer text saved while working in another session.
@@ -1321,6 +1710,7 @@ impl Model {
             catalog,
             sessions,
             settings: Arc::new(SettingsProjection::default()),
+            profiles: Arc::new(ProfilesProjection::default()),
             settings_open: false,
             composer: ComposerState::default(),
             transcript: TranscriptState::new(),
@@ -1338,6 +1728,7 @@ impl Model {
                 ..CredentialState::default()
             },
             browser: BrowserState::default(),
+            profile_center: ProfileCenterState::default(),
             palette: PaletteState::default(),
             help: HelpState::default(),
             drafts: SessionDrafts::default(),
@@ -1372,6 +1763,49 @@ impl Model {
     pub fn apply_settings(&mut self, settings: Arc<SettingsProjection>) {
         self.settings = settings;
         self.dirty = true;
+    }
+    /// Replaces the safe local profile and provider-connection read model.
+    pub fn apply_profiles(&mut self, profiles: Arc<ProfilesProjection>) {
+        self.profiles = profiles;
+        self.sync_profile_selection();
+        self.dirty = true;
+    }
+
+    /// Returns the latest safe profile projection.
+    #[must_use]
+    pub fn profiles(&self) -> &ProfilesProjection {
+        &self.profiles
+    }
+
+    /// Returns whether the full-screen profile center is open.
+    #[must_use]
+    pub const fn profile_center_open(&self) -> bool {
+        self.profile_center.open
+    }
+
+    /// Returns the highlighted provider profile identity.
+    #[must_use]
+    pub fn profile_selection(&self) -> Option<&str> {
+        self.profile_center.selected.as_deref()
+    }
+
+    pub(crate) fn selected_profile(&self) -> Option<&ProviderProfileProjection> {
+        let selected = self.profile_center.selected.as_deref()?;
+        self.profiles
+            .profiles
+            .iter()
+            .find(|profile| profile.id == selected)
+    }
+
+    pub(crate) fn filtered_profiles(
+        &self,
+    ) -> impl Iterator<Item = &ProviderProfileProjection> + use<'_> {
+        let query = self.profile_center.query.to_ascii_lowercase();
+        self.profiles.profiles.iter().filter(move |profile| {
+            query.is_empty()
+                || profile.id.to_ascii_lowercase().contains(&query)
+                || profile.kind.as_str().contains(&query)
+        })
     }
 
     /// Returns the newest resolved-settings read model.
@@ -1679,6 +2113,26 @@ impl Model {
         let request_id = RequestId(self.next_request_id);
         self.next_request_id = self.next_request_id.saturating_add(1);
         request_id
+    }
+
+    pub(crate) fn sync_profile_selection(&mut self) {
+        let selected_visible = self
+            .profile_center
+            .selected
+            .as_deref()
+            .is_some_and(|selected| {
+                self.filtered_profiles()
+                    .any(|profile| profile.id == selected)
+            });
+        if selected_visible {
+            return;
+        }
+        let next = self
+            .filtered_profiles()
+            .find(|profile| profile.active)
+            .or_else(|| self.filtered_profiles().next())
+            .map(|profile| profile.id.clone());
+        self.profile_center.selected = next;
     }
 
     pub(crate) fn sync_retry_deadline(&mut self) {

@@ -14,8 +14,8 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    CatalogProjection, Message, Model, RetryPolicy, SessionProjection, SessionsProjection,
-    UiEffect, UiFailure, UiIntent, UiNotice,
+    CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
+    SessionsProjection, SettingsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::{update, view};
 
@@ -34,6 +34,10 @@ pub struct UiPorts {
     pub session_lists: watch::Receiver<Arc<SessionsProjection>>,
     /// Latest catalog projection, coalesced by `watch`.
     pub catalogs: watch::Receiver<Arc<CatalogProjection>>,
+    /// Latest local profile and provider-connection projection.
+    pub profiles: watch::Receiver<Arc<ProfilesProjection>>,
+    /// Latest resolved settings and provenance projection.
+    pub settings: watch::Receiver<Arc<SettingsProjection>>,
     /// Bounded commit and rejection notices.
     pub notices: mpsc::Receiver<UiNotice>,
 }
@@ -48,6 +52,10 @@ pub struct AppPorts {
     pub session_lists: watch::Sender<Arc<SessionsProjection>>,
     /// Catalog projection publisher.
     pub catalogs: watch::Sender<Arc<CatalogProjection>>,
+    /// Local profile and provider-connection publisher.
+    pub profiles: watch::Sender<Arc<ProfilesProjection>>,
+    /// Resolved settings and provenance publisher.
+    pub settings: watch::Sender<Arc<SettingsProjection>>,
     /// Bounded commit and rejection publisher.
     pub notices: mpsc::Sender<UiNotice>,
 }
@@ -63,6 +71,8 @@ pub fn bounded_ports(
     let (session_tx, session_rx) = watch::channel(session);
     let (session_list_tx, session_list_rx) = watch::channel(session_list);
     let (catalog_tx, catalog_rx) = watch::channel(catalog);
+    let (profile_tx, profile_rx) = watch::channel(Arc::new(ProfilesProjection::default()));
+    let (settings_tx, settings_rx) = watch::channel(Arc::new(SettingsProjection::default()));
     let (notice_tx, notice_rx) = mpsc::channel(APP_NOTICE_CAPACITY);
     (
         UiPorts {
@@ -70,6 +80,8 @@ pub fn bounded_ports(
             sessions: session_rx,
             session_lists: session_list_rx,
             catalogs: catalog_rx,
+            profiles: profile_rx,
+            settings: settings_rx,
             notices: notice_rx,
         },
         AppPorts {
@@ -77,6 +89,8 @@ pub fn bounded_ports(
             sessions: session_tx,
             session_lists: session_list_tx,
             catalogs: catalog_tx,
+            profiles: profile_tx,
+            settings: settings_tx,
             notices: notice_tx,
         },
     )
@@ -141,6 +155,8 @@ where
         mut sessions,
         mut session_lists,
         mut catalogs,
+        mut profiles,
+        mut settings,
         mut notices,
     } = ports;
     let mut events = EventStream::new();
@@ -185,6 +201,16 @@ where
                 result.map_err(|_| RunnerError::ApplicationDisconnected("catalog projection"))?;
                 let catalog = Arc::clone(&catalogs.borrow_and_update());
                 let _ = update(&mut model, Message::CatalogChanged(catalog));
+            }
+            result = profiles.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("profiles projection"))?;
+                let profiles = Arc::clone(&profiles.borrow_and_update());
+                let _ = update(&mut model, Message::ProfilesChanged(profiles));
+            }
+            result = settings.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("settings projection"))?;
+                let settings = Arc::clone(&settings.borrow_and_update());
+                let _ = update(&mut model, Message::SettingsChanged(settings));
             }
             notice = notices.recv() => {
                 let notice = notice.ok_or(RunnerError::ApplicationDisconnected("notice"))?;

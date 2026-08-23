@@ -15,15 +15,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoharness_app::credential::CredentialSourceName;
-use autoharness_app::profiles::ProfileStore;
-use autoharness_app::vault::KeyringVault;
-use autoharness_domain::ClassifiedError as _;
+use autoharness_app::profiles::{ProfileManager, ProfileStore};
+use autoharness_app::vault::{KeyringVault, VaultPort};
+use autoharness_domain::{ClassifiedError as _, RetryAdvice};
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
 };
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
-use autoharness_settings::{LayerKind, SettingsBuilder};
+use autoharness_settings::{LayerKind, ProviderKind, ProviderProfile, SettingsBuilder};
 use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
@@ -34,7 +34,9 @@ use autoharness_tui::{
 };
 use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, WriterLease};
-use coordinator::{Coordinator, ProviderFactory};
+use coordinator::{
+    Coordinator, EnvironmentCredentials, ProfileProviderFactory, ProfileRuntime, ProviderFactory,
+};
 use engine_actor::EngineActor;
 use error::AppError;
 use terminal::TerminalGuard;
@@ -68,8 +70,17 @@ async fn run() -> Result<(), AppError> {
     telemetry::app_started();
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
-    let resolved = resolve_launch(&paths);
-    let provider = configure_provider(Arc::clone(&cache), policy, &resolved)?;
+    let profile_store = ProfileStore::open(&paths.profiles()).map_err(|_| AppError::FileSystem)?;
+    let vault: Arc<dyn VaultPort> = Arc::new(KeyringVault::new());
+    let resolved = resolve_launch(&profile_store, vault.as_ref());
+    let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved)?;
+    let profile_manager = Arc::new(ProfileManager::new(profile_store, vault));
+    let profile_runtime = ProfileRuntime::new(
+        profile_manager,
+        configure_profile_provider_factory(Arc::clone(&cache), policy),
+        environment_credentials(),
+        config::workspace_root()?.display().to_string(),
+    );
     let tool_runtime = configure_tool_runtime(&paths)?;
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
@@ -95,11 +106,12 @@ async fn run() -> Result<(), AppError> {
         }
     };
 
-    let coordinator = Coordinator::with_provider_factory(
+    let coordinator = Coordinator::with_profile_runtime(
         session_id,
         session,
         engine_actor.handle(),
         provider.composition,
+        Some(profile_runtime),
         tool_runtime,
         app_ports,
         shutdown.clone(),
@@ -155,11 +167,10 @@ impl RouterProfileFields {
             .base_url
             .parse::<autoharness_provider_openai::RouterUrl>()
             .map_err(|_| AppError::Configuration)?;
-        let settings = RouterSettings::new(url, self.project.as_deref())
+        let mut settings = RouterSettings::new(url, self.project.as_deref())
             .map_err(|_| AppError::Configuration)?;
         if let Some(header) = &self.auth_header {
-            settings
-                .clone()
+            settings = settings
                 .with_authentication(header, "Bearer")
                 .map_err(|_| AppError::Configuration)?;
         }
@@ -167,19 +178,16 @@ impl RouterProfileFields {
     }
 }
 
-fn resolve_launch(paths: &AppPaths) -> LaunchResolution {
+fn resolve_launch(store: &ProfileStore, vault: &dyn VaultPort) -> LaunchResolution {
     // Layered resolution: user profile document plus live environment.
-    let document = ProfileStore::open(&paths.profiles())
-        .and_then(|store| store.read_document())
-        .unwrap_or_default();
+    let document = store.read_document().unwrap_or_default();
     let settings = SettingsBuilder::new()
         .with_layer(LayerKind::UserFile, document)
         .with_environment(env::vars())
         .resolve();
-    let vault = KeyringVault::new();
     match settings {
         Ok(settings) => {
-            let resolver = autoharness_app::ProfileCredentialResolver::new(&vault)
+            let resolver = autoharness_app::ProfileCredentialResolver::new(vault)
                 .with_environment(env::vars());
             match resolver.resolve(&settings) {
                 Ok(source) => LaunchResolution {
@@ -408,6 +416,63 @@ fn configure_provider(
         },
         catalog,
     })
+}
+
+fn environment_credentials() -> EnvironmentCredentials {
+    EnvironmentCredentials {
+        gemini: env::var("GEMINI_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(Zeroizing::new),
+        router: env::var("AUTOHARNESS_ROUTER_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(Zeroizing::new),
+    }
+}
+
+fn configure_profile_provider_factory(
+    cache: Arc<dyn CatalogCache>,
+    policy: ProviderPolicy,
+) -> ProfileProviderFactory {
+    Arc::new(move |profile, credential| {
+        let provider: Arc<dyn Provider> = match profile.kind() {
+            ProviderKind::Gemini => {
+                let key = GeminiApiKey::new(credential.into_string())?;
+                Arc::new(GeminiProvider::new(key)?)
+            }
+            ProviderKind::Router => {
+                let settings = router_settings_for_profile(profile)?;
+                let credential = RouterCredential::new(credential.into_string())?;
+                Arc::new(OpenAiRouterProvider::new(settings, credential)?)
+            }
+        };
+        Ok(managed_provider(
+            provider,
+            Arc::clone(&cache),
+            policy.clone(),
+        ))
+    })
+}
+
+fn router_settings_for_profile(profile: &ProviderProfile) -> Result<RouterSettings, ProviderError> {
+    let invalid = || ProviderError::new(ProviderErrorKind::InvalidRequest, RetryAdvice::Never);
+    let url = profile
+        .base_url()
+        .ok_or_else(invalid)?
+        .parse::<autoharness_provider_openai::RouterUrl>()
+        .map_err(|_| invalid())?;
+    let mut settings = RouterSettings::new(url, profile.project())?;
+    if let Some(header) = profile.auth_header() {
+        settings = settings.with_authentication(header, "Bearer")?;
+    }
+    if profile.models_path().is_some() || profile.chat_path().is_some() {
+        settings = settings.with_paths(
+            profile.models_path().unwrap_or("/v1/models"),
+            profile.chat_path().unwrap_or("/v1/chat/completions"),
+        )?;
+    }
+    Ok(settings)
 }
 
 fn managed_provider(
