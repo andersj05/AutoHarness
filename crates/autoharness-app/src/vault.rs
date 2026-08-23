@@ -139,10 +139,10 @@ impl VaultPort for FakeVault {
     }
 
     fn delete(&self, reference: &CredentialReference) -> Result<(), VaultError> {
-        let mut entries = self.entries.lock().expect("fake vault mutex");
-        if entries.remove(reference.as_str()).is_none() {
-            return Err(VaultError::MissingEntry);
-        }
+        self.entries
+            .lock()
+            .expect("fake vault mutex")
+            .remove(reference.as_str());
         Ok(())
     }
 }

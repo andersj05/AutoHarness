@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Supported settings schema version.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Bounded profile-name value type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -147,6 +147,56 @@ pub struct ProviderProfile {
 }
 
 impl ProviderProfile {
+    /// Creates a Gemini profile with no stored credential.
+    #[must_use]
+    pub const fn gemini() -> Self {
+        Self {
+            kind: ProviderKind::Gemini,
+            base_url: None,
+            project: None,
+            auth_header: None,
+            models_path: None,
+            chat_path: None,
+            credential: None,
+        }
+    }
+
+    /// Creates a router profile with validated non-secret connection fields.
+    pub fn router(
+        base_url: impl Into<String>,
+        project: Option<String>,
+        auth_header: Option<String>,
+    ) -> Result<Self, &'static str> {
+        let base_url = base_url.into();
+        if base_url.trim().is_empty() {
+            return Err("router base URL must not be empty");
+        }
+        if base_url.len() > 2_048 || base_url.chars().any(char::is_control) {
+            return Err("router base URL is invalid");
+        }
+        for value in project.iter().chain(auth_header.iter()) {
+            if value.len() > 256 || value.chars().any(char::is_control) {
+                return Err("router profile field is invalid");
+            }
+        }
+        Ok(Self {
+            kind: ProviderKind::Router,
+            base_url: Some(base_url),
+            project,
+            auth_header,
+            models_path: None,
+            chat_path: None,
+            credential: None,
+        })
+    }
+
+    /// Returns a copy without credential linkage for safe duplication.
+    #[must_use]
+    pub fn without_credential(mut self) -> Self {
+        self.credential = None;
+        self
+    }
+
     /// Returns the provider adapter this profile selects.
     #[must_use]
     pub const fn kind(&self) -> ProviderKind {
@@ -197,6 +247,58 @@ impl ProviderProfile {
 pub struct CredentialDocument {
     pub(crate) reference: CredentialReference,
 }
+/// Durable non-secret recovery action for a cross-system credential mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialRecoveryKind {
+    /// A vault save has not yet committed its profile-document link.
+    UncommittedSave,
+    /// A removed profile link still requires idempotent vault cleanup.
+    Delete,
+}
+
+/// Bounded recovery record containing identities but never credential material.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialRecoveryRecord {
+    profile: ProfileId,
+    reference: CredentialReference,
+    kind: CredentialRecoveryKind,
+}
+
+impl CredentialRecoveryRecord {
+    /// Creates one non-secret recovery record.
+    #[must_use]
+    pub const fn new(
+        profile: ProfileId,
+        reference: CredentialReference,
+        kind: CredentialRecoveryKind,
+    ) -> Self {
+        Self {
+            profile,
+            reference,
+            kind,
+        }
+    }
+
+    /// Returns the exact profile involved in the mutation.
+    #[must_use]
+    pub const fn profile(&self) -> &ProfileId {
+        &self.profile
+    }
+
+    /// Returns the deterministic opaque vault reference.
+    #[must_use]
+    pub const fn reference(&self) -> &CredentialReference {
+        &self.reference
+    }
+
+    /// Returns the recovery action kind.
+    #[must_use]
+    pub const fn kind(&self) -> CredentialRecoveryKind {
+        self.kind
+    }
+}
 
 /// Validated top-level settings document for one layer or merged output.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -209,4 +311,6 @@ pub struct SettingsDocument {
     pub(crate) profiles: BTreeMap<ProfileId, ProviderProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) active_profile: Option<ProfileId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) credential_recovery: Vec<CredentialRecoveryRecord>,
 }

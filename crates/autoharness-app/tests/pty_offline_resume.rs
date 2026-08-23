@@ -3,7 +3,7 @@
 mod pty_support;
 
 use autoharness_app::profiles::ProfileStore;
-use autoharness_settings::ProfileId;
+use autoharness_settings::{ProfileId, ProviderProfile};
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 #[test]
@@ -12,14 +12,16 @@ fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     let environment = ScenarioEnvironment::prepare();
     environment.seed_completed_session("durable offline prompt", "durable offline response");
     let profiles = ProfileStore::open(&environment.profiles_document()).expect("profile store");
+    let id = ProfileId::new("home-router").expect("profile ID");
     profiles
         .upsert_profile(
-            "home-router",
-            r#"{"kind":"router","base_url":"http://127.0.0.1:9/","project":"pty-fixture"}"#,
+            &id,
+            &ProviderProfile::router("http://127.0.0.1:9/", Some("pty-fixture".to_owned()), None)
+                .expect("router profile"),
         )
         .expect("returning profile");
     profiles
-        .set_active_profile(Some(&ProfileId::new("home-router").expect("profile ID")))
+        .set_active_profile(Some(&id))
         .expect("activate returning profile");
 
     let mut first = PtySession::start(&environment, 24, 80);
