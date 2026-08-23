@@ -34,6 +34,7 @@ Promote the Phase 3.5 implementation through cross-platform CI, close the releas
 - The opt-in `benchmark-instrumentation` feature emits content-free monotonic first-draw, input, dispatch, decoded-chunk, and rendered-revision markers over loopback UDP, and the isolated `terminal_latency` runner reports their correlated harness intervals separately from network time.
 - Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
 - Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
+- The cross-platform PTY gate exposed and now covers Windows cursor-position report handling, inactive-session mutation isolation, reverse-causation event deletion, visible durable tool rows, and notice clearing when destructive confirmation is cancelled.
 - Tool definitions are advertised only for positively identified model support, and the current single safe-agent interaction mode enables the exact built-in registry.
 - Gemini Interactions function-call arguments are buffered across streamed deltas and emitted only after a complete bounded JSON object is available.
 - Unknown names and invalid argument shapes become durable `InvalidToolCall` no-authority proposals, are force-denied even under permissive policy, and return a deterministic result for bounded model repair.
@@ -92,12 +93,12 @@ Promote the Phase 3.5 implementation through cross-platform CI, close the releas
 
 ## Blockers
 
-Cross-platform PTY evidence requires CI on a committed release-candidate branch because nested ConPTY startup is unavailable inside this development harness.
+The six dedicated PTY scenarios pass locally on Windows; cross-platform release evidence still requires the refreshed CI matrix on the committed candidate.
 A configured router endpoint plus credential is required for the router live matrix, and the Gemini probes must be repeated on the release candidate.
 An approved reference machine is required before recording authoritative Phase 3.5 storage and terminal latency results.
 
 ## Handoff note
 
 Phase 3.5 implementation is complete locally on `feat/phase-3-5-release-hardening`; merge only after the dedicated cross-platform PTY step and ordinary baseline jobs pass.
-The actual Windows router terminal smoke passed with one correlated first-draw, input, dispatch, chunk, and rendered marker chain, but those local development-machine timings are not release evidence.
+The actual Windows router terminal smoke and all six Windows PTY release scenarios pass locally, but local development-machine timings are not release evidence.
 Use the ignored structural live probes and the terminal release checklist without retaining provider content, credentials, private endpoints, or raw payloads.

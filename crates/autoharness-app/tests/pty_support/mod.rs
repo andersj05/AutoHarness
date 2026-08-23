@@ -48,6 +48,7 @@ pub struct PtySession {
     output: OutputFeed,
     data_dir: PathBuf,
     raw_output: Vec<u8>,
+    cursor_queries_answered: usize,
 }
 
 /// Non-blocking view of pseudo-terminal output parsed into screen state.
@@ -398,6 +399,7 @@ impl PtySession {
             output,
             data_dir: environment.data_dir().to_path_buf(),
             raw_output: Vec::new(),
+            cursor_queries_answered: 0,
         }
     }
 
@@ -428,6 +430,15 @@ impl PtySession {
                 Ok(chunk) => {
                     self.raw_output.extend_from_slice(&chunk);
                     self.parser.process(&chunk);
+                    let cursor_queries = self
+                        .raw_output
+                        .windows(b"\x1b[6n".len())
+                        .filter(|window| *window == b"\x1b[6n")
+                        .count();
+                    while self.cursor_queries_answered < cursor_queries {
+                        self.send_bytes(b"\x1b[1;1R");
+                        self.cursor_queries_answered += 1;
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {

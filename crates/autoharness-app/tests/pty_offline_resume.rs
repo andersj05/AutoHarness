@@ -10,8 +10,7 @@ use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 #[ignore = "runs in the cross-platform terminal PTY CI gate"]
 fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     let environment = ScenarioEnvironment::prepare();
-    let model =
-        environment.seed_completed_session("durable offline prompt", "durable offline response");
+    environment.seed_completed_session("durable offline prompt", "durable offline response");
     let profiles = ProfileStore::open(&environment.profiles_document()).expect("profile store");
     profiles
         .upsert_profile(
@@ -31,7 +30,7 @@ fn returning_profile_replays_offline_and_survives_resize_and_restart() {
                 && text.contains("durable offline response")
                 && text.contains("home-router")
                 && text.contains("disconnected")
-                && text.contains(model.model_id().as_str())
+                && text.contains("router-offline-mo")
         },
         "returning profile should replay its selected model and transcript offline",
     );

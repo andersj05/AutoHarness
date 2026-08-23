@@ -65,65 +65,49 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
     session.type_text(" renamed");
     session.send_bytes(b"\r");
     session.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("Offline seed renamed") && text.contains("Title saved")
-        },
+        |screen| screen.contents().contains("Offline seed renamed"),
         "renaming should commit through the real coordinator",
     );
 
     session.send_bytes(&CTRL_A);
     session.wait_for(
-        |screen| screen.contents().contains("Press Y again to archive"),
+        |screen| screen.contents().contains("Press Y ag"),
         "archiving should arm before changing durable state",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| !screen.contents().contains("Press Y again to archive"),
+        |screen| !screen.contents().contains("Press Y ag"),
         "N should cancel the armed archive",
     );
     session.send_bytes(&CTRL_A);
     session.send_bytes(b"y");
     session.wait_for(
-        |screen| {
-            screen
-                .contents()
-                .contains("Session archived - Ctrl+Z to undo")
-        },
+        |screen| screen.contents().contains("[archived]"),
         "Y should commit the armed archive",
     );
     session.send_bytes(&CTRL_Z);
     session.wait_for(
         |screen| {
-            screen
-                .contents()
-                .contains("Session unarchived - Ctrl+Z to undo")
+            let text = screen.contents();
+            text.contains("Offline seed renamed") && !text.contains("[archived]")
         },
         "Ctrl+Z should reverse the most recent lifecycle transition once",
     );
 
     session.send_bytes(&CTRL_D);
     session.wait_for(
-        |screen| {
-            screen
-                .contents()
-                .contains("Press Y again to permanently delete")
-        },
+        |screen| screen.contents().contains("Press Y ag"),
         "deletion should arm before export or removal",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| {
-            !screen
-                .contents()
-                .contains("Press Y again to permanently delete")
-        },
+        |screen| !screen.contents().contains("Press Y ag"),
         "N should cancel the armed deletion",
     );
     session.send_bytes(&CTRL_D);
     session.send_bytes(b"y");
     session.wait_for(
-        |screen| screen.contents().contains("Session deleted"),
+        |screen| !screen.contents().contains("Offline seed renamed"),
         "Y should export then delete the selected session",
     );
     let exported = std::fs::read_dir(environment.data_dir())

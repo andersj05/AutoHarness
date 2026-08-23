@@ -698,17 +698,51 @@ impl SessionStore for SqliteStore {
             "DELETE FROM transcript_messages WHERE session_id = ?1",
             "DELETE FROM provider_attempts WHERE session_id = ?1",
             "DELETE FROM admitted_inputs WHERE session_id = ?1",
-            "DELETE FROM session_events WHERE session_id = ?1",
-            "DELETE FROM sessions WHERE session_id = ?1",
         ] {
-            let changed = transaction
+            transaction
                 .execute(statement, params![session_id.as_str()])
                 .map_err(map_sqlite_error)?;
-            if statement.starts_with("DELETE FROM sessions") && changed != 1 {
+        }
+
+        // Event causation is a same-session DAG enforced with RESTRICT.
+        // Remove leaves before their causes so multi-event command batches
+        // remain deletable without weakening foreign-key enforcement.
+        let event_ids = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT event_id FROM session_events \
+                     WHERE session_id = ?1 ORDER BY sequence DESC",
+                )
+                .map_err(map_sqlite_error)?;
+            let rows = statement
+                .query_map(params![session_id.as_str()], |row| row.get::<_, String>(0))
+                .map_err(map_sqlite_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(map_sqlite_error)?
+        };
+        for event_id in event_ids {
+            let changed = transaction
+                .execute(
+                    "DELETE FROM session_events WHERE session_id = ?1 AND event_id = ?2",
+                    params![session_id.as_str(), event_id],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed != 1 {
                 return Err(StoreError::CorruptData {
-                    area: CorruptionArea::SessionProjection,
+                    area: CorruptionArea::Event,
                 });
             }
+        }
+        let changed = transaction
+            .execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+            )
+            .map_err(map_sqlite_error)?;
+        if changed != 1 {
+            return Err(StoreError::CorruptData {
+                area: CorruptionArea::SessionProjection,
+            });
         }
 
         transaction.commit().map_err(map_sqlite_error)?;

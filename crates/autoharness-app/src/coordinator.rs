@@ -1701,6 +1701,9 @@ impl Coordinator {
         _benchmark_chunk: Option<(AttemptId, u64)>,
     ) -> Result<(), DurableEngineError> {
         let reply = self.engine.execute(ids::command(payload)).await?;
+        if reply.session.session_id() != &self.session_id {
+            return Ok(());
+        }
         self.session = reply.session;
         #[cfg(feature = "benchmark-instrumentation")]
         if let Some((attempt_id, chunk_sequence)) = _benchmark_chunk {
@@ -2943,6 +2946,11 @@ mod tests {
         })
         .await;
         assert_eq!(archived.len(), 2);
+        assert_eq!(
+            ui.sessions.borrow().session_id,
+            second_id.as_str(),
+            "mutating an inactive session must not replace the active projection"
+        );
 
         // Switch back into the first session; unarchive it first because an
         // archived session accepts no ordinary commands after activation.
@@ -3847,6 +3855,15 @@ mod tests {
         })
         .await;
         assert!(completed.permission_requests.is_empty());
+        assert!(completed.transcript.iter().any(|item| {
+            matches!(
+                item,
+                TranscriptItem::Tool(row)
+                    if row.tool_name == "fs_write"
+                        && row.status == "completed"
+                        && row.resource == "workspace:result.txt"
+            )
+        }));
         assert_eq!(
             std::fs::read_to_string(workspace.join("result.txt")).expect("tool output file"),
             "written by tool"

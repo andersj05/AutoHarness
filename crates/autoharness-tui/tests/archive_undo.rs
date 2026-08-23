@@ -104,6 +104,10 @@ fn archive_arms_and_requires_y_before_dispatch() {
     let _ = update(&mut model, Message::Input(key_input(Key::Char('n'))));
     assert!(model.browser_archive_confirmation().is_none());
     assert!(
+        model.notice.is_none(),
+        "cancel clears the armed-action notice"
+    );
+    assert!(
         !matches!(
             update(&mut model, Message::Input(key_input(Key::Backspace))).as_slice(),
             [UiEffect::Dispatch(UiIntent::ArchiveSession { .. })]
@@ -134,6 +138,7 @@ fn esc_cancels_an_armed_archive() {
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
 
     assert!(model.browser_archive_confirmation().is_none());
+    assert!(model.notice.is_none(), "Esc clears the armed-action notice");
     assert!(
         model.browser_open(),
         "Esc only disarms the archive; the browser stays open like delete"
