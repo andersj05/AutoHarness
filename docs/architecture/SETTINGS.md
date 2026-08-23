@@ -1,8 +1,9 @@
 # Settings, profiles, and credential handling
 
-**Status:** Current contract for Phase 3.3.
+**Status:** Current credential contract through Phase 3.6.
 
-This document describes how AutoHarness resolves settings, stores provider profiles, and handles credentials. The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault and [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution.
+This document describes how AutoHarness resolves settings, stores provider profiles, and handles credentials.
+The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault, [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution, and [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md) for cross-system mutation recovery.
 
 ## Layered settings resolution
 
@@ -53,6 +54,18 @@ The effective source is displayed in safe terms in the `Ctrl+,` settings overlay
 
 Secrets are validated (non-empty, bounded at 4096 bytes, visible ASCII) before storage and returned in zeroizing strings.
 Vault errors never include secret material.
+
+## Profile management boundary
+
+The application owns one serialized profile-management workflow.
+The TUI consumes safe profile and connection read models and emits typed intents; it never calls the settings file, operating-system vault, or provider adapters directly.
+Secret-bearing save and replace intents remain ephemeral, non-serializable, zeroizing, and redacted in debug output.
+
+Each profile uses one deterministic vault reference derived from its validated profile identity.
+The versioned profile document records bounded non-secret recovery operations around save, disconnect, and delete mutations.
+Recovery either completes an exact linked save or idempotently deletes an unlinked vault entry.
+Locked or unavailable vaults leave cleanup visibly pending without blocking offline profiles, settings, or sessions.
+Environment credentials are visible read-only overrides and are never copied into the vault implicitly.
 
 ## Secret-handling guarantees
 
