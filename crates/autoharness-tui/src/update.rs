@@ -5,8 +5,9 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, Message, Model, Notice,
-    PendingKind, RetryPolicy, SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent,
-    UiNotice,
+    PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
+    ProfileEditorState, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
+    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -30,6 +31,14 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::CatalogChanged(catalog) => {
             apply_catalog(model, catalog);
+            Vec::new()
+        }
+        Message::ProfilesChanged(profiles) => {
+            apply_profiles(model, profiles);
+            Vec::new()
+        }
+        Message::SettingsChanged(settings) => {
+            model.apply_settings(settings);
             Vec::new()
         }
         Message::Notice(notice) => {
@@ -140,6 +149,21 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 
     if model.focus == Focus::Permission {
         return handle_permission_input(model, input);
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('g' | 'G'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        open_profile_center(model);
+        return Vec::new();
+    }
+
+    if model.profile_center.open {
+        return handle_profile_input(model, input);
     }
 
     if matches!(
@@ -357,6 +381,10 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
     match entry.id {
         "sessions" => {
             open_browser(model);
+            Vec::new()
+        }
+        "profiles" => {
+            open_profile_center(model);
             Vec::new()
         }
         "models" => {
@@ -910,6 +938,682 @@ fn handle_browser_rename_input(model: &mut Model, input: Input) -> Vec<UiEffect>
     }
 }
 
+fn apply_profiles(model: &mut Model, profiles: Arc<ProfilesProjection>) {
+    model.apply_profiles(profiles);
+}
+
+fn open_profile_center(model: &mut Model) {
+    model.picker.open = false;
+    model.credential.open = false;
+    model.credential.clear();
+    model.browser.open = false;
+    model.palette.open = false;
+    model.help.open = false;
+    model.search.open = false;
+    model.settings_open = false;
+    model.profile_center.open = true;
+    model.profile_center.editor = None;
+    model.profile_center.credential = None;
+    model.profile_center.confirming_delete = None;
+    model.profile_center.confirming_disconnect = None;
+    model.focus = Focus::Profiles;
+    model.sync_profile_selection();
+    model.dirty = true;
+}
+
+fn close_profile_center(model: &mut Model) {
+    model.profile_center.open = false;
+    model.profile_center.editor = None;
+    model.profile_center.credential = None;
+    model.profile_center.confirming_delete = None;
+    model.profile_center.confirming_disconnect = None;
+    model.focus = Focus::Composer;
+    model.dirty = true;
+}
+
+fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if model.profile_center.credential.is_some() {
+        return handle_profile_credential_input(model, input);
+    }
+    if model.profile_center.editor.is_some() {
+        return handle_profile_editor_input(model, input);
+    }
+    if let Some(profile_id) = model.profile_center.confirming_disconnect.clone() {
+        return match input {
+            Input {
+                key: Key::Char('y' | 'Y'),
+                ctrl: false,
+                ..
+            } => {
+                model.profile_center.confirming_disconnect = None;
+                dispatch_disconnect_profile(model, profile_id)
+            }
+            Input {
+                key: Key::Char('n' | 'N'),
+                ctrl: false,
+                ..
+            }
+            | Input { key: Key::Esc, .. } => {
+                model.profile_center.confirming_disconnect = None;
+                model.notice = None;
+                model.dirty = true;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+    if let Some(profile_id) = model.profile_center.confirming_delete.clone() {
+        return match input {
+            Input {
+                key: Key::Char('y' | 'Y'),
+                ctrl: false,
+                ..
+            } => {
+                model.profile_center.confirming_delete = None;
+                dispatch_delete_profile(model, profile_id)
+            }
+            Input {
+                key: Key::Char('n' | 'N'),
+                ctrl: false,
+                ..
+            }
+            | Input { key: Key::Esc, .. } => {
+                model.profile_center.confirming_delete = None;
+                model.notice = None;
+                model.dirty = true;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_profile_center(model);
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } => {
+            move_profile_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_profile_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => activate_selected_profile(model),
+        Input {
+            key: Key::Char('n' | 'N'),
+            alt: true,
+            ..
+        } => {
+            model.profile_center.editor = Some(ProfileEditorState {
+                mode: ProfileEditorMode::Create,
+                source_id: None,
+                field: 0,
+                id: String::new(),
+                kind: ProviderKindLabel::Gemini,
+                base_url: String::new(),
+                project: String::new(),
+                auth_header: String::new(),
+            });
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('e' | 'E'),
+            alt: true,
+            ..
+        } => {
+            open_profile_editor(model, ProfileEditorMode::Edit);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('d' | 'D'),
+            alt: true,
+            ..
+        } => {
+            open_profile_editor(model, ProfileEditorMode::Duplicate);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('k' | 'K'),
+            alt: true,
+            ..
+        } => {
+            open_profile_credential(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('t' | 'T'),
+            alt: true,
+            ..
+        } => test_selected_profile(model),
+        Input {
+            key: Key::Char('m' | 'M'),
+            alt: true,
+            ..
+        } => set_selected_profile_default_model(model),
+        Input {
+            key: Key::Char('x' | 'X'),
+            alt: true,
+            ..
+        } => {
+            request_disconnect_profile(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Delete, ..
+        } => {
+            request_delete_profile(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.profile_center.query.pop();
+            model.sync_profile_selection();
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.profile_center.query.push(character);
+            model.sync_profile_selection();
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
+    let Some(profile) = model.selected_profile().cloned() else {
+        model.notice = Some(Notice::Info("Create a profile first".to_owned()));
+        model.dirty = true;
+        return;
+    };
+    model.profile_center.editor = Some(ProfileEditorState {
+        mode,
+        source_id: Some(profile.id.clone()),
+        field: if mode == ProfileEditorMode::Duplicate {
+            0
+        } else {
+            1
+        },
+        id: if mode == ProfileEditorMode::Duplicate {
+            String::new()
+        } else {
+            profile.id
+        },
+        kind: profile.kind,
+        base_url: profile.base_url,
+        project: profile.project,
+        auth_header: profile.auth_header,
+    });
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            model.profile_center.editor = None;
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => submit_profile_editor(model),
+        Input {
+            key: Key::Tab,
+            shift,
+            ..
+        } => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            let count = if editor.mode == ProfileEditorMode::Duplicate {
+                1
+            } else {
+                editor.field_count()
+            };
+            let mut field = if shift {
+                editor.field.checked_sub(1).unwrap_or(count - 1)
+            } else {
+                (editor.field + 1) % count
+            };
+            if editor.mode == ProfileEditorMode::Edit && field == 0 {
+                field = if shift { count - 1 } else { 1 };
+            }
+            editor.field = field;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Left | Key::Right,
+            ..
+        } => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            if editor.mode != ProfileEditorMode::Duplicate && editor.field == 1 {
+                editor.kind = match editor.kind {
+                    ProviderKindLabel::Gemini => ProviderKindLabel::Router,
+                    ProviderKindLabel::Router => ProviderKindLabel::Gemini,
+                };
+            }
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            if let Some(field) = profile_editor_field(editor) {
+                field.pop();
+            }
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            if let Some(field) = profile_editor_field(editor)
+                && field.len() < 2_048
+            {
+                field.push(character);
+            }
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn profile_editor_field(editor: &mut ProfileEditorState) -> Option<&mut String> {
+    match editor.field {
+        0 if editor.mode != ProfileEditorMode::Edit => Some(&mut editor.id),
+        2 if editor.kind == ProviderKindLabel::Router => Some(&mut editor.base_url),
+        3 if editor.kind == ProviderKindLabel::Router => Some(&mut editor.project),
+        4 if editor.kind == ProviderKindLabel::Router => Some(&mut editor.auth_header),
+        _ => None,
+    }
+}
+
+fn submit_profile_editor(model: &mut Model) -> Vec<UiEffect> {
+    let Some(editor) = model.profile_center.editor.as_ref() else {
+        return Vec::new();
+    };
+    if editor.id.trim().is_empty() {
+        model.notice = Some(Notice::Failure(UiFailure::new(
+            ErrorClass::Validation,
+            "Profile name must not be empty",
+            RetryPolicy::Never,
+        )));
+        model.dirty = true;
+        return Vec::new();
+    }
+    if editor.kind == ProviderKindLabel::Router && editor.base_url.trim().is_empty() {
+        model.notice = Some(Notice::Failure(UiFailure::new(
+            ErrorClass::Validation,
+            "Router profiles require a base URL",
+            RetryPolicy::Never,
+        )));
+        model.dirty = true;
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    let editor = model
+        .profile_center
+        .editor
+        .take()
+        .expect("profile editor is open");
+    let effect = if editor.mode == ProfileEditorMode::Duplicate {
+        let source = editor.source_id.expect("duplicate editor has a source");
+        let destination = editor.id;
+        model.pending.insert(
+            request_id,
+            PendingKind::DuplicateProfile {
+                source: source.clone(),
+                destination: destination.clone(),
+            },
+        );
+        UiIntent::DuplicateProfile {
+            request_id,
+            source,
+            destination,
+        }
+    } else {
+        let profile = ProviderProfileDraft {
+            id: editor.id,
+            kind: editor.kind,
+            base_url: editor.base_url,
+            project: editor.project,
+            auth_header: editor.auth_header,
+        };
+        model
+            .pending
+            .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
+        UiIntent::UpsertProfile {
+            request_id,
+            profile,
+        }
+    };
+    model.notice = Some(Notice::Info("Saving provider profile...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(effect)]
+}
+
+fn open_profile_credential(model: &mut Model) {
+    let Some(profile) = model.selected_profile().cloned() else {
+        model.notice = Some(Notice::Info("Create a profile first".to_owned()));
+        model.dirty = true;
+        return;
+    };
+    if matches!(
+        profile.credential_state,
+        crate::model::ProfileCredentialStateLabel::RecoveryPending
+    ) {
+        model.notice = Some(Notice::Info(
+            "Credential repair is pending; retry after the platform vault is available".to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
+    let action = if matches!(
+        profile.credential_state,
+        crate::model::ProfileCredentialStateLabel::Stored
+    ) {
+        ProfileCredentialAction::Replace
+    } else {
+        ProfileCredentialAction::Save
+    };
+    model.profile_center.credential = Some(ProfileCredentialEditor::new(profile.id, action));
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn handle_profile_credential_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            model.profile_center.credential = None;
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => submit_profile_credential(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model
+                .profile_center
+                .credential
+                .as_mut()
+                .expect("credential editor is open")
+                .pop();
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } => {
+            let result = model
+                .profile_center
+                .credential
+                .as_mut()
+                .expect("credential editor is open")
+                .append_character(character);
+            match result {
+                Ok(()) => model.notice = None,
+                Err(message) => {
+                    model.notice = Some(Notice::Failure(UiFailure::new(
+                        ErrorClass::Validation,
+                        message,
+                        RetryPolicy::Never,
+                    )));
+                }
+            }
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn submit_profile_credential(model: &mut Model) -> Vec<UiEffect> {
+    let (profile_id, action, credential) = {
+        let editor = model
+            .profile_center
+            .credential
+            .as_mut()
+            .expect("credential editor is open");
+        let credential = match editor.take() {
+            Ok(credential) => credential,
+            Err(message) => {
+                model.notice = Some(Notice::Failure(UiFailure::new(
+                    ErrorClass::Validation,
+                    message,
+                    RetryPolicy::Never,
+                )));
+                model.dirty = true;
+                return Vec::new();
+            }
+        };
+        (editor.profile_id.clone(), editor.action, credential)
+    };
+    model.profile_center.credential = None;
+    let request_id = model.allocate_request();
+    let intent = match action {
+        ProfileCredentialAction::Save => {
+            model.pending.insert(
+                request_id,
+                PendingKind::SaveProfileCredential(profile_id.clone()),
+            );
+            UiIntent::SaveProfileCredential {
+                request_id,
+                profile_id,
+                credential,
+            }
+        }
+        ProfileCredentialAction::Replace => {
+            model.pending.insert(
+                request_id,
+                PendingKind::ReplaceProfileCredential(profile_id.clone()),
+            );
+            UiIntent::ReplaceProfileCredential {
+                request_id,
+                profile_id,
+                credential,
+            }
+        }
+    };
+    model.notice = Some(Notice::Info(
+        "Saving credential in the operating-system vault...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(intent)]
+}
+
+fn activate_selected_profile(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
+        return Vec::new();
+    };
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ActivateProfile(profile_id.clone()));
+    model.notice = Some(Notice::Info(
+        "Switching active provider profile...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ActivateProfile {
+        request_id,
+        profile_id,
+    })]
+}
+
+fn test_selected_profile(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
+        return Vec::new();
+    };
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::TestProfile(profile_id.clone()));
+    model.notice = Some(Notice::Info("Testing provider connection...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::TestProfile {
+        request_id,
+        profile_id,
+    })]
+}
+fn set_selected_profile_default_model(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
+        return Vec::new();
+    };
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::SetProfileDefaultModel(profile_id.clone()),
+    );
+    model.notice = Some(Notice::Info(
+        "Saving the current selected model as this profile's default...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::SetProfileDefaultModel {
+        request_id,
+        profile_id,
+    })]
+}
+
+fn request_disconnect_profile(model: &mut Model) {
+    let Some(profile) = model.selected_profile() else {
+        return;
+    };
+    if !matches!(
+        profile.credential_state,
+        crate::model::ProfileCredentialStateLabel::Stored
+    ) {
+        model.notice = Some(Notice::Info(
+            "The selected profile has no stored credential".to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
+    let profile_id = profile.id.clone();
+    model.profile_center.confirming_disconnect = Some(profile_id.clone());
+    model.notice = Some(Notice::Info(format!(
+        "Disconnect stored credential for '{profile_id}'? Y confirm / N cancel"
+    )));
+    model.dirty = true;
+}
+
+fn dispatch_disconnect_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::DisconnectProfile(profile_id.clone()),
+    );
+    model.notice = Some(Notice::Info(
+        "Disconnecting stored credential...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::DisconnectProfile {
+        request_id,
+        profile_id,
+    })]
+}
+
+fn request_delete_profile(model: &mut Model) {
+    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
+        return;
+    };
+    model.profile_center.confirming_delete = Some(profile_id.clone());
+    model.notice = Some(Notice::Info(format!(
+        "Delete profile '{profile_id}' and its stored credential? Y confirm / N cancel"
+    )));
+    model.dirty = true;
+}
+
+fn dispatch_delete_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::DeleteProfile(profile_id.clone()));
+    model.notice = Some(Notice::Info("Deleting provider profile...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::DeleteProfile {
+        request_id,
+        profile_id,
+    })]
+}
+
+fn move_profile_selection(model: &mut Model, direction: isize) {
+    let visible: Vec<String> = model
+        .filtered_profiles()
+        .map(|profile| profile.id.clone())
+        .collect();
+    if visible.is_empty() {
+        model.profile_center.selected = None;
+        model.dirty = true;
+        return;
+    }
+    let current = model
+        .profile_center
+        .selected
+        .as_ref()
+        .and_then(|selected| visible.iter().position(|profile| profile == selected))
+        .unwrap_or(0);
+    let next = current
+        .saturating_add_signed(direction)
+        .min(visible.len().saturating_sub(1));
+    model.profile_center.selected = visible.get(next).cloned();
+    model.dirty = true;
+}
+
 fn apply_sessions(model: &mut Model, sessions: Arc<SessionsProjection>) {
     model.sessions = sessions;
     model.sync_browser_selection();
@@ -992,6 +1696,15 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::OpenSession(candidate) => candidate == session_id,
         PendingKind::CreateSession
         | PendingKind::ConfigureCredential
+        | PendingKind::UpsertProfile(_)
+        | PendingKind::DuplicateProfile { .. }
+        | PendingKind::ActivateProfile(_)
+        | PendingKind::SaveProfileCredential(_)
+        | PendingKind::ReplaceProfileCredential(_)
+        | PendingKind::TestProfile(_)
+        | PendingKind::SetProfileDefaultModel(_)
+        | PendingKind::DisconnectProfile(_)
+        | PendingKind::DeleteProfile(_)
         | PendingKind::RefreshCatalog
         | PendingKind::SelectModel(_)
         | PendingKind::SubmitPrompt(_)
@@ -1199,6 +1912,20 @@ fn confirm_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn handle_paste(model: &mut Model, text: &str) {
+    if let Some(credential) = model.profile_center.credential.as_mut() {
+        match credential.append_paste(text) {
+            Ok(()) => model.notice = None,
+            Err(message) => {
+                model.notice = Some(Notice::Failure(UiFailure::new(
+                    ErrorClass::Validation,
+                    message,
+                    RetryPolicy::Never,
+                )));
+            }
+        }
+        model.dirty = true;
+        return;
+    }
     if model.credential.open {
         match model.credential.append_paste(text) {
             Ok(()) => model.notice = None,
@@ -1497,7 +2224,9 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
-    if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+    if matches!(&*model.catalog, CatalogProjection::CredentialRequired)
+        && !model.profile_center.open
+    {
         open_credential(model);
     } else if !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
@@ -1520,6 +2249,42 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     }
                     PendingKind::ConfigureCredential => {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
+                    }
+                    PendingKind::UpsertProfile(profile) => {
+                        model.profile_center.selected = Some(profile.id);
+                        model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
+                    }
+                    PendingKind::DuplicateProfile { destination, .. } => {
+                        model.profile_center.selected = Some(destination);
+                        model.notice = Some(Notice::Info(
+                            "Profile duplicated without a credential".to_owned(),
+                        ));
+                    }
+                    PendingKind::ActivateProfile(_) => {
+                        model.notice = Some(Notice::Info("Active provider switched".to_owned()));
+                    }
+                    PendingKind::SaveProfileCredential(_) => {
+                        model.notice = Some(Notice::Info(
+                            "Credential saved in the operating-system vault".to_owned(),
+                        ));
+                    }
+                    PendingKind::ReplaceProfileCredential(_) => {
+                        model.notice = Some(Notice::Info("Stored credential replaced".to_owned()));
+                    }
+                    PendingKind::TestProfile(_) => {
+                        model.notice = Some(Notice::Info(
+                            "Provider connection test completed".to_owned(),
+                        ));
+                    }
+                    PendingKind::SetProfileDefaultModel(_) => {
+                        model.notice = Some(Notice::Info("Profile default model saved".to_owned()));
+                    }
+                    PendingKind::DisconnectProfile(_) => {
+                        model.notice =
+                            Some(Notice::Info("Stored credential disconnected".to_owned()));
+                    }
+                    PendingKind::DeleteProfile(_) => {
+                        model.notice = Some(Notice::Info("Provider profile deleted".to_owned()));
                     }
                     PendingKind::SubmitPrompt(prompt) => {
                         model.history.record(&prompt);
@@ -1588,9 +2353,76 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                 Some(PendingKind::ConfigureCredential) => {
                     open_credential(model);
                 }
+                Some(PendingKind::UpsertProfile(profile)) => {
+                    let mode = if model
+                        .profiles
+                        .profiles
+                        .iter()
+                        .any(|existing| existing.id == profile.id)
+                    {
+                        ProfileEditorMode::Edit
+                    } else {
+                        ProfileEditorMode::Create
+                    };
+                    model.profile_center.editor = Some(ProfileEditorState {
+                        mode,
+                        source_id: None,
+                        field: if mode == ProfileEditorMode::Edit {
+                            1
+                        } else {
+                            0
+                        },
+                        id: profile.id,
+                        kind: profile.kind,
+                        base_url: profile.base_url,
+                        project: profile.project,
+                        auth_header: profile.auth_header,
+                    });
+                }
+                Some(PendingKind::DuplicateProfile {
+                    source,
+                    destination,
+                }) => {
+                    if let Some(profile) = model
+                        .profiles
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.id == source)
+                    {
+                        model.profile_center.editor = Some(ProfileEditorState {
+                            mode: ProfileEditorMode::Duplicate,
+                            source_id: Some(source),
+                            field: 0,
+                            id: destination,
+                            kind: profile.kind,
+                            base_url: profile.base_url.clone(),
+                            project: profile.project.clone(),
+                            auth_header: profile.auth_header.clone(),
+                        });
+                    }
+                }
+                Some(PendingKind::SaveProfileCredential(profile_id)) => {
+                    model.profile_center.selected = Some(profile_id.clone());
+                    model.profile_center.credential = Some(ProfileCredentialEditor::new(
+                        profile_id,
+                        ProfileCredentialAction::Save,
+                    ));
+                }
+                Some(PendingKind::ReplaceProfileCredential(profile_id)) => {
+                    model.profile_center.selected = Some(profile_id.clone());
+                    model.profile_center.credential = Some(ProfileCredentialEditor::new(
+                        profile_id,
+                        ProfileCredentialAction::Replace,
+                    ));
+                }
                 Some(PendingKind::SelectModel(_)) => open_picker(model),
                 Some(
-                    PendingKind::RefreshCatalog
+                    PendingKind::ActivateProfile(_)
+                    | PendingKind::TestProfile(_)
+                    | PendingKind::SetProfileDefaultModel(_)
+                    | PendingKind::DisconnectProfile(_)
+                    | PendingKind::DeleteProfile(_)
+                    | PendingKind::RefreshCatalog
                     | PendingKind::SubmitPrompt(_)
                     | PendingKind::CancelAttempt(_)
                     | PendingKind::RetryAttempt(_)
@@ -2052,6 +2884,15 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             PendingKind::RetryAttempt(candidate) if !cancellation => candidate == attempt_id,
             PendingKind::CreateSession
             | PendingKind::ConfigureCredential
+            | PendingKind::UpsertProfile(_)
+            | PendingKind::DuplicateProfile { .. }
+            | PendingKind::ActivateProfile(_)
+            | PendingKind::SaveProfileCredential(_)
+            | PendingKind::ReplaceProfileCredential(_)
+            | PendingKind::TestProfile(_)
+            | PendingKind::SetProfileDefaultModel(_)
+            | PendingKind::DisconnectProfile(_)
+            | PendingKind::DeleteProfile(_)
             | PendingKind::RefreshCatalog
             | PendingKind::SelectModel(_)
             | PendingKind::SubmitPrompt(_)

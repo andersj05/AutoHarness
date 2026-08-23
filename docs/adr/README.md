@@ -37,6 +37,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0010](0010-use-mit-license.md) | Accepted | Use the MIT License |
 | [0011](0011-use-event-sourced-session-lifecycle.md) | Accepted | Use event-sourced session lifecycle with archive guards and export-before-delete |
 | [0012](0012-use-typed-settings-resolver.md) | Accepted | Use a versioned typed settings resolver with layered precedence |
+| [0013](0013-use-durable-credential-mutation-recovery.md) | Accepted | Use durable non-secret recovery records for cross-system profile and credential mutations |
 
 ## When an ADR is not needed
 

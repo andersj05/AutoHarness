@@ -24,6 +24,10 @@ A failed required item blocks promotion.
 
 - [ ] First run renders the complete terminal without a credential and exits cleanly.
 - [ ] A returning profile reports the expected provider and credential provenance after restart.
+- [ ] A fresh user creates Gemini and router profiles, saves distinct keys, tests both, chooses a default model, switches providers, and reconnects after restart without shell setup.
+- [ ] Duplicate profile configuration starts disconnected and cannot inherit or share the source profile's vault entry.
+- [ ] Environment overrides remain read-only and visibly take precedence without copying their values into the vault.
+- [ ] Disconnect and profile deletion name their exact scope, require confirmation, and never affect another profile's credential.
 - [ ] Offline resume restores the selected model, transcript, and session list from durable state.
 - [ ] Multi-session create, switch, rename, archive, undo, and export-before-delete behavior passes.
 - [ ] Invalid tool calls are force-denied and repaired without human or capability authority.
@@ -41,6 +45,8 @@ A failed required item blocks promotion.
 - [ ] A corrupt catalog cache is discarded and replaced by live discovery without damaging session history.
 - [ ] A malformed profile document is preserved as `.bad` and replaced atomically.
 - [ ] A missing or locked credential vault degrades to session-only offline operation.
+- [ ] Interrupted credential save, disconnect, and profile deletion operations expose bounded non-secret recovery state and reconcile idempotently after restart.
+- [ ] Schema-v1 profile documents migrate to schema 2 without losing profile configuration, active selection, or credential linkage.
 - [ ] Network loss settles the attempt and preserves an explicit retry path without replaying unrelated failed input.
 - [ ] Interrupted prepared, dispatched, permission-pending, and effect-started attempts recover according to their durable ambiguity rules.
 
@@ -59,6 +65,8 @@ A failed required item blocks promotion.
 - [ ] Scan the candidate source tree, test fixtures, benchmark reports, archives, logs, and generated application data for the release sentinel values.
 - [ ] Confirm application logs contain structural fields only and no prompt, response, tool content, credential, or opaque provider payload.
 - [ ] Confirm profile and settings documents contain credential references only.
+- [ ] Confirm credential recovery records contain only operation kind, profile identity, and opaque reference.
+- [ ] Run the unique sentinel through profile save, replace, test, disconnect, delete, restart recovery, rendered UI, and debug output.
 - [ ] Confirm permission prompts display the exact bounded capability and resource without exposing secret content.
 - [ ] Confirm redirects, ambient proxies, inherited process environments, shell execution, and workspace traversal remain denied by the capability adapters.
 

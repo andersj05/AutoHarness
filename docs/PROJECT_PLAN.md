@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Last updated:** 2026-08-22
+**Last updated:** 2026-08-23
 
 **Planning horizon:** Foundation through distributed self-improvement
 
@@ -161,7 +161,7 @@ The Phase 3 completion evidence did not exercise a live Gemini or router functio
 
 ### Phase 3.1: Live protocol reliability and recovery
 
-**Status:** Active
+**Status:** Implemented; live release-candidate evidence moves to Phase 3.9
 
 **Goal:** Make ordinary conversation and the safe tool loop work reliably against live providers, and ensure one invalid model tool emission cannot trap a session in repeated terminal failures.
 
@@ -190,7 +190,7 @@ The Gemini Interactions adapter now buffers streamed argument deltas until a com
 Unknown names and invalid arguments enter a durable force-denied no-authority lifecycle, receive a bounded repair result, and cannot reach an external capability.
 Provider requests exclude prior failed and cancelled prompts unless the same input is explicitly retried, tool definitions require positive model capability evidence, and the terminal exposes a durable global `Ctrl+N` recovery action with stable failure codes and safe attempt references.
 Composed SQLite-backed tests cover repair continuation and replay, and an actual credential-free PTY run created a new session from the credential overlay and restored the terminal.
-Ignored opt-in Gemini and router compatibility probes compile and retain only structural assertions, but the live plain-chat and HTTP-tool exit criteria remain open because no provider credential or router endpoint was available in the verification process.
+Ignored opt-in Gemini and router compatibility probes retain only structural assertions; Gemini plain chat and HTTP-tool probes passed live on 2026-08-22, while reviewed configured-router live evidence remains open for the final Phase 3.9 release candidate.
 
 ### Phase 3.2: Complete session lifecycle
 
@@ -279,9 +279,9 @@ Exit criteria evidence:
 
 ### Phase 3.5: Terminal release hardening
 
-**Status:** Implemented; release-candidate exit evidence pending
+**Status:** Implemented; pull-request and cross-platform evidence pending
 
-**Goal:** Prove the complete Phase 3.x terminal product as a stable base before persistent memory adds more state and UI.
+**Goal:** Prove the current runtime and terminal mechanics before product-level profile management and interface expansion.
 
 Deliverables:
 
@@ -300,18 +300,130 @@ Local implementation evidence:
 - The `benchmark-instrumentation` feature and `terminal_latency` runner correlate first draw, input acceptance, provider dispatch, decoded chunks, and rendered revisions without content-bearing telemetry.
 - The [terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md) gates security, accessibility, restoration, documentation, benchmark provenance, and database rollback preparation.
 
-Remaining exit evidence requires green PTY matrix runs for the release-candidate commit, the configured live-provider matrix, and an approved reference-machine benchmark report.
+Remaining exit evidence requires green baseline and PTY matrix runs for the Phase 3.5 pull-request commit.
+The final configured live-provider matrix, approved reference-machine report, complete usability review, and release approval move to Phase 3.9 because Phases 3.6 through 3.8 materially change the shipped terminal experience.
 
 Exit criteria:
 
-- All baseline Rust gates and Phase 3.x PTY scenarios pass on Windows, macOS, and Linux.
-- The supported live-provider matrix passes plain chat and safe tool continuation on a release candidate.
-- No P0 or P1 defect remains in basic chat, session lifecycle, settings, credential handling, permission handling, recovery, or terminal rendering.
-- Phase 3.x benchmark and usability evidence is reviewed, and Phase 4 can consume stable session, settings, profile, and navigation boundaries rather than building around temporary UI state.
+- All baseline Rust gates and the current Phase 3.x PTY scenarios pass on Windows, macOS, and Linux.
+- Migration, corruption, locked-vault, network-loss, resize, forced-shutdown, and terminal-restoration coverage passes on the pull-request commit.
+- Benchmark instrumentation and the isolated terminal runner produce valid content-free reports, while final thresholds and reference evidence remain a Phase 3.9 gate.
+- The implementation is promoted to `dev` before Phase 3.6 begins.
+
+### Phase 3.6: Local profile and provider connection center
+
+**Status:** Implemented locally; cross-platform pull-request evidence pending
+
+**Goal:** Give users one safe in-terminal place to understand their local profile, manage every supported provider connection, and save distinct API keys without shell setup.
+
+Deliverables:
+
+- A full-screen Profiles and Providers surface reachable from the global `Ctrl+G` shortcut, command palette, and settings provenance surface.
+- A local-only user summary showing the active workspace, default provider profile, default model, and current safe-agent mode; display-label and appearance editing remain in Phase 3.8.
+- The local user profile is not a hosted account or authentication identity, and it never owns provider secrets.
+- A searchable provider-profile list showing provider kind, active and default state, credential source, connection health, default model, and last safe test result.
+- Guided create, edit, duplicate, activate, and delete flows for multiple Gemini and OpenAI-compatible router profiles.
+- Secure save, replace, test, disconnect, delete, and session-only credential actions using one operating-system vault entry per named provider profile.
+- Read-only explanation when an environment credential overrides a saved vault entry, including the exact non-secret source layer and the action needed to use the saved entry.
+- Typed application-owned profile and credential-management commands, read models, validation failures, and recovery states so the TUI never calls the vault, settings store, provider, or filesystem directly.
+- Explicit recovery for partial operations across the profile document and operating-system vault, including orphaned references, failed deletion, locked vaults, and interrupted replacement.
+- A focused ADR accepted before implementation defines ordering, rollback, and user-visible repair for cross-system profile document and vault mutations.
+- Migration and sentinel coverage proving that profile edits and every credential lifecycle operation keep raw keys out of application-owned durable state and rendered diagnostics.
+
+Exit criteria:
+
+- From a fresh launch, a user can create one Gemini profile and one router profile, save a different credential for each, test both, choose defaults, switch between them, and reconnect after restart without a shell command.
+- Replacing, disconnecting, and deleting a credential affects only the selected profile and never silently changes another profile or falls back to plaintext storage.
+- Environment, vault, and session-only precedence is visible and deterministic, including when the vault is locked or unavailable.
+- Every management action has keyboard, palette, and visible-control paths that converge on the same typed application intent.
+- Fake-vault integration tests cover complete and interrupted workflows, and platform vault smoke tests exercise save, retrieve, replace, and delete without printing secret values.
+
+**Local implementation evidence:** Implemented and verified on Windows on 2026-08-23.
+
+[ADR-0013](adr/0013-use-durable-credential-mutation-recovery.md) defines deterministic recovery records and operation ordering across the atomic profile document and operating-system vault.
+Settings schema 2 adds non-secret recovery state and optional profile default models while schema-v1 documents migrate on their next mutation.
+The application-owned `ProfileManager` serializes create, edit, duplicate, activate, save, replace, disconnect, delete, and restart reconciliation without exposing the vault or profile file to the TUI.
+The `Ctrl+G` full-screen surface shows local defaults, searchable Gemini and router profiles, active and credential-source state, content-free connection health, responsive detail panes, masked credential entry, destructive confirmations, and keyboard help.
+Typed TUI intents drive the same coordinator operations as command-palette and visible actions, and runtime profile switches rebuild the correct provider adapter without crossing provider credentials.
+Focused fault-injection and sentinel tests cover interrupted saves, failed cleanup, idempotent recovery, scoped replacement and deletion, duplication without credential linkage, default-model persistence, and raw-secret exclusion.
+A composed coordinator test creates distinct Gemini and router profiles and keys, switches and tests both, assigns a default model, deletes only the router, restarts, and proves the Gemini profile and credential remain.
+An actual PTY journey creates, switches, duplicates, cancels and confirms deletion, exits cleanly, and resolves the surviving profiles without shell setup.
+The opt-in operating-system vault smoke passed save, load, replace, and delete against Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains part of the cross-platform pull-request and Phase 3.9 release matrix.
+
+### Phase 3.7: Unified TUI shell and navigation
+
+**Status:** Planned
+
+**Goal:** Replace the growing collection of overlays with a coherent application shell whose hierarchy, focus, and next action are obvious at every supported terminal size.
+
+Deliverables:
+
+- A route-based shell for Chat, Sessions, Profiles and Providers, Settings, and Help, with a navigation rail at wide widths and a compact route switcher at narrow widths.
+- A visible local profile and active-provider summary in the shell, with connection, model, attempt, and offline state presented once rather than repeated inconsistently.
+- A redesigned chat workspace with clearer transcript grouping, tool and failure hierarchy, composer boundaries, streaming state, and contextual actions.
+- One focus model and one overlay stack with deterministic opening, dismissal, focus restoration, and conflict rules for permission prompts, destructive confirmations, credential entry, search, and the command palette.
+- Reusable terminal design tokens and components for spacing, borders, typography emphasis, selection, focus, disabled controls, success, warning, and failure.
+- Responsive layout classes with explicit information priority for 40x12, 60x18, 80x24, 120x40, 120x50, and wider terminals.
+- Deliberate empty, loading, offline, locked-vault, no-model, no-session, and recoverable-error states with one visible primary action.
+- Contextual action bars and command-palette routing that keep every important operation discoverable without requiring shortcut memorization.
+- A thin TUI boundary that continues to consume application read models and emit typed intents without network, storage, provider, or model logic in the render loop.
+
+Exit criteria:
+
+- A keyboard-only user can move among the five primary routes, return to the prior focus after every overlay, and complete ordinary chat, session, provider, and settings tasks without consulting external documentation.
+- No input can open incompatible overlays, dispatch an action against a hidden or stale selection, or lose a composer draft.
+- Fixed-size goldens and critical visual review cover every responsive layout class and all primary loading, empty, error, permission, and destructive-confirmation states.
+- Instrumented first draw, input dispatch, and decoded-chunk-to-render intervals remain within the reviewed Phase 3.x budgets.
+
+### Phase 3.8: Personalization and accessibility
+
+**Status:** Planned
+
+**Goal:** Let users adapt the terminal to their environment and accessibility needs without editing configuration files.
+
+Deliverables:
+
+- A categorized settings workspace for profile defaults, providers, model and mode, approvals, retention, appearance, accessibility, logging, and terminal behavior.
+- Provenance beside every effective setting, plus reset-to-inherited and reset-to-default actions that preserve layered resolver semantics.
+- Persisted theme presets, no-color and high-contrast modes, reduced-motion behavior, Unicode and ASCII glyph modes, compact and comfortable density, and configurable terminal time presentation.
+- An editor for the local user profile display label and defaults, backed by typed non-secret settings rather than a second profile store.
+- Strong visible focus, deterministic tab order, text alternatives for color-only state, stable status wording, and a single-column presentation suitable for narrow terminals and assistive terminal workflows.
+- Configurable composer submission behavior and a safe shortcut reference generated from the authoritative command table.
+- Schema migration, malformed-setting recovery, workspace-override restrictions, and restart coverage for every new setting.
+
+Exit criteria:
+
+- Every shipped presentation and terminal-behavior setting can be inspected, changed, explained, and reset inside the TUI.
+- No-color, high-contrast, ASCII, reduced-motion, compact, and single-column combinations preserve all status and action information without clipping security-critical prompts.
+- User preferences survive restart, respect fixed precedence, and cannot weaken credential, permission, retention, telemetry, or sandbox policy from a workspace file.
+- Visual review covers representative theme and accessibility combinations at every supported responsive layout class.
+
+### Phase 3.9: Terminal product validation
+
+**Status:** Planned
+
+**Goal:** Validate the complete redesigned terminal as the release-quality product boundary that Phase 4 can extend without reopening basic navigation, profile, credential, or accessibility work.
+
+Deliverables:
+
+- Real-PTY user journeys for first-run onboarding, local-profile setup, adding multiple providers, saving and rotating credentials, switching profiles, ordinary chat, offline resume, session lifecycle, settings changes, permissions, and recovery.
+- Windows, macOS, and Linux vault smoke evidence for save, retrieve, replace, test, disconnect, and delete behavior with content-free output.
+- Gemini and configured-router release-candidate live probes for plain chat and the supported tool-call dialect.
+- Reviewed visual evidence for every responsive layout class, primary route, theme mode, accessibility mode, destructive confirmation, and critical failure state.
+- Approved reference-machine reports for startup, input dispatch, rendered stream overhead, memory, storage, and replay, with network latency reported separately.
+- An expanded terminal release checklist covering secrets, accessibility, navigation, terminal restoration, migration, rollback, help accuracy, and zero-shell ordinary use.
+- A migration and rollback rehearsal from the last Phase 3.5 database and settings formats to the final Phase 3.9 release candidate.
+
+Exit criteria:
+
+- A fresh user can configure a supported provider, securely save a key, select a model, complete a chat, find the session after restart, and change the active provider without shell or database manipulation.
+- All baseline gates, cross-platform PTY journeys, platform vault smokes, live-provider probes, documentation checks, and approved reference-machine budgets pass on one release-candidate commit.
+- No P0 or P1 defect remains in onboarding, chat, sessions, profiles, credentials, settings, permissions, recovery, accessibility, or terminal rendering.
+- The release checklist is approved, rollback evidence is complete, and Phase 4 can consume stable routes, read models, intents, profile settings, and credential workflows.
 
 ### Phase 4: Persistent context and memory
 
-**Status:** Designed; implementation gated by Phase 3.1 through Phase 3.5
+**Status:** Designed; implementation gated by Phase 3.1 through Phase 3.9
 
 **Goal:** Turn durable history into useful, bounded, auditable model context.
 
@@ -373,15 +485,14 @@ Exit criteria:
 ## Next implementation order
 
 Phases 1 through 3 established the engine, provider, storage, replay, and safe tool-execution substrates.
-The observed live-provider failure and missing session and settings lifecycle show that the terminal is not yet a sufficient product surface for Phase 4.
+Phases 3.2 through 3.6 now provide durable sessions, settings, multiple provider profiles, operating-system-vault credentials, navigation primitives, and release-test foundations entirely inside the terminal.
 Proceed in this order:
 
-1. Complete the remaining Phase 3.1 live Gemini and configured-router plain-chat and approved HTTP-tool exit evidence using the checked-in structural probes.
-2. Complete Phase 3.2 multi-session lifecycle and offline session navigation.
-3. Complete Phase 3.3 typed settings, provider profiles, and opt-in operating-system credential storage.
-4. Complete Phase 3.4 TUI usability and discoverability.
-5. Complete Phase 3.5 cross-platform release hardening, benchmark markers, and reference-machine evidence.
-6. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+1. Promote the Phase 3.5 and Phase 3.6 implementations through green baseline and cross-platform PTY pull-request gates.
+2. Implement Phase 3.7 by replacing overlay-led navigation with the responsive route-based shell while preserving the stable profile read models, typed intents, and application-owned effects.
+3. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable shell.
+4. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
+5. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
@@ -423,9 +534,11 @@ LLM network latency must be reported separately from harness overhead.
 
 ### Product usability
 
-- Basic chat, session management, settings, credentials, and failure recovery are available inside the terminal without requiring database or shell manipulation.
+- Basic chat, session management, profile management, settings, credentials, and failure recovery are available inside the terminal without requiring database or shell manipulation.
+- A local user profile summary and the active provider connection are visible without exposing secret metadata or implying a hosted identity.
 - Network or credential failure does not block offline access to durable sessions and non-secret settings.
 - Keyboard, command, and visible-control paths converge on the same typed application intents.
+- Focus order, status meaning, and primary actions remain understandable in every responsive layout and supported accessibility mode.
 - Destructive actions expose their scope and require explicit confirmation.
 
 ## Major risks and responses
@@ -435,8 +548,8 @@ LLM network latency must be reported separately from harness overhead.
 | Provider APIs change rapidly | Contract tests, recorded fixtures, capability discovery, and isolated adapters |
 | Fixture-backed protocol tests miss live behavior | Opt-in redacted live compatibility runs and release-candidate smoke gates for every supported provider dialect |
 | A failed tool call traps later conversation | Durable rejection and bounded repair, explicit failed-turn context, actionable recovery, and an always-available fresh session |
-| TUI feature debt makes durable capabilities inaccessible | Treat session, settings, profile, and navigation completeness as a Phase 4 entry gate |
-| Credential convenience weakens secret handling | Store raw secrets only in an operating-system vault, keep opaque references in profiles, and retain session-only and environment fallbacks |
+| TUI feature debt makes durable capabilities inaccessible | Complete the profile center, route-based shell, personalization, accessibility, and integrated Phase 3.9 validation before Phase 4 |
+| Credential convenience weakens secret handling | Store raw secrets only in one operating-system vault entry per named provider profile, keep opaque references in profiles, and retain session-only and environment fallbacks |
 | The abstraction collapses to the least common denominator | Keep normalized lifecycle events while allowing namespaced provider options at the edge |
 | Memory becomes prompt-injection persistence | Provenance, trust classes, proposal validation, inspection, and retraction |
 | Self-improvement rewards the evaluator instead of users | Hidden holdouts, multiple metrics, independent judges, guardrails, and canaries |

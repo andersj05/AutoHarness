@@ -3,12 +3,12 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-The Phase 3 safe-execution substrate is complete, and Phase 3.1 local protocol reliability and recovery are fixture-verified while live-provider exit evidence remains open.
-The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, but session browsing, persistent profiles, and in-app settings remain planned work.
+The Phase 3 safe-execution substrate and Phase 3.2 through Phase 3.6 terminal product slices are implemented locally.
+The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, with offline session browsing, named provider profiles, operating-system-vault credentials, command discovery, and a full-screen Profiles and Providers center.
 Versioned filesystem, direct-process, and HTTP tools use scoped deny, ask, or allow decisions, bounded output, content-addressed artifacts, immutable run budgets, and explicit interruption recovery.
 Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
 Gemini function arguments are aggregated across streamed deltas, malformed model calls are durably denied and returned for bounded repair, and failed prompts are not replayed into unrelated later turns.
-The current reviewed provider-protocol evidence still does not claim a successful live Gemini or router verification.
+Reviewed live Gemini plain-chat and function-calling probes passed on 2026-08-22; reviewed configured-router release-candidate evidence remains open.
 
 ## Run the terminal application
 
@@ -31,11 +31,15 @@ Do not put the key in a repository file or command-line argument.
 
 ### Provider profiles and the credential vault
 
-A named provider profile stores non-secret connection fields plus an opaque credential reference; the raw key lives only in the operating-system credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
-Saving a credential is explicit and opt in.
+A named provider profile stores validated non-secret connection fields, an optional default model, and an opaque credential reference.
+The raw key lives only in the operating-system credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
+Press `Ctrl+G` to open Profiles and Providers, where you can create, edit, duplicate, activate, test, disconnect, and delete Gemini and router profiles.
+Press `Alt+K` inside that surface to save or replace the selected profile's key, and press `Alt+M` to use the active session's selected model as that profile's default.
+Saving a credential is explicit and opt in, and duplicated profiles never share credential linkage.
 When an active profile has a stored credential, AutoHarness reconnects after restart without asking for the key again.
 If the vault is unavailable, AutoHarness stays usable offline and falls back to environment or session-only entry; it never creates its own plaintext store.
-Press `Ctrl+,` to open the settings overlay, which shows the effective provider and the safe credential source (`environment`, `credential vault`, or `session only`).
+Interrupted profile and credential mutations retain only bounded non-secret recovery records and are reconciled idempotently after restart.
+Press `Ctrl+,` to open the read-only settings provenance overlay, which shows the effective provider and safe credential source (`environment`, `credential vault`, or `session only`).
 
 To use an OpenAI-compatible router, set `AUTOHARNESS_PROVIDER=router`, a base URL ending in `/`, and the router credential.
 Router credentials require HTTPS except for loopback HTTP endpoints such as `http://127.0.0.1:PORT/`.
@@ -51,6 +55,13 @@ Routers mounted below a path such as `https://router.example/api/` retain that p
 | Open the model picker | `Ctrl+P` |
 | Create a fresh durable session | `Ctrl+N` |
 | Open the session browser | `Ctrl+L` |
+| Open Profiles and Providers | `Ctrl+G` |
+| Create or edit a provider profile | `Alt+N` or `Alt+E` inside Profiles and Providers |
+| Duplicate profile configuration without its key | `Alt+D` inside Profiles and Providers |
+| Save or replace the selected profile key | `Alt+K` inside Profiles and Providers |
+| Test the selected provider connection | `Alt+T` inside Profiles and Providers |
+| Use the selected model as the active profile default | `Alt+M` inside Profiles and Providers |
+| Disconnect or delete the selected profile | `Alt+X`, or `Delete`, then `Y` to confirm |
 | Search sessions | Type while the browser is open |
 | Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` while the browser is open |
 | Delete the highlighted session | `Ctrl+D` then `Y` to confirm while the browser is open |
@@ -131,10 +142,11 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-The local Phase 3 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
-The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, every run-budget dimension, bounded artifacts, permission UI behavior, interruption recovery, a composed allow-execute-continue-reopen path, SQLite replay, terminal restoration, and credential redaction.
-A one-byte-fragmented Gemini Interactions fixture covers streamed function arguments, and a composed SQLite-backed test proves an unknown tool name is force-denied, returned to the provider, repaired in the same bounded attempt, and replayed after restart.
-A Phase 3.1 PTY smoke run pressed `Ctrl+N` from the credential overlay, observed the durable new-session confirmation, exited through `Ctrl+C`, restored the terminal, and removed the isolated test data afterward.
+The local Phase 3.6 validation passes formatting, strict Clippy, and the full workspace test suite.
+The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, profile and credential mutation recovery, multiple provider-scoped vault entries, profile defaults, responsive profile-center rendering, SQLite replay, terminal restoration, and credential redaction.
+A composed application test creates Gemini and router profiles with distinct credentials, switches and tests both, deletes only the selected router profile, restarts, and verifies the Gemini profile and key remain.
+An actual PTY journey creates, switches, duplicates, confirms deletion, and restarts profile state entirely inside the terminal.
+The opt-in platform-vault smoke verifies save, load, replace, and delete without printing secret values; set `AUTOHARNESS_RUN_PLATFORM_VAULT_SMOKE=1` and run its ignored test on the target operating system.
 Opt-in ignored live probes are available in each provider crate and retain only structural event assertions.
 With the corresponding runtime credentials configured, run `cargo test --locked -p autoharness-provider-gemini --test live_compat -- --ignored` for Gemini and `cargo test --locked -p autoharness-provider-openai --test live_compat -- --ignored` for the configured router.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.

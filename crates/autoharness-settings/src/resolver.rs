@@ -36,7 +36,12 @@ impl LayerKind {
 }
 
 /// Keys a workspace settings document may never override.
-const WORKSPACE_FORBIDDEN_KEYS: &[&str] = &["provider", "profiles", "active_profile"];
+const WORKSPACE_FORBIDDEN_KEYS: &[&str] = &[
+    "provider",
+    "profiles",
+    "active_profile",
+    "credential_recovery",
+];
 
 #[derive(Debug, Default, Clone)]
 struct RawLayer {
@@ -251,6 +256,7 @@ fn document_has_key(document: &SettingsDocument, key: &str) -> bool {
         "provider" => document.provider.is_some(),
         "active_profile" => document.active_profile.is_some(),
         "profiles" => !document.profiles.is_empty(),
+        "credential_recovery" => !document.credential_recovery.is_empty(),
         _ => false,
     }
 }

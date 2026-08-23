@@ -191,10 +191,8 @@ fn palette_settings_entry_toggles_the_same_non_modal_overlay() {
     assert!(!model.settings_open());
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
 
-    // Move to the settings row: down arrow five times from the top.
-    for _ in 0..5 {
-        let _ = update(&mut model, Message::Input(key_input(Key::Down)));
-    }
+    // Filter by stable command identity rather than relying on table position.
+    type_text(&mut model, "settings");
     let _ = update(&mut model, Message::Input(enter()));
 
     assert!(model.settings_open());
