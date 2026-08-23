@@ -5,7 +5,7 @@ Branch: `feat/phase-3-4-tui-usability` cut from `dev` at `246a18a`.
 ## Goal
 
 Make the terminal interface understandable without memorizing shortcuts and efficient
-enough for sustained daily work, per [PROJECT_PLAN](../../PROJECT_PLAN.md) Phase 3.4.
+enough for sustained daily work, per the Phase 3.4 section of `docs/PROJECT_PLAN.md`.
 
 ## Vertical slices
 
