@@ -7,9 +7,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AttemptStatus, CatalogProjection, Focus, Model, ModelSummary, Notice, PendingKind,
+    AttemptStatus, CatalogProjection, Focus, Model, ModelSummary, Notice, OverlayKind, PendingKind,
     ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
-    ProviderProfileProjection, RetryPolicy, TranscriptItem,
+    ProviderProfileProjection, RetryPolicy, Route, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -35,29 +35,26 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-
-    if area.width < 24 || area.height < 7 {
-        render_compact(frame, area, model);
-    } else {
-        render_standard(frame, area, model);
+    match model.route() {
+        Route::Chat => {
+            if area.width < 24 || area.height < 7 {
+                render_compact(frame, area, model);
+            } else {
+                render_standard(frame, area, model);
+            }
+        }
+        Route::Sessions => render_browser(frame, area, model),
+        Route::Profiles => render_profile_center(frame, area, model),
+        Route::Settings => render_settings(frame, area, model),
+        Route::Help => render_help(frame, area, model),
     }
 
-    if model.focus == Focus::Permission {
-        render_permission(frame, area, model);
-    } else if model.profile_center.open {
-        render_profile_center(frame, area, model);
-    } else if model.palette.open {
-        render_palette(frame, area, model);
-    } else if model.help.open {
-        render_help(frame, area, model);
-    } else if model.browser.open {
-        render_browser(frame, area, model);
-    } else if model.credential.open {
-        render_credential(frame, area, model);
-    } else if model.picker.open {
-        render_picker(frame, area, model);
-    } else if model.settings_open {
-        render_settings(frame, area, model);
+    match model.overlay() {
+        Some(OverlayKind::Permission) => render_permission(frame, area, model),
+        Some(OverlayKind::CommandPalette) => render_palette(frame, area, model),
+        Some(OverlayKind::SessionCredential) => render_credential(frame, area, model),
+        Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
+        Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
 }
 
@@ -171,7 +168,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     // The surface help was opened from leads; everything else follows in
     // table order so context is never below the fold on small terminals.
     // The always-true Global section never leads.
-    let origin = model.help.return_focus;
+    let origin = model.navigation.previous_route.focus();
     let mut ordered: Vec<&crate::model::HelpSection> = Vec::new();
     if let Some(first) = crate::model::HELP_SECTIONS
         .iter()
@@ -771,7 +768,7 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .saturating_add(2)
         .clamp(3, 8);
     let notice_height = if model.notice.is_some() { 2 } else { 0 };
-    let search_height = u16::from(model.search.open);
+    let search_height = u16::from(model.search_open());
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -975,7 +972,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
 
     // An active search jump pins its row into view; ordinary scrolling and
     // tail-follow apply otherwise.
-    let top: usize = if let Some(pinned) = model.search_pinned_row.filter(|_| model.search.open) {
+    let top: usize = if let Some(pinned) = model.search_pinned_row.filter(|_| model.search_open()) {
         pinned.saturating_sub(viewport_rows / 4).min(maximum_scroll)
     } else if model.transcript.follow_tail {
         maximum_scroll
@@ -1554,8 +1551,7 @@ fn credential_rect(area: Rect) -> Rect {
 
 fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
     if model.focus != Focus::Composer
-        || model.picker.open
-        || model.credential.open
+        || model.overlay().is_some()
         || model
             .pending
             .values()

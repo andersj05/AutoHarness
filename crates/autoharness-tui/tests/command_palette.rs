@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, Notice, SessionProjection,
+    CatalogProjection, Focus, Message, Model, ModelSummary, Notice, Route, SessionProjection,
     SessionsProjection, UiEffect, UiIntent, update,
 };
 use ratatui::Terminal;
@@ -214,7 +214,11 @@ fn global_chords_still_work_while_the_palette_is_open() {
         ),
         "Ctrl+N stays global"
     );
-    assert!(model.palette_open(), "the palette stays open underneath");
+    assert!(
+        !model.palette_open(),
+        "the global action closes the modal slot"
+    );
+    assert_eq!(model.route(), Route::Chat);
 
     // Ctrl+C quits from inside the palette like everywhere else.
     let mut model = empty_model();

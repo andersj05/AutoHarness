@@ -12,12 +12,12 @@ mod view;
 pub use model::{
     ApiCredential, AttemptKey, AttemptStatus, COMMANDS, CatalogProjection, CommandEntry,
     ComposerState, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
-    ModelSummary, Notice, PendingKind, PermissionDetailView, PermissionRequestView,
+    ModelSummary, Notice, OverlayKind, PendingKind, PermissionDetailView, PermissionRequestView,
     ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
     ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
-    RetryPolicy, SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection,
-    ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiEffect, UiFailure, UiIntent,
-    UiNotice, UsageView,
+    RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiEffect,
+    UiFailure, UiIntent, UiNotice, UsageView,
 };
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,
