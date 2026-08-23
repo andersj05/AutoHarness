@@ -112,6 +112,19 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         open_help(model);
         return Vec::new();
     }
+    // Ctrl+F opens the transcript search bar under the same rule.
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('f' | 'F'),
+            ctrl: true,
+            ..
+        }
+    ) && model.focus != Focus::Permission
+    {
+        open_search(model);
+        return Vec::new();
+    }
 
     if model.focus == Focus::Palette {
         return handle_palette_input(model, input);
@@ -119,6 +132,10 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 
     if model.focus == Focus::Help {
         return handle_help_input(model, input);
+    }
+
+    if model.focus == Focus::Search {
+        return handle_search_input(model, input);
     }
 
     if model.focus == Focus::Permission {
@@ -1082,6 +1099,143 @@ fn handle_paste(model: &mut Model, text: &str) {
     {
         model.notice = None;
         model.dirty = true;
+    }
+}
+
+/// Opens the transcript search bar and takes the keyboard.
+fn open_search(model: &mut Model) {
+    model.search.open = true;
+    model.search.query.clear();
+    model.search.matches.clear();
+    model.search.current = None;
+    model.focus = Focus::Search;
+    model.dirty = true;
+}
+
+fn close_search(model: &mut Model) {
+    model.search.open = false;
+    model.search.query.clear();
+    model.search.matches.clear();
+    model.search.current = None;
+    // A closed search no longer pins the scroll position.
+    model.focus = Focus::Composer;
+    model.dirty = true;
+}
+
+/// Recomputes matches for the current query over rendered transcript lines.
+///
+/// Matching runs on the same display text the renderer produces so counts,
+/// jump targets, and visible rows always agree. Case is ignored; queries are
+/// bounded by the composer safety limits through `editable_safe`.
+fn refresh_search_matches(model: &mut Model) {
+    let query = model.search.query.to_lowercase();
+    model.search.matches.clear();
+    model.search.current = None;
+    if query.is_empty() {
+        return;
+    }
+    let lines = crate::view::transcript_display_lines(model);
+    for (row, line) in lines.iter().enumerate() {
+        if line.to_lowercase().contains(&query) {
+            model.search.matches.push(row);
+        }
+    }
+}
+
+/// Advances to the next or previous match and scrolls it into view.
+fn step_search(model: &mut Model, direction: isize) {
+    if model.search.matches.is_empty() {
+        return;
+    }
+    let count = model.search.matches.len();
+    let next = match model.search.current {
+        None => {
+            if direction < 0 {
+                count - 1
+            } else {
+                0
+            }
+        }
+        Some(current) => {
+            let candidate = current as isize + direction;
+            candidate.rem_euclid(count as isize) as usize
+        }
+    };
+    model.search.current = Some(next);
+
+    // Pin the transcript scroll to the matching row: disable tail-follow and
+    // set the offset so the row lands mid-viewport when possible.
+    let row = model.search.matches[next];
+    model.transcript.follow_tail = false;
+    model.search_pinned_row = Some(row);
+    model.dirty = true;
+}
+
+/// Applies keyboard input while the search bar owns the keyboard.
+///
+/// Quit and fresh-session chords stay global; BackTab walks backwards.
+fn handle_search_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('n' | 'N'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        return create_session(model);
+    }
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_search(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => {
+            step_search(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Tab,
+            shift: true,
+            ..
+        } => {
+            step_search(model, -1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.search.query.pop();
+            refresh_search_matches(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.search.query.push(character);
+            refresh_search_matches(model);
+            model.dirty = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }
 

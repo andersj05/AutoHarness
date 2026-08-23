@@ -388,6 +388,8 @@ pub enum Focus {
     Palette,
     /// The contextual help overlay owns key input.
     Help,
+    /// The transcript search bar owns key input.
+    Search,
 }
 
 /// One searchable row in the session browser.
@@ -911,6 +913,17 @@ impl HelpSection {
     }
 }
 
+/// Transcript search local state.
+#[derive(Debug, Default)]
+pub(crate) struct SearchState {
+    pub open: bool,
+    pub query: String,
+    /// Wrapped row indexes (in renderer coordinates) of matches.
+    pub matches: Vec<usize>,
+    /// Position within `matches`; `None` before the first Enter.
+    pub current: Option<usize>,
+}
+
 /// One executable command shared by the palette, slash commands, and keys.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandEntry {
@@ -1200,6 +1213,10 @@ pub struct Model {
     pub(crate) drafts: SessionDrafts,
     /// In-run submitted-prompt history for recall.
     pub(crate) history: ComposerHistory,
+    /// Active transcript search state.
+    pub(crate) search: SearchState,
+    /// Wrapped transcript row pinned into view by an active search jump.
+    pub(crate) search_pinned_row: Option<usize>,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -1268,6 +1285,8 @@ impl Model {
             help: HelpState::default(),
             drafts: SessionDrafts::default(),
             history: ComposerHistory::default(),
+            search: SearchState::default(),
+            search_pinned_row: None,
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
@@ -1412,6 +1431,40 @@ impl Model {
     #[must_use]
     pub const fn help_scroll(&self) -> u16 {
         self.help.scroll
+    }
+
+    /// Returns whether the transcript search bar is open.
+    #[must_use]
+    pub const fn search_open(&self) -> bool {
+        self.search.open
+    }
+
+    /// Returns the active search query.
+    #[must_use]
+    pub fn search_query(&self) -> &str {
+        &self.search.query
+    }
+
+    /// Returns the number of transcript matches for the query.
+    #[must_use]
+    pub fn search_match_count(&self) -> usize {
+        self.search.matches.len()
+    }
+
+    /// Returns the position of the currently selected match.
+    #[must_use]
+    pub fn search_current_index(&self) -> usize {
+        self.search.current.unwrap_or(0)
+    }
+
+    /// Returns a safe one-line status label such as `2/7 matches`.
+    #[must_use]
+    pub fn search_status_label(&self) -> String {
+        if self.search.matches.is_empty() {
+            return "no matches".to_owned();
+        }
+        let current = self.search.current.map_or(1, |index| index + 1);
+        format!("{}/{} matches", current, self.search.matches.len())
     }
 
     /// Returns the filtered session-browser rows in durable order.

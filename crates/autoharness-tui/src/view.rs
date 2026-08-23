@@ -416,12 +416,14 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .saturating_add(2)
         .clamp(3, 8);
     let notice_height = if model.notice.is_some() { 2 } else { 0 };
+    let search_height = u16::from(model.search.open);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(notice_height),
+            Constraint::Length(search_height),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
@@ -432,9 +434,23 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if notice_height > 0 {
         render_notice(frame, chunks[2], model);
     }
-    frame.render_widget(&model.composer.editor, chunks[3]);
-    render_footer(frame, chunks[4], model);
-    set_composer_cursor(frame, chunks[3], model, true);
+    if search_height > 0 {
+        render_search_bar(frame, chunks[3], model);
+    }
+    frame.render_widget(&model.composer.editor, chunks[4]);
+    render_footer(frame, chunks[5], model);
+    set_composer_cursor(frame, chunks[4], model, true);
+}
+
+/// Renders the one-row transcript search bar.
+fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let status = model.search_status_label();
+    let query = display_safe(&model.search.query);
+    frame.render_widget(
+        Paragraph::new(format!(" Search: /{query} - {status} "))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray)),
+        area,
+    );
 }
 
 fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -601,14 +617,33 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let total_rows = paragraph.line_count(inner.width);
     let viewport_rows = usize::from(inner.height);
     let maximum_scroll = total_rows.saturating_sub(viewport_rows);
-    let rows_from_bottom = if model.transcript.follow_tail {
-        0
+
+    // An active search jump pins its row into view; ordinary scrolling and
+    // tail-follow apply otherwise.
+    let top: usize = if let Some(pinned) = model.search_pinned_row.filter(|_| model.search.open) {
+        pinned.saturating_sub(viewport_rows / 4).min(maximum_scroll)
+    } else if model.transcript.follow_tail {
+        maximum_scroll
     } else {
-        model.transcript.rows_from_bottom.min(maximum_scroll)
+        maximum_scroll.saturating_sub(model.transcript.rows_from_bottom.min(maximum_scroll))
     };
-    let top = maximum_scroll.saturating_sub(rows_from_bottom);
     let top = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((top, 0)), inner);
+}
+
+/// Plain display text of every transcript line, shared by rendering and
+/// search so match counts always describe what is actually visible.
+pub(crate) fn transcript_display_lines(model: &Model) -> Vec<String> {
+    let text = transcript_text(model);
+    text.lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 fn transcript_text(model: &Model) -> Text<'static> {
