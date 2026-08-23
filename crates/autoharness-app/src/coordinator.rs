@@ -4215,7 +4215,7 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 TranscriptItem::Assistant { attempt_id, .. } => Some(attempt_id.clone()),
-                TranscriptItem::User { .. } => None,
+                TranscriptItem::Tool(_) | TranscriptItem::User { .. } => None,
             })
             .expect("streaming attempt");
 
@@ -4377,7 +4377,7 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 TranscriptItem::Assistant { attempt_id, .. } => Some(attempt_id.clone()),
-                TranscriptItem::User { .. } => None,
+                TranscriptItem::Tool(_) | TranscriptItem::User { .. } => None,
             })
             .expect("failed attempt");
 

@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary,
-    PermissionDetailView, PermissionRequestView, SessionProjection, SessionsProjection,
-    ToolCallKey, ToolRowView, TranscriptItem, UsageView, update,
+    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, SessionProjection,
+    SessionsProjection, ToolCallKey, ToolRowView, TranscriptItem, UsageView, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
