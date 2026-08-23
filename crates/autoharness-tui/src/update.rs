@@ -770,6 +770,28 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         return handle_browser_rename_input(model, input);
     }
 
+    // While an archiving is armed, Y confirms and N or Esc cancels.
+    if model.browser.confirming_archive.is_some() {
+        match input {
+            Input {
+                key: Key::Char('y' | 'Y'),
+                ctrl: false,
+                ..
+            } => return confirm_archive_selected_session(model),
+            Input {
+                key: Key::Char('n' | 'N'),
+                ctrl: false,
+                ..
+            }
+            | Input { key: Key::Esc, .. } => {
+                model.browser.confirming_archive = None;
+                model.dirty = true;
+                return Vec::new();
+            }
+            _ => return Vec::new(),
+        }
+    }
+
     // While a deletion is armed, Y confirms and N or Esc cancels.
     if model.browser.confirming_delete.is_some() {
         match input {
@@ -818,6 +840,11 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: true,
             ..
         } => toggle_archive_selected_session(model),
+        Input {
+            key: Key::Char('z' | 'Z'),
+            ctrl: true,
+            ..
+        } => undo_last_lifecycle(model),
         Input {
             key: Key::Char('d' | 'D'),
             ctrl: true,
@@ -895,6 +922,7 @@ fn open_browser(model: &mut Model) {
     model.browser.renaming = false;
     model.browser.rename_buffer.clear();
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     if let Some(active) = model
         .sessions
         .sessions
@@ -914,6 +942,7 @@ fn close_browser(model: &mut Model) {
     model.browser.renaming = false;
     model.browser.rename_buffer.clear();
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     model.focus = Focus::Composer;
     model.dirty = true;
 }
@@ -948,6 +977,7 @@ fn move_browser_selection(model: &mut Model, direction: isize) {
     };
     model.browser.selected = Some(entries[next].session_id.clone());
     model.browser.confirming_delete = None;
+    model.browser.confirming_archive = None;
     model.dirty = true;
 }
 
@@ -1052,32 +1082,79 @@ fn toggle_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
-    let request_id = model.allocate_request();
-    let (kind, intent) = if archived {
-        (
-            PendingKind::UnarchiveSession(session_id.clone()),
-            UiIntent::UnarchiveSession {
-                request_id,
-                session_id: session_id.clone(),
-            },
-        )
-    } else {
-        (
-            PendingKind::ArchiveSession(session_id.clone()),
-            UiIntent::ArchiveSession {
-                request_id,
-                session_id: session_id.clone(),
-            },
-        )
+    // Archiving hides work from the default view, so it arms for explicit
+    // confirmation; unarchiving is the safe direction and runs immediately.
+    if !archived {
+        model.browser.confirming_archive = Some(session_id);
+        model.notice = Some(Notice::Info(
+            "Press Y again to archive; N or Esc cancels".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+    dispatch_unarchive(model, session_id)
+}
+
+fn confirm_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
+    let Some(session_id) = model.browser.confirming_archive.take() else {
+        return Vec::new();
     };
-    model.pending.insert(request_id, kind);
-    model.notice = Some(Notice::Info(if archived {
-        "Unarchiving session...".to_owned()
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::ArchiveSession(session_id.clone()));
+    model.notice = Some(Notice::Info("Archiving session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::ArchiveSession {
+        request_id,
+        session_id,
+    })]
+}
+
+fn dispatch_unarchive(model: &mut Model, session_id: String) -> Vec<UiEffect> {
+    if has_pending_lifecycle(model, &session_id) {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::UnarchiveSession(session_id.clone()),
+    );
+    model.notice = Some(Notice::Info("Unarchiving session...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UnarchiveSession {
+        request_id,
+        session_id,
+    })]
+}
+
+/// Reverses the most recent committed archive or unarchive exactly once.
+fn undo_last_lifecycle(model: &mut Model) -> Vec<UiEffect> {
+    let Some(undoable) = model.undoable.take() else {
+        return Vec::new();
+    };
+    model.notice = Some(Notice::Info(if undoable.archived {
+        "Undoing archive...".to_owned()
     } else {
-        "Archiving session...".to_owned()
+        "Undoing unarchive...".to_owned()
     }));
     model.dirty = true;
-    vec![UiEffect::Dispatch(intent)]
+    if undoable.archived {
+        dispatch_unarchive(model, undoable.session_id)
+    } else {
+        let request_id = model.allocate_request();
+        model.pending.insert(
+            request_id,
+            PendingKind::ArchiveSession(undoable.session_id.clone()),
+        );
+        vec![UiEffect::Dispatch(UiIntent::ArchiveSession {
+            request_id,
+            session_id: undoable.session_id,
+        })]
+    }
 }
 
 fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
@@ -1469,11 +1546,22 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::RenameSession(_) => {
                         model.notice = Some(Notice::Info("Title saved".to_owned()));
                     }
-                    PendingKind::ArchiveSession(_) => {
-                        model.notice = Some(Notice::Info("Session archived".to_owned()));
+                    PendingKind::ArchiveSession(session_id) => {
+                        model.undoable = Some(crate::model::UndoableLifecycle {
+                            session_id,
+                            archived: true,
+                        });
+                        model.notice =
+                            Some(Notice::Info("Session archived - Ctrl+Z to undo".to_owned()));
                     }
-                    PendingKind::UnarchiveSession(_) => {
-                        model.notice = Some(Notice::Info("Session unarchived".to_owned()));
+                    PendingKind::UnarchiveSession(session_id) => {
+                        model.undoable = Some(crate::model::UndoableLifecycle {
+                            session_id,
+                            archived: false,
+                        });
+                        model.notice = Some(Notice::Info(
+                            "Session unarchived - Ctrl+Z to undo".to_owned(),
+                        ));
                     }
                     PendingKind::DeleteSession(_) => {
                         model.notice = Some(Notice::Info("Session deleted".to_owned()));

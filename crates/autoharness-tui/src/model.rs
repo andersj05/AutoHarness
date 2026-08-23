@@ -622,6 +622,15 @@ pub enum Notice {
     Failure(UiFailure),
 }
 
+/// One committed reversible lifecycle action awaiting possible undo.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UndoableLifecycle {
+    /// Session the action applied to.
+    pub session_id: String,
+    /// Whether the committed action archived (true) or unarchived (false).
+    pub archived: bool,
+}
+
 /// Kind of request awaiting application acknowledgement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingKind {
@@ -831,6 +840,8 @@ pub(crate) struct BrowserState {
     pub rename_buffer: String,
     /// When set, deletion of this identity is awaiting explicit confirmation.
     pub confirming_delete: Option<String>,
+    /// When set, archiving this identity is awaiting explicit confirmation.
+    pub confirming_archive: Option<String>,
 }
 
 /// Command-palette local state.
@@ -1261,6 +1272,8 @@ pub struct Model {
     pub(crate) tools_expanded: bool,
     /// Wrapped transcript row pinned into view by an active search jump.
     pub(crate) search_pinned_row: Option<usize>,
+    /// Most recent committed archive or unarchive available for undo.
+    pub(crate) undoable: Option<UndoableLifecycle>,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -1332,6 +1345,7 @@ impl Model {
             search: SearchState::default(),
             tools_expanded: false,
             search_pinned_row: None,
+            undoable: None,
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),
@@ -1482,6 +1496,12 @@ impl Model {
     #[must_use]
     pub const fn tools_expanded(&self) -> bool {
         self.tools_expanded
+    }
+
+    /// Returns the identity awaiting confirmed archiving, if any.
+    #[must_use]
+    pub fn browser_archive_confirmation(&self) -> Option<&str> {
+        self.browser.confirming_archive.as_deref()
     }
 
     /// Returns whether the transcript search bar is open.
