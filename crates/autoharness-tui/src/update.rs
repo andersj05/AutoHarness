@@ -972,6 +972,17 @@ fn close_profile_center(model: &mut Model) {
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
     if model.profile_center.credential.is_some() {
         return handle_profile_credential_input(model, input);
     }
@@ -2189,7 +2200,9 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
-    if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+    if matches!(&*model.catalog, CatalogProjection::CredentialRequired)
+        && !model.profile_center.open
+    {
         open_credential(model);
     } else if !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())

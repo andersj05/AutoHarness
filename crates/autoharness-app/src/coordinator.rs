@@ -3085,6 +3085,8 @@ mod tests {
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
 
+    use autoharness_app::profiles::ProfileStore;
+    use autoharness_app::vault::{FakeVault, VaultPort};
     use autoharness_domain::{
         Causation, CommandId, CorrelationId, EventEnvelope, EventId, EventPayload, InputId,
         ModelId, ModelRef, ProviderCallId, ProviderId, SessionSequence, TimestampMillis,
@@ -3096,6 +3098,7 @@ mod tests {
         ProviderMetadata, TextDelta, UsageSnapshot as ProviderUsage,
     };
     use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
+    use autoharness_settings::CredentialReference;
     use autoharness_store::SessionStore as _;
     use autoharness_store_sqlite::SqliteStore;
     use autoharness_tui::{SessionProjection, TranscriptItem, UiPorts, bounded_ports};
@@ -3650,6 +3653,220 @@ mod tests {
             .expect("notice timeout")
             .expect("notice sender remains open");
         assert_eq!(notice, UiNotice::IntentCommitted { request_id });
+    }
+
+    async fn wait_for_profiles(
+        profiles: &mut watch::Receiver<Arc<ProfilesProjection>>,
+        predicate: impl Fn(&ProfilesProjection) -> bool,
+    ) -> Arc<ProfilesProjection> {
+        loop {
+            let current = Arc::clone(&profiles.borrow_and_update());
+            if predicate(&current) {
+                return current;
+            }
+            tokio::time::timeout(Duration::from_secs(5), profiles.changed())
+                .await
+                .expect("profiles timeout")
+                .expect("profiles sender remains open");
+        }
+    }
+
+    #[tokio::test]
+    async fn composed_multi_provider_profile_lifecycle_is_scoped_and_restart_safe() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("profiles.sqlite3");
+        let profile_path = directory.path().join("autoharness.profiles.json");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let store = ProfileStore::open(&profile_path).expect("profile store");
+        let vault = Arc::new(FakeVault::new());
+        let manager = Arc::new(ProfileManager::new(store.clone(), vault.clone()));
+        let built_kinds = Arc::new(Mutex::new(Vec::new()));
+        let kinds = Arc::clone(&built_kinds);
+        let profile_factory: ProfileProviderFactory = Arc::new(move |profile, _credential| {
+            kinds.lock().expect("kind mutex").push(profile.kind());
+            Ok(Arc::new(FakeProvider::default()) as Arc<dyn Provider>)
+        });
+        let fallback_provider = Arc::new(FakeProvider::default());
+        let fallback_factory: ProviderFactory =
+            Arc::new(move |_credential| Ok(Arc::clone(&fallback_provider) as Arc<dyn Provider>));
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_profile_runtime(
+            session_id,
+            session,
+            actor.handle(),
+            ProviderComposition {
+                initial: None,
+                factory: fallback_factory,
+            },
+            Some(ProfileRuntime::new(
+                Arc::clone(&manager),
+                profile_factory,
+                EnvironmentCredentials {
+                    gemini: None,
+                    router: None,
+                },
+                "workspace-fixture".to_owned(),
+            )),
+            test_tool_runtime(),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        let gemini = ProviderProfileDraft {
+            id: "personal-gemini".to_owned(),
+            kind: ProviderKindLabel::Gemini,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+        };
+        ui.intents
+            .send(UiIntent::UpsertProfile {
+                request_id: RequestId::new(1),
+                profile: gemini,
+            })
+            .await
+            .expect("create Gemini profile");
+        expect_commit(&mut ui, RequestId::new(1)).await;
+        ui.intents
+            .send(UiIntent::SaveProfileCredential {
+                request_id: RequestId::new(2),
+                profile_id: "personal-gemini".to_owned(),
+                credential: ApiCredential::new("gemini-profile-secret".to_owned())
+                    .expect("Gemini credential"),
+            })
+            .await
+            .expect("save Gemini credential");
+        expect_commit(&mut ui, RequestId::new(2)).await;
+
+        let router = ProviderProfileDraft {
+            id: "work-router".to_owned(),
+            kind: ProviderKindLabel::Router,
+            base_url: "https://router.example.test/v1/".to_owned(),
+            project: "work".to_owned(),
+            auth_header: "x-router-key".to_owned(),
+        };
+        ui.intents
+            .send(UiIntent::UpsertProfile {
+                request_id: RequestId::new(3),
+                profile: router,
+            })
+            .await
+            .expect("create router profile");
+        expect_commit(&mut ui, RequestId::new(3)).await;
+        ui.intents
+            .send(UiIntent::SaveProfileCredential {
+                request_id: RequestId::new(4),
+                profile_id: "work-router".to_owned(),
+                credential: ApiCredential::new("router-profile-secret".to_owned())
+                    .expect("router credential"),
+            })
+            .await
+            .expect("save router credential");
+        expect_commit(&mut ui, RequestId::new(4)).await;
+
+        ui.intents
+            .send(UiIntent::ActivateProfile {
+                request_id: RequestId::new(5),
+                profile_id: "personal-gemini".to_owned(),
+            })
+            .await
+            .expect("activate Gemini");
+        expect_commit(&mut ui, RequestId::new(5)).await;
+        wait_for_catalog(&mut ui).await;
+        ui.intents
+            .send(UiIntent::TestProfile {
+                request_id: RequestId::new(6),
+                profile_id: "personal-gemini".to_owned(),
+            })
+            .await
+            .expect("test Gemini");
+        expect_commit(&mut ui, RequestId::new(6)).await;
+
+        ui.intents
+            .send(UiIntent::ActivateProfile {
+                request_id: RequestId::new(7),
+                profile_id: "work-router".to_owned(),
+            })
+            .await
+            .expect("activate router");
+        expect_commit(&mut ui, RequestId::new(7)).await;
+        wait_for_catalog(&mut ui).await;
+        ui.intents
+            .send(UiIntent::TestProfile {
+                request_id: RequestId::new(8),
+                profile_id: "work-router".to_owned(),
+            })
+            .await
+            .expect("test router");
+        expect_commit(&mut ui, RequestId::new(8)).await;
+
+        let projection = wait_for_profiles(&mut ui.profiles, |profiles| {
+            profiles.profiles.iter().any(|profile| {
+                profile.id == "work-router"
+                    && profile.active
+                    && profile.connection == ProfileConnectionState::Ready
+            })
+        })
+        .await;
+        assert_eq!(
+            projection.user.default_profile.as_deref(),
+            Some("work-router")
+        );
+        assert_eq!(projection.user.workspace, "workspace-fixture");
+
+        ui.intents
+            .send(UiIntent::DeleteProfile {
+                request_id: RequestId::new(9),
+                profile_id: "work-router".to_owned(),
+            })
+            .await
+            .expect("delete router");
+        expect_commit(&mut ui, RequestId::new(9)).await;
+
+        let snapshot = manager.snapshot().expect("profile snapshot");
+        assert_eq!(snapshot.profiles.len(), 1);
+        assert_eq!(snapshot.profiles[0].id.as_str(), "personal-gemini");
+        assert_eq!(
+            snapshot.profiles[0].credential_state,
+            StoredCredentialState::Stored
+        );
+        let gemini_reference =
+            CredentialReference::new("autoharness/profile/personal-gemini").expect("reference");
+        let router_reference =
+            CredentialReference::new("autoharness/profile/work-router").expect("reference");
+        assert_eq!(
+            &*vault.load(&gemini_reference).expect("Gemini remains"),
+            "gemini-profile-secret"
+        );
+        assert!(matches!(
+            vault.load(&router_reference),
+            Err(VaultError::MissingEntry)
+        ));
+        let document = store.read_document().expect("profile document");
+        assert!(!document.contains("gemini-profile-secret"));
+        assert!(!document.contains("router-profile-secret"));
+
+        let kinds = built_kinds.lock().expect("kind mutex").clone();
+        assert!(kinds.contains(&ProviderKind::Gemini));
+        assert!(kinds.contains(&ProviderKind::Router));
+
+        shutdown.cancel();
+        task.await.expect("coordinator task").expect("coordinator");
+        actor.shutdown().await.expect("engine shutdown");
+        let reopened = ProfileStore::open(&profile_path)
+            .expect("reopen profile store")
+            .snapshot()
+            .expect("reopen snapshot");
+        assert_eq!(reopened.profiles.len(), 1);
+        assert_eq!(reopened.profiles[0].id.as_str(), "personal-gemini");
     }
 
     #[tokio::test]
