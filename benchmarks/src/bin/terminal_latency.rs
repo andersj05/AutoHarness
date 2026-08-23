@@ -250,20 +250,27 @@ fn run_sample(executable: &Path, number: usize) -> Result<Sample, Box<dyn Error>
     );
     let process_started = Instant::now();
     let mut child = ChildGuard::new(pair.slave.spawn_command(command)?);
+    let mut screen = TerminalScreen::new(30, 100);
 
-    let first_draw = receive_marker(&marker_socket, "first_draw_completed")?;
-    let process_start_to_first_draw_ns = nanos(process_started.elapsed());
-    wait_for_screen(&output, child.get(), 30, 100, |screen| {
+    wait_for_screen(&output, &mut screen, &mut writer, child.get(), |screen| {
         screen.contents().contains("AutoHarness")
     })?;
+    let first_draw = receive_marker(&marker_socket, "first_draw_completed")?;
+    let process_start_to_first_draw_ns = nanos(process_started.elapsed());
 
     writer.write_all(&[0x10])?;
     writer.flush()?;
-    wait_for_screen(&output, child.get(), 30, 100, |screen| {
+    wait_for_screen(&output, &mut screen, &mut writer, child.get(), |screen| {
         let text = screen.contents();
         text.contains("Models") && text.contains("PTY Router")
     })?;
-    writer.write_all(b"\rterminal latency probe")?;
+    writer.write_all(b"\r")?;
+    writer.flush()?;
+    wait_for_screen(&output, &mut screen, &mut writer, child.get(), |screen| {
+        let text = screen.contents();
+        text.contains("PTY Router") && text.contains("Ask AutoHarness") && !text.contains("Models")
+    })?;
+    writer.write_all(b"terminal latency probe")?;
     writer.write_all(&[0x13])?;
     writer.flush()?;
 
@@ -348,18 +355,57 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>) -> Receiver<Vec<u8>> {
     receiver
 }
 
+struct TerminalScreen {
+    parser: vt100::Parser,
+    raw_output: Vec<u8>,
+    cursor_queries_answered: usize,
+}
+
+impl TerminalScreen {
+    fn new(rows: u16, columns: u16) -> Self {
+        Self {
+            parser: vt100::Parser::new(rows, columns, 0),
+            raw_output: Vec::new(),
+            cursor_queries_answered: 0,
+        }
+    }
+
+    fn process(
+        &mut self,
+        chunk: &[u8],
+        terminal_input: &mut Box<dyn Write + Send>,
+    ) -> Result<(), io::Error> {
+        self.raw_output.extend_from_slice(chunk);
+        self.parser.process(chunk);
+        let cursor_queries = self
+            .raw_output
+            .windows(b"\x1b[6n".len())
+            .filter(|window| *window == b"\x1b[6n")
+            .count();
+        while self.cursor_queries_answered < cursor_queries {
+            terminal_input.write_all(b"\x1b[1;1R")?;
+            terminal_input.flush()?;
+            self.cursor_queries_answered += 1;
+        }
+        Ok(())
+    }
+
+    fn screen(&self) -> &vt100::Screen {
+        self.parser.screen()
+    }
+}
+
 fn wait_for_screen(
     output: &Receiver<Vec<u8>>,
+    parser: &mut TerminalScreen,
+    terminal_input: &mut Box<dyn Write + Send>,
     child: &mut Box<dyn Child + Send + Sync>,
-    rows: u16,
-    columns: u16,
     condition: impl Fn(&vt100::Screen) -> bool,
 ) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + TIMEOUT;
-    let mut parser = vt100::Parser::new(rows, columns, 0);
     loop {
         match output.try_recv() {
-            Ok(chunk) => parser.process(&chunk),
+            Ok(chunk) => parser.process(&chunk, terminal_input)?,
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 return Err(Box::new(io::Error::other("terminal output closed")));
