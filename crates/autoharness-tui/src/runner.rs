@@ -151,6 +151,8 @@ where
     let started = Instant::now();
 
     draw(terminal, &mut model)?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    crate::benchmark::first_draw_completed();
 
     loop {
         tokio::select! {
@@ -230,6 +232,10 @@ fn dispatch_effects(
             }
             UiEffect::Dispatch(intent) => {
                 let request_id = intent.request_id();
+                #[cfg(feature = "benchmark-instrumentation")]
+                if matches!(&intent, UiIntent::SubmitPrompt { .. }) {
+                    crate::benchmark::input_accepted(request_id);
+                }
                 if let Err(error) = intents.try_send(intent) {
                     let (message, retry) = match error {
                         TrySendError::Full(_) => (
@@ -262,6 +268,8 @@ where
     terminal
         .draw(|frame| view(frame, model))
         .map_err(|error| RunnerError::Draw(error.to_string()))?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    crate::benchmark::rendered_projection(&model.session.session_id, model.session.revision);
     model.dirty = false;
     Ok(())
 }

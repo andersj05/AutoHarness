@@ -279,7 +279,7 @@ Exit criteria evidence:
 
 ### Phase 3.5: Terminal release hardening
 
-**Status:** Planned
+**Status:** Implemented; release-candidate exit evidence pending
 
 **Goal:** Prove the complete Phase 3.x terminal product as a stable base before persistent memory adds more state and UI.
 
@@ -290,6 +290,17 @@ Deliverables:
 - Migration, backup, corruption, locked-vault, network-loss, terminal-resize, forced-shutdown, and restart-recovery tests.
 - The deferred monotonic startup, dispatch, and rendered-delta markers plus an approved reference-machine benchmark report.
 - A release checklist covering secret scanning, accessibility, terminal restoration, help and documentation accuracy, and database rollback preparation.
+
+Local implementation evidence:
+
+- Real-PTY integration scenarios cover first run, returning-profile offline replay, resize and restart, multi-session lifecycle and destructive confirmations, invalid-call repair, deny and allow permission outcomes, and forced-shutdown recovery.
+- The platform test matrix runs the ignored PTY scenario group serially on Windows, macOS, and Linux while the ordinary workspace suite remains deterministic under non-terminal test hosts.
+- The robustness suite covers schema-v1 migration, future-schema rejection, migration and event corruption, catalog-cache replacement, malformed-profile backup, locked-vault degradation, interrupted-attempt recovery, network interruption, and terminal restoration.
+- Opt-in live probes now cover Gemini and the configured router for both plain chat and the supported function-calling dialect.
+- The `benchmark-instrumentation` feature and `terminal_latency` runner correlate first draw, input acceptance, provider dispatch, decoded chunks, and rendered revisions without content-bearing telemetry.
+- The [terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md) gates security, accessibility, restoration, documentation, benchmark provenance, and database rollback preparation.
+
+Remaining exit evidence requires green PTY matrix runs for the release-candidate commit, the configured live-provider matrix, and an approved reference-machine benchmark report.
 
 Exit criteria:
 

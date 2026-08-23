@@ -60,6 +60,8 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), AppError> {
+    #[cfg(feature = "benchmark-instrumentation")]
+    autoharness_tui::benchmark::initialize();
     let paths = AppPaths::prepare()?;
     let _writer_lease = WriterLease::acquire(&paths.writer_lock())?;
     let _trace_guard = initialize_tracing(&paths)?;
@@ -187,11 +189,11 @@ fn resolve_launch(paths: &AppPaths) -> LaunchResolution {
                     credential: source.into_credential(),
                     router: router_fields(&settings),
                 },
-                Err(_) => unavailable_launch(),
+                Err(_) => session_only_launch(&settings),
             }
         }
         // Malformed settings degrade to environment/session-only operation.
-        Err(_) => unavailable_launch(),
+        Err(_) => environment_launch(),
     }
 }
 
@@ -208,12 +210,48 @@ fn router_fields(settings: &autoharness_settings::ResolvedSettings) -> Option<Ro
     })
 }
 
-fn unavailable_launch() -> LaunchResolution {
+fn session_only_launch(settings: &autoharness_settings::ResolvedSettings) -> LaunchResolution {
+    let active_profile = settings.active_profile().map(str::to_owned);
+    let profile_kind = settings.active_profile().and_then(|profile| {
+        let id = autoharness_settings::ProfileId::new(profile).ok()?;
+        settings.profile(&id).map(|profile| profile.kind())
+    });
     LaunchResolution {
         source: CredentialSourceName::SessionOnly,
-        active_profile: None,
-        provider_kind: None,
+        active_profile,
+        provider_kind: profile_kind
+            .or(settings.provider())
+            .or(Some(autoharness_settings::ProviderKind::Gemini)),
         credential: Zeroizing::new(String::new()),
+        router: router_fields(settings),
+    }
+}
+
+fn environment_launch() -> LaunchResolution {
+    let provider_kind = config::provider_selection()
+        .ok()
+        .map(|selection| match selection {
+            config::ProviderSelection::Gemini => autoharness_settings::ProviderKind::Gemini,
+            config::ProviderSelection::Router => autoharness_settings::ProviderKind::Router,
+        });
+    let credential = provider_kind
+        .and_then(|kind| match kind {
+            autoharness_settings::ProviderKind::Gemini => env::var("GEMINI_API_KEY").ok(),
+            autoharness_settings::ProviderKind::Router => {
+                env::var("AUTOHARNESS_ROUTER_API_KEY").ok()
+            }
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_default();
+    LaunchResolution {
+        source: if credential.is_empty() {
+            CredentialSourceName::SessionOnly
+        } else {
+            CredentialSourceName::Environment
+        },
+        active_profile: None,
+        provider_kind,
+        credential: Zeroizing::new(credential),
         router: None,
     }
 }

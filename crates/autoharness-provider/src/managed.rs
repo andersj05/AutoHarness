@@ -656,6 +656,32 @@ mod tests {
         }
     }
 
+    struct CorruptCache;
+
+    #[async_trait]
+    impl CatalogCache for CorruptCache {
+        async fn load(
+            &self,
+            _provider_id: &ProviderId,
+        ) -> Result<Option<CatalogCacheEntry>, ProviderError> {
+            Err(ProviderError::new(
+                ProviderErrorKind::Protocol,
+                RetryAdvice::Never,
+            ))
+        }
+
+        async fn store(
+            &self,
+            _provider_id: &ProviderId,
+            _entry: &CatalogCacheEntry,
+        ) -> Result<(), ProviderError> {
+            Err(ProviderError::new(
+                ProviderErrorKind::Protocol,
+                RetryAdvice::Never,
+            ))
+        }
+    }
+
     #[tokio::test]
     async fn fresh_cache_avoids_network_and_transient_refresh_uses_bounded_stale_data() {
         let now = unix_millis().expect("clock");
@@ -695,6 +721,24 @@ mod tests {
             .await
             .expect("stale fallback");
         assert_eq!(catalog.freshness(), CatalogFreshness::Stale);
+    }
+
+    #[tokio::test]
+    async fn corrupt_catalog_cache_is_discarded_and_replaced_from_live_discovery() {
+        let inner = Arc::new(FakeProvider::new(Vec::new()));
+        let managed = ManagedProvider::new(
+            inner.clone(),
+            Arc::new(CorruptCache),
+            ProviderPolicy::default(),
+        );
+
+        let catalog = managed
+            .list_models(CatalogRequest::PreferCache, CancellationToken::new())
+            .await
+            .expect("corrupt cache must not block live discovery");
+
+        assert_eq!(catalog.freshness(), CatalogFreshness::Live);
+        assert_eq!(inner.catalog_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
