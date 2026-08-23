@@ -1069,6 +1069,83 @@ impl SettingsProjection {
     }
 }
 
+/// In-run composer history for prompt recall.
+///
+/// Entries are ordered oldest to newest and never persisted; the walk
+/// position is an offset from the end, where `None` means the live draft.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ComposerHistory {
+    entries: Vec<String>,
+    /// Offset back into history: 0 = newest entry, None = not walking.
+    walk: Option<usize>,
+    /// Live composer content stashed while walking, restored at the end.
+    stashed_draft: Option<String>,
+}
+
+impl ComposerHistory {
+    const MAX_ENTRIES: usize = 100;
+
+    pub(crate) fn record(&mut self, prompt: &str) {
+        if prompt.is_empty() {
+            return;
+        }
+        if self.entries.last().is_some_and(|last| last == prompt) {
+            self.walk = None;
+            return;
+        }
+        self.entries.push(prompt.to_owned());
+        if self.entries.len() > Self::MAX_ENTRIES {
+            let overflow = self.entries.len() - Self::MAX_ENTRIES;
+            self.entries.drain(0..overflow);
+        }
+        self.walk = None;
+    }
+
+    /// Steps back (negative) or forward (positive) through history.
+    ///
+    /// Returns the recalled text, or `None` when the step would leave the
+    /// history range. Stepping forward past the newest entry returns the
+    /// stashed draft and ends the walk.
+    pub(crate) fn step(&mut self, direction: isize, draft: &str) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        match direction.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                if self.walk.is_none() {
+                    // Starting a walk stashes the live draft so it can be
+                    // restored when the walk returns past the newest entry.
+                    self.stashed_draft = Some(draft.to_owned());
+                }
+                let next = self
+                    .walk
+                    .map_or(0, |walk| walk.saturating_add((-direction) as usize));
+                if next >= self.entries.len() {
+                    // Saturate at the oldest entry.
+                    self.walk = Some(self.entries.len() - 1);
+                    return Some(self.entries[0].clone());
+                }
+                self.walk = Some(next);
+                Some(self.entries[self.entries.len() - 1 - next].clone())
+            }
+            std::cmp::Ordering::Greater => {
+                let walk = self.walk?;
+                if walk == 0 {
+                    self.walk = None;
+                    return Some(self.stashed_draft.take().unwrap_or_default());
+                }
+                self.walk = Some(walk - 1);
+                Some(self.entries[self.entries.len() - 1 - (walk - 1)].clone())
+            }
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    pub(crate) fn reset_walk(&mut self) {
+        self.walk = None;
+    }
+}
+
 /// Per-session composer draft keyed by stable session identity.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub(crate) struct SessionDrafts {
@@ -1121,6 +1198,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
+    /// In-run submitted-prompt history for recall.
+    pub(crate) history: ComposerHistory,
     pub(crate) pending: BTreeMap<RequestId, PendingKind>,
     pub(crate) cancelling: BTreeSet<AttemptKey>,
     pub(crate) retrying: BTreeSet<AttemptKey>,
@@ -1188,6 +1267,7 @@ impl Model {
             palette: PaletteState::default(),
             help: HelpState::default(),
             drafts: SessionDrafts::default(),
+            history: ComposerHistory::default(),
             pending: BTreeMap::new(),
             cancelling: BTreeSet::new(),
             retrying: BTreeSet::new(),

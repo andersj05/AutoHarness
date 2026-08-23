@@ -204,6 +204,16 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input {
             key: Key::Up,
+            ctrl: true,
+            ..
+        } => recall_history(model, -1),
+        Input {
+            key: Key::Down,
+            ctrl: true,
+            ..
+        } => recall_history(model, 1),
+        Input {
+            key: Key::Up,
             alt: true,
             ..
         }
@@ -245,6 +255,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 return effects;
             }
             if !has_pending_submission(model) && input_composer(&mut model.composer.editor, input) {
+                model.history.reset_walk();
                 model.notice = None;
                 model.dirty = true;
             }
@@ -1074,6 +1085,26 @@ fn handle_paste(model: &mut Model, text: &str) {
     }
 }
 
+/// Steps composer history without ever touching durable state.
+///
+/// A successful recall replaces the composer content; any ordinary edit
+/// afterwards ends the walk so Ctrl+Down returns to the edited draft.
+fn recall_history(model: &mut Model, direction: isize) -> Vec<UiEffect> {
+    let draft = model.composer.text();
+    if let Some(recalled) = model.history.step(direction, &draft) {
+        model.composer.reset();
+        if !recalled.is_empty() {
+            let _ = model
+                .composer
+                .editor
+                .insert_str(crate::text::editable_safe(&recalled));
+        }
+        model.notice = None;
+        model.dirty = true;
+    }
+    Vec::new()
+}
+
 fn input_composer(editor: &mut ratatui_textarea::TextArea<'static>, input: Input) -> bool {
     if let Input {
         key: Key::Char(character),
@@ -1214,7 +1245,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::ConfigureCredential => {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
                     }
-                    PendingKind::SubmitPrompt(_) => {
+                    PendingKind::SubmitPrompt(prompt) => {
+                        model.history.record(&prompt);
                         model.composer.reset();
                         model.notice = None;
                     }
