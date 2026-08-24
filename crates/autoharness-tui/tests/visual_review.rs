@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
+use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, RetryPolicy,
-    SessionProjection, SessionsProjection, ToolCallKey, ToolRowView, TranscriptItem, UiFailure,
-    UiNotice, UsageView, update, view,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
+    TranscriptItem, UiFailure, UiNotice, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -135,6 +136,65 @@ fn ctrl(c: char) -> Input {
         ctrl: true,
         alt: false,
         shift: false,
+    }
+}
+
+fn apply_presentation(model: &mut Model, preferences: &str) {
+    let settings = SettingsBuilder::new()
+        .with_layer(LayerKind::UserFile, preferences)
+        .resolve()
+        .expect("visual review preferences");
+    model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: settings.local_profile().clone(),
+        ..SettingsProjection::default()
+    }));
+}
+
+#[test]
+#[ignore = "accessibility visual review harness; run with --ignored --nocapture"]
+fn render_accessibility_review_matrix() {
+    let modes = [
+        (
+            "no-color ASCII compact single-column",
+            r#"{
+                "schema_version": 3,
+                "local_profile": {
+                    "preferences": {
+                        "color_mode": "no_color",
+                        "glyph_mode": "ascii",
+                        "reduced_motion": true,
+                        "density": "compact",
+                        "layout": "single_column"
+                    }
+                }
+            }"#,
+        ),
+        (
+            "high-contrast ASCII compact single-column",
+            r#"{
+                "schema_version": 3,
+                "local_profile": {
+                    "preferences": {
+                        "color_mode": "high_contrast",
+                        "glyph_mode": "ascii",
+                        "reduced_motion": true,
+                        "density": "compact",
+                        "layout": "single_column"
+                    }
+                }
+            }"#,
+        ),
+    ];
+    for (name, preferences) in modes {
+        for (width, height) in [(120u16, 50u16), (120, 40), (80, 24), (60, 18), (40, 12)] {
+            let mut model = snapshot_model();
+            apply_presentation(&mut model, preferences);
+            let _ = update(&mut model, Message::Input(ctrl(',')));
+            println!(
+                "=== {name} Settings {width}x{height} ===\n{}",
+                render(&model, width, height)
+            );
+        }
     }
 }
 

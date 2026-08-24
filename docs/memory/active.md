@@ -93,7 +93,7 @@ Promote Phase 3.8 through cross-platform CI, then use Phase 3.9 to validate the 
 1. Open the Phase 3.8 pull request from `feat/phase-3-8-personalization-accessibility` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs on Windows, macOS, and Linux.
 2. Review representative theme, no-color, high-contrast, ASCII, reduced-motion, compact, and single-column terminal surfaces in cross-platform CI.
 3. Begin Phase 3.9 release-candidate validation only after Phase 3.8 promotion.
-4. Preserve configured-router live, platform-vault, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
+4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
 5. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.
 
 ## Open questions
