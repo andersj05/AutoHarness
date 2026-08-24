@@ -303,6 +303,18 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         Line::from(""),
     ];
+    if let Some(title) = active_session_title(model) {
+        lines.push(Line::styled(
+            "SESSION",
+            visual_style(model, VisualRole::Muted),
+        ));
+        lines.push(Line::styled(
+            display_safe(&title),
+            visual_style(model, VisualRole::Normal),
+        ));
+        lines.push(Line::from(""));
+    }
+
     for (index, route) in Route::ALL.into_iter().enumerate() {
         let label = format!(" {}  {:<10}", index + 1, route.label());
         let style = if route == model.route() {
@@ -349,6 +361,47 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         visual_style(model, VisualRole::Muted),
     ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn active_session_title(model: &Model) -> Option<String> {
+    model
+        .sessions
+        .sessions
+        .iter()
+        .find(|entry| entry.active || entry.session_id == model.session.session_id)
+        .map(|entry| display_safe(&entry.title))
+}
+
+fn conversation_title(model: &Model) -> String {
+    active_session_title(model).map_or_else(
+        || " Conversation ".to_owned(),
+        |title| format!(" Conversation · {title} "),
+    )
+}
+
+fn onboarding_step(model: &Model) -> (&'static str, &'static str) {
+    if model.session.selected_model.is_none() {
+        ("NEXT", "Ctrl+P choose a model")
+    } else if model.settings().provider_status.credential_connected {
+        ("READY", "Write a prompt below")
+    } else {
+        ("NEXT", "Ctrl+K connect a session-only key")
+    }
+}
+
+fn render_onboarding(lines: &mut Vec<Line<'static>>, model: &Model) {
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        "GET STARTED",
+        visual_style(model, VisualRole::User),
+    ));
+    lines.push(Line::from("1  Connect a provider in Alt+3 or Ctrl+K"));
+    lines.push(Line::from("2  Choose a compatible model with Ctrl+P"));
+    let (label, action) = onboarding_step(model);
+    lines.push(Line::styled(
+        format!("3  {label} · {action}"),
+        visual_style(model, VisualRole::Assistant),
+    ));
 }
 
 fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -1726,7 +1779,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let block = bordered.then(|| {
         app_block(model)
             .borders(Borders::ALL)
-            .title(" Conversation ")
+            .title(conversation_title(model))
             .border_style(visual_style(model, VisualRole::Border))
     });
     let inner = block.as_ref().map_or(area, |block| block.inner(area));
@@ -1852,6 +1905,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                     "Enter sends"
                 };
                 lines.push(Line::styled(send, visual_style(model, VisualRole::Muted)));
+                render_onboarding(&mut lines, model);
             }
         }
         return Text::from(lines);

@@ -287,6 +287,15 @@ fn chat_empty_states_name_one_primary_recovery_action() {
 }
 
 #[test]
+fn chat_empty_state_explains_the_zero_shell_start_path() {
+    let model = model();
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("GET STARTED"));
+    assert!(rendered.contains("Ctrl+K connect a session-only key"));
+    assert!(rendered.contains("Conversation · Active conversation"));
+}
+
+#[test]
 #[ignore = "visual review harness for the Phase 3.7 routed shell"]
 fn render_route_review_matrix() {
     for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
