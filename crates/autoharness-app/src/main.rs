@@ -72,6 +72,10 @@ async fn run() -> Result<(), AppError> {
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
     let profile_store = ProfileStore::open(&paths.profiles()).map_err(|_| AppError::FileSystem)?;
+    let initial_local_profile = profile_store
+        .resolved_settings()
+        .map(|settings| settings.local_profile().clone())
+        .unwrap_or_default();
     let vault: Arc<dyn VaultPort> = Arc::new(KeyringVault::new());
     let resolved = resolve_launch(&profile_store, vault.as_ref());
     let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved)?;
@@ -88,7 +92,7 @@ async fn run() -> Result<(), AppError> {
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
-    let initial_settings = Arc::new(settings_projection(&resolved));
+    let initial_settings = Arc::new(settings_projection(&resolved, initial_local_profile));
     let model = Model::new(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
@@ -267,7 +271,10 @@ fn environment_launch() -> LaunchResolution {
     }
 }
 
-fn settings_projection(resolved: &LaunchResolution) -> SettingsProjection {
+fn settings_projection(
+    resolved: &LaunchResolution,
+    local_profile: autoharness_settings::EffectiveLocalProfile,
+) -> SettingsProjection {
     SettingsProjection {
         provider_status: ProviderStatusProjection {
             active_profile: resolved.active_profile.clone(),
@@ -282,6 +289,7 @@ fn settings_projection(resolved: &LaunchResolution) -> SettingsProjection {
             },
             credential_connected: !resolved.credential.is_empty(),
         },
+        local_profile,
     }
 }
 

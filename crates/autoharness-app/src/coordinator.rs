@@ -16,15 +16,15 @@ use autoharness_provider::{
 };
 #[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
-use autoharness_settings::{ProfileId, ProviderKind, ProviderProfile};
+use autoharness_settings::{DisplayLabel, ProfileId, ProviderKind, ProviderProfile};
 use autoharness_store::SessionStatus;
 use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
 use autoharness_tui::{
     ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
-    LocalUserProfileProjection, ProfileConnectionState, ProfileCredentialStateLabel,
-    ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, ProviderProfileProjection,
-    RequestId, RetryPolicy, SessionBrowserEntry, SessionsProjection, SettingsProjection,
-    ToolCallKey, UiFailure, UiIntent, UiNotice,
+    LocalPreferenceChange, LocalUserProfileProjection, ProfileConnectionState,
+    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
+    ProviderProfileProjection, RequestId, RetryPolicy, SessionBrowserEntry, SessionsProjection,
+    SettingsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -355,6 +355,9 @@ impl Coordinator {
             } => {
                 self.delete_profile(request_id, profile_id).await?;
             }
+            UiIntent::UpdateLocalPreference { request_id, change } => {
+                self.update_local_preference(request_id, change).await?;
+            }
             UiIntent::RefreshCatalog { request_id } => {
                 if self.provider.is_some() {
                     self.ports
@@ -488,6 +491,92 @@ impl Coordinator {
         Ok(())
     }
 
+    async fn update_local_preference(
+        &mut self,
+        request_id: RequestId,
+        change: LocalPreferenceChange,
+    ) -> Result<(), AppError> {
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let mut local_profile = match manager.local_profile() {
+            Ok(local_profile) => local_profile,
+            Err(error) => {
+                self.reject(request_id, profile_failure(&error)).await?;
+                return Ok(());
+            }
+        };
+        let mut preferences = local_profile.preferences().clone();
+        let display_label = match change {
+            LocalPreferenceChange::DisplayLabel(value) => match value {
+                Some(value) => match DisplayLabel::new(value) {
+                    Ok(label) => Some(label),
+                    Err(_) => {
+                        self.reject(
+                            request_id,
+                            profile_validation_failure(
+                                "the local display label must be visible, bounded text",
+                            ),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                },
+                None => None,
+            },
+            LocalPreferenceChange::ThemePreset(value) => {
+                preferences.set_theme_preset(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::ColorMode(value) => {
+                preferences.set_color_mode(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::GlyphMode(value) => {
+                preferences.set_glyph_mode(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::ReducedMotion(value) => {
+                preferences.set_reduced_motion(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::Density(value) => {
+                preferences.set_density(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::Layout(value) => {
+                preferences.set_layout(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::TerminalTimestampStyle(value) => {
+                preferences.set_terminal_timestamp_style(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::ComposerSubmitBehavior(value) => {
+                preferences.set_composer_submit_behavior(value);
+                local_profile.display_label().cloned()
+            }
+        };
+        local_profile.set_display_label(display_label);
+        local_profile.set_preferences(preferences);
+        match manager.set_local_profile(local_profile) {
+            Ok(()) => {
+                self.publish_profiles();
+                self.commit(request_id).await?;
+            }
+            Err(error) => {
+                self.reject(request_id, profile_failure(&error)).await?;
+            }
+        }
+        Ok(())
+    }
+
     fn publish_profiles(&self) {
         let Some(runtime) = &self.profiles else {
             return;
@@ -495,6 +584,11 @@ impl Coordinator {
         let Ok(snapshot) = runtime.manager.snapshot() else {
             return;
         };
+        let local_profile = runtime
+            .manager
+            .resolved_settings()
+            .map(|settings| settings.local_profile().clone())
+            .unwrap_or_default();
         let active_profile = snapshot.profiles.iter().find(|profile| profile.active);
         let active_default_model = active_profile
             .and_then(|profile| profile.profile.default_model())
@@ -543,7 +637,11 @@ impl Coordinator {
             .profiles
             .send_replace(Arc::new(ProfilesProjection {
                 user: LocalUserProfileProjection {
-                    display_label: None,
+                    display_label: local_profile
+                        .display_label()
+                        .value()
+                        .as_ref()
+                        .map(ToString::to_string),
                     workspace: runtime.workspace.clone(),
                     default_profile: active_id.clone(),
                     default_model: active_default_model,
@@ -576,6 +674,7 @@ impl Coordinator {
                     credential_source,
                     credential_connected,
                 },
+                local_profile,
             }));
     }
 

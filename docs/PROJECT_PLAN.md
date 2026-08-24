@@ -392,7 +392,7 @@ The Phase 3.7 validation path also fixed fresh-session list publication so a new
 
 ### Phase 3.8: Personalization and accessibility
 
-**Status:** Planned
+**Status:** Implemented locally
 
 **Goal:** Let users adapt the terminal to their environment and accessibility needs without editing configuration files.
 
@@ -412,6 +412,16 @@ Exit criteria:
 - No-color, high-contrast, ASCII, reduced-motion, compact, and single-column combinations preserve all status and action information without clipping security-critical prompts.
 - User preferences survive restart, respect fixed precedence, and cannot weaken credential, permission, retention, telemetry, or sandbox policy from a workspace file.
 - Visual review covers representative theme and accessibility combinations at every supported responsive layout class.
+
+**Local implementation evidence:** Implemented and verified on Windows on 2026-08-24.
+
+Settings is now a categorized route-local workspace with deterministic selection and inline local-label editing.
+Every shipped terminal preference shows its effective value, source, explanation, inherited reset, and user-default reset.
+Schema 3 stores non-secret local display, theme, color, glyph, motion, density, layout, timestamp, and composer-submission preferences in the atomic profile document.
+The resolver migrates schema 1 and 2 documents, fixes layer precedence independent of builder insertion order, and permits only safe workspace presentation overrides.
+Renderer tokens apply theme, no-color, high-contrast, ASCII, reduced-motion, compact-density, and single-column behavior across routes and security overlays.
+The Settings shortcut reference derives from the shared command table.
+Focused resolver, profile-store, render matrix, complete workspace, and real Windows PTY route journey evidence pass.
 
 ### Phase 3.9: Terminal product validation
 

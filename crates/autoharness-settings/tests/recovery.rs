@@ -9,7 +9,13 @@ fn malformed_user_layer_is_skipped_and_defaults_remain() {
         .expect("malformed layer must degrade to defaults");
 
     assert_eq!(resolved.provider(), None);
-    assert!(resolved.provenance().is_empty());
+    assert_eq!(
+        resolved
+            .provenance()
+            .get("local_profile.preferences.theme_preset"),
+        Some(&autoharness_settings::Source::Default)
+    );
+    assert_eq!(resolved.diagnostics().len(), 1);
 }
 
 #[test]
@@ -42,7 +48,7 @@ fn active_profile_must_reference_a_declared_profile() {
 }
 
 #[test]
-fn workspace_profile_selection_is_allowed_but_provider_is_not() {
+fn legacy_profile_selection_retains_user_provenance() {
     let resolved = SettingsBuilder::new()
         .with_layer(LayerKind::UserFile, USER_JSON)
         .resolve()

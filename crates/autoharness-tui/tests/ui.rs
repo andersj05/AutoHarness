@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
+use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, Notice,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection,
-    SessionsProjection, ToolCallKey, TranscriptItem, UiEffect, UiFailure, UiIntent, UiNotice,
-    UsageView, display_safe, update, view,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, TranscriptItem,
+    UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -811,4 +812,166 @@ fn every_tiny_terminal_size_renders_without_panicking() {
             assert_eq!(backend.buffer().area.height, height);
         }
     }
+}
+
+struct VisualPreferences {
+    color_mode: &'static str,
+    theme: &'static str,
+    glyph_mode: &'static str,
+    reduced_motion: bool,
+    density: &'static str,
+    layout: &'static str,
+    timestamp: &'static str,
+}
+
+fn apply_visual_preferences(model: &mut Model, preferences: VisualPreferences) {
+    let preferences = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            format!(
+                r#"{{"schema_version":3,"local_profile":{{"preferences":{{"theme_preset":"{}","color_mode":"{}","glyph_mode":"{}","reduced_motion":{},"density":"{}","layout":"{}","terminal_timestamp_style":"{}"}}}}}}"#,
+                preferences.theme,
+                preferences.color_mode,
+                preferences.glyph_mode,
+                preferences.reduced_motion,
+                preferences.density,
+                preferences.layout,
+                preferences.timestamp,
+            ),
+        )
+        .resolve()
+        .expect("visual preference fixture");
+    model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: preferences.local_profile().clone(),
+        ..SettingsProjection::default()
+    }));
+}
+
+#[test]
+fn accessibility_visual_matrix_preserves_security_text_and_ascii_borders() {
+    let sizes = [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)];
+    let mut permission = (*session(9, Vec::new())).clone();
+    permission.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("matrix-permission").expect("tool call"),
+        tool_name: "fs_write".to_owned(),
+        capability: "filesystem write".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: vec![PermissionDetailView {
+            label: "Path".to_owned(),
+            value: "src/lib.rs".to_owned(),
+        }],
+    });
+    let mut model = Model::new(
+        Arc::new(permission),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "no_color",
+            theme: "dark",
+            glyph_mode: "ascii",
+            reduced_motion: true,
+            density: "compact",
+            layout: "single_column",
+            timestamp: "absolute",
+        },
+    );
+    for (width, height) in sizes {
+        let rendered = buffer_text(&render_model(&model, width, height));
+        assert!(rendered.contains("Tool permission"));
+        assert!(rendered.contains("filesystem write"));
+        assert!(rendered.contains("workspace:src/lib.rs"));
+        if width > 40 && height > 12 {
+            assert!(rendered.contains('+'));
+            assert!(!rendered.contains('┌'));
+        }
+    }
+}
+
+#[test]
+fn accessibility_confirmation_matrix_retains_destructive_copy() {
+    let sessions = Arc::new(SessionsProjection {
+        sessions: vec![SessionBrowserEntry {
+            session_id: "matrix-session".to_owned(),
+            title: "Security review".to_owned(),
+            archived: false,
+            selected_model: Some(pro_model()),
+            updated_at_ms: 1_700_000_000_000,
+            active: false,
+        }],
+    });
+    let mut model = Model::new(session(10, Vec::new()), sessions, ready_catalog());
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "high_contrast",
+            theme: "light",
+            glyph_mode: "ascii",
+            reduced_motion: true,
+            density: "compact",
+            layout: "single_column",
+            timestamp: "hidden",
+        },
+    );
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('d'))));
+    for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
+        let rendered = buffer_text(&render_model(&model, width, height));
+        assert!(rendered.contains("Delete session"));
+        assert!(rendered.contains("Permanently delete"));
+        assert!(rendered.contains("Y confirm"));
+        assert!(rendered.contains("N or Esc cancel"));
+    }
+}
+
+#[test]
+fn theme_and_timestamp_preferences_change_rendered_output() {
+    let sessions = Arc::new(SessionsProjection {
+        sessions: vec![SessionBrowserEntry {
+            session_id: "timestamp-session".to_owned(),
+            title: "Timestamp fixture".to_owned(),
+            archived: false,
+            selected_model: Some(pro_model()),
+            updated_at_ms: 1_700_000_000_000,
+            active: false,
+        }],
+    });
+    let mut model = Model::new(session(11, Vec::new()), sessions, ready_catalog());
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "light",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "absolute",
+        },
+    );
+    let light = render_model(&model, 120, 40);
+    assert_eq!(light.buffer().cell((0, 0)).expect("header").bg, Color::Blue);
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
+    assert!(buffer_text(&render_model(&model, 120, 40)).contains("updated 1700000000000"));
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "dark",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "hidden",
+        },
+    );
+    let dark = render_model(&model, 120, 40);
+    assert_eq!(
+        dark.buffer().cell((0, 0)).expect("header").bg,
+        Color::LightBlue
+    );
+    assert!(!buffer_text(&dark).contains("updated 1700000000000"));
 }

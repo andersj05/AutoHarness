@@ -56,6 +56,7 @@ fn profile_projection_shows_active_profile_and_vault_source() {
     );
     model.apply_settings(Arc::new(SettingsProjection {
         provider_status: projection,
+        ..SettingsProjection::default()
     }));
 
     assert_eq!(
@@ -74,6 +75,7 @@ fn disconnected_profile_reports_session_only_without_a_credential() {
             credential_source: autoharness_tui::CredentialSourceLabel::SessionOnly,
             credential_connected: false,
         },
+        ..SettingsProjection::default()
     };
     let mut model = Model::new(
         Arc::new(session()),

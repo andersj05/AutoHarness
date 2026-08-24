@@ -4,11 +4,11 @@
 
 **Phase:** 3.8 personalization and accessibility
 
-**Status:** Phase 3.7 merged into `dev` through pull request #17 after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux
+**Status:** Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`; focused resolver, persistence, render matrix, strict baseline gates, and an actual Windows PTY Settings journey pass
 
 ## Current objective
 
-Implement Phase 3.8 settings, personalization, and accessibility over the stable route, focus, overlay, profile, and settings boundaries.
+Promote Phase 3.8 through cross-platform CI, then use Phase 3.9 to validate the complete terminal product boundary.
 
 ## Current repository state
 
@@ -57,6 +57,7 @@ Implement Phase 3.8 settings, personalization, and accessibility over the stable
 
 ## Recently completed
 
+- Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
 - Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
 - Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
 - Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.
@@ -89,11 +90,11 @@ Implement Phase 3.8 settings, personalization, and accessibility over the stable
 
 ## Immediate next actions
 
-1. Implement the Phase 3.8 typed settings schema, resolver provenance, restrictive workspace policy, migration, and atomic non-secret preference persistence.
-2. Extend the existing Settings route with categorized inspection, edit, explanation, inherited reset, default reset, and deterministic focus behavior.
-3. Apply persisted appearance, accessibility, terminal, and composer preferences to all routes and overlays without losing status or security-prompt information.
-4. Generate the shortcut reference from the authoritative command table and complete focused, responsive visual, restart, and real-PTY coverage.
-5. Preserve configured-router live, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
+1. Open the Phase 3.8 pull request from `feat/phase-3-8-personalization-accessibility` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs on Windows, macOS, and Linux.
+2. Review representative theme, no-color, high-contrast, ASCII, reduced-motion, compact, and single-column terminal surfaces in cross-platform CI.
+3. Begin Phase 3.9 release-candidate validation only after Phase 3.8 promotion.
+4. Preserve configured-router live, platform-vault, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
+5. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.
 
 ## Open questions
 
@@ -101,10 +102,10 @@ Implement Phase 3.8 settings, personalization, and accessibility over the stable
 
 ## Blockers
 
-Phase 3.8 implementation is unblocked.
-A configured router endpoint and an approved reference machine remain Phase 3.9 evidence prerequisites.
+Local Phase 3.8 implementation is complete.
+A configured router endpoint, macOS and Linux platform vault environments, and an approved reference machine remain Phase 3.9 evidence prerequisites.
 
 ## Handoff note
 
-Phase 3.7 merged into `dev` through pull request #17 on 2026-08-24 after all cross-platform baseline and serial PTY jobs passed.
-Phase 3.8 must extend the existing Settings route and typed resolver without reintroducing page-open booleans, competing focus state, a second modal convention, or a second preferences store.
+Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`.
+Promote only after cross-platform baseline and serial PTY jobs pass.

@@ -11,11 +11,11 @@ mod view;
 
 pub use model::{
     ApiCredential, AttemptKey, AttemptStatus, COMMANDS, CatalogProjection, CommandEntry,
-    ComposerState, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
-    ModelSummary, Notice, OverlayKind, PendingKind, PermissionDetailView, PermissionRequestView,
-    ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
-    ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
-    RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    ComposerState, CredentialSourceLabel, Focus, LocalPreferenceChange, LocalUserProfileProjection,
+    Message, Model, ModelSummary, Notice, OverlayKind, PendingKind, PermissionDetailView,
+    PermissionRequestView, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
+    ProviderKindLabel, ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection,
+    RequestId, RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
     SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiEffect,
     UiFailure, UiIntent, UiNotice, UsageView,
 };

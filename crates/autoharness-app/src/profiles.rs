@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use autoharness_settings::{
-    CredentialRecoveryKind, CredentialRecoveryRecord, CredentialReference, LayerKind, ProfileId,
-    ProviderProfile, SETTINGS_SCHEMA_VERSION, SettingsBuilder,
+    CredentialRecoveryKind, CredentialRecoveryRecord, CredentialReference, LayerKind, LocalProfile,
+    ProfileId, ProviderProfile, ResolvedSettings, SETTINGS_SCHEMA_VERSION, SettingsBuilder,
+    SettingsDocument,
 };
 use zeroize::Zeroizing;
 
@@ -126,12 +127,19 @@ impl ProfileStore {
         match fs::read_to_string(path) {
             Ok(existing) => {
                 let trimmed = existing.trim();
-                if trimmed.is_empty() {
-                    write_default_document(path)?;
-                } else if serde_json::from_str::<serde_json::Value>(trimmed)
-                    .ok()
-                    .and_then(|value| value.as_object().cloned())
-                    .is_none()
+                let parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
+                let is_future_schema = parsed
+                    .as_ref()
+                    .and_then(|value| value.get("schema_version"))
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|version| version > u64::from(SETTINGS_SCHEMA_VERSION));
+                if trimmed.is_empty()
+                    || parsed
+                        .as_ref()
+                        .and_then(serde_json::Value::as_object)
+                        .is_none()
+                    || (!is_future_schema
+                        && serde_json::from_str::<SettingsDocument>(trimmed).is_err())
                 {
                     let backup = backup_path(path);
                     let _ = fs::rename(path, &backup);
@@ -188,6 +196,38 @@ impl ProfileStore {
             profiles,
             pending_recovery: recovery.len(),
         })
+    }
+
+    /// Returns all effective local settings resolved from the durable user layer.
+    pub fn resolved_settings(&self) -> Result<ResolvedSettings, ProfileStoreError> {
+        SettingsBuilder::new()
+            .with_layer(LayerKind::UserFile, self.read_document()?)
+            .resolve()
+            .map_err(|_| ProfileStoreError::Io)
+    }
+
+    /// Replaces the typed non-secret local profile preference layer atomically.
+    pub fn set_local_profile(&self, local_profile: LocalProfile) -> Result<(), ProfileStoreError> {
+        let serialized = serde_json::to_value(local_profile).map_err(|_| ProfileStoreError::Io)?;
+        self.mutate_document(|document| {
+            let object = document.as_object_mut().ok_or(ProfileStoreError::Io)?;
+            if serialized
+                .as_object()
+                .is_some_and(serde_json::Map::is_empty)
+            {
+                object.remove("local_profile");
+            } else {
+                object.insert("local_profile".to_owned(), serialized);
+            }
+            Ok(())
+        })
+    }
+
+    /// Returns the persisted local profile layer without resolving lower layers.
+    pub fn local_profile(&self) -> Result<LocalProfile, ProfileStoreError> {
+        serde_json::from_str::<SettingsDocument>(&self.read_document()?)
+            .map(|document| document.local_profile().clone())
+            .map_err(|_| ProfileStoreError::Io)
     }
 
     /// Inserts or replaces one validated non-secret profile definition.
@@ -441,6 +481,26 @@ impl ProfileManager {
     /// Returns the latest safe profile projection.
     pub fn snapshot(&self) -> Result<ProfileSnapshot, ProfileManagementError> {
         self.store.snapshot().map_err(Into::into)
+    }
+
+    /// Returns effective local settings with per-leaf provenance.
+    pub fn resolved_settings(&self) -> Result<ResolvedSettings, ProfileManagementError> {
+        self.store.resolved_settings().map_err(Into::into)
+    }
+
+    /// Replaces the typed non-secret local profile preference layer.
+    pub fn set_local_profile(
+        &self,
+        local_profile: LocalProfile,
+    ) -> Result<(), ProfileManagementError> {
+        self.store
+            .set_local_profile(local_profile)
+            .map_err(Into::into)
+    }
+
+    /// Returns the persisted local profile layer for one typed preference mutation.
+    pub fn local_profile(&self) -> Result<LocalProfile, ProfileManagementError> {
+        self.store.local_profile().map_err(Into::into)
     }
 
     /// Inserts or edits one profile while preserving credential linkage.
