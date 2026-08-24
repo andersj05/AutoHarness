@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-24
 
-**Phase:** 3.8 personalization and accessibility
+**Phase:** 3.9 terminal product validation
 
-**Status:** Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`; focused resolver, persistence, rendered accessibility review, strict baseline gates, and an actual Windows PTY Settings journey pass
+**Status:** Local TUI release-candidate improvements are implemented on `feat/phase-3-9-terminal-product-validation`; full Phase 3.9 evidence remains pending
 
 ## Current objective
 
-Promote Phase 3.8 through cross-platform CI, then use Phase 3.9 to validate the complete terminal product boundary.
+Run and record the release-candidate baseline, PTY, migration, benchmark, live-provider, vault, and rollback gates without reopening stabilized terminal contracts.
 
 ## Current repository state
 
@@ -90,10 +90,10 @@ Promote Phase 3.8 through cross-platform CI, then use Phase 3.9 to validate the 
 
 ## Immediate next actions
 
-1. Open the Phase 3.8 pull request from `feat/phase-3-8-personalization-accessibility` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs on Windows, macOS, and Linux.
-2. Review representative theme, no-color, high-contrast, ASCII, reduced-motion, compact, and single-column terminal surfaces in cross-platform CI.
-3. Begin Phase 3.9 release-candidate validation only after Phase 3.8 promotion.
-4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
+1. Run `cargo fmt --all -- --check`, strict Clippy, rustdoc/doctests, full workspace tests, and isolated benchmark gates on this release-candidate branch.
+2. Run the serial Windows PTY matrix and record the focused TUI visual and accessibility review output for this candidate.
+3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
+4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
 5. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.
 
 ## Open questions
@@ -102,10 +102,9 @@ Promote Phase 3.8 through cross-platform CI, then use Phase 3.9 to validate the 
 
 ## Blockers
 
-Local Phase 3.8 implementation is complete.
-A configured router endpoint, macOS and Linux platform vault environments, and an approved reference machine remain Phase 3.9 evidence prerequisites.
+The local TUI implementation slice is complete, but the Phase 3.9 release evidence has not been executed on this branch.
+Configured router access, macOS and Linux platform vault environments, an approved reference machine, and operator-owned rollback inputs remain prerequisites.
 
 ## Handoff note
 
-Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`.
-Promote only after cross-platform baseline and serial PTY jobs pass.
+The branch adds release-candidate TUI hardening and focused tests; do not promote it until the full cross-platform evidence matrix and release checklist are recorded.

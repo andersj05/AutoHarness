@@ -425,7 +425,7 @@ Focused resolver, profile-store, render matrix, complete workspace, and real Win
 
 ### Phase 3.9: Terminal product validation
 
-**Status:** Planned
+**Status:** Implemented locally; release-candidate evidence pending
 
 **Goal:** Validate the complete redesigned terminal as the release-quality product boundary that Phase 4 can extend without reopening basic navigation, profile, credential, or accessibility work.
 
@@ -445,6 +445,9 @@ Exit criteria:
 - All baseline gates, cross-platform PTY journeys, platform vault smokes, live-provider probes, documentation checks, and approved reference-machine budgets pass on one release-candidate commit.
 - No P0 or P1 defect remains in onboarding, chat, sessions, profiles, credentials, settings, permissions, recovery, accessibility, or terminal rendering.
 - The release checklist is approved, rollback evidence is complete, and Phase 4 can consume stable routes, read models, intents, profile settings, and credential workflows.
+
+**Local implementation evidence:** This branch adds a zero-shell onboarding path, responsive Settings selection with fixed action visibility, profile/default metadata presentation, command-palette labels, contextual help parity, bounded paste editing, and route/session title context.
+Focused `autoharness-tui` compilation, unit tests, navigation tests, help tests, and ignored visual review rendering pass; the real-PTY, migration, recovery, benchmark, live-probe, vault, rollback, and cross-platform gates remain to be executed for this release candidate.
 
 ### Phase 4: Persistent context and memory
 
