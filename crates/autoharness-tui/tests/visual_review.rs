@@ -6,9 +6,9 @@ use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection,
-    SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, UiFailure,
-    UiNotice, UsageView, update, view,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
+    TranscriptItem, UiFailure, UiNotice, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -218,6 +218,32 @@ fn render_accessibility_review_matrix() {
             apply_presentation(&mut model, preferences);
             println!(
                 "=== {name} Permission {width}x{height} ===\n{}",
+                render(&model, width, height)
+            );
+        }
+    }
+    let sessions = Arc::new(SessionsProjection {
+        sessions: vec![SessionBrowserEntry {
+            session_id: "visual-confirmation".to_owned(),
+            title: "Destructive accessibility review".to_owned(),
+            archived: false,
+            selected_model: Some(pro_model()),
+            updated_at_ms: 1_700_000_000_000,
+            active: false,
+        }],
+    });
+    for (name, preferences) in modes {
+        for (width, height) in [(120u16, 50u16), (120, 40), (80, 24), (60, 18), (40, 12)] {
+            let mut model = Model::new(
+                session(10, Vec::new()),
+                Arc::clone(&sessions),
+                ready_catalog(),
+            );
+            apply_presentation(&mut model, preferences);
+            let _ = update(&mut model, Message::Input(ctrl('l')));
+            let _ = update(&mut model, Message::Input(ctrl('d')));
+            println!(
+                "=== {name} Confirmation {width}x{height} ===\n{}",
                 render(&model, width, height)
             );
         }
