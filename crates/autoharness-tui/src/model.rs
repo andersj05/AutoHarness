@@ -1313,7 +1313,10 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
                 "Alt+1..5",
                 "switch Chat, Sessions, Profiles, Settings, Help",
             ),
-            ("Ctrl+S", "send the prompt"),
+            (
+                "Ctrl+S",
+                "send the prompt by default; configurable in Settings",
+            ),
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open Sessions"),
             ("Ctrl+G", "open Profiles"),
@@ -1321,12 +1324,16 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
             ("Ctrl+R", "retry the failed attempt"),
+            ("Ctrl+F", "search the transcript"),
+            ("Ctrl+X", "expand or collapse tool rows"),
+            ("Ctrl+Y", "copy the visible transcript"),
+            ("Ctrl+Z", "undo the latest archive or unarchive"),
             ("Esc", "cancel streaming output"),
             ("Alt+Up / Alt+Down", "scroll the transcript"),
             ("Ctrl+End", "follow live output again"),
             ("Ctrl+/", "command palette"),
             ("F1", "this help"),
-            ("Ctrl+C", "quit"),
+            ("Ctrl+C", "quit when idle; cancel an active response"),
         ],
     },
     HelpSection {
@@ -1376,6 +1383,19 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         ],
     },
     HelpSection {
+        title: "Settings",
+        rows: &[
+            ("Up/Down", "choose a preference"),
+            ("PageUp/PageDown", "move through settings"),
+            ("Home/End", "jump to the first or last preference"),
+            ("Left/Right", "change the selected value"),
+            ("Enter", "edit the display label"),
+            ("R", "reset to the inherited value"),
+            ("D", "reset to the user default"),
+            ("Esc", "return to Chat"),
+        ],
+    },
+    HelpSection {
         title: "Permission",
         rows: &[
             ("Y", "allow this exact call once"),
@@ -1395,6 +1415,7 @@ impl HelpSection {
             "Browser" => focus == Focus::Browser,
             "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
+            "Settings" => focus == Focus::Settings,
             "Permission" => focus == Focus::Permission,
             _ => false,
         }
