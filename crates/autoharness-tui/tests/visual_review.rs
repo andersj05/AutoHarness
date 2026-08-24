@@ -5,9 +5,10 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, RetryPolicy,
-    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
-    TranscriptItem, UiFailure, UiNotice, UsageView, update, view,
+    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionProjection,
+    SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, UiFailure,
+    UiNotice, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -192,6 +193,31 @@ fn render_accessibility_review_matrix() {
             let _ = update(&mut model, Message::Input(ctrl(',')));
             println!(
                 "=== {name} Settings {width}x{height} ===\n{}",
+                render(&model, width, height)
+            );
+        }
+    }
+    let mut permission = (*session(9, Vec::new())).clone();
+    permission.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("visual-permission").expect("tool call"),
+        tool_name: "fs_write".to_owned(),
+        capability: "filesystem write".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: vec![PermissionDetailView {
+            label: "Path".to_owned(),
+            value: "src/lib.rs".to_owned(),
+        }],
+    });
+    for (name, preferences) in modes {
+        for (width, height) in [(120u16, 50u16), (120, 40), (80, 24), (60, 18), (40, 12)] {
+            let mut model = Model::new(
+                Arc::new(permission.clone()),
+                Arc::new(SessionsProjection::default()),
+                ready_catalog(),
+            );
+            apply_presentation(&mut model, preferences);
+            println!(
+                "=== {name} Permission {width}x{height} ===\n{}",
                 render(&model, width, height)
             );
         }

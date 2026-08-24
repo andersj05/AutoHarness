@@ -883,6 +883,7 @@ fn accessibility_visual_matrix_preserves_security_text_and_ascii_borders() {
         assert!(rendered.contains("Tool permission"));
         assert!(rendered.contains("filesystem write"));
         assert!(rendered.contains("workspace:src/lib.rs"));
+        assert!(rendered.contains("N/Esc deny"));
         if width > 40 && height > 12 {
             assert!(rendered.contains('+'));
             assert!(!rendered.contains('┌'));

@@ -4,7 +4,7 @@
 
 **Phase:** 3.8 personalization and accessibility
 
-**Status:** Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`; focused resolver, persistence, render matrix, strict baseline gates, and an actual Windows PTY Settings journey pass
+**Status:** Phase 3.8 is implemented locally on `feat/phase-3-8-personalization-accessibility`; focused resolver, persistence, rendered accessibility review, strict baseline gates, and an actual Windows PTY Settings journey pass
 
 ## Current objective
 

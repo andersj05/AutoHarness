@@ -1470,7 +1470,7 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let help = if pending {
         "Saving answer..."
     } else {
-        "Up/Down inspect  Y allow this exact call once  N/Esc deny"
+        "Y allow  N/Esc deny"
     };
     let mut lines = vec![
         Line::styled(
@@ -1501,7 +1501,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::raw(display_safe(&detail.value)),
         ])
     }));
-    lines.push(Line::from(""));
     lines.push(Line::styled(help, visual_style(model, VisualRole::Warning)));
     frame.render_widget(
         Paragraph::new(Text::from(lines))
