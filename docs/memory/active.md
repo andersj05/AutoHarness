@@ -87,11 +87,13 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 - Added opt-in ignored Gemini plain-chat, Gemini HTTP-function, and configured-router HTTP-function compatibility probes that retain only structural assertions.
 - Completed the Phase 3 safe agent execution path without adding provider-native payloads or concrete capabilities to the engine.
 - Recorded the durable capability boundary in [ADR-0007](../adr/0007-use-durable-capability-tool-runtime.md).
+- On this branch, focused TUI tests (108 passed), the ignored visual review (2 passed), Windows PTY onboarding, routed shell, profile center, offline resume, session lifecycle, forced shutdown, and permission/tool journeys passed.
+- Workspace formatting, strict Clippy, full workspace tests (336 passed across 46 suites), and documentation link checks passed.
 
 ## Immediate next actions
 
-1. Run `cargo fmt --all -- --check`, strict Clippy, rustdoc/doctests, full workspace tests, and isolated benchmark gates on this release-candidate branch.
-2. Run the serial Windows PTY matrix and record the focused TUI visual and accessibility review output for this candidate.
+1. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on this release-candidate branch.
+2. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
 4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
 5. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.

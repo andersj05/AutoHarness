@@ -147,10 +147,10 @@
 - The operating-system vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
-- Eight dedicated PTY scenarios, including routed shell and profile management, pass locally on Windows; Linux, macOS, and refreshed Windows evidence awaits the release-candidate CI run.
+- Eight dedicated PTY scenarios, including routed shell, profile management, onboarding, offline resume, session lifecycle, forced shutdown, and permission outcomes, pass locally on Windows; Linux and refreshed Windows evidence awaits the release-candidate CI run.
+- This branch passes workspace formatting, strict Clippy, 336 workspace tests across 46 suites, 108 focused TUI tests, two ignored visual-review renders, and the relative Markdown-link check.
 - The checked-in release checklist has not been executed against a committed release candidate.
 
 ## Next milestone exit target
-
-Phase 3.7 must pass green baseline and dedicated PTY pull-request gates on Windows, macOS, and Linux and merge to `dev`.
-Phase 3.8 then exits only when every shipped presentation and terminal-behavior preference can be inspected, changed, explained, reset, migrated, and verified inside the existing Settings route.
+Phase 3.9 exits only when one release-candidate commit passes the cross-platform PTY matrix, platform vault smokes, live-provider probes, benchmark and storage reports, migration and rollback rehearsal, documentation checks, and release approval.
+Phase 4 remains gated until the release checklist is approved and the terminal routes, read models, intents, settings, and credential workflows are stable on that candidate.

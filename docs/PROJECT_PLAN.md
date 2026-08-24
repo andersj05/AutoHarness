@@ -447,7 +447,7 @@ Exit criteria:
 - The release checklist is approved, rollback evidence is complete, and Phase 4 can consume stable routes, read models, intents, profile settings, and credential workflows.
 
 **Local implementation evidence:** This branch adds a zero-shell onboarding path, responsive Settings selection with fixed action visibility, profile/default metadata presentation, command-palette labels, contextual help parity, bounded paste editing, and route/session title context.
-Focused `autoharness-tui` compilation, unit tests, navigation tests, help tests, and ignored visual review rendering pass; the real-PTY, migration, recovery, benchmark, live-probe, vault, rollback, and cross-platform gates remain to be executed for this release candidate.
+Focused `autoharness-tui` compilation, unit tests, navigation tests, help tests, ignored visual review rendering, and selected Windows PTY journeys pass; the full cross-platform, migration, recovery, benchmark, live-probe, vault, rollback, and release-approval gates remain to be executed for this release candidate.
 
 ### Phase 4: Persistent context and memory
 
