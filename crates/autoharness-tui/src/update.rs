@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
 use autoharness_domain::ErrorClass;
+use autoharness_settings::{
+    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout, TerminalTimestampStyle,
+    ThemePreset,
+};
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, Message, Model, Notice,
-    OverlayKind, PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
-    ProfileEditorState, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
-    Route, SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, LocalPreferenceChange, Message,
+    Model, Notice, OverlayKind, PendingKind, ProfileCredentialAction, ProfileCredentialEditor,
+    ProfileEditorMode, ProfileEditorState, ProfilesProjection, ProviderKindLabel,
+    ProviderProfileDraft, RetryPolicy, Route, SessionProjection, SessionsProjection,
+    SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -241,12 +246,28 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('s' | 'S'),
             ctrl: true,
             ..
+        } if composer_submit_behavior(model) == ComposerSubmitBehavior::ControlS => {
+            submit_prompt(model)
         }
-        | Input {
+        Input {
             key: Key::Enter,
             ctrl: true,
             ..
-        } => submit_prompt(model),
+        } if composer_submit_behavior(model) == ComposerSubmitBehavior::ControlS => {
+            submit_prompt(model)
+        }
+        input @ Input {
+            key: Key::Enter,
+            ctrl: false,
+            ..
+        } if composer_submit_behavior(model) == ComposerSubmitBehavior::Enter => {
+            maybe_slash_command(model, &input).unwrap_or_else(|| submit_prompt(model))
+        }
+        Input {
+            key: Key::Char('s' | 'S') | Key::Enter,
+            ctrl: true,
+            ..
+        } => insert_composer_newline(model),
         Input {
             key: Key::Char('r' | 'R'),
             ctrl: true,
@@ -348,13 +369,6 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         Input {
-            key: Key::Char('p' | 'P'),
-            ..
-        } => {
-            navigate_to_route(model, Route::Profiles);
-            Vec::new()
-        }
-        Input {
             key: Key::Char('c' | 'C'),
             ctrl: true,
             ..
@@ -362,8 +376,261 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             model.should_quit = true;
             vec![UiEffect::Quit]
         }
+        Input {
+            key: Key::Enter, ..
+        } if model.settings_workspace.display_label_editor.is_some() => commit_display_label(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } if model.settings_workspace.display_label_editor.is_some() => {
+            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
+                editor.pop();
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if model.settings_workspace.display_label_editor.is_some() => {
+            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
+                editor.push_str(&display_safe(&character.to_string()));
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } => {
+            move_settings_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_settings_selection(model, 1);
+            Vec::new()
+        }
+        Input { key: Key::Left, .. } => change_selected_preference(model, -1),
+        Input {
+            key: Key::Right, ..
+        } => change_selected_preference(model, 1),
+        Input {
+            key: Key::Enter, ..
+        } if selected_settings_preference(model) == SettingsPreference::DisplayLabel => {
+            begin_display_label_edit(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('r' | 'R'),
+            ctrl: false,
+            ..
+        } => reset_selected_preference(model),
+        Input {
+            key: Key::Char('d' | 'D'),
+            ctrl: false,
+            ..
+        } => default_selected_preference(model),
+        Input {
+            key: Key::Char('p' | 'P'),
+            ..
+        } => {
+            navigate_to_route(model, Route::Profiles);
+            Vec::new()
+        }
         _ => Vec::new(),
     }
+}
+
+fn selected_settings_preference(model: &Model) -> SettingsPreference {
+    SettingsPreference::at(model.settings_workspace.selected)
+}
+
+fn move_settings_selection(model: &mut Model, direction: isize) {
+    let current = model.settings_workspace.selected;
+    let last = SettingsPreference::ALL.len().saturating_sub(1);
+    let selected = current.saturating_add_signed(direction).min(last);
+    model.settings_workspace.selected = selected;
+    model.settings_workspace.scroll = settings_scroll_for(selected);
+    model.settings_workspace.display_label_editor = None;
+    model.dirty = true;
+}
+
+fn settings_scroll_for(selected: usize) -> u16 {
+    const ROWS: [u16; 9] = [1, 21, 22, 23, 25, 26, 30, 31, 32];
+    ROWS[selected.min(ROWS.len().saturating_sub(1))].saturating_sub(2)
+}
+
+fn begin_display_label_edit(model: &mut Model) {
+    let label = model
+        .settings()
+        .local_profile
+        .display_label()
+        .value()
+        .as_ref()
+        .map_or_else(String::new, |label| label.as_str().to_owned());
+    model.settings_workspace.display_label_editor = Some(label);
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn commit_display_label(model: &mut Model) -> Vec<UiEffect> {
+    let value = model
+        .settings_workspace
+        .display_label_editor
+        .take()
+        .unwrap_or_default();
+    let value = (!value.trim().is_empty()).then_some(value);
+    dispatch_local_preference(model, LocalPreferenceChange::DisplayLabel(value))
+}
+
+fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffect> {
+    let preferences = model.settings().local_profile.preferences();
+    let change = match selected_settings_preference(model) {
+        SettingsPreference::DisplayLabel => return Vec::new(),
+        SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
+            *preferences.theme_preset().value(),
+            &[ThemePreset::System, ThemePreset::Light, ThemePreset::Dark],
+            direction,
+        ))),
+        SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(Some(cycle(
+            *preferences.color_mode().value(),
+            &[
+                ColorMode::Color,
+                ColorMode::NoColor,
+                ColorMode::HighContrast,
+            ],
+            direction,
+        ))),
+        SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(Some(cycle(
+            *preferences.glyph_mode().value(),
+            &[GlyphMode::Unicode, GlyphMode::Ascii],
+            direction,
+        ))),
+        SettingsPreference::ReducedMotion => {
+            LocalPreferenceChange::ReducedMotion(Some(!*preferences.reduced_motion().value()))
+        }
+        SettingsPreference::Density => LocalPreferenceChange::Density(Some(cycle(
+            *preferences.density().value(),
+            &[Density::Comfortable, Density::Compact],
+            direction,
+        ))),
+        SettingsPreference::Layout => LocalPreferenceChange::Layout(Some(cycle(
+            *preferences.layout().value(),
+            &[Layout::Responsive, Layout::SingleColumn],
+            direction,
+        ))),
+        SettingsPreference::TerminalTimestampStyle => {
+            LocalPreferenceChange::TerminalTimestampStyle(Some(cycle(
+                *preferences.terminal_timestamp_style().value(),
+                &[
+                    TerminalTimestampStyle::Relative,
+                    TerminalTimestampStyle::Absolute,
+                    TerminalTimestampStyle::Hidden,
+                ],
+                direction,
+            )))
+        }
+        SettingsPreference::ComposerSubmitBehavior => {
+            LocalPreferenceChange::ComposerSubmitBehavior(Some(cycle(
+                *preferences.composer_submit_behavior().value(),
+                &[
+                    ComposerSubmitBehavior::ControlS,
+                    ComposerSubmitBehavior::Enter,
+                ],
+                direction,
+            )))
+        }
+    };
+    dispatch_local_preference(model, change)
+}
+
+fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
+    dispatch_local_preference(
+        model,
+        match selected_settings_preference(model) {
+            SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
+            SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
+            SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
+            SettingsPreference::ReducedMotion => LocalPreferenceChange::ReducedMotion(None),
+            SettingsPreference::Density => LocalPreferenceChange::Density(None),
+            SettingsPreference::Layout => LocalPreferenceChange::Layout(None),
+            SettingsPreference::TerminalTimestampStyle => {
+                LocalPreferenceChange::TerminalTimestampStyle(None)
+            }
+            SettingsPreference::ComposerSubmitBehavior => {
+                LocalPreferenceChange::ComposerSubmitBehavior(None)
+            }
+        },
+    )
+}
+
+fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
+    dispatch_local_preference(
+        model,
+        match selected_settings_preference(model) {
+            SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::ThemePreset => {
+                LocalPreferenceChange::ThemePreset(Some(ThemePreset::System))
+            }
+            SettingsPreference::ColorMode => {
+                LocalPreferenceChange::ColorMode(Some(ColorMode::Color))
+            }
+            SettingsPreference::GlyphMode => {
+                LocalPreferenceChange::GlyphMode(Some(GlyphMode::Unicode))
+            }
+            SettingsPreference::ReducedMotion => LocalPreferenceChange::ReducedMotion(Some(false)),
+            SettingsPreference::Density => {
+                LocalPreferenceChange::Density(Some(Density::Comfortable))
+            }
+            SettingsPreference::Layout => LocalPreferenceChange::Layout(Some(Layout::Responsive)),
+            SettingsPreference::TerminalTimestampStyle => {
+                LocalPreferenceChange::TerminalTimestampStyle(Some(
+                    TerminalTimestampStyle::Relative,
+                ))
+            }
+            SettingsPreference::ComposerSubmitBehavior => {
+                LocalPreferenceChange::ComposerSubmitBehavior(Some(
+                    ComposerSubmitBehavior::ControlS,
+                ))
+            }
+        },
+    )
+}
+
+fn dispatch_local_preference(model: &mut Model, change: LocalPreferenceChange) -> Vec<UiEffect> {
+    if model
+        .pending
+        .values()
+        .any(|pending| matches!(pending, PendingKind::UpdateLocalPreference(_)))
+    {
+        return Vec::new();
+    }
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::UpdateLocalPreference(change.clone()),
+    );
+    model.notice = Some(Notice::Info("Saving local preference...".to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UpdateLocalPreference {
+        request_id,
+        change,
+    })]
+}
+
+fn cycle<T: Copy + Eq>(current: T, values: &[T], direction: isize) -> T {
+    let index = values
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0);
+    let next = if direction < 0 {
+        index
+            .checked_sub(1)
+            .unwrap_or(values.len().saturating_sub(1))
+    } else {
+        (index + 1) % values.len()
+    };
+    values[next]
 }
 
 /// Recognizes slash commands typed into an otherwise empty composer.
@@ -1025,6 +1292,9 @@ fn navigate_to_route(model: &mut Model, route: Route) {
         model.profile_center.credential = None;
         model.profile_center.confirming_delete = None;
         model.profile_center.confirming_disconnect = None;
+    }
+    if model.route() == Route::Settings && route != Route::Settings {
+        model.settings_workspace.display_label_editor = None;
     }
     if !model.navigate(route) {
         return;
@@ -1756,6 +2026,7 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::TestProfile(_)
         | PendingKind::SetProfileDefaultModel(_)
         | PendingKind::DisconnectProfile(_)
+        | PendingKind::UpdateLocalPreference(_)
         | PendingKind::DeleteProfile(_)
         | PendingKind::RefreshCatalog
         | PendingKind::SelectModel(_)
@@ -2015,6 +2286,14 @@ fn handle_paste(model: &mut Model, text: &str) {
         Some(
             OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
         ) => {}
+        None if model.route() == Route::Settings
+            && model.settings_workspace.display_label_editor.is_some() =>
+        {
+            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
+                editor.push_str(&editable_safe(text).replace('\n', " "));
+                model.dirty = true;
+            }
+        }
         None if model.route() == Route::Chat
             && !has_pending_submission(model)
             && model.composer.editor.insert_str(editable_safe(text)) =>
@@ -2175,6 +2454,24 @@ fn recall_history(model: &mut Model, direction: isize) -> Vec<UiEffect> {
                 .editor
                 .insert_str(crate::text::editable_safe(&recalled));
         }
+        model.notice = None;
+        model.dirty = true;
+    }
+    Vec::new()
+}
+
+fn composer_submit_behavior(model: &Model) -> ComposerSubmitBehavior {
+    *model
+        .settings()
+        .local_profile
+        .preferences()
+        .composer_submit_behavior()
+        .value()
+}
+
+fn insert_composer_newline(model: &mut Model) -> Vec<UiEffect> {
+    if !has_pending_submission(model) && model.composer.editor.insert_str("\n") {
+        model.history.reset_walk();
         model.notice = None;
         model.dirty = true;
     }
@@ -2355,6 +2652,12 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         model.notice =
                             Some(Notice::Info("Stored credential disconnected".to_owned()));
                     }
+                    PendingKind::UpdateLocalPreference(_) => {
+                        model.notice = Some(Notice::Info(
+                            "Local preference saved; waiting for the resolved settings projection"
+                                .to_owned(),
+                        ));
+                    }
                     PendingKind::DeleteProfile(_) => {
                         model.notice = Some(Notice::Info("Provider profile deleted".to_owned()));
                     }
@@ -2493,6 +2796,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     | PendingKind::TestProfile(_)
                     | PendingKind::SetProfileDefaultModel(_)
                     | PendingKind::DisconnectProfile(_)
+                    | PendingKind::UpdateLocalPreference(_)
                     | PendingKind::DeleteProfile(_)
                     | PendingKind::RefreshCatalog
                     | PendingKind::SubmitPrompt(_)
@@ -2941,6 +3245,7 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::TestProfile(_)
             | PendingKind::SetProfileDefaultModel(_)
             | PendingKind::DisconnectProfile(_)
+            | PendingKind::UpdateLocalPreference(_)
             | PendingKind::DeleteProfile(_)
             | PendingKind::RefreshCatalog
             | PendingKind::SelectModel(_)

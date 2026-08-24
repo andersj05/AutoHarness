@@ -1,8 +1,8 @@
 # Settings, profiles, and credential handling
 
-**Status:** Current credential contract through Phase 3.6.
+**Status:** Current settings, credential, and local-preference contract through Phase 3.8.
 
-This document describes how AutoHarness resolves settings, stores provider profiles, and handles credentials.
+This document describes how AutoHarness resolves settings, stores provider profiles and local preferences, and handles credentials.
 The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault, [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution, and [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md) for cross-system mutation recovery.
 
 ## Layered settings resolution
@@ -16,12 +16,38 @@ The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credenti
 5. Command-line and in-app overrides.
 
 Every effective value records which layer supplied it through a provenance map.
-A malformed layer is skipped with a safe diagnostic instead of failing startup; a future schema version fails closed with an explicit error.
-Workspace files may not override `provider`, `profiles`, `active_profile`, or internal `credential_recovery` state, and can never supply credentials or weaken permission, retention, telemetry, or sandbox policy.
+A malformed layer is skipped with a safe diagnostic instead of failing startup.
+A future schema version fails closed with an explicit error.
+Workspace files may override only explicitly permitted appearance, accessibility, and terminal-presentation preferences.
+Workspace files may not override local display identity, provider, profiles, active profile, internal credential recovery state, approvals, retention, telemetry, sandbox policy, or credentials.
 
-The profile document carries schema version 2 and is written atomically through a temporary file plus rename.
-Schema-v1 documents migrate on their next mutation; schema 2 adds optional profile default models and non-secret credential recovery records.
-An unparseable existing document is renamed to `autoharness.profiles.json.bad` and replaced with defaults so AutoHarness remains usable.
+The profile document carries schema version 3 and is written atomically through a temporary file plus rename.
+Schema-v1 and schema-v2 documents migrate on their next mutation.
+Schema 3 adds typed non-secret local preferences while retaining optional profile default models and credential recovery records.
+An unparseable or invalid existing document is renamed to `autoharness.profiles.json.bad` and replaced with defaults so AutoHarness remains usable.
+Future schema documents remain intact and fail closed.
+
+## Local profile and preferences
+
+The application-owned profile document is also the one durable store for a local display label and terminal preferences.
+There is no second preferences file or profile store.
+Every local preference is optional in a layer, so an absent user value inherits a permitted lower-layer value or the built-in default.
+The Settings route offers reset to inherited by clearing the user-layer value and reset to default by writing the built-in default at the user layer.
+
+The typed persisted preferences are:
+
+- Theme preset.
+- Color mode: color, no color, or high contrast.
+- Glyph mode: Unicode or ASCII chrome.
+- Reduced motion.
+- Density: comfortable or compact.
+- Layout: responsive or single column.
+- Terminal timestamp style: relative, absolute, or hidden.
+- Composer submission behavior: Control-S or Enter.
+
+The terminal receives a safe effective projection with each value, source, and explanation.
+The TUI emits typed preference changes only.
+The application validates display labels, atomically updates the document, resolves the new projection, and republishes it before the TUI acknowledges the action.
 
 ## Provider profiles
 

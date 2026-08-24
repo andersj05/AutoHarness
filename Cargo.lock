@@ -243,6 +243,7 @@ name = "autoharness-tui"
 version = "0.1.0"
 dependencies = [
  "autoharness-domain",
+ "autoharness-settings",
  "crossterm",
  "futures-util",
  "ratatui",

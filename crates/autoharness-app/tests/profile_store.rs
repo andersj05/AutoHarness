@@ -5,7 +5,10 @@ use autoharness_app::profiles::{
     ProfileManagementError, ProfileManager, ProfileStore, StoredCredentialState,
 };
 use autoharness_app::vault::{FakeVault, VaultError, VaultPort};
-use autoharness_settings::{CredentialReference, ProfileId, ProviderProfile};
+use autoharness_settings::{
+    ColorMode, CredentialReference, DisplayLabel, GlyphMode, LocalPreferences, LocalProfile,
+    ProfileId, ProviderProfile, Source,
+};
 use zeroize::Zeroizing;
 
 fn store_dir() -> tempfile::TempDir {
@@ -104,7 +107,7 @@ fn malformed_existing_file_is_backed_up_and_replaced() {
     let store = ProfileStore::open(&path).expect("recover store");
 
     let document = store.read_document().expect("replacement document");
-    assert!(document.contains("\"schema_version\": 2"));
+    assert!(document.contains("\"schema_version\": 3"));
     let backup = dir.path().join("profiles.json.bad");
     assert_eq!(fs::read_to_string(backup).expect("backup"), "{corrupted");
 }
@@ -206,6 +209,69 @@ fn profile_default_model_persists_without_disturbing_credential_linkage() {
         Some("router-default-model")
     );
     assert_eq!(profile.credential_state, StoredCredentialState::Stored);
+}
+
+#[test]
+fn local_preferences_persist_and_reset_to_inherited_defaults() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    let (_, _, manager, _) = manager(&path);
+    let mut preferences = LocalPreferences::new();
+    preferences.set_color_mode(Some(ColorMode::NoColor));
+    preferences.set_glyph_mode(Some(GlyphMode::Ascii));
+    let mut local_profile = LocalProfile::new();
+    local_profile.set_display_label(Some(DisplayLabel::new("Jensen").expect("label")));
+    local_profile.set_preferences(preferences);
+
+    manager
+        .set_local_profile(local_profile)
+        .expect("persist local preferences");
+
+    let resolved = manager
+        .resolved_settings()
+        .expect("resolve local preferences");
+    assert_eq!(
+        resolved
+            .local_profile()
+            .display_label()
+            .value()
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("Jensen")
+    );
+    assert_eq!(
+        resolved.local_profile().preferences().glyph_mode().value(),
+        &GlyphMode::Ascii
+    );
+    assert_eq!(
+        resolved.local_profile().preferences().glyph_mode().source(),
+        Source::UserFile
+    );
+
+    let mut reset = manager.local_profile().expect("stored local preferences");
+    let mut reset_preferences = reset.preferences().clone();
+    reset_preferences.set_glyph_mode(None);
+    reset.set_preferences(reset_preferences);
+    manager
+        .set_local_profile(reset)
+        .expect("reset inherited glyph mode");
+
+    let reopened = ProfileManager::new(
+        ProfileStore::open(&path).expect("reopen"),
+        Arc::new(FakeVault::new()),
+    );
+    let resolved = reopened
+        .resolved_settings()
+        .expect("resolve reopened preferences");
+    assert_eq!(
+        resolved.local_profile().preferences().glyph_mode().value(),
+        &GlyphMode::Unicode
+    );
+    assert_eq!(
+        resolved.local_profile().preferences().glyph_mode().source(),
+        Source::Default
+    );
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

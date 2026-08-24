@@ -86,6 +86,7 @@ fn wide_header_shows_provider_profile_credential_and_session_state() {
             credential_source: CredentialSourceLabel::CredentialVault,
             credential_connected: true,
         },
+        ..SettingsProjection::default()
     });
 
     let header = buffer_text(&render_model(&model, 120, 40));
@@ -120,6 +121,7 @@ fn disconnected_vault_profile_never_claims_a_connected_credential() {
             credential_source: CredentialSourceLabel::CredentialVault,
             credential_connected: false,
         },
+        ..SettingsProjection::default()
     });
 
     let header = buffer_text(&render_model(&model, 120, 40));

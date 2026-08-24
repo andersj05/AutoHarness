@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::preferences::LocalProfile;
+
 /// Supported settings schema version.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// Bounded profile-name value type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -267,6 +269,7 @@ impl ProviderProfile {
 
 /// Serialized credential linkage inside one profile.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialDocument {
     pub(crate) reference: CredentialReference,
 }
@@ -324,8 +327,7 @@ impl CredentialRecoveryRecord {
 }
 
 /// Validated top-level settings document for one layer or merged output.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SettingsDocument {
     pub(crate) schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,4 +338,90 @@ pub struct SettingsDocument {
     pub(crate) active_profile: Option<ProfileId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) credential_recovery: Vec<CredentialRecoveryRecord>,
+    #[serde(default, skip_serializing_if = "LocalProfile::is_empty")]
+    pub(crate) local_profile: LocalProfile,
+}
+
+impl Default for SettingsDocument {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SettingsDocument {
+    /// Creates a current-version settings document with no layer overrides.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            provider: None,
+            profiles: BTreeMap::new(),
+            active_profile: None,
+            credential_recovery: Vec::new(),
+            local_profile: LocalProfile::new(),
+        }
+    }
+
+    /// Returns the current schema version written by this document.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Returns the persisted local profile layer.
+    #[must_use]
+    pub const fn local_profile(&self) -> &LocalProfile {
+        &self.local_profile
+    }
+
+    /// Replaces the persisted local profile layer.
+    pub fn set_local_profile(&mut self, local_profile: LocalProfile) {
+        self.local_profile = local_profile;
+    }
+
+    /// Returns this document with the supplied local profile layer.
+    #[must_use]
+    pub fn with_local_profile(mut self, local_profile: LocalProfile) -> Self {
+        self.set_local_profile(local_profile);
+        self
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsDocumentWire {
+    schema_version: u32,
+    #[serde(default)]
+    provider: Option<ProviderKind>,
+    #[serde(default)]
+    profiles: BTreeMap<ProfileId, ProviderProfile>,
+    #[serde(default)]
+    active_profile: Option<ProfileId>,
+    #[serde(default)]
+    credential_recovery: Vec<CredentialRecoveryRecord>,
+    #[serde(default)]
+    local_profile: LocalProfile,
+}
+
+impl<'de> Deserialize<'de> for SettingsDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = SettingsDocumentWire::deserialize(deserializer)?;
+        if !(1..=SETTINGS_SCHEMA_VERSION).contains(&wire.schema_version) {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported settings schema version {}",
+                wire.schema_version
+            )));
+        }
+        Ok(Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            provider: wire.provider,
+            profiles: wire.profiles,
+            active_profile: wire.active_profile,
+            credential_recovery: wire.credential_recovery,
+            local_profile: wire.local_profile,
+        })
+    }
 }

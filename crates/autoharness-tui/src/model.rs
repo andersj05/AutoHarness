@@ -3,6 +3,10 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelRef, RetryAdvice};
+use autoharness_settings::{
+    ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
+    TerminalTimestampStyle, ThemePreset,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::{TextArea, WrapMode};
@@ -776,6 +780,33 @@ pub(crate) struct UndoableLifecycle {
     pub archived: bool,
 }
 
+/// One user-layer local preference update requested by the Settings route.
+///
+/// `None` clears the user-layer leaf so the resolver inherits the next
+/// applicable layer. The application validates and persists these values;
+/// the TUI never accesses settings storage directly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalPreferenceChange {
+    /// Local display label; `None` inherits no local label.
+    DisplayLabel(Option<String>),
+    /// Terminal theme preset.
+    ThemePreset(Option<ThemePreset>),
+    /// Terminal color treatment.
+    ColorMode(Option<ColorMode>),
+    /// Terminal decoration character set.
+    GlyphMode(Option<GlyphMode>),
+    /// Whether animation is suppressed.
+    ReducedMotion(Option<bool>),
+    /// Terminal information density.
+    Density(Option<Density>),
+    /// Terminal panel layout.
+    Layout(Option<Layout>),
+    /// Transcript timestamp display.
+    TerminalTimestampStyle(Option<TerminalTimestampStyle>),
+    /// Composer submission chord.
+    ComposerSubmitBehavior(Option<ComposerSubmitBehavior>),
+}
+
 /// Kind of request awaiting application acknowledgement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingKind {
@@ -823,6 +854,8 @@ pub enum PendingKind {
     SetProfileDefaultModel(String),
     /// Stored credential disconnection.
     DisconnectProfile(String),
+    /// One user-layer preference update from the Settings route.
+    UpdateLocalPreference(LocalPreferenceChange),
     /// Confirmed profile deletion.
     DeleteProfile(String),
 }
@@ -950,6 +983,11 @@ pub enum UiIntent {
         request_id: RequestId,
         session_id: String,
     },
+    /// Updates or clears one persisted user-layer local preference.
+    UpdateLocalPreference {
+        request_id: RequestId,
+        change: LocalPreferenceChange,
+    },
     /// Write the active session transcript to a Markdown file.
     ExportTranscript {
         request_id: RequestId,
@@ -984,6 +1022,7 @@ impl UiIntent {
             | Self::ArchiveSession { request_id, .. }
             | Self::UnarchiveSession { request_id, .. }
             | Self::DeleteSession { request_id, .. }
+            | Self::UpdateLocalPreference { request_id, .. }
             | Self::ExportTranscript { request_id, .. } => *request_id,
         }
     }
@@ -1208,6 +1247,49 @@ pub(crate) struct PaletteState {
 pub(crate) struct HelpState {
     /// Rows scrolled from the top of the help content.
     pub scroll: u16,
+}
+/// The editable leaves in deterministic Settings workspace order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SettingsPreference {
+    DisplayLabel,
+    ThemePreset,
+    ColorMode,
+    GlyphMode,
+    ReducedMotion,
+    Density,
+    Layout,
+    TerminalTimestampStyle,
+    ComposerSubmitBehavior,
+}
+
+impl SettingsPreference {
+    pub(crate) const ALL: [Self; 9] = [
+        Self::DisplayLabel,
+        Self::ThemePreset,
+        Self::ColorMode,
+        Self::GlyphMode,
+        Self::ReducedMotion,
+        Self::Density,
+        Self::Layout,
+        Self::TerminalTimestampStyle,
+        Self::ComposerSubmitBehavior,
+    ];
+
+    #[must_use]
+    pub(crate) fn at(index: usize) -> Self {
+        Self::ALL[index.min(Self::ALL.len().saturating_sub(1))]
+    }
+}
+
+/// Inline state owned exclusively by the Settings route.
+#[derive(Debug, Default)]
+pub(crate) struct SettingsState {
+    /// Index into `SettingsPreference::ALL`.
+    pub selected: usize,
+    /// First rendered Settings line kept visible while selecting preferences.
+    pub scroll: u16,
+    /// Buffered local-label edit; no value is persisted until Enter.
+    pub display_label_editor: Option<String>,
 }
 
 /// One contextual help section shown in the help overlay.
@@ -1484,6 +1566,8 @@ pub struct ProviderStatusProjection {
 pub struct SettingsProjection {
     /// Effective provider and credential status.
     pub provider_status: ProviderStatusProjection,
+    /// Effective local profile preferences and provenance for every leaf.
+    pub local_profile: EffectiveLocalProfile,
 }
 
 impl SettingsProjection {
@@ -1777,6 +1861,8 @@ pub struct Model {
     pub(crate) profile_center: ProfileCenterState,
     pub(crate) palette: PaletteState,
     pub(crate) help: HelpState,
+    /// Deterministic inline Settings workspace interaction state.
+    pub(crate) settings_workspace: SettingsState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
     /// In-run submitted-prompt history for recall.
@@ -1871,6 +1957,7 @@ impl Model {
             profile_center: ProfileCenterState::default(),
             palette: PaletteState::default(),
             help: HelpState::default(),
+            settings_workspace: SettingsState::default(),
             drafts: SessionDrafts::default(),
             history: ComposerHistory::default(),
             search: SearchState::default(),

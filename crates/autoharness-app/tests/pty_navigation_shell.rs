@@ -12,6 +12,8 @@ const ALT_5: [u8; 2] = [0x1b, b'5'];
 const CTRL_N: [u8; 1] = [0x0e];
 const CTRL_P: [u8; 1] = [0x10];
 const CTRL_D: [u8; 1] = [0x04];
+const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
+const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 
 #[test]
 #[ignore = "runs in the cross-platform terminal PTY CI gate"]
@@ -54,6 +56,17 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| screen.contents().contains("Settings & Provenance"),
         "Esc should restore the exact Settings route",
+    );
+    for _ in 0..3 {
+        terminal.send_bytes(&DOWN);
+    }
+    terminal.send_bytes(&RIGHT);
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Glyph mode") && text.contains("ASCII") && text.contains("user file")
+        },
+        "Settings should persist an ASCII chrome preference without leaving the route",
     );
     terminal.send_bytes(&ALT_5);
     terminal.wait_for(
@@ -123,4 +136,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
 
     terminal.send_bytes(&ctrl_c());
     assert_eq!(terminal.wait_for_exit(), 0);
+    let settings = std::fs::read_to_string(environment.profiles_document())
+        .expect("persisted Settings preference");
+    assert!(settings.contains("\"glyph_mode\": \"ascii\""));
 }
