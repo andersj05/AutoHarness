@@ -285,3 +285,34 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     assert!(failed.contains("CONNECTION ERROR"));
     assert!(failed.contains("Ctrl+R retry"));
 }
+
+#[test]
+#[ignore = "visual review harness for the Phase 3.7 routed shell"]
+fn render_route_review_matrix() {
+    for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
+        let mut model = model();
+        for (key, route) in [
+            ('1', Route::Chat),
+            ('2', Route::Sessions),
+            ('3', Route::Profiles),
+            ('4', Route::Settings),
+            ('5', Route::Help),
+        ] {
+            let _ = update(&mut model, Message::Input(ctrl(key)));
+            println!(
+                "=== {} {width}x{height} ===\n{}",
+                route.label(),
+                render_text(&model, width, height)
+            );
+        }
+    }
+
+    let mut confirmation = model();
+    let _ = update(&mut confirmation, Message::Input(ctrl('2')));
+    let _ = update(&mut confirmation, Message::Input(key(Key::Down)));
+    let _ = update(&mut confirmation, Message::Input(ctrl('d')));
+    println!(
+        "=== Confirmation 80x24 ===\n{}",
+        render_text(&confirmation, 80, 24)
+    );
+}

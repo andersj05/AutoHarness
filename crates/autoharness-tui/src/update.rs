@@ -2015,11 +2015,12 @@ fn handle_paste(model: &mut Model, text: &str) {
         Some(
             OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
         ) => {}
-        None if model.route() == Route::Chat && !has_pending_submission(model) => {
-            if model.composer.editor.insert_str(editable_safe(text)) {
-                model.notice = None;
-                model.dirty = true;
-            }
+        None if model.route() == Route::Chat
+            && !has_pending_submission(model)
+            && model.composer.editor.insert_str(editable_safe(text)) =>
+        {
+            model.notice = None;
+            model.dirty = true;
         }
         None => {}
     }

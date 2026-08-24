@@ -246,7 +246,7 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let Some((title, question, consequence)) = confirmation else {
         return;
     };
-    let popup = popup_rect(area);
+    let popup = confirmation_rect(area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -462,6 +462,11 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         WARNING_STYLE
     };
+    let primary = if status.active_profile.is_some() {
+        "P or Alt+3 manage profiles and credentials"
+    } else {
+        "P or Alt+3 create your first provider profile"
+    };
     let mut lines = vec![
         Line::styled("EFFECTIVE RUNTIME", USER_STYLE),
         detail_line("Provider", &model.settings().provider_label()),
@@ -473,6 +478,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line("Source", status.credential_source.as_str()),
         detail_line("Model", &selected_model_label(model)),
         detail_line("Mode", "safe agent"),
+        Line::styled(primary, Style::default().fg(Color::LightCyan)),
         Line::from(""),
         Line::styled("RECOVERY & SECURITY", USER_STYLE),
         Line::from("Credentials remain outside settings, sessions, logs, and model context."),
@@ -492,12 +498,6 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ));
     }
     lines.push(Line::from(""));
-    let primary = if status.active_profile.is_some() {
-        "P or Alt+3 manage profiles and credentials"
-    } else {
-        "P or Alt+3 create your first provider profile"
-    };
-    lines.push(Line::styled(primary, Style::default().fg(Color::LightCyan)));
     lines.push(Line::styled("Esc or Alt+1 return to Chat", MUTED_STYLE));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -581,17 +581,27 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let user = &model.profiles().user;
     let label = user.display_label.as_deref().unwrap_or("Local user");
     let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let default_mode = if user.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        user.default_mode.as_str()
+    };
+    let workspace_value = if user.workspace.is_empty() {
+        "current workspace"
+    } else {
+        user.workspace.as_str()
+    };
     let first = Line::from(vec![
         Span::styled(format!(" {} ", display_safe(label)), HEADER_STYLE),
         Span::raw("  "),
         Span::styled("Default ", MUTED_STYLE),
         Span::raw(display_safe(default_profile)),
         Span::styled("  Mode ", MUTED_STYLE),
-        Span::raw(display_safe(&user.default_mode)),
+        Span::raw(display_safe(default_mode)),
     ]);
     let workspace = Line::from(vec![
         Span::styled(" Workspace ", MUTED_STYLE),
-        Span::raw(display_safe(&user.workspace)),
+        Span::raw(display_safe(workspace_value)),
     ]);
     let mut lines = vec![first];
     if area.height >= 2 {
@@ -928,11 +938,12 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 
     if help.height > 0 && !model.browser.renaming {
-        let confirming = model.browser.confirming_delete.is_some();
-        let hints = if confirming {
-            "Y delete permanently  N/Esc cancel"
+        let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
+            "Y confirm  N/Esc cancel"
+        } else if help.width >= 50 {
+            "↑/↓ Enter open  ^R rename  ^A archive  ^D delete  Esc"
         } else {
-            "↑/↓ choose  Enter open  Ctrl+R rename  Ctrl+A archive  Ctrl+D delete  Esc close"
+            "↑/↓ Enter open  ^R rename  ^D delete"
         };
         frame.render_widget(Paragraph::new(hints).style(MUTED_STYLE), help);
     }
@@ -1791,6 +1802,17 @@ fn picker_item(summary: &ModelSummary, model: &Model) -> ListItem<'static> {
         Style::default().fg(Color::White)
     };
     ListItem::new(Line::styled(label, style))
+}
+
+fn confirmation_rect(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(4).clamp(1, 72);
+    let height = area.height.saturating_sub(2).clamp(1, 9);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }
 
 fn filtered_models(model: &Model) -> Vec<&ModelSummary> {
