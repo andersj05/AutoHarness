@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-23
 
-**Phase:** 3.6 local profile and provider connection center
+**Phase:** 3.7 unified TUI shell and navigation
 
-**Status:** Phase 3.6 is implemented locally on `feat/phase-3-6-profile-center`; focused tests, strict baseline gates, a real profile-management PTY journey, responsive visual review, and a Windows Credential Manager smoke pass
+**Status:** Phase 3.7 is implemented locally on `feat/phase-3-7-unified-tui-shell`; focused route and overlay tests, responsive visual review, strict baseline gates, and the complete serial Windows PTY matrix pass
 
 ## Current objective
 
-Promote Phase 3.6 through cross-platform CI and platform-vault evidence, then begin Phase 3.7 from the stable profile read models, typed intents, focus rules, and provider-switching workflow.
+Promote Phase 3.7 through cross-platform CI, then implement Phase 3.8 settings, personalization, and accessibility over the stable route, focus, overlay, profile, and settings boundaries.
 
 ## Current repository state
 
@@ -25,14 +25,17 @@ Promote Phase 3.6 through cross-platform CI and platform-vault evidence, then be
 - `autoharness-app::vault` defines the credential-vault port with an operating-system implementation through the `keyring` crate and a fake implementation for tests; Windows Credential Manager save, load, replace, and delete passed the opt-in platform smoke.
 - Startup and runtime switching resolve one provider-matched credential source in precedence order: environment, then the active profile's vault entry, then session-only; locked or unavailable vaults preserve offline use without plaintext fallback.
 - Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; a compatible selected model can be saved as the profile default and reapplied after catalog refresh.
-- The terminal receives live safe settings and profile projections; `Ctrl+,` shows provenance and `Ctrl+G` opens the full-screen searchable Profiles and Providers center.
-- Sentinel tests seed unique marker secrets through save, replace, disconnect, delete, failed recovery, and debug rendering and find no leakage into application-owned durable files.
-- `autoharness-tui` adds masked profile-scoped credential entry, guided Gemini and router forms, duplicate-without-credential behavior, activate, test, default-model, disconnect, delete, source, connection, and recovery states over typed intents.
-- Phase 3.6 responsive profile layouts are verified at 120x50, 120x40, 80x24, 60x18, and 40x12, and the actual PTY journey creates, switches, duplicates, cancels and confirms deletion, and exits cleanly without shell setup.
+- The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
+- `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
+- Wide terminals show a persistent rail with local profile and runtime status; narrower terminals show compact route tabs and one prioritized status line.
+- Chat has explicit conversation roles, composer boundaries, recovery actions, and offline, loading, connection-error, no-model, and new-conversation states.
+- Sessions, Profiles, Settings, and Help are primary routes with contextual action bars; settings shows safe runtime provenance and recovery without becoming the Phase 3.8 editor.
+- Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
+- Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
-- The PTY scenarios are ignored in ordinary non-terminal test hosts and run serially in a dedicated Windows, macOS, and Linux CI matrix step.
-- The opt-in `benchmark-instrumentation` feature emits content-free monotonic first-draw, input, dispatch, decoded-chunk, and rendered-revision markers over loopback UDP, and the isolated `terminal_latency` runner reports their correlated harness intervals separately from network time.
+- Eight real-PTY scenarios now include the routed shell journey alongside first run, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and confirmations, profile management, invalid-call repair, permission outcomes, and forced-shutdown recovery.
+- The instrumented release binary and three-sample real-PTY loopback runner produce valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render intervals outside network time; the result is local smoke evidence, not authoritative reference-machine evidence.
 - Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
 - Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
 - The cross-platform PTY gate exposed and now covers Windows cursor-position report handling, inactive-session mutation isolation, reverse-causation event deletion, visible durable tool rows, and notice clearing when destructive confirmation is cancelled.
@@ -48,12 +51,14 @@ Promote Phase 3.6 through cross-platform CI and platform-vault evidence, then be
 - The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
 - On 2026-08-22 both opt-in Gemini live probes passed against production Google AI Studio using current-generation models: plain chat with the complete registry streamed text to completion, and streamed function calling produced one complete bounded `http_request` call before a tool-calls completion.
 - Stable failure codes, compact safe attempt references, retry actions, and the global fresh-session action are rendered in failed transcript rows and fixed-size golden buffers.
-- Formatting, strict Clippy, 307 workspace tests across 41 suites, warning-denied rustdoc, doctests, benchmark gates, and documentation links pass locally after Phase 3.5 implementation.
+- Formatting, strict Clippy, 325 workspace tests across 46 suites, fixed-size goldens, documentation links, focused navigation tests, and the complete serial Windows PTY matrix pass after Phase 3.7 implementation.
 - A real Windows terminal smoke selected a loopback router model, submitted a prompt, rendered the completed response, emitted one correctly correlated marker chain, exited with code 0, and restored the terminal.
 - Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, a serial cross-platform PTY scenario gate, and separate formatting, Clippy, and test gates for the isolated benchmark workspace.
 
 ## Recently completed
 
+- Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
+- Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.
 - Implemented Phase 3.6 end to end: ADR-0013 recovery semantics, settings schema 2, `ProfileManager`, distinct per-profile vault entries, runtime adapter switching, safe connection tests, profile defaults, the responsive `Ctrl+G` center, composed lifecycle coverage, PTY coverage, and Windows vault smoke evidence.
 - Implemented the Phase 3.5 PTY scenario harness and six release scenarios covering all planned terminal paths without live credentials.
 - Expanded the roadmap with Phase 3.6 profile and provider management, Phase 3.7 unified TUI shell and navigation, Phase 3.8 personalization and accessibility, and Phase 3.9 integrated terminal product validation.
@@ -83,11 +88,11 @@ Promote Phase 3.6 through cross-platform CI and platform-vault evidence, then be
 
 ## Immediate next actions
 
-1. Open the Phase 3.6 pull request from `feat/phase-3-6-profile-center` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs.
-2. Run the opt-in platform-vault smoke with `AUTOHARNESS_RUN_PLATFORM_VAULT_SMOKE=1` on macOS Keychain and Linux Secret Service environments and retain content-free pass or fail evidence.
-3. Review the cross-platform profile-center PTY result, especially Alt-key decoding, focus restoration, narrow layouts, and terminal restoration.
-4. Begin Phase 3.7 only after Phase 3.6 promotion, preserving the profile projections and typed intents while replacing overlay-led navigation with the route-based shell.
-5. Preserve configured-router live, approved reference-machine, complete accessibility, migration, rollback, and final release-checklist evidence for Phase 3.9.
+1. Open the Phase 3.7 pull request from `feat/phase-3-7-unified-tui-shell` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs on Windows, macOS, and Linux.
+2. Review cross-platform `Alt+1` through `Alt+5` decoding, permission preemption, confirmation dismissal, route focus restoration, 40x12 rendering, and terminal restoration.
+3. Repeat the instrumented terminal latency runner on the pull-request commit and retain only reviewed content-free benchmark evidence.
+4. Begin Phase 3.8 only after Phase 3.7 promotion, using Settings as the editor host and preserving the route and overlay contracts.
+5. Preserve configured-router live, macOS and Linux vault, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
 
 ## Open questions
 
@@ -95,12 +100,12 @@ Promote Phase 3.6 through cross-platform CI and platform-vault evidence, then be
 
 ## Blockers
 
-Local Windows implementation evidence is complete.
-Promotion still requires refreshed baseline and serial PTY CI on Windows, macOS, and Linux plus platform-vault smoke evidence on macOS and Linux.
-A configured router endpoint and approved reference machine remain Phase 3.9 evidence prerequisites rather than Phase 3.6 implementation blockers.
+Local Windows implementation and validation evidence is complete.
+Promotion still requires refreshed ordinary and serial PTY CI on Windows, macOS, and Linux.
+A configured router endpoint, macOS and Linux platform vault environments, and an approved reference machine remain Phase 3.9 evidence prerequisites rather than Phase 3.7 implementation blockers.
 
 ## Handoff note
 
-Phase 3.6 is complete locally and committed frequently on `feat/phase-3-6-profile-center`.
-Merge only after cross-platform PTY and ordinary baseline jobs pass and macOS and Linux vault results are reviewed.
-The authoritative implementation contract is [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md), and the current settings boundary is [SETTINGS](../architecture/SETTINGS.md).
+Phase 3.7 is complete locally and committed in scoped slices on `feat/phase-3-7-unified-tui-shell`.
+Merge only after cross-platform baseline and PTY jobs pass.
+Phase 3.8 must extend the existing Settings route and typed resolver without reintroducing page-open booleans, competing focus state, or a second modal convention.

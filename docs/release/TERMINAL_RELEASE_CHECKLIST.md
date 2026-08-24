@@ -28,6 +28,11 @@ A failed required item blocks promotion.
 - [ ] Duplicate profile configuration starts disconnected and cannot inherit or share the source profile's vault entry.
 - [ ] Environment overrides remain read-only and visibly take precedence without copying their values into the vault.
 - [ ] Disconnect and profile deletion name their exact scope, require confirmation, and never affect another profile's credential.
+- [ ] Chat, Sessions, Profiles, Settings, and Help are reachable through `Alt+1` through `Alt+5`, the command palette, and documented legacy shortcuts.
+- [ ] Wide terminals show the persistent navigation rail and narrow terminals show compact route tabs without duplicating or contradicting status.
+- [ ] Model, credential, command, transcript-search, permission, and confirmation overlays restore the exact prior route and focus after dismissal.
+- [ ] Permission prompts preempt lower-authority overlays, and route changes cannot retain a hidden destructive confirmation or secret editor.
+- [ ] Composer drafts, session and profile selections, transcript scroll, and pending operations survive safe route navigation.
 - [ ] Offline resume restores the selected model, transcript, and session list from durable state.
 - [ ] Multi-session create, switch, rename, archive, undo, and export-before-delete behavior passes.
 - [ ] Invalid tool calls are force-denied and repaired without human or capability authority.
@@ -49,6 +54,8 @@ A failed required item blocks promotion.
 - [ ] Schema-v1 profile documents migrate to schema 2 without losing profile configuration, active selection, or credential linkage.
 - [ ] Network loss settles the attempt and preserves an explicit retry path without replaying unrelated failed input.
 - [ ] Interrupted prepared, dispatched, permission-pending, and effect-started attempts recover according to their durable ambiguity rules.
+- [ ] Offline, loading, connection-error, empty-catalog, no-model, no-session, locked-vault, and recovery-pending states name one visible primary action.
+- [ ] A freshly created durable session appears immediately in Sessions without restart or another lifecycle mutation.
 
 ## Live-provider matrix
 
@@ -76,6 +83,7 @@ A failed required item blocks promotion.
 - [ ] `F1` help matches the actual keys and follows the current focus.
 - [ ] Focus, selection, pending state, failure, retry, and destructive confirmation remain distinguishable without relying on animation.
 - [ ] Text remains readable and no required action disappears at every supported terminal size.
+- [ ] Visual review covers every primary route at 40x12, 60x18, 80x24, 120x40, 120x50, and one exact destructive confirmation.
 - [ ] Screen-reader-facing terminal text uses meaningful labels for provider, model, attempt, permission, and error states.
 - [ ] Keyboard-only first run, model selection, prompt submission, permission response, session recovery, and quit are reviewed end to end.
 

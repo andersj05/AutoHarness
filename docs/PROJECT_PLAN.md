@@ -352,7 +352,7 @@ The opt-in operating-system vault smoke passed save, load, replace, and delete a
 
 ### Phase 3.7: Unified TUI shell and navigation
 
-**Status:** Planned
+**Status:** Implemented locally; cross-platform pull-request evidence pending
 
 **Goal:** Replace the growing collection of overlays with a coherent application shell whose hierarchy, focus, and next action are obvious at every supported terminal size.
 
@@ -374,6 +374,21 @@ Exit criteria:
 - No input can open incompatible overlays, dispatch an action against a hidden or stale selection, or lose a composer draft.
 - Fixed-size goldens and critical visual review cover every responsive layout class and all primary loading, empty, error, permission, and destructive-confirmation states.
 - Instrumented first draw, input dispatch, and decoded-chunk-to-render intervals remain within the reviewed Phase 3.x budgets.
+
+**Local implementation evidence:** Implemented and verified on Windows on 2026-08-23.
+
+The TUI now has one typed primary `Route` for Chat, Sessions, Profiles, Settings, and Help, reachable through portable `Alt+1` through `Alt+5` chords plus the existing legacy shortcuts and shared command table.
+Terminals at least 100 columns wide render a persistent navigation rail; narrower terminals render prioritized route tabs and one compact status line.
+The shell presents local profile, workspace, provider, credential source, model, attempt, usage, and catalog health once, while every route owns its content and contextual action bar.
+Chat renders a Conversation workspace with explicit `YOU`, `AUTOHARNESS`, and `TOOL` hierarchy, bounded failure recovery, composer separation, and deliberate offline, loading, connection-error, empty-catalog, no-model, and new-conversation states.
+Sessions, Profiles, Settings, and Help are primary pages rather than modal overlays, and Settings provides safe effective runtime, provenance, recovery, and profile-management routing.
+One `OverlayKind` slot now owns model selection, session-only and profile credential entry, command and transcript search, permission decisions, and exact destructive confirmations.
+Every overlay captures and restores its prior route and focus; permission preempts lower-authority overlays, global route changes clear hidden confirmations, and secret editors are dropped before focus moves.
+Navigation tests cover direct and legacy routes, overlay restoration from non-chat routes, permission preemption, modal replacement, confirmation clearing, draft preservation, explicit recovery states, and every route at 40x12, 60x18, 80x24, 120x40, and 120x50.
+Reviewed fixed-size goldens and the ignored visual matrix cover all five routes and the confirmation surface at every responsive layout class.
+The actual PTY journey switches all routes with Alt chords, restores Settings after model-picker dismissal, preserves a draft, creates and lists another durable session, cancels a deletion confirmation, resizes to 40x12, exits cleanly, and restores the terminal.
+An instrumented release build and three-sample real-PTY loopback smoke produced valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render reports with network time excluded; authoritative thresholds and reference-machine evidence remain Phase 3.9 gates.
+The Phase 3.7 validation path also fixed fresh-session list publication so a newly committed session becomes immediately visible in Sessions.
 
 ### Phase 3.8: Personalization and accessibility
 
@@ -485,14 +500,13 @@ Exit criteria:
 ## Next implementation order
 
 Phases 1 through 3 established the engine, provider, storage, replay, and safe tool-execution substrates.
-Phases 3.2 through 3.6 now provide durable sessions, settings, multiple provider profiles, operating-system-vault credentials, navigation primitives, and release-test foundations entirely inside the terminal.
+Phases 3.2 through 3.7 now provide durable sessions, multiple secure provider profiles, and one stable responsive terminal shell with typed route, focus, overlay, and recovery boundaries.
 Proceed in this order:
 
-1. Promote the Phase 3.5 and Phase 3.6 implementations through green baseline and cross-platform PTY pull-request gates.
-2. Implement Phase 3.7 by replacing overlay-led navigation with the responsive route-based shell while preserving the stable profile read models, typed intents, and application-owned effects.
-3. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable shell.
-4. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
-5. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+1. Promote the Phase 3.7 implementation through green baseline and cross-platform serial PTY pull-request gates.
+2. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable route-based shell.
+3. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
+4. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 

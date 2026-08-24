@@ -178,7 +178,17 @@ The TUI follows model/update/view:
 - **Update:** pure or narrowly effectful handling of input and engine events.
 - **View:** terminal rendering from model state only.
 
-Network and storage tasks run outside the render loop. Bounded queues and coalesced delta rendering prevent high-frequency streams from starving keyboard input or terminal restoration.
+One typed `Route` is always active: Chat, Sessions, Profiles, Settings, or Help.
+Wide terminals render a persistent navigation rail; narrower terminals render compact route tabs over the same content routes.
+The shell owns the one safe status projection for local profile, provider, credential source, model, attempt, usage, and catalog state.
+
+One `OverlayKind` slot owns modal input above the active route.
+Model selection, session-only credential entry, profile credential entry, command search, transcript search, tool permission, and destructive confirmation are mutually exclusive.
+Opening an overlay captures the exact route and focus to restore on dismissal.
+Permission decisions preempt and clear any lower-authority overlay, and route changes clear hidden confirmations and secret editors before changing focus.
+
+Network and storage tasks run outside the render loop.
+Bounded queues and coalesced delta rendering prevent high-frequency streams from starving keyboard input or terminal restoration.
 
 ### Improvement lifecycle
 
