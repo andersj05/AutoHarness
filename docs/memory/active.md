@@ -1,14 +1,14 @@
 # Active memory
 
-**Last reviewed:** 2026-08-23
+**Last reviewed:** 2026-08-24
 
-**Phase:** 3.7 unified TUI shell and navigation
+**Phase:** 3.8 personalization and accessibility
 
-**Status:** Phase 3.7 is implemented locally on `feat/phase-3-7-unified-tui-shell`; focused route and overlay tests, responsive visual review, strict baseline gates, and the complete serial Windows PTY matrix pass
+**Status:** Phase 3.7 merged into `dev` through pull request #17 after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux
 
 ## Current objective
 
-Promote Phase 3.7 through cross-platform CI, then implement Phase 3.8 settings, personalization, and accessibility over the stable route, focus, overlay, profile, and settings boundaries.
+Implement Phase 3.8 settings, personalization, and accessibility over the stable route, focus, overlay, profile, and settings boundaries.
 
 ## Current repository state
 
@@ -51,12 +51,13 @@ Promote Phase 3.7 through cross-platform CI, then implement Phase 3.8 settings, 
 - The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
 - On 2026-08-22 both opt-in Gemini live probes passed against production Google AI Studio using current-generation models: plain chat with the complete registry streamed text to completion, and streamed function calling produced one complete bounded `http_request` call before a tool-calls completion.
 - Stable failure codes, compact safe attempt references, retry actions, and the global fresh-session action are rendered in failed transcript rows and fixed-size golden buffers.
-- Formatting, strict Clippy, 325 workspace tests across 46 suites, fixed-size goldens, documentation links, focused navigation tests, and the complete serial Windows PTY matrix pass after Phase 3.7 implementation.
+- Formatting, strict Clippy, 325 workspace tests across 46 suites, fixed-size goldens, documentation links, focused navigation tests, and the complete serial Windows PTY matrix passed locally before Phase 3.7 promotion.
 - A real Windows terminal smoke selected a loopback router model, submitted a prompt, rendered the completed response, emitted one correctly correlated marker chain, exited with code 0, and restored the terminal.
 - Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, a serial cross-platform PTY scenario gate, and separate formatting, Clippy, and test gates for the isolated benchmark workspace.
 
 ## Recently completed
 
+- Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
 - Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
 - Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.
 - Implemented Phase 3.6 end to end: ADR-0013 recovery semantics, settings schema 2, `ProfileManager`, distinct per-profile vault entries, runtime adapter switching, safe connection tests, profile defaults, the responsive `Ctrl+G` center, composed lifecycle coverage, PTY coverage, and Windows vault smoke evidence.
@@ -88,11 +89,11 @@ Promote Phase 3.7 through cross-platform CI, then implement Phase 3.8 settings, 
 
 ## Immediate next actions
 
-1. Open the Phase 3.7 pull request from `feat/phase-3-7-unified-tui-shell` into `dev` and require green formatting, Clippy, documentation, full workspace, and serial PTY jobs on Windows, macOS, and Linux.
-2. Review cross-platform `Alt+1` through `Alt+5` decoding, permission preemption, confirmation dismissal, route focus restoration, 40x12 rendering, and terminal restoration.
-3. Repeat the instrumented terminal latency runner on the pull-request commit and retain only reviewed content-free benchmark evidence.
-4. Begin Phase 3.8 only after Phase 3.7 promotion, using Settings as the editor host and preserving the route and overlay contracts.
-5. Preserve configured-router live, macOS and Linux vault, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
+1. Implement the Phase 3.8 typed settings schema, resolver provenance, restrictive workspace policy, migration, and atomic non-secret preference persistence.
+2. Extend the existing Settings route with categorized inspection, edit, explanation, inherited reset, default reset, and deterministic focus behavior.
+3. Apply persisted appearance, accessibility, terminal, and composer preferences to all routes and overlays without losing status or security-prompt information.
+4. Generate the shortcut reference from the authoritative command table and complete focused, responsive visual, restart, and real-PTY coverage.
+5. Preserve configured-router live, approved reference-machine, migration, rollback, and final release-checklist evidence for Phase 3.9.
 
 ## Open questions
 
@@ -100,12 +101,10 @@ Promote Phase 3.7 through cross-platform CI, then implement Phase 3.8 settings, 
 
 ## Blockers
 
-Local Windows implementation and validation evidence is complete.
-Promotion still requires refreshed ordinary and serial PTY CI on Windows, macOS, and Linux.
-A configured router endpoint, macOS and Linux platform vault environments, and an approved reference machine remain Phase 3.9 evidence prerequisites rather than Phase 3.7 implementation blockers.
+Phase 3.8 implementation is unblocked.
+A configured router endpoint and an approved reference machine remain Phase 3.9 evidence prerequisites.
 
 ## Handoff note
 
-Phase 3.7 is complete locally and committed in scoped slices on `feat/phase-3-7-unified-tui-shell`.
-Merge only after cross-platform baseline and PTY jobs pass.
-Phase 3.8 must extend the existing Settings route and typed resolver without reintroducing page-open booleans, competing focus state, or a second modal convention.
+Phase 3.7 merged into `dev` through pull request #17 on 2026-08-24 after all cross-platform baseline and serial PTY jobs passed.
+Phase 3.8 must extend the existing Settings route and typed resolver without reintroducing page-open booleans, competing focus state, a second modal convention, or a second preferences store.
