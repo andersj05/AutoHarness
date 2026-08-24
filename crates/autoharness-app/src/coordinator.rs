@@ -1017,7 +1017,7 @@ impl Coordinator {
             })
             .is_some_and(|profile| profile.active);
         match manager.delete(&id) {
-            Ok(()) => {
+            Ok(()) | Err(ProfileManagementError::RecoveryPending) => {
                 if let Some(runtime) = self.profiles.as_mut() {
                     runtime.connection.remove(id.as_str());
                 }
