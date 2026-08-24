@@ -1290,12 +1290,6 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let mut lines = vec![
         detail_line(model, "Name", &profile.id),
         detail_line(model, "Provider", profile.kind.as_str()),
-        detail_line(model, "Active", if profile.active { "yes" } else { "no" }),
-        detail_line(model, "Credential", profile.credential_state.as_str()),
-        detail_line(model, "Source", profile.credential_source.as_str()),
-        detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Default model", default_model),
-        detail_line(model, "Mode", default_mode),
     ];
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));
@@ -1306,6 +1300,14 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             lines.push(detail_line(model, "Auth header", &profile.auth_header));
         }
     }
+    lines.extend([
+        detail_line(model, "Active", if profile.active { "yes" } else { "no" }),
+        detail_line(model, "Credential", profile.credential_state.as_str()),
+        detail_line(model, "Source", profile.credential_source.as_str()),
+        detail_line(model, "Connection", profile.connection.label()),
+        detail_line(model, "Default model", default_model),
+        detail_line(model, "Mode", default_mode),
+    ]);
     if let ProfileConnectionState::Failed(reason) = &profile.connection {
         lines.push(Line::from(vec![
             Span::styled("Reason      ", visual_style(model, VisualRole::Error)),
@@ -1326,21 +1328,13 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         "Alt+N new  Alt+E edit  Alt+D duplicate  Alt+K save/replace",
         visual_style(model, VisualRole::Muted),
     )));
-    lines.push(Line::from(Span::styled(
-        "Alt+T test  Alt+M set current model default",
-        visual_style(model, VisualRole::Muted),
-    )));
-    lines.push(Line::from(Span::styled(
-        "Alt+X disconnect  Delete remove",
-        visual_style(model, VisualRole::Muted),
-    )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn detail_line(model: &Model, label: &'static str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{label:<12}"),
+            format!("{label:<14}"),
             visual_style(model, VisualRole::Muted),
         ),
         Span::raw(display_safe(value)),
