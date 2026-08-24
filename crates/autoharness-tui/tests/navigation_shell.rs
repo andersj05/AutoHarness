@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use autoharness_domain::{ModelId, ModelRef, ProviderId};
+use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, Route,
-    SessionBrowserEntry, SessionProjection, SessionsProjection, update,
+    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, RetryPolicy, Route,
+    SessionBrowserEntry, SessionProjection, SessionsProjection, UiFailure, update, view,
 };
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui_textarea::{Input, Key};
 
 fn model_ref() -> ModelRef {
@@ -74,6 +76,22 @@ fn type_text(model: &mut Model, text: &str) {
     for character in text.chars() {
         let _ = update(model, Message::Input(key(Key::Char(character))));
     }
+}
+
+fn render_text(model: &Model, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal.draw(|frame| view(frame, model)).expect("draw");
+    let backend = terminal.backend();
+    let area = backend.buffer().area;
+    let mut rendered = String::new();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            rendered.push_str(backend.buffer()[(x, y)].symbol());
+        }
+        rendered.push('\n');
+    }
+    rendered
 }
 
 #[test]
@@ -149,4 +167,66 @@ fn composer_draft_survives_primary_route_navigation() {
 
     assert_eq!(model.composer.text(), "draft survives routes");
     assert_eq!(model.focus, Focus::Composer);
+}
+
+#[test]
+fn every_route_renders_through_wide_rail_and_compact_tabs() {
+    let cases = [
+        ('1', "Conversation"),
+        ('2', "Sessions"),
+        ('3', "Profiles & Providers"),
+        ('4', "Settings & Provenance"),
+        ('5', "Help"),
+    ];
+    for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
+        let mut model = model();
+        for (key, expected) in cases {
+            let _ = update(&mut model, Message::Input(ctrl(key)));
+            let rendered = render_text(&model, width, height);
+            assert!(
+                rendered.contains(expected),
+                "{expected} missing at {width}x{height}"
+            );
+            if width >= 48 {
+                for route in ["Chat", "Sessions", "Profiles", "Settings", "Help"] {
+                    assert!(
+                        rendered.contains(route),
+                        "route {route} missing at {width}x{height}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn chat_empty_states_name_one_primary_recovery_action() {
+    let mut model = model();
+    let _ = update(
+        &mut model,
+        Message::CatalogChanged(Arc::new(CatalogProjection::CredentialRequired)),
+    );
+    let _ = update(&mut model, Message::Input(ctrl('1')));
+    let offline = render_text(&model, 80, 24);
+    assert!(offline.contains("OFFLINE"));
+    assert!(offline.contains("Ctrl+3 manage providers"));
+
+    let _ = update(
+        &mut model,
+        Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
+    );
+    let loading = render_text(&model, 80, 24);
+    assert!(loading.contains("CONNECTING"));
+
+    let _ = update(
+        &mut model,
+        Message::CatalogChanged(Arc::new(CatalogProjection::Failed(UiFailure::new(
+            ErrorClass::Unavailable,
+            "provider unavailable",
+            RetryPolicy::Now,
+        )))),
+    );
+    let failed = render_text(&model, 80, 24);
+    assert!(failed.contains("CONNECTION ERROR"));
+    assert!(failed.contains("Ctrl+R retry"));
 }

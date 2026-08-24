@@ -1,18 +1,18 @@
+ 1 Chat   2 Sessions   3 Profiles   4 Settings   5 Help
  AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed
-┌ Transcript ──────────────────────────────────────────────────────────────────┐
-│Keep it practical.                                                            │
+┌ Conversation ────────────────────────────────────────────────────────────────┐
 │                                                                              │
-│assistant · complete                                                          │
+│AUTOHARNESS · complete                                                        │
 │Start with a two-week validation sprint:                                      │
 │1. Interview ten customers.                                                   │
 │2. Price three menu bundles.                                                  │
 │3. Measure repeat intent.                                                     │
 │18 input tokens · 41 output tokens                                            │
 │                                                                              │
-│you                                                                           │
+│YOU                                                                           │
 │What could go wrong?                                                          │
 │                                                                              │
-│assistant · retry · failed                                                    │
+│AUTOHARNESS · retry · failed                                                  │
 │The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                    │
 │Error: Capacity is temporarily exhausted; no credentials were exposed.        │
 │rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2                      │

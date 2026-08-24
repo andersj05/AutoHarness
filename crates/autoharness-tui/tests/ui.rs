@@ -748,20 +748,53 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
 fn fixed_size_views_match_reviewed_golden_buffers() {
     let model = snapshot_model();
     let cases = [
-        (120, 40, include_str!("golden/main-120x40.txt")),
-        (80, 24, include_str!("golden/main-80x24.txt")),
-        (60, 18, include_str!("golden/main-60x18.txt")),
-        (40, 12, include_str!("golden/main-40x12.txt")),
+        (
+            120,
+            40,
+            "golden/main-120x40.txt",
+            include_str!("golden/main-120x40.txt"),
+        ),
+        (
+            80,
+            24,
+            "golden/main-80x24.txt",
+            include_str!("golden/main-80x24.txt"),
+        ),
+        (
+            60,
+            18,
+            "golden/main-60x18.txt",
+            include_str!("golden/main-60x18.txt"),
+        ),
+        (
+            40,
+            12,
+            "golden/main-40x12.txt",
+            include_str!("golden/main-40x12.txt"),
+        ),
     ];
+    let update_goldens = std::env::var("AUTOHARNESS_UPDATE_GOLDENS").as_deref() == Ok("1");
 
-    for (width, height, expected) in cases {
+    for (width, height, path, expected) in cases {
         let backend = render_model(&model, width, height);
         let actual = buffer_text(&backend);
-        assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
+        if update_goldens {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join(path);
+            std::fs::write(path, &actual).expect("write updated golden");
+        } else {
+            assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
+        }
+        let expected_anchor = if width >= 100 {
+            Color::Cyan
+        } else {
+            Color::LightCyan
+        };
         assert_eq!(
             backend.buffer().cell((0, 0)).expect("header origin").bg,
-            Color::Cyan,
-            "header must retain its visual anchor at {width}x{height}"
+            expected_anchor,
+            "shell must retain its visual anchor at {width}x{height}"
         );
     }
 }

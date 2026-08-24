@@ -1,11 +1,11 @@
+ 1Chat  2Sessions  3Profiles  4Settings  5Help
  AutoHarness  |  Gemini 2.5 Pro  |  failed
-┌ Transcript ──────────────────────────────────────────────┐
-│18 input tokens · 41 output tokens                        │
+┌ Conversation ────────────────────────────────────────────┐
 │                                                          │
-│you                                                       │
+│YOU                                                       │
 │What could go wrong?                                      │
 │                                                          │
-│assistant · retry · failed                                │
+│AUTOHARNESS · retry · failed                              │
 │The provider returned \u{1b}[31ma partial answer\u{1b}[0m.│
 │Error: Capacity is temporarily exhausted; no credentials  │
 │were exposed.                                             │

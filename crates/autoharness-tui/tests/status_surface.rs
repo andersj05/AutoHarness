@@ -88,11 +88,7 @@ fn wide_header_shows_provider_profile_credential_and_session_state() {
         },
     });
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
 
     for expected in [
         "AutoHarness",
@@ -109,11 +105,7 @@ fn wide_header_shows_provider_profile_credential_and_session_state() {
 fn default_launch_reports_gemini_default_and_session_only() {
     let model = empty_model(SettingsProjection::default());
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
 
     assert!(header.contains("gemini (default)"));
     assert!(header.contains("session only"));
@@ -130,11 +122,7 @@ fn disconnected_vault_profile_never_claims_a_connected_credential() {
         },
     });
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
 
     assert!(
         !header.contains("credential vault"),
@@ -155,11 +143,7 @@ fn stale_catalog_is_visible_in_the_status_surface() {
     };
     let _ = update(&mut model, Message::CatalogChanged(stale));
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
     assert!(header.contains("stale"));
 }
 
@@ -182,11 +166,7 @@ fn aggregate_usage_appears_in_the_status_surface_after_turns() {
         catalog_ready(),
     );
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
     assert!(
         header.contains("460 tok") || header.contains("460 tokens"),
         "aggregate usage must appear, got: {header}"
@@ -197,19 +177,11 @@ fn aggregate_usage_appears_in_the_status_surface_after_turns() {
 fn narrow_header_keeps_the_essential_state_only() {
     let model = empty_model(SettingsProjection::default());
 
-    let header = buffer_text(&render_model(&model, 40, 12))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 40, 12));
     assert!(header.contains("AutoHarness"));
     assert!(header.contains("ready"), "work state stays visible");
 
-    let tiny = buffer_text(&render_model(&model, 24, 7))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let tiny = buffer_text(&render_model(&model, 24, 7));
     assert!(tiny.contains("AutoHarness"));
     assert!(
         !tiny.contains("gemini (default)"),
@@ -237,10 +209,6 @@ fn failed_attempt_state_is_visible_in_the_status_surface() {
         catalog_ready(),
     );
 
-    let header = buffer_text(&render_model(&model, 120, 40))
-        .lines()
-        .next()
-        .expect("header row")
-        .to_owned();
+    let header = buffer_text(&render_model(&model, 120, 40));
     assert!(header.contains("failed"));
 }

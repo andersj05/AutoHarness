@@ -28,6 +28,13 @@ const ERROR_STYLE: Style = Style::new()
     .fg(Color::LightRed)
     .add_modifier(Modifier::BOLD);
 const TOOL_STYLE: Style = Style::new().fg(Color::Yellow);
+const NAV_ACTIVE_STYLE: Style = Style::new()
+    .fg(Color::Black)
+    .bg(Color::LightCyan)
+    .add_modifier(Modifier::BOLD);
+const PANEL_BORDER_STYLE: Style = Style::new().fg(Color::DarkGray);
+const SUCCESS_STYLE: Style = Style::new().fg(Color::LightGreen);
+const WARNING_STYLE: Style = Style::new().fg(Color::Yellow);
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -35,18 +42,21 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    match model.route() {
-        Route::Chat => {
-            if area.width < 24 || area.height < 7 {
-                render_compact(frame, area, model);
-            } else {
-                render_standard(frame, area, model);
+    let content = render_shell(frame, area, model);
+    if content.width > 0 && content.height > 0 {
+        match model.route() {
+            Route::Chat => {
+                if content.width < 24 || content.height < 7 {
+                    render_compact(frame, content, model);
+                } else {
+                    render_standard(frame, content, model);
+                }
             }
+            Route::Sessions => render_browser(frame, content, model),
+            Route::Profiles => render_profile_center(frame, content, model),
+            Route::Settings => render_settings(frame, content, model),
+            Route::Help => render_help(frame, content, model),
         }
-        Route::Sessions => render_browser(frame, area, model),
-        Route::Profiles => render_profile_center(frame, area, model),
-        Route::Settings => render_settings(frame, area, model),
-        Route::Help => render_help(frame, area, model),
     }
 
     match model.overlay() {
@@ -56,6 +66,150 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
+}
+
+fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
+    if area.width >= 100 && area.height >= 16 {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(28), Constraint::Min(1)])
+            .split(area);
+        render_navigation_rail(frame, columns[0], model);
+        columns[1]
+    } else {
+        let navigation_height = if area.height >= 3 { 2 } else { 1 };
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(navigation_height), Constraint::Min(0)])
+            .split(area);
+        render_compact_navigation(frame, rows[0], model);
+        rows[1]
+    }
+}
+
+fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .title(" AutoHarness ")
+        .title_style(HEADER_STYLE)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let user = &model.profiles().user;
+    let local_label = user.display_label.as_deref().unwrap_or("Local user");
+    let mut lines = vec![
+        Line::styled(display_safe(local_label), USER_STYLE),
+        Line::styled(workspace_label(&user.workspace), MUTED_STYLE),
+        Line::from(""),
+    ];
+    for (index, route) in Route::ALL.into_iter().enumerate() {
+        let label = format!(" {}  {:<10}", index + 1, route.label());
+        let style = if route == model.route() {
+            NAV_ACTIVE_STYLE
+        } else {
+            Style::default()
+        };
+        lines.push(Line::styled(label, style));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::styled("CONNECTION", MUTED_STYLE));
+    lines.push(Line::from(display_safe(&model.settings_provider_label())));
+    lines.push(Line::from(display_safe(&header_credential_label(model))));
+    lines.push(Line::from(display_safe(&selected_model_label(model))));
+    let state = attempt_state_label(model);
+    let state_style = if state == "ready" {
+        SUCCESS_STYLE
+    } else if state == "failed" || state == "cancelled" {
+        ERROR_STYLE
+    } else {
+        WARNING_STYLE
+    };
+    lines.push(Line::styled(state, state_style));
+    let usage = session_usage(model);
+    if !usage.is_empty() {
+        lines.push(Line::styled(usage, MUTED_STYLE));
+    }
+    if let Some(catalog) = catalog_status_label(model) {
+        lines.push(Line::styled(catalog, WARNING_STYLE));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::styled("Ctrl+/ commands", MUTED_STYLE));
+    lines.push(Line::styled("F1 contextual help", MUTED_STYLE));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.height == 0 {
+        return;
+    }
+    let route_line = if area.width >= 72 {
+        let spans = Route::ALL
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, route)| {
+                let style = if route == model.route() {
+                    NAV_ACTIVE_STYLE
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                [
+                    Span::styled(format!(" {} {} ", index + 1, route.label()), style),
+                    Span::raw(" "),
+                ]
+            })
+            .collect::<Vec<_>>();
+        Line::from(spans)
+    } else if area.width >= 48 {
+        Line::from(
+            Route::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(index, route)| {
+                    let style = if route == model.route() {
+                        NAV_ACTIVE_STYLE
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    Span::styled(format!(" {}{} ", index + 1, route.label()), style)
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        Line::from(vec![
+            Span::styled(
+                format!(
+                    " {} {} ",
+                    route_number(model.route()),
+                    model.route().label()
+                ),
+                NAV_ACTIVE_STYLE,
+            ),
+            Span::raw("  Ctrl+1..5 routes"),
+        ])
+    };
+    frame.render_widget(Paragraph::new(route_line), area);
+    if area.height >= 2 {
+        let status = Rect::new(area.x, area.y + 1, area.width, 1);
+        render_header(frame, status, model);
+    }
+}
+
+fn route_number(route: Route) -> usize {
+    Route::ALL
+        .iter()
+        .position(|candidate| *candidate == route)
+        .map_or(1, |index| index + 1)
+}
+
+fn workspace_label(workspace: &str) -> String {
+    workspace
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .map_or_else(|| "workspace".to_owned(), display_safe)
 }
 
 /// Renders the searchable command-palette overlay from local state only.
@@ -153,7 +307,7 @@ fn palette_item(
 /// The section matching the surface help was requested from is rendered
 /// first and highlighted, and content scrolls without clipping the frame.
 fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = popup_rect(area);
+    let popup = area;
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -216,38 +370,71 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
-/// Renders the non-modal settings overlay from local state only.
+/// Renders resolved runtime settings and safe provenance as a primary route.
 fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Settings ")
+        .title(" Settings & Provenance ")
         .border_style(Style::default().fg(Color::Cyan));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    let credential_line = model.settings().credential_label();
-    let lines = vec![
+    let status = &model.settings().provider_status;
+    let active_profile = status.active_profile.as_deref().unwrap_or("none");
+    let connection = if status.credential_connected {
+        "connected"
+    } else if status.active_profile.is_some() {
+        "disconnected"
+    } else {
+        "session only"
+    };
+    let connection_style = if status.credential_connected {
+        SUCCESS_STYLE
+    } else {
+        WARNING_STYLE
+    };
+    let mut lines = vec![
+        Line::styled("EFFECTIVE RUNTIME", USER_STYLE),
+        detail_line("Provider", &model.settings().provider_label()),
+        detail_line("Profile", active_profile),
         Line::from(vec![
-            Span::styled("Provider   ", MUTED_STYLE),
-            Span::raw(display_safe(&model.settings().provider_label())),
+            Span::styled("Credential  ", MUTED_STYLE),
+            Span::styled(connection, connection_style),
         ]),
-        Line::from(vec![
-            Span::styled("Credential ", MUTED_STYLE),
-            Span::raw(display_safe(&credential_line)),
-        ]),
+        detail_line("Source", status.credential_source.as_str()),
+        detail_line("Model", &selected_model_label(model)),
+        detail_line("Mode", "safe agent"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Ctrl+, close - Ctrl+G manage profiles - Ctrl+K session-only key",
-            MUTED_STYLE,
-        )),
+        Line::styled("RECOVERY & SECURITY", USER_STYLE),
+        Line::from("Credentials remain outside settings, sessions, logs, and model context."),
     ];
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, inner);
+    if model.profiles().pending_recovery > 0 {
+        lines.push(Line::styled(
+            format!(
+                "{} credential repair operation(s) pending",
+                model.profiles().pending_recovery
+            ),
+            WARNING_STYLE,
+        ));
+    } else {
+        lines.push(Line::styled(
+            "No credential repair is pending.",
+            SUCCESS_STYLE,
+        ));
+    }
+    lines.push(Line::from(""));
+    let primary = if status.active_profile.is_some() {
+        "P or Ctrl+3 manage profiles and credentials"
+    } else {
+        "P or Ctrl+3 create your first provider profile"
+    };
+    lines.push(Line::styled(primary, Style::default().fg(Color::LightCyan)));
+    lines.push(Line::styled("Esc or Ctrl+1 return to Chat", MUTED_STYLE));
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 /// Renders the full-screen local profile and provider connection center.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -603,7 +790,7 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 /// Renders the searchable session-browser overlay from local state only.
 fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = popup_rect(area);
+    let popup = area;
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -639,8 +826,13 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
     let entries = model.browser_entries();
     if entries.is_empty() {
+        let empty = if model.sessions.sessions.is_empty() {
+            "No durable sessions yet.\nCtrl+N creates and opens the first session."
+        } else {
+            "No sessions match this filter.\nBackspace clears the filter."
+        };
         frame.render_widget(
-            Paragraph::new("No sessions match this filter.")
+            Paragraph::new(empty)
                 .style(MUTED_STYLE)
                 .wrap(Wrap { trim: false }),
             list,
@@ -772,7 +964,6 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
@@ -781,17 +972,16 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(area);
 
-    render_header(frame, chunks[0], model);
-    render_transcript(frame, chunks[1], model, true);
+    render_transcript(frame, chunks[0], model, true);
     if notice_height > 0 {
-        render_notice(frame, chunks[2], model);
+        render_notice(frame, chunks[1], model);
     }
     if search_height > 0 {
-        render_search_bar(frame, chunks[3], model);
+        render_search_bar(frame, chunks[2], model);
     }
-    frame.render_widget(&model.composer.editor, chunks[4]);
-    render_footer(frame, chunks[5], model);
-    set_composer_cursor(frame, chunks[4], model, true);
+    frame.render_widget(&model.composer.editor, chunks[3]);
+    render_footer(frame, chunks[4], model);
+    set_composer_cursor(frame, chunks[3], model, true);
 }
 
 /// Renders the one-row transcript search bar.
@@ -806,19 +996,12 @@ fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let header = Rect::new(area.x, area.y, area.width, 1);
-    render_header(frame, header, model);
-    if area.height == 1 {
-        return;
-    }
-
-    let remaining = area.height - 1;
-    let composer_height = remaining.min(2);
-    let transcript_height = remaining.saturating_sub(composer_height);
-    let transcript = Rect::new(area.x, area.y + 1, area.width, transcript_height);
+    let composer_height = area.height.min(2);
+    let transcript_height = area.height.saturating_sub(composer_height);
+    let transcript = Rect::new(area.x, area.y, area.width, transcript_height);
     let composer = Rect::new(
         area.x,
-        area.y + 1 + transcript_height,
+        area.y + transcript_height,
         area.width,
         composer_height,
     );
@@ -834,8 +1017,8 @@ fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let selected = model
+fn selected_model_label(model: &Model) -> String {
+    model
         .session
         .selected_model
         .as_ref()
@@ -850,9 +1033,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                     |summary| summary.display_name.clone(),
                 )
         })
-        .unwrap_or_else(|| "no model".to_owned());
+        .unwrap_or_else(|| "no model".to_owned())
+}
 
-    let state = if let Some((attempt_id, status)) = model.session.active_attempt() {
+fn attempt_state_label(model: &Model) -> String {
+    if let Some((attempt_id, status)) = model.session.active_attempt() {
         if matches!(status, AttemptStatus::Cancelling) || model.cancelling.contains(attempt_id) {
             format!("{} cancelling", spinner(model.now))
         } else {
@@ -868,7 +1053,23 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
     } else {
         "ready".to_owned()
-    };
+    }
+}
+
+fn catalog_status_label(model: &Model) -> Option<&'static str> {
+    match &*model.catalog {
+        CatalogProjection::CredentialRequired => Some("offline · credential needed"),
+        CatalogProjection::Loading => Some("catalog loading"),
+        CatalogProjection::Ready { stale: true, .. } => Some("catalog stale"),
+        CatalogProjection::Failed(_) => Some("catalog error"),
+        CatalogProjection::Ready { stale: false, .. } => None,
+    }
+}
+
+fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let selected = selected_model_label(model);
+
+    let state = attempt_state_label(model);
 
     // Status surface segments degrade left to right: identity and work state
     // survive at every width; provider, credential, catalog, and usage detail
@@ -876,13 +1077,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     // that is not effective.
     let provider = model.settings.provider_label();
     let credential = header_credential_label(model);
-    let catalog = match &*model.catalog {
-        CatalogProjection::Ready { stale: true, .. } => "catalog stale",
-        CatalogProjection::Failed(_) => "catalog error",
-        CatalogProjection::Ready { stale: false, .. }
-        | CatalogProjection::Loading
-        | CatalogProjection::CredentialRequired => "",
-    };
+    let catalog = catalog_status_label(model).unwrap_or_default();
     let usage = session_usage(model);
     let usage_segment = (!usage.is_empty()).then(|| format!(" | {usage}"));
     let usage = usage_segment.as_deref().unwrap_or_default();
@@ -954,8 +1149,8 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let block = bordered.then(|| {
         Block::default()
             .borders(Borders::ALL)
-            .title(" Transcript ")
-            .border_style(MUTED_STYLE)
+            .title(" Conversation ")
+            .border_style(PANEL_BORDER_STYLE)
     });
     let inner = block.as_ref().map_or(area, |block| block.inner(area));
     if let Some(block) = block {
@@ -1011,10 +1206,47 @@ pub(crate) fn transcript_display_lines(model: &Model) -> Vec<String> {
 fn transcript_text(model: &Model) -> Text<'static> {
     let mut lines = Vec::new();
     if model.session.transcript.is_empty() {
-        lines.push(Line::styled(
-            "Choose a model and write a prompt to begin.",
-            MUTED_STYLE,
-        ));
+        match &*model.catalog {
+            CatalogProjection::CredentialRequired => {
+                lines.push(Line::styled("OFFLINE", WARNING_STYLE));
+                lines.push(Line::from("No provider credential is available."));
+                lines.push(Line::styled(
+                    "Ctrl+3 manage providers or Ctrl+K use a session-only key",
+                    Style::default().fg(Color::LightCyan),
+                ));
+            }
+            CatalogProjection::Loading => {
+                lines.push(Line::styled("CONNECTING", WARNING_STYLE));
+                lines.push(Line::from("Loading compatible models..."));
+            }
+            CatalogProjection::Failed(failure) => {
+                lines.push(Line::styled("CONNECTION ERROR", ERROR_STYLE));
+                lines.push(Line::from(display_safe(&failure.message)));
+                lines.push(Line::styled(
+                    "Ctrl+R retry or Ctrl+3 inspect provider settings",
+                    Style::default().fg(Color::LightCyan),
+                ));
+            }
+            CatalogProjection::Ready { models, .. } if models.is_empty() => {
+                lines.push(Line::styled("NO COMPATIBLE MODELS", WARNING_STYLE));
+                lines.push(Line::styled(
+                    "Ctrl+R refresh the catalog",
+                    Style::default().fg(Color::LightCyan),
+                ));
+            }
+            CatalogProjection::Ready { .. } if model.session.selected_model.is_none() => {
+                lines.push(Line::styled("CHOOSE A MODEL", USER_STYLE));
+                lines.push(Line::styled(
+                    "Ctrl+P opens the searchable model catalog",
+                    Style::default().fg(Color::LightCyan),
+                ));
+            }
+            CatalogProjection::Ready { .. } => {
+                lines.push(Line::styled("NEW CONVERSATION", USER_STYLE));
+                lines.push(Line::from("Write a prompt below."));
+                lines.push(Line::styled("Ctrl+S sends", MUTED_STYLE));
+            }
+        }
         return Text::from(lines);
     }
 
@@ -1024,11 +1256,11 @@ fn transcript_text(model: &Model) -> Text<'static> {
         }
         match item {
             TranscriptItem::User { text, .. } => {
-                lines.push(Line::styled("you", USER_STYLE));
+                lines.push(Line::styled("YOU", USER_STYLE));
                 push_safe_lines(&mut lines, text, Style::default());
             }
             TranscriptItem::Tool(row) => {
-                let mut heading = String::from("tool ");
+                let mut heading = String::from("TOOL · ");
                 heading.push_str(&display_safe(&row.tool_name));
                 if !row.status.is_empty() {
                     heading.push_str(" · ");
@@ -1052,7 +1284,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 usage,
                 retry_of,
             } => {
-                let mut heading = String::from("assistant");
+                let mut heading = String::from("AUTOHARNESS");
                 if retry_of.is_some() {
                     heading.push_str(" · retry");
                 }
