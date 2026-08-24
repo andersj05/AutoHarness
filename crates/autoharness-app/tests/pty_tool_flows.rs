@@ -77,10 +77,10 @@ fn invalid_tool_call_is_denied_and_repaired_in_the_same_terminal_attempt() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("tool web_search")
+            text.contains("TOOL · web_search")
                 && text.contains("denied")
                 && text.contains("recovered after invalid tool call")
-                && text.contains("assistant")
+                && text.contains("AUTOHARNESS")
                 && text.contains("complete")
         },
         "invalid tool proposal should be force-denied and repaired without human authority",
@@ -143,7 +143,7 @@ fn permission_deny_and_allow_both_settle_durably() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("tool fs_write")
+            text.contains("TOOL · fs_write")
                 && text.contains("denied")
                 && text.contains("denied call handled")
         },
@@ -168,7 +168,7 @@ fn permission_deny_and_allow_both_settle_durably() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("tool fs_write")
+            text.contains("TOOL · fs_write")
                 && text.contains("completed")
                 && text.contains("allowed call handled")
         },
@@ -196,13 +196,18 @@ fn permission_deny_and_allow_both_settle_durably() {
     environment.remove("AUTOHARNESS_ROUTER_API_KEY");
     let mut replay = PtySession::start(&environment, 32, 110);
     replay.wait_for(
+        |screen| screen.contents().contains("Provider API key"),
+        "offline permission replay should offer dismissible credential recovery",
+    );
+    replay.send_bytes(b"\x1b");
+    replay.wait_for(
         |screen| {
             let text = screen.contents();
             text.contains("denied call handled")
                 && text.contains("allowed call handled")
-                && text.contains("tool fs_write")
+                && text.contains("TOOL · fs_write")
         },
-        "permission decisions and tool settlements should replay offline after restart",
+        "permission decisions and tool settlements should replay after dismissal",
     );
     replay.send_bytes(&ctrl_c());
     assert_eq!(replay.wait_for_exit(), 0, "permission replay exits cleanly");

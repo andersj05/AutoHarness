@@ -3,8 +3,8 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-The Phase 3 safe-execution substrate and Phase 3.2 through Phase 3.6 terminal product slices are implemented locally.
-The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, with offline session browsing, named provider profiles, operating-system-vault credentials, command discovery, and a full-screen Profiles and Providers center.
+The Phase 3 safe-execution substrate and Phase 3.2 through Phase 3.7 terminal product slices are implemented locally.
+The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, with a responsive route-based shell, offline sessions, named provider profiles, operating-system-vault credentials, explicit recovery states, and one deterministic modal owner.
 Versioned filesystem, direct-process, and HTTP tools use scoped deny, ask, or allow decisions, bounded output, content-addressed artifacts, immutable run budgets, and explicit interruption recovery.
 Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
 Gemini function arguments are aggregated across streamed deltas, malformed model calls are durably denied and returned for bounded repair, and failed prompts are not replayed into unrelated later turns.
@@ -46,28 +46,39 @@ Router credentials require HTTPS except for loopback HTTP endpoints such as `htt
 The default relative endpoints are `v1/models` and `v1/chat/completions`.
 Routers mounted below a path such as `https://router.example/api/` retain that path when relative endpoints are resolved.
 
+### Unified terminal shell
+
+AutoHarness always has one primary route: Chat, Sessions, Profiles, Settings, or Help.
+Wide terminals show a persistent navigation rail with the local profile, active provider, credential source, model, attempt state, usage, and catalog health.
+Narrow terminals show compact route tabs and the same prioritized status without duplicating it inside every page.
+Use `Alt+1` through `Alt+5` to switch routes directly.
+The legacy `Ctrl+L`, `Ctrl+G`, `Ctrl+,`, and `F1` shortcuts still open Sessions, Profiles, Settings, and Help.
+Model selection, credential entry, command search, transcript search, permission decisions, and destructive confirmations share one modal slot and restore the exact prior route and focus when dismissed.
+
 ## Controls
 
 | Action | Key |
 | --- | --- |
+| Switch Chat, Sessions, Profiles, Settings, or Help | `Alt+1` through `Alt+5` |
+| Open the command palette over the current route | `Ctrl+/` |
 | Send the composed prompt | `Ctrl+S` or `Ctrl+Enter` |
 | Insert a newline | `Enter` |
 | Open the model picker | `Ctrl+P` |
 | Create a fresh durable session | `Ctrl+N` |
-| Open the session browser | `Ctrl+L` |
-| Open Profiles and Providers | `Ctrl+G` |
+| Open Sessions | `Alt+2` or `Ctrl+L` |
+| Open Profiles and Providers | `Alt+3` or `Ctrl+G` |
 | Create or edit a provider profile | `Alt+N` or `Alt+E` inside Profiles and Providers |
 | Duplicate profile configuration without its key | `Alt+D` inside Profiles and Providers |
 | Save or replace the selected profile key | `Alt+K` inside Profiles and Providers |
 | Test the selected provider connection | `Alt+T` inside Profiles and Providers |
 | Use the selected model as the active profile default | `Alt+M` inside Profiles and Providers |
 | Disconnect or delete the selected profile | `Alt+X`, or `Delete`, then `Y` to confirm |
-| Search sessions | Type while the browser is open |
-| Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` while the browser is open |
-| Delete the highlighted session | `Ctrl+D` then `Y` to confirm while the browser is open |
+| Search sessions | Type while Sessions is active |
+| Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` in Sessions |
+| Delete the highlighted session | `Ctrl+D` then `Y` to confirm in Sessions |
 | Slash commands | `/sessions`, `/open <n>`, `/rename <title>`, `/archive`, `/unarchive`, `/delete` in the composer |
 | Open or replace the API key | `Ctrl+K` |
-| Toggle the settings overlay | `Ctrl+,` |
+| Open Settings and provenance | `Alt+4` or `Ctrl+,` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
 | Close the model picker | `Esc` |
@@ -142,11 +153,12 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-The local Phase 3.6 validation passes formatting, strict Clippy, and the full workspace test suite.
-The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, profile and credential mutation recovery, multiple provider-scoped vault entries, profile defaults, responsive profile-center rendering, SQLite replay, terminal restoration, and credential redaction.
-A composed application test creates Gemini and router profiles with distinct credentials, switches and tests both, deletes only the selected router profile, restarts, and verifies the Gemini profile and key remain.
-An actual PTY journey creates, switches, duplicates, confirms deletion, and restarts profile state entirely inside the terminal.
+The local Phase 3.7 validation passes formatting, strict Clippy, the full workspace suite, and the serial Windows PTY matrix.
+The TUI suite covers typed routes, single-overlay ownership, permission preemption, exact focus restoration, hidden-confirmation clearing, draft and selection preservation, responsive rail and tab layouts, every primary route, explicit empty and recovery states, and fixed-size goldens.
+The real routed-shell PTY journey switches every route with portable Alt chords, restores Settings after a model-picker overlay, preserves a composer draft, creates and lists a second durable session, cancels a scoped deletion confirmation, resizes to 40x12, exits cleanly, and restores the terminal.
+The suite continues to cover both production adapters, fragmented native function calls, durable tool transitions, capability confinement, profile and credential mutation recovery, SQLite replay, terminal restoration, and credential redaction.
 The opt-in platform-vault smoke verifies save, load, replace, and delete without printing secret values; set `AUTOHARNESS_RUN_PLATFORM_VAULT_SMOKE=1` and run its ignored test on the target operating system.
+An instrumented release smoke ran the routed shell through the real PTY loopback latency runner and produced valid correlated startup, dispatch, and rendered-delta intervals without measuring network time.
 Opt-in ignored live probes are available in each provider crate and retain only structural event assertions.
 With the corresponding runtime credentials configured, run `cargo test --locked -p autoharness-provider-gemini --test live_compat -- --ignored` for Gemini and `cargo test --locked -p autoharness-provider-openai --test live_compat -- --ignored` for the configured router.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.

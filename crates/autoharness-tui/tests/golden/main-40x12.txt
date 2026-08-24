@@ -1,6 +1,6 @@
+ 1 Chat   Alt+1..5 routes
  AutoHarness | failed
-┌ Transcript ──────────────────────────┐
-│exhausted; no credentials were        │
+┌ Conversation ────────────────────────┐
 │exposed.                              │
 │rate_limited | Ctrl+R retry | Ctrl+N  │
 │new | ref attempt-2                   │

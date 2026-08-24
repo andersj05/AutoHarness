@@ -410,8 +410,127 @@ pub enum Focus {
     Palette,
     /// The contextual help overlay owns key input.
     Help,
+    /// The settings route owns key input.
+    Settings,
+    /// An exact destructive action awaits Y or N.
+    Confirmation,
     /// The transcript search bar owns key input.
     Search,
+}
+/// One primary destination in the terminal application shell.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Route {
+    /// Streaming conversation, transcript, tools, and composer.
+    #[default]
+    Chat,
+    /// Durable session discovery and lifecycle management.
+    Sessions,
+    /// Local profile and provider connection management.
+    Profiles,
+    /// Resolved settings and provenance.
+    Settings,
+    /// Contextual keyboard and workflow guidance.
+    Help,
+}
+
+impl Route {
+    /// Stable ordered route table used by navigation and rendering.
+    pub const ALL: [Self; 5] = [
+        Self::Chat,
+        Self::Sessions,
+        Self::Profiles,
+        Self::Settings,
+        Self::Help,
+    ];
+
+    /// Returns the visible route label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "Chat",
+            Self::Sessions => "Sessions",
+            Self::Profiles => "Profiles",
+            Self::Settings => "Settings",
+            Self::Help => "Help",
+        }
+    }
+
+    /// Returns the direct keyboard chord shown in the shell.
+    #[must_use]
+    pub const fn key_hint(self) -> &'static str {
+        match self {
+            Self::Chat => "Alt+1",
+            Self::Sessions => "Alt+2",
+            Self::Profiles => "Alt+3",
+            Self::Settings => "Alt+4",
+            Self::Help => "Alt+5",
+        }
+    }
+
+    /// Returns the route's normal keyboard owner.
+    #[must_use]
+    pub const fn focus(self) -> Focus {
+        match self {
+            Self::Chat => Focus::Composer,
+            Self::Sessions => Focus::Browser,
+            Self::Profiles => Focus::Profiles,
+            Self::Settings => Focus::Settings,
+            Self::Help => Focus::Help,
+        }
+    }
+}
+
+/// One mutually exclusive modal layer above the active route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverlayKind {
+    ModelPicker,
+    SessionCredential,
+    CommandPalette,
+    TranscriptSearch,
+    Permission,
+    ProfileCredential,
+    Confirmation,
+}
+
+impl OverlayKind {
+    /// Returns the keyboard owner for this modal layer.
+    #[must_use]
+    pub const fn focus(self) -> Focus {
+        match self {
+            Self::ModelPicker => Focus::Picker,
+            Self::SessionCredential | Self::ProfileCredential => Focus::Credential,
+            Self::CommandPalette => Focus::Palette,
+            Self::TranscriptSearch => Focus::Search,
+            Self::Permission => Focus::Permission,
+            Self::Confirmation => Focus::Confirmation,
+        }
+    }
+}
+
+/// Captured base state restored when one modal overlay closes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OverlayFrame {
+    pub kind: OverlayKind,
+    pub return_route: Route,
+    pub return_focus: Focus,
+}
+
+/// Single authority for route selection and modal ownership.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NavigationState {
+    pub route: Route,
+    pub previous_route: Route,
+    pub overlay: Option<OverlayFrame>,
+}
+
+impl Default for NavigationState {
+    fn default() -> Self {
+        Self {
+            route: Route::Chat,
+            previous_route: Route::Chat,
+            overlay: None,
+        }
+    }
 }
 
 /// One searchable row in the session browser.
@@ -504,7 +623,6 @@ impl Debug for ApiCredential {
 /// Ephemeral, masked API-key editor state.
 #[derive(Default)]
 pub(crate) struct CredentialState {
-    pub open: bool,
     raw: Zeroizing<String>,
 }
 
@@ -558,7 +676,6 @@ impl Debug for CredentialState {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CredentialState")
-            .field("open", &self.open)
             .field("has_value", &self.has_value())
             .finish()
     }
@@ -567,7 +684,6 @@ impl Debug for CredentialState {
 /// Model-picker local state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PickerState {
-    pub open: bool,
     pub query: String,
     pub selected: Option<ModelRef>,
 }
@@ -947,7 +1063,6 @@ impl Debug for Message {
 /// Session-browser local state.
 #[derive(Debug, Default)]
 pub(crate) struct BrowserState {
-    pub open: bool,
     pub query: String,
     /// Stable identity of the highlighted row.
     pub selected: Option<String>,
@@ -1073,7 +1188,6 @@ impl Drop for ProfileCredentialEditor {
 /// Full-screen Profiles and Providers local interaction state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
-    pub open: bool,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,
@@ -1084,22 +1198,16 @@ pub(crate) struct ProfileCenterState {
 /// Command-palette local state.
 #[derive(Debug, Default)]
 pub(crate) struct PaletteState {
-    pub open: bool,
     pub query: String,
     /// Stable identity of the highlighted command.
     pub selected: Option<&'static str>,
-    /// Focus restored when the palette closes without running a command.
-    pub return_focus: Focus,
 }
 
 /// Contextual help local state.
 #[derive(Debug, Default)]
 pub(crate) struct HelpState {
-    pub open: bool,
     /// Rows scrolled from the top of the help content.
     pub scroll: u16,
-    /// Focus restored when help closes.
-    pub return_focus: Focus,
 }
 
 /// One contextual help section shown in the help overlay.
@@ -1119,10 +1227,14 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Global",
         rows: &[
+            (
+                "Alt+1..5",
+                "switch Chat, Sessions, Profiles, Settings, Help",
+            ),
             ("Ctrl+S", "send the prompt"),
             ("Ctrl+N", "create a fresh session"),
-            ("Ctrl+L", "open the session browser"),
-            ("Ctrl+G", "open Profiles and Providers"),
+            ("Ctrl+L", "open Sessions"),
+            ("Ctrl+G", "open Profiles"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
@@ -1210,7 +1322,6 @@ impl HelpSection {
 /// Transcript search local state.
 #[derive(Debug, Default)]
 pub(crate) struct SearchState {
-    pub open: bool,
     pub query: String,
     /// Wrapped row indexes (in renderer coordinates) of matches.
     pub matches: Vec<usize>,
@@ -1237,16 +1348,22 @@ pub struct CommandEntry {
 /// one entry here so all paths converge on the same behavior and intents.
 pub const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
+        id: "chat",
+        label: "Chat",
+        description: "Return to the conversation workspace",
+        key_hint: Some("Alt+1"),
+    },
+    CommandEntry {
         id: "sessions",
         label: "Sessions",
         description: "Browse, rename, archive, or delete sessions",
-        key_hint: Some("Ctrl+L"),
+        key_hint: Some("Alt+2"),
     },
     CommandEntry {
         id: "profiles",
         label: "Profiles and Providers",
         description: "Manage providers, API keys, connection tests, and defaults",
-        key_hint: Some("Ctrl+G"),
+        key_hint: Some("Alt+3"),
     },
     CommandEntry {
         id: "new-session",
@@ -1276,13 +1393,13 @@ pub const COMMANDS: &[CommandEntry] = &[
         id: "settings",
         label: "Settings",
         description: "Show effective provider, profile, and credential source",
-        key_hint: Some("Ctrl+,"),
+        key_hint: Some("Alt+4"),
     },
     CommandEntry {
         id: "help",
         label: "Help",
         description: "Show keybindings and guidance for the current focus",
-        key_hint: Some("F1"),
+        key_hint: Some("Alt+5"),
     },
     CommandEntry {
         id: "copy",
@@ -1640,8 +1757,8 @@ pub struct Model {
     pub(crate) settings: Arc<SettingsProjection>,
     /// Newest safe local profile and provider-connection read model.
     pub(crate) profiles: Arc<ProfilesProjection>,
-    /// Whether the settings overlay is visible.
-    pub(crate) settings_open: bool,
+    /// Single source of truth for the active shell route and modal layer.
+    pub(crate) navigation: NavigationState,
     /// Multiline prompt composer.
     pub composer: ComposerState,
     /// Transcript tail-follow and scroll state.
@@ -1706,6 +1823,24 @@ impl Model {
         } else {
             Focus::Composer
         };
+        let overlay = if permission_pending {
+            Some(OverlayKind::Permission)
+        } else if open_credential {
+            Some(OverlayKind::SessionCredential)
+        } else if open_picker {
+            Some(OverlayKind::ModelPicker)
+        } else {
+            None
+        };
+        let navigation = NavigationState {
+            route: Route::Chat,
+            previous_route: Route::Chat,
+            overlay: overlay.map(|kind| OverlayFrame {
+                kind,
+                return_route: Route::Chat,
+                return_focus: Focus::Composer,
+            }),
+        };
         let selected = session.selected_model.clone().or_else(|| {
             catalog
                 .models()
@@ -1720,7 +1855,7 @@ impl Model {
             sessions,
             settings: Arc::new(SettingsProjection::default()),
             profiles: Arc::new(ProfilesProjection::default()),
-            settings_open: false,
+            navigation,
             composer: ComposerState::default(),
             transcript: TranscriptState::new(),
             focus,
@@ -1728,14 +1863,10 @@ impl Model {
             dirty: true,
             should_quit: false,
             picker: PickerState {
-                open: open_picker,
                 query: String::new(),
                 selected,
             },
-            credential: CredentialState {
-                open: open_credential,
-                ..CredentialState::default()
-            },
+            credential: CredentialState::default(),
             browser: BrowserState::default(),
             profile_center: ProfileCenterState::default(),
             palette: PaletteState::default(),
@@ -1761,11 +1892,78 @@ impl Model {
         model.sync_browser_selection();
         model
     }
+    /// Returns the active primary shell route.
+    #[must_use]
+    pub const fn route(&self) -> Route {
+        self.navigation.route
+    }
 
-    /// Returns whether the session-browser overlay is open.
+    /// Returns the one active modal layer, when any.
+    #[must_use]
+    pub fn overlay(&self) -> Option<OverlayKind> {
+        self.navigation.overlay.map(|frame| frame.kind)
+    }
+
+    /// Changes the primary route unless a security decision owns input.
+    pub(crate) fn navigate(&mut self, route: Route) -> bool {
+        if self.overlay() == Some(OverlayKind::Permission) {
+            return false;
+        }
+        if self.navigation.route != route {
+            self.navigation.previous_route = self.navigation.route;
+            self.navigation.route = route;
+        }
+        self.navigation.overlay = None;
+        self.focus = route.focus();
+        self.dirty = true;
+        true
+    }
+
+    /// Returns to the route visited before the current primary route.
+    pub(crate) fn navigate_back(&mut self) -> bool {
+        let route = self.navigation.previous_route;
+        self.navigate(route)
+    }
+
+    /// Opens one mutually exclusive modal layer over the current route.
+    pub(crate) fn open_overlay(&mut self, kind: OverlayKind) -> bool {
+        if self.overlay() == Some(OverlayKind::Permission) && kind != OverlayKind::Permission {
+            return false;
+        }
+        let (return_route, return_focus) = self
+            .navigation
+            .overlay
+            .map(|frame| (frame.return_route, frame.return_focus))
+            .unwrap_or((self.navigation.route, self.navigation.route.focus()));
+        self.navigation.overlay = Some(OverlayFrame {
+            kind,
+            return_route,
+            return_focus,
+        });
+        self.focus = kind.focus();
+        self.dirty = true;
+        true
+    }
+
+    /// Closes the active modal layer and restores its captured base state.
+    pub(crate) fn close_overlay(&mut self, expected: OverlayKind) -> bool {
+        let Some(frame) = self.navigation.overlay else {
+            return false;
+        };
+        if frame.kind != expected {
+            return false;
+        }
+        self.navigation.overlay = None;
+        self.navigation.route = frame.return_route;
+        self.focus = frame.return_focus;
+        self.dirty = true;
+        true
+    }
+
+    /// Returns whether the Sessions route is active.
     #[must_use]
     pub const fn browser_open(&self) -> bool {
-        self.browser.open
+        matches!(self.navigation.route, Route::Sessions)
     }
 
     /// Replaces the resolved-settings read model.
@@ -1786,10 +1984,10 @@ impl Model {
         &self.profiles
     }
 
-    /// Returns whether the full-screen profile center is open.
+    /// Returns whether the Profiles route is active.
     #[must_use]
     pub const fn profile_center_open(&self) -> bool {
-        self.profile_center.open
+        matches!(self.navigation.route, Route::Profiles)
     }
 
     /// Returns the highlighted provider profile identity.
@@ -1823,10 +2021,10 @@ impl Model {
         &self.settings
     }
 
-    /// Returns whether the settings overlay is visible.
+    /// Returns whether the Settings route is active.
     #[must_use]
     pub const fn settings_open(&self) -> bool {
-        self.settings_open
+        matches!(self.navigation.route, Route::Settings)
     }
 
     /// Returns the effective provider label in safe provenance terms.
@@ -1883,16 +2081,16 @@ impl Model {
         self.browser.confirming_delete.as_deref()
     }
 
-    /// Returns whether the picker overlay is open.
+    /// Returns whether the model picker owns the overlay slot.
     #[must_use]
-    pub const fn picker_open(&self) -> bool {
-        self.picker.open
+    pub fn picker_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::ModelPicker)
     }
 
-    /// Returns whether the command palette is open.
+    /// Returns whether the command palette owns the overlay slot.
     #[must_use]
-    pub const fn palette_open(&self) -> bool {
-        self.palette.open
+    pub fn palette_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::CommandPalette)
     }
 
     /// Returns the current palette filter query.
@@ -1923,10 +2121,10 @@ impl Model {
         self.palette.selected
     }
 
-    /// Returns whether the contextual help overlay is open.
+    /// Returns whether the Help route is active.
     #[must_use]
     pub const fn help_open(&self) -> bool {
-        self.help.open
+        matches!(self.navigation.route, Route::Help)
     }
 
     /// Returns the current help scroll offset in rows.
@@ -1947,10 +2145,10 @@ impl Model {
         self.browser.confirming_archive.as_deref()
     }
 
-    /// Returns whether the transcript search bar is open.
+    /// Returns whether transcript search owns the overlay slot.
     #[must_use]
-    pub const fn search_open(&self) -> bool {
-        self.search.open
+    pub fn search_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::TranscriptSearch)
     }
 
     /// Returns the active search query.
@@ -2008,14 +2206,18 @@ impl Model {
             .as_ref()
             .is_some_and(|selected| entries.iter().any(|entry| &entry.session_id == selected));
         if !valid {
-            self.browser.selected = Some(entries[0].session_id.clone());
+            self.browser.selected = entries
+                .iter()
+                .find(|entry| entry.active)
+                .or_else(|| entries.first())
+                .map(|entry| entry.session_id.clone());
         }
     }
 
-    /// Returns whether the API-key overlay is open.
+    /// Returns whether session-only credential entry owns the overlay slot.
     #[must_use]
-    pub const fn credential_open(&self) -> bool {
-        self.credential.open
+    pub fn credential_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::SessionCredential)
     }
 
     /// Returns whether the masked credential editor contains any input.

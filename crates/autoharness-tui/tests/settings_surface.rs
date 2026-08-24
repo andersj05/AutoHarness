@@ -89,7 +89,7 @@ fn disconnected_profile_reports_session_only_without_a_credential() {
 }
 
 #[test]
-fn settings_overlay_opens_with_ctrl_comma_and_toggles_closed() {
+fn settings_route_opens_with_ctrl_comma_and_returns_to_chat() {
     let selected = ModelRef::new(
         ProviderId::new("router:home").expect("provider id"),
         ModelId::new("models/test").expect("model id"),
@@ -115,7 +115,7 @@ fn settings_overlay_opens_with_ctrl_comma_and_toggles_closed() {
         }),
     );
     assert!(model.settings_open());
-    assert_eq!(model.focus, Focus::Composer, "overlay is non-modal");
+    assert_eq!(model.focus, Focus::Settings, "settings route owns input");
 
     let _ = autoharness_tui::update(
         &mut model,

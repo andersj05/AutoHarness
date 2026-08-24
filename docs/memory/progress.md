@@ -18,7 +18,7 @@
 | 3.4. TUI usability and discoverability | Implemented | A `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay, an enriched header status surface with graceful narrow-width degradation, composer history recall, `Ctrl+F` transcript search with jump-to-match scrolling, OSC 52 transcript copy, durable-event Markdown export beside the database, structured collapsible tool rows, and confirm-gated archiving with `Ctrl+Z` undo pass palette, help, search, tool-row, archive-undo, export, render, and full-workspace tests |
 | 3.5. Terminal release hardening | Implemented; pull-request evidence pending | Six real-PTY release scenarios, serial cross-platform CI routing, Windows cursor reporting, inactive-session isolation, causation-safe deletion, durable tool rows, locked-vault and corrupt-cache recovery, provider-matched environment credentials, content-free terminal markers, a PTY latency runner, and the terminal release checklist pass local baseline, benchmark, real Windows router smoke, and six-scenario Windows PTY validation; green cross-platform pull-request evidence remains open |
 | 3.6. Local profile and provider connection center | Implemented locally | ADR-0013 recovery records, settings schema 2, application-owned profile workflows, distinct provider-scoped vault entries, runtime Gemini and router switching, content-free tests, default models, live safe projections, the responsive `Ctrl+G` center, fault injection, sentinel coverage, a composed restart lifecycle, a real PTY journey, and Windows Credential Manager smoke pass locally; cross-platform CI and macOS and Linux vault evidence remain open |
-| 3.7. Unified TUI shell and navigation | Planned | Replace overlay-led navigation with a responsive route-based shell, one focus and overlay model, redesigned chat hierarchy, visible profile and provider status, and explicit empty and recovery states |
+| 3.7. Unified TUI shell and navigation | Implemented locally | Typed Chat, Sessions, Profiles, Settings, and Help routes, one modal owner, permission preemption, exact focus restoration, wide rail, compact tabs, unified safe status, redesigned Chat hierarchy and recovery states, routed settings provenance, exact confirmation dialogs, responsive goldens, all-route visual review, fresh-session list publication, and a real route and resize PTY journey pass locally; cross-platform pull-request evidence remains open |
 | 3.8. Personalization and accessibility | Planned | Add an in-terminal settings workspace, provenance and reset controls, typed local-profile preferences, themes, no-color and high-contrast modes, reduced motion, ASCII mode, density, and single-column presentation |
 | 3.9. Terminal product validation | Planned | Validate complete cross-platform onboarding, multiple providers, vault workflows, navigation, accessibility, live-provider compatibility, visual quality, performance, migration, rollback, and zero-shell ordinary use on one release candidate |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.9 validation |
@@ -126,19 +126,29 @@
 - A composed coordinator test manages two providers and distinct credentials through switching, live structural catalog tests, default assignment, scoped deletion, shutdown, reopen, and secret-free durable files.
 - The real profile-center PTY journey creates Gemini and router profiles, duplicates without credential linkage, activates, cancels and confirms deletion, exits successfully, and restores the terminal.
 - The opt-in operating-system vault test passed real save, load, replace, and delete behavior against Windows Credential Manager without printing secret values.
+- `Route` is the single authority for Chat, Sessions, Profiles, Settings, and Help, with portable Alt chords, legacy shortcuts, command-palette entries, and slash routing converging on the same update functions.
+- `OverlayKind` is the single modal authority for model selection, session-only and profile credential entry, command and transcript search, permission decisions, and destructive confirmations.
+- Every overlay captures exact return route and focus, permission preempts lower-authority modal state, and route changes clear hidden confirmations and zeroizing secret editors.
+- Wide terminals render a persistent rail with local profile and runtime state; 80x24, 60x18, and 40x12 terminals render compact tabs and one prioritized status line.
+- Chat renders explicit `YOU`, `AUTOHARNESS`, and `TOOL` hierarchy plus offline, loading, connection-error, empty-catalog, no-model, and new-conversation recovery states.
+- Sessions, Profiles, Settings, and Help are primary routed pages with contextual actions rather than competing page-open overlays.
+- Fixed-size goldens and the ignored visual matrix cover all routes at 40x12, 60x18, 80x24, 120x40, and 120x50 plus one exact destructive confirmation.
+- The routed-shell PTY journey verifies Alt route switching, overlay restoration, draft preservation, fresh-session visibility, confirmation cancellation, narrow resize, clean exit, and terminal restoration.
+- Fresh-session application composition publishes the session list before acknowledgement so Sessions immediately reflects the newly active durable session.
+- A three-sample instrumented release smoke exercised the routed shell through the real PTY loopback runner and produced valid correlated startup, dispatch, and rendered-delta intervals with network time excluded.
 
 ## Known gaps
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence now includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
-- The current TUI still uses independent overlays rather than the Phase 3.7 route-based shell, and it has no full settings editor, theme selection, high-contrast or no-color mode, ASCII mode, or single-column accessibility presentation.
+- The routed shell is implemented, but Phase 3.8 still must add the full settings editor, typed local display preferences, theme selection, high-contrast and no-color modes, ASCII mode, reduced motion, density, and single-column accessibility presentation.
 - The opt-in platform-vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
-- Seven dedicated PTY scenarios, including profile management, pass locally on Windows; Linux, macOS, and refreshed Windows evidence awaits the updated pull-request CI run.
+- Eight dedicated PTY scenarios, including routed shell and profile management, pass locally on Windows; Linux, macOS, and refreshed Windows evidence awaits the updated pull-request CI run.
 - The checked-in release checklist has not been executed against a committed release candidate.
 
 ## Next milestone exit target
 
-Phase 3.6 must pass green baseline and dedicated PTY pull-request gates on Windows, macOS, and Linux, collect macOS and Linux platform-vault smoke evidence, and merge to `dev`.
-Phase 3.7 then exits only when the responsive route-based shell replaces overlay-led primary navigation without regressing the stable session, profile, credential, provider, and settings intents.
+Phase 3.7 must pass green baseline and dedicated PTY pull-request gates on Windows, macOS, and Linux and merge to `dev`.
+Phase 3.8 then exits only when every shipped presentation and terminal-behavior preference can be inspected, changed, explained, reset, migrated, and verified inside the existing Settings route.

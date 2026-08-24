@@ -5,9 +5,9 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, Message, Model, Notice,
-    PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
+    OverlayKind, PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
     ProfileEditorState, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
-    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    Route, SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -75,95 +75,13 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
 }
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
-    if matches!(
-        input,
-        Input {
-            key: Key::Char('n' | 'N'),
-            ctrl: true,
-            ..
-        }
-    ) {
-        return create_session(model);
-    }
-
-    // Ctrl+, toggles the non-modal settings overlay from any focus except
-    // the permission decision, which owns the keyboard exclusively.
-    if matches!(
-        input,
-        Input {
-            key: Key::Char(','),
-            ctrl: true,
-            ..
-        }
-    ) && model.focus != Focus::Permission
-    {
-        model.settings_open = !model.settings_open;
-        model.dirty = true;
-        return Vec::new();
-    }
-
-    // Ctrl+/ opens the modal command palette from any focus except the
-    // permission decision, which owns the keyboard exclusively. F1 opens
-    // contextual help under the same rule.
-    if matches!(
-        input,
-        Input {
-            key: Key::Char('/' | '?'),
-            ctrl: true,
-            ..
-        }
-    ) && model.focus != Focus::Permission
-    {
-        open_palette(model);
-        return Vec::new();
-    }
-    if matches!(input, Input { key: Key::F(1), .. }) && model.focus != Focus::Permission {
-        open_help(model);
-        return Vec::new();
-    }
-    // Ctrl+F opens the transcript search bar under the same rule.
-    if matches!(
-        input,
-        Input {
-            key: Key::Char('f' | 'F'),
-            ctrl: true,
-            ..
-        }
-    ) && model.focus != Focus::Permission
-    {
-        open_search(model);
-        return Vec::new();
-    }
-
-    if model.focus == Focus::Palette {
-        return handle_palette_input(model, input);
-    }
-
-    if model.focus == Focus::Help {
-        return handle_help_input(model, input);
-    }
-
-    if model.focus == Focus::Search {
-        return handle_search_input(model, input);
-    }
-
-    if model.focus == Focus::Permission {
+    if model.overlay() == Some(OverlayKind::Permission) {
         return handle_permission_input(model, input);
     }
-    if matches!(
-        input,
-        Input {
-            key: Key::Char('g' | 'G'),
-            ctrl: true,
-            ..
-        }
-    ) {
-        open_profile_center(model);
-        return Vec::new();
-    }
 
-    if model.profile_center.open {
-        return handle_profile_input(model, input);
+    if let Some(route) = direct_route(&input) {
+        navigate_to_route(model, route);
+        return Vec::new();
     }
 
     if matches!(
@@ -174,16 +92,84 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
     ) {
-        if !model.browser.open {
-            open_browser(model);
+        navigate_to_route(model, Route::Sessions);
+        return Vec::new();
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('g' | 'G'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        navigate_to_route(model, Route::Profiles);
+        return Vec::new();
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char(','),
+            ctrl: true,
+            ..
+        }
+    ) {
+        if model.route() == Route::Settings {
+            navigate_to_route(model, Route::Chat);
+        } else {
+            navigate_to_route(model, Route::Settings);
+        }
+        return Vec::new();
+    }
+    if matches!(input, Input { key: Key::F(1), .. }) {
+        if model.route() == Route::Help {
+            close_help(model);
+        } else {
+            navigate_to_route(model, Route::Help);
         }
         return Vec::new();
     }
 
-    if model.browser.open {
-        return handle_browser_input(model, input);
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('/' | '?'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        close_active_overlay_state(model);
+        open_palette(model);
+        return Vec::new();
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('f' | 'F'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        close_active_overlay_state(model);
+        if model.route() != Route::Chat {
+            navigate_to_route(model, Route::Chat);
+        }
+        open_search(model);
+        return Vec::new();
     }
 
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('p' | 'P'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        close_active_overlay_state(model);
+        open_picker(model);
+        return Vec::new();
+    }
     if matches!(
         input,
         Input {
@@ -192,29 +178,65 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
     ) {
-        if !model.credential.open {
-            open_credential(model);
-        }
+        close_active_overlay_state(model);
+        open_credential(model);
         return Vec::new();
     }
 
-    if model.credential.open {
-        return handle_credential_input(model, input);
-    }
-
-    if model.picker.open {
-        return handle_picker_input(model, input);
-    }
-
-    match input {
+    if matches!(
+        input,
         Input {
-            key: Key::Char('p' | 'P'),
+            key: Key::Char('n' | 'N'),
             ctrl: true,
             ..
-        } => {
-            open_picker(model);
-            Vec::new()
         }
+    ) {
+        close_active_overlay_state(model);
+        navigate_to_route(model, Route::Chat);
+        return create_session(model);
+    }
+
+    if let Some(overlay) = model.overlay() {
+        return match overlay {
+            OverlayKind::ModelPicker => handle_picker_input(model, input),
+            OverlayKind::SessionCredential => handle_credential_input(model, input),
+            OverlayKind::CommandPalette => handle_palette_input(model, input),
+            OverlayKind::TranscriptSearch => handle_search_input(model, input),
+            OverlayKind::Permission => handle_permission_input(model, input),
+            OverlayKind::ProfileCredential => handle_profile_credential_input(model, input),
+            OverlayKind::Confirmation => match model.route() {
+                Route::Sessions => handle_browser_input(model, input),
+                Route::Profiles => handle_profile_input(model, input),
+                Route::Chat | Route::Settings | Route::Help => Vec::new(),
+            },
+        };
+    }
+
+    match model.route() {
+        Route::Chat => handle_chat_input(model, input),
+        Route::Sessions => handle_browser_input(model, input),
+        Route::Profiles => handle_profile_input(model, input),
+        Route::Settings => handle_settings_input(model, input),
+        Route::Help => handle_help_input(model, input),
+    }
+}
+
+fn direct_route(input: &Input) -> Option<Route> {
+    if !input.alt && !input.ctrl {
+        return None;
+    }
+    match &input.key {
+        Key::Char('1') => Some(Route::Chat),
+        Key::Char('2') => Some(Route::Sessions),
+        Key::Char('3') => Some(Route::Profiles),
+        Key::Char('4') => Some(Route::Settings),
+        Key::Char('5') => Some(Route::Help),
+        _ => None,
+    }
+}
+
+fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
         Input {
             key: Key::Char('s' | 'S'),
             ctrl: true,
@@ -304,8 +326,6 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         input => {
-            // Slash commands give keyboard-first access to every command
-            // through the shared table without opening the palette overlay.
             if !has_pending_submission(model)
                 && let Some(effects) = maybe_slash_command(model, &input)
             {
@@ -318,6 +338,31 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+    }
+}
+
+fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            navigate_to_route(model, Route::Chat);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('p' | 'P'),
+            ..
+        } => {
+            navigate_to_route(model, Route::Profiles);
+            Vec::new()
+        }
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        } => {
+            model.should_quit = true;
+            vec![UiEffect::Quit]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -379,12 +424,16 @@ fn run_command_by_id(model: &mut Model, id: &str) -> Result<Vec<UiEffect>, Strin
 /// must cross into application composition.
 pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiEffect> {
     match entry.id {
+        "chat" => {
+            navigate_to_route(model, Route::Chat);
+            Vec::new()
+        }
         "sessions" => {
-            open_browser(model);
+            navigate_to_route(model, Route::Sessions);
             Vec::new()
         }
         "profiles" => {
-            open_profile_center(model);
+            navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
         "models" => {
@@ -396,14 +445,13 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "settings" => {
-            model.settings_open = !model.settings_open;
-            model.dirty = true;
+            navigate_to_route(model, Route::Settings);
             Vec::new()
         }
         "refresh-models" => refresh_catalog(model),
         "new-session" => create_session(model),
         "help" => {
-            open_help(model);
+            navigate_to_route(model, Route::Help);
             Vec::new()
         }
         "commands" => {
@@ -473,29 +521,20 @@ fn submit_prompt_text(model: &mut Model, prompt: String) -> Vec<UiEffect> {
     })]
 }
 
-/// Opens the modal command-palette overlay, remembering where the keyboard
-/// came from so Esc restores it exactly.
+/// Opens the single command-palette modal and captures the active route.
 fn open_palette(model: &mut Model) {
-    if !model.palette.open {
-        model.palette.return_focus = model.focus;
+    if !model.open_overlay(OverlayKind::CommandPalette) {
+        return;
     }
-    model.palette.open = true;
     model.palette.query.clear();
     model.palette.selected = None;
     normalize_palette_selection(model);
-    model.focus = Focus::Palette;
-    model.dirty = true;
 }
 
 fn close_palette(model: &mut Model) {
-    model.palette.open = false;
     model.palette.query.clear();
     model.palette.selected = None;
-    model.focus = match model.palette.return_focus {
-        Focus::Palette | Focus::Permission => Focus::Composer,
-        restored => restored,
-    };
-    model.dirty = true;
+    let _ = model.close_overlay(OverlayKind::CommandPalette);
 }
 
 fn filtered_palette_commands(model: &Model) -> Vec<CommandEntry> {
@@ -552,20 +591,8 @@ fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
     let Some(entry) = COMMANDS.iter().find(|entry| entry.id == selected).copied() else {
         return Vec::new();
     };
-    model.palette.open = false;
-    model.palette.query.clear();
-    model.palette.selected = None;
-    let effects = execute_command(model, entry);
-    // A command that opened another modal overlay keeps its focus there;
-    // otherwise the keyboard returns to the remembered focus.
-    if !model.palette.open && model.focus == Focus::Palette {
-        model.focus = match model.palette.return_focus {
-            Focus::Palette | Focus::Permission => Focus::Composer,
-            restored => restored,
-        };
-        model.dirty = true;
-    }
-    effects
+    close_palette(model);
+    execute_command(model, entry)
 }
 
 /// Applies keyboard input while the command palette owns focus.
@@ -813,6 +840,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_archive = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 return Vec::new();
@@ -836,6 +864,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_delete = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 return Vec::new();
@@ -942,33 +971,75 @@ fn apply_profiles(model: &mut Model, profiles: Arc<ProfilesProjection>) {
     model.apply_profiles(profiles);
 }
 
-fn open_profile_center(model: &mut Model) {
-    model.picker.open = false;
-    model.credential.open = false;
-    model.credential.clear();
-    model.browser.open = false;
-    model.palette.open = false;
-    model.help.open = false;
-    model.search.open = false;
-    model.settings_open = false;
-    model.profile_center.open = true;
-    model.profile_center.editor = None;
-    model.profile_center.credential = None;
-    model.profile_center.confirming_delete = None;
-    model.profile_center.confirming_disconnect = None;
-    model.focus = Focus::Profiles;
-    model.sync_profile_selection();
-    model.dirty = true;
+fn close_active_overlay_state(model: &mut Model) {
+    let Some(overlay) = model.overlay() else {
+        return;
+    };
+    if overlay == OverlayKind::Permission {
+        return;
+    }
+    match overlay {
+        OverlayKind::ModelPicker => {
+            model.picker.query.clear();
+        }
+        OverlayKind::SessionCredential => {
+            model.credential.clear();
+        }
+        OverlayKind::CommandPalette => {
+            model.palette.query.clear();
+            model.palette.selected = None;
+        }
+        OverlayKind::TranscriptSearch => {
+            model.search.query.clear();
+            model.search.matches.clear();
+            model.search.current = None;
+            model.search_pinned_row = None;
+        }
+        OverlayKind::ProfileCredential => {
+            model.profile_center.credential = None;
+        }
+        OverlayKind::Confirmation => {
+            model.browser.confirming_archive = None;
+            model.browser.confirming_delete = None;
+            model.profile_center.confirming_disconnect = None;
+            model.profile_center.confirming_delete = None;
+        }
+        OverlayKind::Permission => {}
+    }
+    let _ = model.close_overlay(overlay);
+}
+
+fn navigate_to_route(model: &mut Model, route: Route) {
+    if model.overlay() == Some(OverlayKind::Permission) {
+        return;
+    }
+    close_active_overlay_state(model);
+    if model.route() == Route::Sessions && route != Route::Sessions {
+        model.browser.renaming = false;
+        model.browser.rename_buffer.clear();
+        model.browser.confirming_delete = None;
+        model.browser.confirming_archive = None;
+    }
+    if model.route() == Route::Profiles && route != Route::Profiles {
+        model.profile_center.editor = None;
+        model.profile_center.credential = None;
+        model.profile_center.confirming_delete = None;
+        model.profile_center.confirming_disconnect = None;
+    }
+    if !model.navigate(route) {
+        return;
+    }
+    match route {
+        Route::Chat | Route::Settings => {}
+        Route::Sessions => model.sync_browser_selection(),
+        Route::Profiles => model.sync_profile_selection(),
+        Route::Help => model.help.scroll = 0,
+    }
+    model.notice = None;
 }
 
 fn close_profile_center(model: &mut Model) {
-    model.profile_center.open = false;
-    model.profile_center.editor = None;
-    model.profile_center.credential = None;
-    model.profile_center.confirming_delete = None;
-    model.profile_center.confirming_disconnect = None;
-    model.focus = Focus::Composer;
-    model.dirty = true;
+    navigate_to_route(model, Route::Chat);
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1006,6 +1077,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.profile_center.confirming_disconnect = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 Vec::new()
@@ -1030,6 +1102,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.profile_center.confirming_delete = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 Vec::new()
@@ -1366,8 +1439,11 @@ fn open_profile_credential(model: &mut Model) {
         ProfileCredentialAction::Save
     };
     model.profile_center.credential = Some(ProfileCredentialEditor::new(profile.id, action));
+    if !model.open_overlay(OverlayKind::ProfileCredential) {
+        model.profile_center.credential = None;
+        return;
+    }
     model.notice = None;
-    model.dirty = true;
 }
 
 fn handle_profile_credential_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1375,7 +1451,7 @@ fn handle_profile_credential_input(model: &mut Model, input: Input) -> Vec<UiEff
         Input { key: Key::Esc, .. } => {
             model.profile_center.credential = None;
             model.notice = None;
-            model.dirty = true;
+            let _ = model.close_overlay(OverlayKind::ProfileCredential);
             Vec::new()
         }
         Input {
@@ -1445,6 +1521,7 @@ fn submit_profile_credential(model: &mut Model) -> Vec<UiEffect> {
         (editor.profile_id.clone(), editor.action, credential)
     };
     model.profile_center.credential = None;
+    let _ = model.close_overlay(OverlayKind::ProfileCredential);
     let request_id = model.allocate_request();
     let intent = match action {
         ProfileCredentialAction::Save => {
@@ -1545,6 +1622,7 @@ fn request_disconnect_profile(model: &mut Model) {
     }
     let profile_id = profile.id.clone();
     model.profile_center.confirming_disconnect = Some(profile_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(format!(
         "Disconnect stored credential for '{profile_id}'? Y confirm / N cancel"
     )));
@@ -1552,6 +1630,7 @@ fn request_disconnect_profile(model: &mut Model) {
 }
 
 fn dispatch_disconnect_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     let request_id = model.allocate_request();
     model.pending.insert(
         request_id,
@@ -1572,6 +1651,7 @@ fn request_delete_profile(model: &mut Model) {
         return;
     };
     model.profile_center.confirming_delete = Some(profile_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(format!(
         "Delete profile '{profile_id}' and its stored credential? Y confirm / N cancel"
     )));
@@ -1579,6 +1659,7 @@ fn request_delete_profile(model: &mut Model) {
 }
 
 fn dispatch_delete_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     let request_id = model.allocate_request();
     model
         .pending
@@ -1620,37 +1701,8 @@ fn apply_sessions(model: &mut Model, sessions: Arc<SessionsProjection>) {
     model.dirty = true;
 }
 
-fn open_browser(model: &mut Model) {
-    model.picker.open = false;
-    model.credential.open = false;
-    model.credential.clear();
-    model.browser.open = true;
-    model.browser.renaming = false;
-    model.browser.rename_buffer.clear();
-    model.browser.confirming_delete = None;
-    model.browser.confirming_archive = None;
-    if let Some(active) = model
-        .sessions
-        .sessions
-        .iter()
-        .find(|entry| entry.active)
-        .map(|entry| entry.session_id.clone())
-    {
-        model.browser.selected = Some(active);
-    }
-    model.focus = Focus::Browser;
-    model.sync_browser_selection();
-    model.dirty = true;
-}
-
 fn close_browser(model: &mut Model) {
-    model.browser.open = false;
-    model.browser.renaming = false;
-    model.browser.rename_buffer.clear();
-    model.browser.confirming_delete = None;
-    model.browser.confirming_archive = None;
-    model.focus = Focus::Composer;
-    model.dirty = true;
+    navigate_to_route(model, Route::Chat);
 }
 
 fn selected_browser_entry(model: &Model) -> Option<&crate::model::SessionBrowserEntry> {
@@ -1801,6 +1853,7 @@ fn toggle_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     // confirmation; unarchiving is the safe direction and runs immediately.
     if !archived {
         model.browser.confirming_archive = Some(session_id);
+        let _ = model.open_overlay(OverlayKind::Confirmation);
         model.notice = Some(Notice::Info(
             "Press Y again to archive; N or Esc cancels".to_owned(),
         ));
@@ -1814,6 +1867,7 @@ fn confirm_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     let Some(session_id) = model.browser.confirming_archive.take() else {
         return Vec::new();
     };
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
@@ -1884,6 +1938,7 @@ fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
         return Vec::new();
     }
     model.browser.confirming_delete = Some(entry.session_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(
         "Press Y again to permanently delete; N or Esc cancels".to_owned(),
     ));
@@ -1896,6 +1951,7 @@ fn confirm_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
         // A stray Y with no armed deletion is ignored.
         return Vec::new();
     };
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
@@ -1912,63 +1968,80 @@ fn confirm_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn handle_paste(model: &mut Model, text: &str) {
-    if let Some(credential) = model.profile_center.credential.as_mut() {
-        match credential.append_paste(text) {
-            Ok(()) => model.notice = None,
-            Err(message) => {
-                model.notice = Some(Notice::Failure(UiFailure::new(
-                    ErrorClass::Validation,
-                    message,
-                    RetryPolicy::Never,
-                )));
+    match model.overlay() {
+        Some(OverlayKind::ProfileCredential) => {
+            let Some(credential) = model.profile_center.credential.as_mut() else {
+                return;
+            };
+            match credential.append_paste(text) {
+                Ok(()) => model.notice = None,
+                Err(message) => {
+                    model.notice = Some(Notice::Failure(UiFailure::new(
+                        ErrorClass::Validation,
+                        message,
+                        RetryPolicy::Never,
+                    )));
+                }
             }
+            model.dirty = true;
         }
-        model.dirty = true;
-        return;
-    }
-    if model.credential.open {
-        match model.credential.append_paste(text) {
-            Ok(()) => model.notice = None,
-            Err(message) => {
-                model.notice = Some(Notice::Failure(UiFailure::new(
-                    ErrorClass::Validation,
-                    message,
-                    RetryPolicy::Never,
-                )));
+        Some(OverlayKind::SessionCredential) => {
+            match model.credential.append_paste(text) {
+                Ok(()) => model.notice = None,
+                Err(message) => {
+                    model.notice = Some(Notice::Failure(UiFailure::new(
+                        ErrorClass::Validation,
+                        message,
+                        RetryPolicy::Never,
+                    )));
+                }
             }
+            model.dirty = true;
         }
-        model.dirty = true;
-    } else if model.picker.open {
-        let flattened = editable_safe(text).replace('\n', " ");
-        model.picker.query.push_str(&flattened);
-        normalize_picker_selection(model);
-        model.dirty = true;
-    } else if !has_pending_submission(model)
-        && model.composer.editor.insert_str(editable_safe(text))
-    {
-        model.notice = None;
-        model.dirty = true;
+        Some(OverlayKind::ModelPicker) => {
+            let flattened = editable_safe(text).replace('\n', " ");
+            model.picker.query.push_str(&flattened);
+            normalize_picker_selection(model);
+            model.dirty = true;
+        }
+        Some(OverlayKind::CommandPalette) => {
+            model
+                .palette
+                .query
+                .push_str(&editable_safe(text).replace('\n', " "));
+            normalize_palette_selection(model);
+            model.dirty = true;
+        }
+        Some(
+            OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
+        ) => {}
+        None if model.route() == Route::Chat
+            && !has_pending_submission(model)
+            && model.composer.editor.insert_str(editable_safe(text)) =>
+        {
+            model.notice = None;
+            model.dirty = true;
+        }
+        None => {}
     }
 }
 
 /// Opens the transcript search bar and takes the keyboard.
 fn open_search(model: &mut Model) {
-    model.search.open = true;
+    if !model.open_overlay(OverlayKind::TranscriptSearch) {
+        return;
+    }
     model.search.query.clear();
     model.search.matches.clear();
     model.search.current = None;
-    model.focus = Focus::Search;
-    model.dirty = true;
 }
 
 fn close_search(model: &mut Model) {
-    model.search.open = false;
     model.search.query.clear();
     model.search.matches.clear();
     model.search.current = None;
-    // A closed search no longer pins the scroll position.
-    model.focus = Focus::Composer;
-    model.dirty = true;
+    model.search_pinned_row = None;
+    let _ = model.close_overlay(OverlayKind::TranscriptSearch);
 }
 
 /// Recomputes matches for the current query over rendered transcript lines.
@@ -2148,11 +2221,9 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
         model.retrying.clear();
         model.answering_permissions.clear();
         model.permission_scroll = 0;
-        model.credential.open = false;
-        model.credential.clear();
-        model.picker.open = false;
+        close_active_overlay_state(model);
         model.picker.selected = session.selected_model.clone();
-        model.focus = Focus::Composer;
+        model.focus = model.route().focus();
     }
     if model.transcript.follow_tail {
         model.transcript.rows_from_bottom = 0;
@@ -2203,17 +2274,16 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
     model.session = session;
     if !model.session.permission_requests.is_empty() {
         model.permission_scroll = 0;
-        model.credential.open = false;
-        model.credential.clear();
-        model.picker.open = false;
-        model.focus = Focus::Permission;
-    } else if model.focus == Focus::Permission {
+        close_active_overlay_state(model);
+        let _ = model.open_overlay(OverlayKind::Permission);
+    } else if model.overlay() == Some(OverlayKind::Permission) {
         model.permission_scroll = 0;
-        model.focus = Focus::Composer;
+        let _ = model.close_overlay(OverlayKind::Permission);
     } else if session_changed
         && model.session.selected_model.is_none()
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
     {
+        navigate_to_route(model, Route::Chat);
         open_picker(model);
     }
     model.sync_retry_deadline();
@@ -2224,11 +2294,14 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
-    if matches!(&*model.catalog, CatalogProjection::CredentialRequired)
-        && !model.profile_center.open
+    if model.route() == Route::Chat
+        && model.overlay().is_none()
+        && matches!(&*model.catalog, CatalogProjection::CredentialRequired)
     {
         open_credential(model);
-    } else if !selected_model_available(model)
+    } else if model.route() == Route::Chat
+        && model.overlay().is_none()
+        && !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
     {
         open_picker(model);
@@ -2243,7 +2316,6 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                 match pending {
                     PendingKind::CreateSession => {
                         model.composer.reset();
-                        model.credential.open = false;
                         model.credential.clear();
                         model.notice = Some(Notice::Info("New session created".to_owned()));
                     }
@@ -2672,34 +2744,17 @@ fn refresh_catalog(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn open_picker(model: &mut Model) {
-    model.credential.open = false;
-    model.credential.clear();
-    model.picker.open = true;
-    model.focus = Focus::Picker;
-    normalize_picker_selection(model);
-    model.dirty = true;
-}
-
-/// Opens the modal contextual help overlay, remembering where the keyboard
-/// came from so Esc restores it exactly.
-fn open_help(model: &mut Model) {
-    if !model.help.open {
-        model.help.return_focus = model.focus;
+    if !model.open_overlay(OverlayKind::ModelPicker) {
+        return;
     }
-    model.help.open = true;
-    model.help.scroll = 0;
-    model.focus = Focus::Help;
-    model.dirty = true;
+    normalize_picker_selection(model);
 }
 
 fn close_help(model: &mut Model) {
-    model.help.open = false;
     model.help.scroll = 0;
-    model.focus = match model.help.return_focus {
-        Focus::Help | Focus::Permission => Focus::Composer,
-        restored => restored,
-    };
-    model.dirty = true;
+    if !model.navigate_back() {
+        navigate_to_route(model, Route::Chat);
+    }
 }
 
 fn scroll_help(model: &mut Model, rows: i32) {
@@ -2764,24 +2819,18 @@ fn open_credential(model: &mut Model) {
         model.dirty = true;
         return;
     }
-    model.picker.open = false;
     model.credential.clear();
-    model.credential.open = true;
-    model.focus = Focus::Credential;
-    model.dirty = true;
+    let _ = model.open_overlay(OverlayKind::SessionCredential);
 }
 
 fn close_credential(model: &mut Model) {
     model.credential.clear();
-    model.credential.open = false;
-    model.focus = Focus::Composer;
-    model.dirty = true;
+    let _ = model.close_overlay(OverlayKind::SessionCredential);
 }
 
 fn close_picker(model: &mut Model) {
-    model.picker.open = false;
-    model.focus = Focus::Composer;
-    model.dirty = true;
+    model.picker.query.clear();
+    let _ = model.close_overlay(OverlayKind::ModelPicker);
 }
 
 fn normalize_picker_selection(model: &mut Model) {

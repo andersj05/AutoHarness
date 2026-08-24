@@ -279,7 +279,7 @@ fn global_chords_stay_global_while_searching() {
         ),
         "Ctrl+N stays reachable mid-search"
     );
-    assert!(model.search_open());
+    assert!(!model.search_open(), "global action closes the modal slot");
 
     let effects = update(&mut model, Message::Input(ctrl(Key::Char('c'))));
     assert!(matches!(
