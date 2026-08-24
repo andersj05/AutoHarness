@@ -161,6 +161,31 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     if matches!(
         input,
         Input {
+            key: Key::Char('p' | 'P'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        close_active_overlay_state(model);
+        open_picker(model);
+        return Vec::new();
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('k' | 'K'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        close_active_overlay_state(model);
+        open_credential(model);
+        return Vec::new();
+    }
+
+    if matches!(
+        input,
+        Input {
             key: Key::Char('n' | 'N'),
             ctrl: true,
             ..
@@ -179,6 +204,11 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             OverlayKind::TranscriptSearch => handle_search_input(model, input),
             OverlayKind::Permission => handle_permission_input(model, input),
             OverlayKind::ProfileCredential => handle_profile_credential_input(model, input),
+            OverlayKind::Confirmation => match model.route() {
+                Route::Sessions => handle_browser_input(model, input),
+                Route::Profiles => handle_profile_input(model, input),
+                Route::Chat | Route::Settings | Route::Help => Vec::new(),
+            },
         };
     }
 
@@ -192,57 +222,21 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 }
 
 fn direct_route(input: &Input) -> Option<Route> {
-    match input {
-        Input {
-            key: Key::Char('1'),
-            ctrl: true,
-            ..
-        } => Some(Route::Chat),
-        Input {
-            key: Key::Char('2'),
-            ctrl: true,
-            ..
-        } => Some(Route::Sessions),
-        Input {
-            key: Key::Char('3'),
-            ctrl: true,
-            ..
-        } => Some(Route::Profiles),
-        Input {
-            key: Key::Char('4'),
-            ctrl: true,
-            ..
-        } => Some(Route::Settings),
-        Input {
-            key: Key::Char('5'),
-            ctrl: true,
-            ..
-        } => Some(Route::Help),
+    if !input.alt && !input.ctrl {
+        return None;
+    }
+    match &input.key {
+        Key::Char('1') => Some(Route::Chat),
+        Key::Char('2') => Some(Route::Sessions),
+        Key::Char('3') => Some(Route::Profiles),
+        Key::Char('4') => Some(Route::Settings),
+        Key::Char('5') => Some(Route::Help),
         _ => None,
     }
 }
 
 fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
-    if matches!(
-        input,
-        Input {
-            key: Key::Char('k' | 'K'),
-            ctrl: true,
-            ..
-        }
-    ) {
-        open_credential(model);
-        return Vec::new();
-    }
     match input {
-        Input {
-            key: Key::Char('p' | 'P'),
-            ctrl: true,
-            ..
-        } => {
-            open_picker(model);
-            Vec::new()
-        }
         Input {
             key: Key::Char('s' | 'S'),
             ctrl: true,
@@ -846,6 +840,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_archive = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 return Vec::new();
@@ -869,6 +864,7 @@ fn handle_browser_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.browser.confirming_delete = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 return Vec::new();
@@ -1002,6 +998,12 @@ fn close_active_overlay_state(model: &mut Model) {
         OverlayKind::ProfileCredential => {
             model.profile_center.credential = None;
         }
+        OverlayKind::Confirmation => {
+            model.browser.confirming_archive = None;
+            model.browser.confirming_delete = None;
+            model.profile_center.confirming_disconnect = None;
+            model.profile_center.confirming_delete = None;
+        }
         OverlayKind::Permission => {}
     }
     let _ = model.close_overlay(overlay);
@@ -1075,6 +1077,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.profile_center.confirming_disconnect = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 Vec::new()
@@ -1099,6 +1102,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             | Input { key: Key::Esc, .. } => {
                 model.profile_center.confirming_delete = None;
+                let _ = model.close_overlay(OverlayKind::Confirmation);
                 model.notice = None;
                 model.dirty = true;
                 Vec::new()
@@ -1618,6 +1622,7 @@ fn request_disconnect_profile(model: &mut Model) {
     }
     let profile_id = profile.id.clone();
     model.profile_center.confirming_disconnect = Some(profile_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(format!(
         "Disconnect stored credential for '{profile_id}'? Y confirm / N cancel"
     )));
@@ -1625,6 +1630,7 @@ fn request_disconnect_profile(model: &mut Model) {
 }
 
 fn dispatch_disconnect_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     let request_id = model.allocate_request();
     model.pending.insert(
         request_id,
@@ -1645,6 +1651,7 @@ fn request_delete_profile(model: &mut Model) {
         return;
     };
     model.profile_center.confirming_delete = Some(profile_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(format!(
         "Delete profile '{profile_id}' and its stored credential? Y confirm / N cancel"
     )));
@@ -1652,6 +1659,7 @@ fn request_delete_profile(model: &mut Model) {
 }
 
 fn dispatch_delete_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     let request_id = model.allocate_request();
     model
         .pending
@@ -1845,6 +1853,7 @@ fn toggle_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     // confirmation; unarchiving is the safe direction and runs immediately.
     if !archived {
         model.browser.confirming_archive = Some(session_id);
+        let _ = model.open_overlay(OverlayKind::Confirmation);
         model.notice = Some(Notice::Info(
             "Press Y again to archive; N or Esc cancels".to_owned(),
         ));
@@ -1858,6 +1867,7 @@ fn confirm_archive_selected_session(model: &mut Model) -> Vec<UiEffect> {
     let Some(session_id) = model.browser.confirming_archive.take() else {
         return Vec::new();
     };
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
@@ -1928,6 +1938,7 @@ fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
         return Vec::new();
     }
     model.browser.confirming_delete = Some(entry.session_id.clone());
+    let _ = model.open_overlay(OverlayKind::Confirmation);
     model.notice = Some(Notice::Info(
         "Press Y again to permanently delete; N or Esc cancels".to_owned(),
     ));
@@ -1940,6 +1951,7 @@ fn confirm_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
         // A stray Y with no armed deletion is ignored.
         return Vec::new();
     };
+    let _ = model.close_overlay(OverlayKind::Confirmation);
     if has_pending_lifecycle(model, &session_id) {
         return Vec::new();
     }
@@ -2000,7 +2012,9 @@ fn handle_paste(model: &mut Model, text: &str) {
             normalize_palette_selection(model);
             model.dirty = true;
         }
-        Some(OverlayKind::TranscriptSearch | OverlayKind::Permission) => {}
+        Some(
+            OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
+        ) => {}
         None if model.route() == Route::Chat && !has_pending_submission(model) => {
             if model.composer.editor.insert_str(editable_safe(text)) {
                 model.notice = None;

@@ -1440,6 +1440,7 @@ impl Coordinator {
                 self.ports
                     .sessions
                     .send_replace(Arc::new(projection::session(&self.session)));
+                self.publish_sessions().await?;
                 self.commit(request_id).await?;
             }
             Err(error) => self.reject(request_id, engine_failure(&error)).await?,
@@ -4053,6 +4054,13 @@ mod tests {
         assert_eq!(created.revision, 1);
         assert!(created.transcript.is_empty());
         assert!(created.selected_model.is_none());
+        let list =
+            wait_for_session_list(&mut ui.session_lists, |list| list.sessions.len() >= 2).await;
+        assert_eq!(list.len(), 2);
+        assert!(
+            list.iter()
+                .any(|entry| { entry.session_id == created.session_id && entry.active })
+        );
 
         shutdown.cancel();
         task.await

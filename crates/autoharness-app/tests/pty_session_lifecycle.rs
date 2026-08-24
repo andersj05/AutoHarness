@@ -71,13 +71,16 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
 
     session.send_bytes(&CTRL_A);
     session.wait_for(
-        |screen| screen.contents().contains("Press Y ag"),
-        "archiving should arm before changing durable state",
+        |screen| {
+            let text = screen.contents();
+            text.contains("Archive session") && text.contains("Y confirm")
+        },
+        "archiving should own the confirmation overlay before changing durable state",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| !screen.contents().contains("Press Y ag"),
-        "N should cancel the armed archive",
+        |screen| !screen.contents().contains("Y confirm"),
+        "N should cancel the archive confirmation",
     );
     session.send_bytes(&CTRL_A);
     session.send_bytes(b"y");
@@ -96,13 +99,16 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
 
     session.send_bytes(&CTRL_D);
     session.wait_for(
-        |screen| screen.contents().contains("Press Y ag"),
-        "deletion should arm before export or removal",
+        |screen| {
+            let text = screen.contents();
+            text.contains("Delete session") && text.contains("Y confirm")
+        },
+        "deletion should own the confirmation overlay before export or removal",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| !screen.contents().contains("Press Y ag"),
-        "N should cancel the armed deletion",
+        |screen| !screen.contents().contains("Y confirm"),
+        "N should cancel the deletion confirmation",
     );
     session.send_bytes(&CTRL_D);
     session.send_bytes(b"y");

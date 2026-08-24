@@ -412,6 +412,8 @@ pub enum Focus {
     Help,
     /// The settings route owns key input.
     Settings,
+    /// An exact destructive action awaits Y or N.
+    Confirmation,
     /// The transcript search bar owns key input.
     Search,
 }
@@ -457,11 +459,11 @@ impl Route {
     #[must_use]
     pub const fn key_hint(self) -> &'static str {
         match self {
-            Self::Chat => "Ctrl+1",
-            Self::Sessions => "Ctrl+2",
-            Self::Profiles => "Ctrl+3",
-            Self::Settings => "Ctrl+4",
-            Self::Help => "Ctrl+5",
+            Self::Chat => "Alt+1",
+            Self::Sessions => "Alt+2",
+            Self::Profiles => "Alt+3",
+            Self::Settings => "Alt+4",
+            Self::Help => "Alt+5",
         }
     }
 
@@ -487,6 +489,7 @@ pub enum OverlayKind {
     TranscriptSearch,
     Permission,
     ProfileCredential,
+    Confirmation,
 }
 
 impl OverlayKind {
@@ -499,6 +502,7 @@ impl OverlayKind {
             Self::CommandPalette => Focus::Palette,
             Self::TranscriptSearch => Focus::Search,
             Self::Permission => Focus::Permission,
+            Self::Confirmation => Focus::Confirmation,
         }
     }
 }
@@ -1224,13 +1228,13 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         title: "Global",
         rows: &[
             (
-                "Ctrl+1..5",
+                "Alt+1..5",
                 "switch Chat, Sessions, Profiles, Settings, Help",
             ),
             ("Ctrl+S", "send the prompt"),
             ("Ctrl+N", "create a fresh session"),
-            ("Ctrl+L / Ctrl+2", "open Sessions"),
-            ("Ctrl+G / Ctrl+3", "open Profiles"),
+            ("Ctrl+L", "open Sessions"),
+            ("Ctrl+G", "open Profiles"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
@@ -1347,19 +1351,19 @@ pub const COMMANDS: &[CommandEntry] = &[
         id: "chat",
         label: "Chat",
         description: "Return to the conversation workspace",
-        key_hint: Some("Ctrl+1"),
+        key_hint: Some("Alt+1"),
     },
     CommandEntry {
         id: "sessions",
         label: "Sessions",
         description: "Browse, rename, archive, or delete sessions",
-        key_hint: Some("Ctrl+2"),
+        key_hint: Some("Alt+2"),
     },
     CommandEntry {
         id: "profiles",
         label: "Profiles and Providers",
         description: "Manage providers, API keys, connection tests, and defaults",
-        key_hint: Some("Ctrl+3"),
+        key_hint: Some("Alt+3"),
     },
     CommandEntry {
         id: "new-session",
@@ -1389,13 +1393,13 @@ pub const COMMANDS: &[CommandEntry] = &[
         id: "settings",
         label: "Settings",
         description: "Show effective provider, profile, and credential source",
-        key_hint: Some("Ctrl+4"),
+        key_hint: Some("Alt+4"),
     },
     CommandEntry {
         id: "help",
         label: "Help",
         description: "Show keybindings and guidance for the current focus",
-        key_hint: Some("Ctrl+5"),
+        key_hint: Some("Alt+5"),
     },
     CommandEntry {
         id: "copy",

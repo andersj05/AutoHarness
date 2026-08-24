@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, RetryPolicy, Route,
-    SessionBrowserEntry, SessionProjection, SessionsProjection, UiFailure, update, view,
+    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, PermissionDetailView,
+    PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry, SessionProjection,
+    SessionsProjection, ToolCallKey, UiFailure, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -112,6 +113,58 @@ fn ctrl_number_routes_cover_every_primary_destination() {
 }
 
 #[test]
+fn global_model_and_credential_overlays_restore_non_chat_routes() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(ctrl('p')));
+    assert_eq!(model.overlay(), Some(OverlayKind::ModelPicker));
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
+
+    let _ = update(&mut model, Message::Input(ctrl('3')));
+    let _ = update(&mut model, Message::Input(ctrl('k')));
+    assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.focus, Focus::Profiles);
+}
+
+#[test]
+fn permission_preempts_the_modal_slot_and_restores_the_base_route() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('2')));
+    let _ = update(&mut model, Message::Input(ctrl('/')));
+    assert_eq!(model.overlay(), Some(OverlayKind::CommandPalette));
+
+    let mut permission = (*model.session).clone();
+    permission.revision = 2;
+    permission.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("route-permission").expect("tool call id"),
+        tool_name: "fs_read".to_owned(),
+        capability: "filesystem read".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: vec![PermissionDetailView {
+            label: "Path".to_owned(),
+            value: "src/lib.rs".to_owned(),
+        }],
+    });
+    let _ = update(
+        &mut model,
+        Message::SessionChanged(Arc::new(permission.clone())),
+    );
+    assert_eq!(model.route(), Route::Sessions);
+    assert_eq!(model.overlay(), Some(OverlayKind::Permission));
+    assert_eq!(model.focus, Focus::Permission);
+
+    permission.revision = 3;
+    permission.permission_requests.clear();
+    let _ = update(&mut model, Message::SessionChanged(Arc::new(permission)));
+    assert_eq!(model.route(), Route::Sessions);
+    assert_eq!(model.overlay(), None);
+    assert_eq!(model.focus, Focus::Browser);
+}
+#[test]
 fn overlay_escape_restores_the_exact_route_and_focus() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('2')));
@@ -133,6 +186,8 @@ fn route_change_closes_modal_state_and_clears_hidden_actions() {
     let _ = update(&mut model, Message::Input(ctrl('2')));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     let _ = update(&mut model, Message::Input(ctrl('d')));
+    assert_eq!(model.overlay(), Some(OverlayKind::Confirmation));
+    assert_eq!(model.focus, Focus::Confirmation);
     assert!(model.browser_delete_confirmation().is_some());
 
     let _ = update(&mut model, Message::Input(ctrl('/')));
@@ -209,7 +264,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
     assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("Ctrl+3 manage providers"));
+    assert!(offline.contains("Alt+3 manage providers"));
 
     let _ = update(
         &mut model,

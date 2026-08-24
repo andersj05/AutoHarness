@@ -64,6 +64,7 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::CommandPalette) => render_palette(frame, area, model),
         Some(OverlayKind::SessionCredential) => render_credential(frame, area, model),
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
+        Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
         Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
 }
@@ -188,7 +189,7 @@ fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 ),
                 NAV_ACTIVE_STYLE,
             ),
-            Span::raw("  Ctrl+1..5 routes"),
+            Span::raw("  Alt+1..5 routes"),
         ])
     };
     frame.render_widget(Paragraph::new(route_line), area);
@@ -203,6 +204,70 @@ fn route_number(route: Route) -> usize {
         .iter()
         .position(|candidate| *candidate == route)
         .map_or(1, |index| index + 1)
+}
+fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let confirmation = if let Some(session_id) = &model.browser.confirming_archive {
+        Some((
+            " Archive session ",
+            format!("Archive session '{}'?", display_safe(session_id)),
+            "The session remains durable and can be unarchived.",
+        ))
+    } else if let Some(session_id) = &model.browser.confirming_delete {
+        Some((
+            " Delete session ",
+            format!("Permanently delete session '{}'?", display_safe(session_id)),
+            "A complete provider-neutral archive is written before deletion.",
+        ))
+    } else if let Some(profile_id) = &model.profile_center.confirming_disconnect {
+        Some((
+            " Disconnect credential ",
+            format!(
+                "Disconnect the stored credential for '{}'?",
+                display_safe(profile_id)
+            ),
+            "The profile remains and environment overrides are unchanged.",
+        ))
+    } else {
+        model
+            .profile_center
+            .confirming_delete
+            .as_ref()
+            .map(|profile_id| {
+                (
+                    " Delete provider profile ",
+                    format!(
+                        "Delete profile '{}' and its stored credential?",
+                        display_safe(profile_id)
+                    ),
+                    "Other provider profiles and credentials are unaffected.",
+                )
+            })
+    };
+    let Some((title, question, consequence)) = confirmation else {
+        return;
+    };
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(ERROR_STYLE);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let lines = vec![
+        Line::styled(question, Style::default().add_modifier(Modifier::BOLD)),
+        Line::from(""),
+        Line::styled(consequence, WARNING_STYLE),
+        Line::from(""),
+        Line::styled(
+            "Y confirm  N or Esc cancel",
+            Style::default().fg(Color::LightCyan),
+        ),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn workspace_label(workspace: &str) -> String {
@@ -428,12 +493,12 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     lines.push(Line::from(""));
     let primary = if status.active_profile.is_some() {
-        "P or Ctrl+3 manage profiles and credentials"
+        "P or Alt+3 manage profiles and credentials"
     } else {
-        "P or Ctrl+3 create your first provider profile"
+        "P or Alt+3 create your first provider profile"
     };
     lines.push(Line::styled(primary, Style::default().fg(Color::LightCyan)));
-    lines.push(Line::styled("Esc or Ctrl+1 return to Chat", MUTED_STYLE));
+    lines.push(Line::styled("Esc or Alt+1 return to Chat", MUTED_STYLE));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 /// Renders the full-screen local profile and provider connection center.
@@ -1211,7 +1276,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 lines.push(Line::styled("OFFLINE", WARNING_STYLE));
                 lines.push(Line::from("No provider credential is available."));
                 lines.push(Line::styled(
-                    "Ctrl+3 manage providers or Ctrl+K use a session-only key",
+                    "Alt+3 manage providers or Ctrl+K use a session-only key",
                     Style::default().fg(Color::LightCyan),
                 ));
             }
@@ -1223,7 +1288,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 lines.push(Line::styled("CONNECTION ERROR", ERROR_STYLE));
                 lines.push(Line::from(display_safe(&failure.message)));
                 lines.push(Line::styled(
-                    "Ctrl+R retry or Ctrl+3 inspect provider settings",
+                    "Ctrl+R retry or Alt+3 inspect provider settings",
                     Style::default().fg(Color::LightCyan),
                 ));
             }

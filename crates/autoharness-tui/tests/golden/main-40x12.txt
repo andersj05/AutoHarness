@@ -1,4 +1,4 @@
- 1 Chat   Ctrl+1..5 routes
+ 1 Chat   Alt+1..5 routes
  AutoHarness | failed
 ┌ Conversation ────────────────────────┐
 │exposed.                              │
