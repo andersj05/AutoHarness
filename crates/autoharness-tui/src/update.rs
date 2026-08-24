@@ -16,6 +16,7 @@ use crate::model::{
 };
 use crate::text::{display_safe, editable_safe};
 
+const MAX_DISPLAY_LABEL_CHARS: usize = 64;
 /// Applies one input to local UI state and returns application-owned effects.
 #[must_use]
 pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
@@ -395,7 +396,9 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             alt: false,
             ..
         } if model.settings_workspace.display_label_editor.is_some() => {
-            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
+            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut()
+                && editor.chars().count() < MAX_DISPLAY_LABEL_CHARS
+            {
                 editor.push_str(&display_safe(&character.to_string()));
                 model.dirty = true;
             }
@@ -407,6 +410,26 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input { key: Key::Down, .. } => {
             move_settings_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::PageUp, ..
+        } => {
+            move_settings_selection(model, -3);
+            Vec::new()
+        }
+        Input {
+            key: Key::PageDown, ..
+        } => {
+            move_settings_selection(model, 3);
+            Vec::new()
+        }
+        Input { key: Key::Home, .. } => {
+            move_settings_selection_to(model, 0);
+            Vec::new()
+        }
+        Input { key: Key::End, .. } => {
+            move_settings_selection_to(model, SettingsPreference::ALL.len().saturating_sub(1));
             Vec::new()
         }
         Input { key: Key::Left, .. } => change_selected_preference(model, -1),
@@ -447,16 +470,15 @@ fn selected_settings_preference(model: &Model) -> SettingsPreference {
 fn move_settings_selection(model: &mut Model, direction: isize) {
     let current = model.settings_workspace.selected;
     let last = SettingsPreference::ALL.len().saturating_sub(1);
-    let selected = current.saturating_add_signed(direction).min(last);
-    model.settings_workspace.selected = selected;
-    model.settings_workspace.scroll = settings_scroll_for(selected);
-    model.settings_workspace.display_label_editor = None;
-    model.dirty = true;
+    move_settings_selection_to(model, current.saturating_add_signed(direction).min(last));
 }
 
-fn settings_scroll_for(selected: usize) -> u16 {
-    const ROWS: [u16; 9] = [1, 21, 22, 23, 25, 26, 30, 31, 32];
-    ROWS[selected.min(ROWS.len().saturating_sub(1))].saturating_sub(2)
+fn move_settings_selection_to(model: &mut Model, selected: usize) {
+    let last = SettingsPreference::ALL.len().saturating_sub(1);
+    model.settings_workspace.selected = selected.min(last);
+    model.settings_workspace.scroll = 0;
+    model.settings_workspace.display_label_editor = None;
+    model.dirty = true;
 }
 
 fn begin_display_label_edit(model: &mut Model) {
@@ -2286,11 +2308,42 @@ fn handle_paste(model: &mut Model, text: &str) {
         Some(
             OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
         ) => {}
+        None if model.route() == Route::Profiles && model.profile_center.editor.is_some() => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            if let Some(field) = profile_editor_field(editor) {
+                let flattened = editable_safe(text).replace('\n', " ");
+                let remaining = 2_048usize.saturating_sub(field.len());
+                field.push_str(&flattened.chars().take(remaining).collect::<String>());
+                model.dirty = true;
+            }
+        }
+        None if model.route() == Route::Sessions && model.browser.renaming => {
+            let flattened = editable_safe(text).replace('\n', " ");
+            let remaining = 128usize.saturating_sub(model.browser.rename_buffer.chars().count());
+            model
+                .browser
+                .rename_buffer
+                .push_str(&flattened.chars().take(remaining).collect::<String>());
+            model.dirty = true;
+        }
         None if model.route() == Route::Settings
             && model.settings_workspace.display_label_editor.is_some() =>
         {
             if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
-                editor.push_str(&editable_safe(text).replace('\n', " "));
+                let flattened = editable_safe(text).replace('\n', " ");
+                let remaining = MAX_DISPLAY_LABEL_CHARS.saturating_sub(editor.chars().count());
+                let appended = flattened.chars().take(remaining).collect::<String>();
+                let truncated = appended.chars().count() < flattened.chars().count();
+                editor.push_str(&appended);
+                if truncated {
+                    model.notice = Some(Notice::Info(
+                        "Display label limited to 64 characters".to_owned(),
+                    ));
+                }
                 model.dirty = true;
             }
         }

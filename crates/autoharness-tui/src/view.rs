@@ -620,7 +620,8 @@ fn palette_item(
         " "
     };
     let mut label = format!(
-        "{prefix} /{} - {}",
+        "{prefix} {}  /{} - {}",
+        display_safe(entry.label),
         entry.id,
         display_safe(entry.description)
     );
@@ -794,21 +795,31 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             )
         })
     }));
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        format!(
-            "{} select  Left/Right change  Enter edit label  R inherit  D user default  Esc chat",
-            navigation_keys(model)
-        ),
-        visual_style(model, VisualRole::Muted),
-    ));
-    let scroll = model.settings_workspace.scroll;
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height.saturating_sub(hint_height);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let scroll = settings_scroll(
+        &lines,
+        SettingsPreference::at(model.settings_workspace.selected),
+        content,
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0)),
-        inner,
+        content,
     );
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{} select/PgUp/PgDn  Left/Right change  Enter edit label  R inherit  D user default  Esc chat",
+                navigation_keys(model)
+            ))
+            .style(visual_style(model, VisualRole::Muted)),
+            hint,
+        );
+    }
 }
 
 fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
@@ -911,6 +922,39 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
         format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
         style,
     )
+}
+
+fn settings_preference_label(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::DisplayLabel => "Display label",
+        SettingsPreference::ThemePreset => "Theme preset",
+        SettingsPreference::ColorMode => "Color mode",
+        SettingsPreference::GlyphMode => "Glyph mode",
+        SettingsPreference::ReducedMotion => "Reduced motion",
+        SettingsPreference::Density => "Density",
+        SettingsPreference::Layout => "Layout",
+        SettingsPreference::TerminalTimestampStyle => "Timestamp style",
+        SettingsPreference::ComposerSubmitBehavior => "Composer submit",
+    }
+}
+
+fn settings_scroll(lines: &[Line<'static>], selected: SettingsPreference, area: Rect) -> u16 {
+    let needle = settings_preference_label(selected);
+    let target = lines
+        .iter()
+        .position(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+                .contains(needle)
+        })
+        .unwrap_or_default();
+    let prefix_rows = Paragraph::new(Text::from(lines[..target].to_vec()))
+        .wrap(Wrap { trim: false })
+        .line_count(area.width);
+    let visible_rows = usize::from(area.height.max(1));
+    u16::try_from(prefix_rows.saturating_sub(visible_rows / 3)).unwrap_or(u16::MAX)
 }
 
 fn theme_preset_label(value: ThemePreset) -> &'static str {
@@ -1086,6 +1130,7 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let user = &model.profiles().user;
     let label = user.display_label.as_deref().unwrap_or("Local user");
     let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let default_model = user.default_model.as_deref().unwrap_or("not set");
     let default_mode = if user.default_mode.is_empty() {
         "safe agent"
     } else {
@@ -1104,6 +1149,8 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Span::raw("  "),
         Span::styled("Default ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_profile)),
+        Span::styled("  Model ", visual_style(model, VisualRole::Muted)),
+        Span::raw(display_safe(default_model)),
         Span::styled("  Mode ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_mode)),
     ]);
@@ -1187,7 +1234,20 @@ fn profile_list_item(
         visual_style(model, VisualRole::Normal)
     };
     let id = display_safe(&profile.id);
-    let label = if width >= 44 {
+    let default_model = profile
+        .default_model
+        .as_deref()
+        .map(display_safe)
+        .unwrap_or_else(|| "no default".to_owned());
+    let label = if width >= 56 {
+        format!(
+            "{marker}{active} {id}  {}  {}  {}  {}",
+            profile.kind.as_str(),
+            profile.credential_state.as_str(),
+            profile.connection.label(),
+            default_model,
+        )
+    } else if width >= 44 {
         format!(
             "{marker}{active} {id}  {}  {}  {}",
             profile.kind.as_str(),
@@ -1221,12 +1281,21 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         );
         return;
     };
+    let default_model = profile.default_model.as_deref().unwrap_or("not set");
+    let default_mode = if profile.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        profile.default_mode.as_str()
+    };
     let mut lines = vec![
         detail_line(model, "Name", &profile.id),
         detail_line(model, "Provider", profile.kind.as_str()),
+        detail_line(model, "Active", if profile.active { "yes" } else { "no" }),
         detail_line(model, "Credential", profile.credential_state.as_str()),
         detail_line(model, "Source", profile.credential_source.as_str()),
         detail_line(model, "Connection", profile.connection.label()),
+        detail_line(model, "Default model", default_model),
+        detail_line(model, "Mode", default_mode),
     ];
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));

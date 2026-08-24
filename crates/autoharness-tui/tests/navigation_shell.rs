@@ -296,6 +296,15 @@ fn chat_empty_state_explains_the_zero_shell_start_path() {
 }
 
 #[test]
+fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::End)));
+    let rendered = render_text(&model, 40, 12);
+    assert!(rendered.contains("Composer submit"));
+    assert!(rendered.contains("PgUp/PgDn"));
+}
+#[test]
 #[ignore = "visual review harness for the Phase 3.7 routed shell"]
 fn render_route_review_matrix() {
     for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
