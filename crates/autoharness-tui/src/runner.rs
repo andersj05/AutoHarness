@@ -421,15 +421,25 @@ mod tests {
     #[test]
     fn left_mouse_down_becomes_a_semantic_click() {
         let model = model_with_draft();
-        let event = Event::Mouse(MouseEvent {
+        let profile_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 2,
-            row: 0,
+            row: 23,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
-            terminal_message(event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::Route(Route::Chat)))
+            terminal_message(profile_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::OpenUserProfile))
+        ));
+        let settings_event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 14,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            terminal_message(settings_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::Route(Route::Settings)))
         ));
     }
 
