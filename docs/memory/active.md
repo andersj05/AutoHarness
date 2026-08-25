@@ -1,6 +1,6 @@
 # Active memory
 
-**Last reviewed:** 2026-08-24
+**Last reviewed:** 2026-08-25
 
 **Phase:** 3.9 terminal product validation
 
@@ -58,6 +58,7 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 ## Recently completed
 
 - Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
+- On 2026-08-25, `feat/tui-professional-overhaul` corrected compact-shell mouse geometry from the rendered content rectangle, added exact profile click coverage, added a bounded reduced-motion-safe startup boot surface, exposed `/profile` beside `/settings`, refreshed the dark preset to a dark neon cockpit palette, and passed 66 focused TUI tests, 350 workspace tests, strict Clippy, formatting, and three ignored Windows PTY journeys.
 - Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
 - Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
 - Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.

@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-08-23
+**Last reviewed:** 2026-08-25
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -20,7 +20,7 @@
 | 3.6. Local profile and provider connection center | Implemented locally | ADR-0013 recovery records, settings schema 2, application-owned profile workflows, distinct provider-scoped vault entries, runtime Gemini and router switching, content-free tests, default models, live safe projections, the responsive `Ctrl+G` center, fault injection, sentinel coverage, a composed restart lifecycle, a real PTY journey, and Windows Credential Manager smoke pass locally; Phase 3.7 cross-platform CI validated the full workspace and PTY suite, while macOS and Linux vault smoke evidence remains open |
 | 3.7. Unified TUI shell and navigation | Complete | Typed Chat, Sessions, Profiles, Settings, and Help routes, one modal owner, permission preemption, exact focus restoration, wide rail, compact tabs, unified safe status, redesigned Chat hierarchy and recovery states, routed settings provenance, exact confirmation dialogs, responsive goldens, all-route visual review, fresh-session list publication, and a real route and resize PTY journey pass locally and through green pull request #17 CI on Windows, macOS, and Linux |
 | 3.8. Personalization and accessibility | Implemented locally | Settings is a categorized keyboard workspace with value provenance, explanation, inherited and default reset controls, typed schema-3 local display and terminal preferences, fixed layered precedence, migration and malformed recovery, restricted workspace overrides, projection-driven theme, no-color, high-contrast, ASCII, reduced-motion, compact, and single-column rendering across security overlays, configurable composer submission, command-table shortcut reference, timestamp behavior, focused restart coverage, responsive security render matrices, and a Windows PTY ASCII-persistence journey; cross-platform pull-request evidence remains open |
-| 3.9. Terminal product validation | Implemented locally; evidence pending | This branch adds zero-shell onboarding, a local user-profile dialog, mouse capture and semantic click actions for routes, chat, sessions, profiles, confirmations, picker rows, palette rows, credential dialogs, and permission controls, responsive Settings action visibility, provider/profile default context, contextual-help parity, bounded paste editing, and route/session context; 118 focused TUI tests and 347 workspace tests pass while the full release-candidate evidence matrix remains open |
+| 3.9. Terminal product validation | Implemented locally; evidence pending | This branch adds zero-shell onboarding, geometry-derived semantic mouse actions with compact offset coverage, a bounded animated startup boot surface with reduced-motion and ASCII fallbacks, `/profile` and `/settings` command parity, dark neon styling, and 66 focused TUI tests plus 350 workspace tests; the full release-candidate evidence matrix remains open |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.9 validation |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
 | 6. Extension and distributed runtime | Planned | Target boundaries are documented; runtime is not implemented |
@@ -143,6 +143,7 @@
 - Bracketed paste is accepted by profile forms and session renaming while preserving bounded editable fields and credential secrecy.
 - The local user-profile dialog edits the non-secret display label through the existing typed preference intent, shows workspace/provider/model/mode context, and offers visible Save and Cancel controls.
 - Left-button terminal clicks become semantic typed actions after application-owned mouse capture; route tabs, Chat, Sessions, Profiles, profile detail actions, confirmations, and the user-profile dialog share the deterministic update path.
+- The 2026-08-25 TUI overhaul derives compact profile hit regions from the same content layout used by rendering, keeps blank rows inert, animates loading only within a bounded startup surface, and preserves the existing route, overlay, settings, profile, command, accessibility, and credential boundaries.
 - Mouse capture restoration is tested for normal exit, partial setup failure, drop fallback, and selected Windows PTY journeys; panic-hook-specific output and cross-platform restoration remain release evidence.
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
