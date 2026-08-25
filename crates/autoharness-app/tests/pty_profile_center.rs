@@ -6,10 +6,9 @@ use autoharness_settings::{LayerKind, SettingsBuilder};
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 const CTRL_G: [u8; 1] = [0x07];
-const ALT_N: [u8; 2] = [0x1b, b'n'];
 const ALT_D: [u8; 2] = [0x1b, b'd'];
 const TAB: [u8; 1] = *b"\t";
-const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
+const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 const DELETE: [u8; 4] = [0x1b, b'[', b'3', b'~'];
 
 #[test]
@@ -22,38 +21,42 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Profiles & Providers") && text.contains("No provider profiles yet")
+            text.contains("Providers & Connections") && text.contains("Google AI Studio")
         },
-        "profile center should open from credential-free first run",
+        "provider catalog should open from credential-free first run",
     );
 
-    terminal.send_bytes(&ALT_N);
+    terminal.send_bytes(b"\r");
     terminal.wait_for(
         |screen| screen.contents().contains("Create provider profile"),
-        "create profile form should open",
+        "Google AI Studio setup form should open",
     );
-    terminal.submit_line("personal-gemini");
+    terminal.submit_line("");
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("personal-gemini") && text.contains("Provider profile saved")
+            text.contains("google-ai-studio") && text.contains("Provider profile saved")
         },
-        "Gemini profile should save inside the terminal",
+        "Google AI Studio profile should save inside the terminal",
     );
 
-    terminal.send_bytes(&ALT_N);
-    terminal.type_text("work-router");
-    terminal.send_bytes(&TAB);
-    terminal.send_bytes(&RIGHT);
-    terminal.send_bytes(&TAB);
-    terminal.submit_line("https://router.example.test/v1/");
+    terminal.send_bytes(&DOWN);
+    terminal.send_bytes(b"\r");
+    terminal.wait_for(
+        |screen| screen.contents().contains("Create provider profile"),
+        "OpenAI and Codex setup form should open",
+    );
+    terminal.submit_line("");
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("work-router") && text.contains("router.example.test")
+            text.contains("openai-codex") && text.contains("api.openai.com")
         },
-        "router profile should save with its non-secret connection fields",
+        "OpenAI and Codex profile should save with its non-secret connection fields",
     );
+
+    terminal.send_bytes(&TAB);
+    terminal.send_bytes(&DOWN);
 
     terminal.send_bytes(&ALT_D);
     terminal.wait_for(
@@ -111,6 +114,6 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
         .profiles()
         .map(|(id, _)| id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["personal-gemini", "work-router"]);
+    assert_eq!(names, vec!["google-ai-studio", "openai-codex"]);
     assert_eq!(settings.active_profile(), None);
 }

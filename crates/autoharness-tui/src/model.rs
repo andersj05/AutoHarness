@@ -1277,15 +1277,118 @@ impl Drop for ProfileCredentialEditor {
     }
 }
 
+/// Keyboard focus within the provider connection center.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ProviderCenterFocus {
+    /// A saved connection is selected for activation or maintenance.
+    #[default]
+    Connections,
+    /// A supported connection template is selected for setup.
+    Catalog,
+}
+
+/// One safe, non-secret provider connection template.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProviderCatalogEntry {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub kind: ProviderKindLabel,
+    pub base_url: &'static str,
+    pub project: &'static str,
+    pub auth_header: &'static str,
+}
+
+/// API-key connections supported by the currently linked provider adapters.
+///
+/// An account remains with its provider. AutoHarness never accepts provider
+/// passwords, and a provider-specific OAuth or device flow is not represented
+/// until its adapter supports secure refresh and revocation semantics.
+pub(crate) const PROVIDER_CATALOG: [ProviderCatalogEntry; 6] = [
+    ProviderCatalogEntry {
+        id: "google-ai-studio",
+        label: "Google AI Studio",
+        description: "Gemini API key",
+        kind: ProviderKindLabel::Gemini,
+        base_url: "",
+        project: "",
+        auth_header: "",
+    },
+    ProviderCatalogEntry {
+        id: "openai-codex",
+        label: "OpenAI / Codex",
+        description: "OpenAI-compatible API key",
+        kind: ProviderKindLabel::Router,
+        base_url: "https://api.openai.com/",
+        project: "openai",
+        auth_header: "Authorization",
+    },
+    ProviderCatalogEntry {
+        id: "openrouter",
+        label: "OpenRouter",
+        description: "OpenAI-compatible API key",
+        kind: ProviderKindLabel::Router,
+        base_url: "https://openrouter.ai/api/",
+        project: "openrouter",
+        auth_header: "Authorization",
+    },
+    ProviderCatalogEntry {
+        id: "groq",
+        label: "Groq",
+        description: "OpenAI-compatible API key",
+        kind: ProviderKindLabel::Router,
+        base_url: "https://api.groq.com/openai/",
+        project: "groq",
+        auth_header: "Authorization",
+    },
+    ProviderCatalogEntry {
+        id: "mistral",
+        label: "Mistral AI",
+        description: "OpenAI-compatible API key",
+        kind: ProviderKindLabel::Router,
+        base_url: "https://api.mistral.ai/",
+        project: "mistral",
+        auth_header: "Authorization",
+    },
+    ProviderCatalogEntry {
+        id: "custom-openai",
+        label: "Custom compatible API",
+        description: "OpenAI-compatible API key",
+        kind: ProviderKindLabel::Router,
+        base_url: "",
+        project: "",
+        auth_header: "Authorization",
+    },
+];
+
 /// Full-screen Profiles and Providers local interaction state.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ProfileCenterState {
+    /// The connection catalog or existing connections owns arrows and Enter.
+    pub focus: ProviderCenterFocus,
+    /// Selected row in [`PROVIDER_CATALOG`].
+    pub catalog_selected: usize,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,
     pub editor: Option<ProfileEditorState>,
     pub credential: Option<ProfileCredentialEditor>,
     pub confirming_delete: Option<String>,
+}
+
+impl Default for ProfileCenterState {
+    fn default() -> Self {
+        Self {
+            focus: ProviderCenterFocus::Connections,
+            catalog_selected: 0,
+            query: String::new(),
+            selected: None,
+            confirming_disconnect: None,
+            editor: None,
+            credential: None,
+            confirming_delete: None,
+        }
+    }
 }
 /// Command-palette local state.
 #[derive(Debug, Default)]

@@ -88,8 +88,11 @@ Vault errors never include secret material.
 The application owns one serialized profile-management workflow.
 The TUI consumes safe profile and connection read models and emits typed intents; it never calls the settings file, operating-system vault, or provider adapters directly.
 Secret-bearing save and replace intents remain ephemeral, non-serializable, zeroizing, and redacted in debug output.
-The full-screen `Ctrl+G` surface supports profile create, edit, duplicate, activate, test, disconnect, and confirmed delete actions.
-It also supports explicit vault save or replace, selection of the current compatible model as the active profile default, and content-free connection health results.
+The keyboard-first Providers workspace is available through `Ctrl+G`, `/provider`, or the Settings tab.
+Its catalog starts safe non-secret profiles for Google AI Studio and compatible API-key endpoints including OpenAI or Codex, OpenRouter, Groq, Mistral AI, and a custom OpenAI-compatible API.
+It supports profile create, edit, duplicate, activate, test, disconnect, confirmed delete, explicit vault save or replace, selection of the current compatible model as the active profile default, and content-free connection health results.
+The catalog never accepts provider passwords or claims account sign-in support.
+Provider-specific OAuth, device authorization, token refresh, revocation, and account identity require a provider adapter and durable credential lifecycle before they may be offered.
 Keyboard shortcuts, command-palette routing, and visible controls converge on the same typed intents.
 
 Each profile uses one deterministic vault reference derived from its validated profile identity.

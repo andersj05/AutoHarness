@@ -100,12 +100,6 @@ fn alt(character: char) -> Input {
     }
 }
 
-fn type_text(model: &mut Model, text: &str) {
-    for character in text.chars() {
-        let _ = update(model, Message::Input(key(Key::Char(character))));
-    }
-}
-
 fn render_text(model: &Model, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -133,7 +127,7 @@ fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
 
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
         let rendered = render_text(&model, width, height);
-        assert!(rendered.contains("Profiles & Providers"));
+        assert!(rendered.contains("Providers & Connections"));
         assert!(rendered.contains("Jensen"));
         assert!(rendered.contains("personal-gemini"));
     }
@@ -143,34 +137,51 @@ fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
 }
 
 #[test]
-fn create_forms_emit_typed_gemini_and_router_profiles() {
+fn provider_catalog_starts_safe_api_key_profiles_for_gemini_and_openai_codex() {
     let mut gemini = model();
     let _ = update(&mut gemini, Message::Input(ctrl('g')));
-    let _ = update(&mut gemini, Message::Input(alt('n')));
-    type_text(&mut gemini, "second-gemini");
+    let _ = update(&mut gemini, Message::Input(key(Key::Tab)));
+    let _ = update(&mut gemini, Message::Input(key(Key::Enter)));
     let effects = update(&mut gemini, Message::Input(key(Key::Enter)));
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "second-gemini" && profile.kind == ProviderKindLabel::Gemini
+            if profile.id == "google-ai-studio" && profile.kind == ProviderKindLabel::Gemini
     ));
 
-    let mut router = model();
-    let _ = update(&mut router, Message::Input(ctrl('g')));
-    let _ = update(&mut router, Message::Input(alt('n')));
-    type_text(&mut router, "second-router");
-    let _ = update(&mut router, Message::Input(key(Key::Tab)));
-    let _ = update(&mut router, Message::Input(key(Key::Right)));
-    let _ = update(&mut router, Message::Input(key(Key::Tab)));
-    type_text(&mut router, "https://router.example.test/v1/");
-    let effects = update(&mut router, Message::Input(key(Key::Enter)));
+    let mut codex = model();
+    let _ = update(&mut codex, Message::Input(ctrl('g')));
+    let _ = update(&mut codex, Message::Input(key(Key::Tab)));
+    let _ = update(&mut codex, Message::Input(key(Key::Down)));
+    let _ = update(&mut codex, Message::Input(key(Key::Enter)));
+    let effects = update(&mut codex, Message::Input(key(Key::Enter)));
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "second-router"
+            if profile.id == "openai-codex"
                 && profile.kind == ProviderKindLabel::Router
-                && profile.base_url == "https://router.example.test/v1/"
+                && profile.base_url == "https://api.openai.com/"
+                && profile.auth_header == "Authorization"
     ));
+}
+
+#[test]
+fn provider_catalog_names_supported_key_connections() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+
+    let rendered = render_text(&model, 120, 40);
+    for provider in [
+        "Google AI Studio",
+        "OpenAI / Codex",
+        "OpenRouter",
+        "Groq",
+        "Mistral AI",
+    ] {
+        assert!(rendered.contains(provider), "missing provider {provider}");
+    }
+    assert!(rendered.contains("Provider account API key"));
 }
 
 #[test]

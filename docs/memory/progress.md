@@ -155,13 +155,15 @@
 - The 2026-08-25 chat shell polish removes numbered route tabs and provider status strings from the visible shell, keeps Profile and Settings as the only bottom actions, removes the sidebar session heading, renders capability-aware `think:` and `/workspace` metadata, and gives the composer a transparent rounded box with a `❯` input line.
 - The 2026-08-25 visual refinement relocates Profile and Settings into the wide sidebar, keeps compact actions only where no sidebar exists, makes Border styles terminal-transparent across themes, renders inline slash rows without fills, and removes the transcript-bottom plus composer-top double line.
 - The 2026-08-25 command integration removes duplicate Profile/Profiles suggestions, renders `/command` before the human label, keeps the cursor visible inside the filtered composer, and makes Provider, Profile, and Agents command destinations render inside Settings tabs.
+- The 2026-08-25 provider workspace keeps catalog and saved-connection keyboard focus explicit, returns from Providers to Settings before Chat, preserves chat borders under the inline command list, and starts only supported API-key connection profiles for Google AI Studio, OpenAI or Codex, OpenRouter, Groq, Mistral AI, and custom compatible endpoints.
+- The provider catalog does not collect provider passwords or present OAuth account sign-in as implemented because the current provider contracts have no device flow, callback, token refresh, revocation, or account-identity lifecycle.
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
 - The operating-system vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
 - Eight dedicated PTY scenarios, including routed shell, profile management, onboarding, offline resume, session lifecycle, forced shutdown, and permission outcomes, pass locally on Windows; Linux and refreshed Windows evidence awaits the release-candidate CI run.
-- This branch passes workspace formatting, strict Clippy, 347 workspace tests across 46 suites, 118 focused TUI tests, two ignored visual-review renders, and the relative Markdown-link check.
+- This branch passes workspace formatting, strict Clippy, 401 workspace tests across 47 suites, 55 focused TUI tests, the real Windows provider and routed-shell PTY journeys, and the relative Markdown-link check.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
 - The checked-in release checklist has not been executed against a committed release candidate.
 

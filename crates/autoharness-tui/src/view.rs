@@ -12,9 +12,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, MouseAction, Notice,
-    OverlayKind, PendingKind, ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode,
-    ProviderKindLabel, ProviderProfileProjection, RetryPolicy, Route, SettingsPreference,
-    TranscriptItem,
+    OverlayKind, PROVIDER_CATALOG, PendingKind, ProfileConnectionState, ProfileCredentialAction,
+    ProfileEditorMode, ProviderCenterFocus, ProviderKindLabel, ProviderProfileProjection,
+    RetryPolicy, Route, SettingsPreference, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -1242,11 +1242,11 @@ fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
     let height = u16::try_from(model.palette_entries().len())
         .unwrap_or(u16::MAX)
         .min(8)
-        .min(area.height.saturating_sub(4));
+        .min(area.height.saturating_sub(5));
     Rect::new(
-        area.x,
+        area.x.saturating_add(1),
         area.bottom().saturating_sub(height.saturating_add(4)),
-        area.width,
+        area.width.saturating_sub(2),
         height,
     )
 }
@@ -1941,12 +1941,12 @@ fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
         ComposerSubmitBehavior::Enter => "Enter",
     }
 }
-/// Renders the full-screen local profile and provider connection center.
+/// Renders the keyboard-first local provider connection center.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
     let outer = app_block(model)
         .borders(Borders::ALL)
-        .title(" Profiles & Providers ")
+        .title(" Providers & Connections ")
         .border_style(visual_style(model, VisualRole::Border));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
@@ -1955,66 +1955,78 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 
     let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
+    let notice_height = if model.notice.is_some() && inner.height >= 10 {
         if compact { 1 } else { 2 }
     } else {
         0
     };
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
+    let user_height = if compact { 1 } else { 2 };
+    let catalog_height = if inner.height >= 24 {
+        7
+    } else if inner.height >= 14 {
         4
+    } else if inner.height >= 9 {
+        3
     } else {
-        2
+        0
     };
-    let help_height = u16::from(inner.height >= 4);
+    let help_height = u16::from(inner.height >= 5);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(user_height),
+            Constraint::Length(catalog_height),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(help_height),
         ])
         .split(inner);
     render_local_profile(frame, rows[0], model);
+    if catalog_height > 0 {
+        render_provider_catalog(frame, rows[1], model);
+    }
 
-    if !presentation(model).single_column && rows[1].width >= 78 && rows[1].height >= 7 {
+    if !presentation(model).single_column && rows[2].width >= 78 && rows[2].height >= 7 {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[1]);
+            .split(rows[2]);
         render_profile_list(frame, columns[0], model);
         render_profile_detail(frame, columns[1], model);
-    } else if rows[1].height >= 9 {
+    } else if rows[2].height >= 9 {
         let panes = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(rows[1]);
+            .split(rows[2]);
         render_profile_list(frame, panes[0], model);
         render_profile_detail(frame, panes[1], model);
     } else {
-        render_profile_list(frame, rows[1], model);
+        render_profile_list(frame, rows[2], model);
     }
 
     if notice_height > 0 {
-        render_notice(frame, rows[2], model);
+        render_notice(frame, rows[3], model);
     }
     if help_height > 0 {
-        let hints = if model.profile_center.confirming_disconnect.is_some() {
-            "[ Y Disconnect ]  [ N Cancel ]"
-        } else if model.profile_center.confirming_delete.is_some() {
-            "[ Y Delete ]  [ N Cancel ]"
-        } else if rows[3].width >= 70 {
-            "[ New ]  [ Key ]  [ Test ]  [ Default ]  Esc"
-        } else if rows[3].width >= 50 {
-            "[ New ]  [ Key ]  [ Test ]  Esc"
+        let return_to = if model.route() == Route::Settings {
+            "Settings"
         } else {
-            "[ New ]  [ Key ]  Esc"
+            "Chat"
+        };
+        let hints = match model.profile_center.focus {
+            ProviderCenterFocus::Catalog => format!(
+                "↑/↓ choose  Enter connect  Tab connections  Esc {return_to}  Provider account API key"
+            ),
+            ProviderCenterFocus::Connections if rows[4].width >= 70 => {
+                format!("↑/↓ connections  Enter activate  Tab catalog  Alt+K key  Esc {return_to}")
+            }
+            ProviderCenterFocus::Connections => {
+                format!("Enter activate  Tab catalog  Esc {return_to}")
+            }
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
-            rows[3],
+            rows[4],
         );
     }
 
@@ -2023,6 +2035,56 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else if model.profile_center.credential.is_some() {
         render_profile_credential(frame, area, model);
     }
+}
+
+fn render_provider_catalog(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let title = if model.profile_center.focus == ProviderCenterFocus::Catalog {
+        " Connect a provider "
+    } else {
+        " Provider catalog "
+    };
+    let block = app_block(model).borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let selected = model
+        .profile_center
+        .catalog_selected
+        .min(PROVIDER_CATALOG.len().saturating_sub(1));
+    let visible = usize::from(inner.height);
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(PROVIDER_CATALOG.len().saturating_sub(visible));
+    let items = PROVIDER_CATALOG
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(index, entry)| {
+            let is_selected =
+                model.profile_center.focus == ProviderCenterFocus::Catalog && index == selected;
+            let prefix = if is_selected {
+                selection_marker(model)
+            } else {
+                " "
+            };
+            let label = if inner.width >= 48 {
+                format!("{prefix} {}  {}", entry.label, entry.description)
+            } else {
+                format!("{prefix} {}", entry.label)
+            };
+            let style = if is_selected {
+                visual_style(model, VisualRole::Selected)
+            } else {
+                visual_style(model, VisualRole::Normal)
+            };
+            ListItem::new(Line::styled(label, style))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(items), inner);
 }
 
 fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2071,7 +2133,12 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let title = format!(
-        " Provider profiles - filter: {} ",
+        " {} - filter: {} ",
+        if model.profile_center.focus == ProviderCenterFocus::Connections {
+            "Connections"
+        } else {
+            "Saved connections"
+        },
         display_safe(&model.profile_center.query)
     );
     let block = app_block(model).borders(Borders::ALL).title(title);
@@ -2083,9 +2150,9 @@ fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let profiles = model.filtered_profiles().collect::<Vec<_>>();
     if profiles.is_empty() {
         let empty = if model.profiles().profiles.is_empty() {
-            "No provider profiles yet.\nPress Alt+N to create Gemini or router access."
+            "No connections yet.\nTab to the catalog, choose a provider, then press Enter."
         } else {
-            "No profiles match this filter."
+            "No connections match this filter."
         };
         frame.render_widget(
             Paragraph::new(empty)
@@ -2118,7 +2185,8 @@ fn profile_list_item(
     model: &Model,
     width: u16,
 ) -> ListItem<'static> {
-    let selected = model.profile_selection() == Some(profile.id.as_str());
+    let selected = model.profile_center.focus == ProviderCenterFocus::Connections
+        && model.profile_selection() == Some(profile.id.as_str());
     let marker = if selected {
         selection_marker(model)
     } else {
@@ -2133,6 +2201,7 @@ fn profile_list_item(
         visual_style(model, VisualRole::Normal)
     };
     let id = display_safe(&profile.id);
+    let provider = provider_connection_label(profile);
     let default_model = profile
         .default_model
         .as_deref()
@@ -2140,29 +2209,40 @@ fn profile_list_item(
         .unwrap_or_else(|| "no default".to_owned());
     let label = if width >= 56 {
         format!(
-            "{marker}{active} {id}  {}  {}  {}  {}",
-            profile.kind.as_str(),
+            "{marker}{active} {id}  {provider}  {}  {}  {}",
             profile.credential_state.as_str(),
             profile.connection.label(),
             default_model,
         )
     } else if width >= 44 {
         format!(
-            "{marker}{active} {id}  {}  {}  {}",
-            profile.kind.as_str(),
+            "{marker}{active} {id}  {provider}  {}  {}",
             profile.credential_state.as_str(),
             profile.connection.label(),
         )
     } else if width >= 32 {
         format!(
-            "{marker}{active} {id}  {}  {}",
-            profile.kind.as_str(),
+            "{marker}{active} {id}  {provider}  {}",
             profile.credential_state.as_str(),
         )
     } else {
-        format!("{marker}{active} {id}  {}", profile.kind.as_str())
+        format!("{marker}{active} {id}  {provider}")
     };
     ListItem::new(Line::from(label)).style(style)
+}
+
+fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static str {
+    if profile.kind == ProviderKindLabel::Gemini {
+        return "Google AI Studio";
+    }
+    PROVIDER_CATALOG
+        .iter()
+        .find(|entry| {
+            entry.kind == ProviderKindLabel::Router
+                && !entry.base_url.is_empty()
+                && entry.base_url == profile.base_url
+        })
+        .map_or("OpenAI-compatible", |entry| entry.label)
 }
 
 fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2188,7 +2268,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     };
     let mut lines = vec![
         detail_line(model, "Name", &profile.id),
-        detail_line(model, "Provider", profile.kind.as_str()),
+        detail_line(model, "Provider", provider_connection_label(profile)),
     ];
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));

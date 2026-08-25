@@ -170,6 +170,30 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
     let filtered = buffer_text(&render_model(&model, 80, 24));
     assert!(filtered.contains("❯ /profile"));
 }
+
+#[test]
+fn inline_command_rows_preserve_the_chat_panel_border_at_narrow_width() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+
+    let rendered = render_model(&model, 40, 12);
+    assert_eq!(
+        rendered
+            .buffer()
+            .cell((0, 1))
+            .expect("left transcript border")
+            .symbol(),
+        "│"
+    );
+    assert_eq!(
+        rendered
+            .buffer()
+            .cell((1, 1))
+            .expect("first command column")
+            .symbol(),
+        "›"
+    );
+}
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {
     let mut model = empty_model();
@@ -295,7 +319,7 @@ fn known_slash_commands_execute_and_clear_the_composer() {
     type_text(&mut model, "/profiles");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Profiles & Providers"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers & Connections"));
 
     // The historical /sessions spelling keeps working through the shared table.
     let mut model = empty_model();
@@ -312,7 +336,7 @@ fn provider_command_opens_provider_setup_route() {
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
     assert_eq!(model.focus, Focus::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Profiles & Providers"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers & Connections"));
 }
 
 #[test]

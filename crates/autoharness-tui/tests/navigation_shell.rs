@@ -245,7 +245,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
         ('1', "Conversation"),
         ('2', "Sessions"),
-        ('3', "Profiles & Providers"),
+        ('3', "Providers & Connections"),
         ('4', "Settings & Provenance"),
         ('5', "Help"),
     ];
@@ -383,6 +383,23 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     assert_eq!(model.route(), Route::Settings);
     assert_eq!(model.focus, Focus::Settings);
+}
+
+#[test]
+fn providers_returns_to_settings_navigation_before_leaving_the_route() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(render_text(&model, 80, 24).contains("Google AI Studio"));
+
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::UserProfile);
 }
 
 #[test]

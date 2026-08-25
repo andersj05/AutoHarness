@@ -9,11 +9,11 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, LocalPreferenceChange, Message,
-    Model, MouseAction, Notice, OverlayKind, PendingKind, ProfileCredentialAction,
-    ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
-    ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT,
-    SessionProjection, SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent,
-    UiNotice,
+    Model, MouseAction, Notice, OverlayKind, PROVIDER_CATALOG, PendingKind,
+    ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
+    ProfilesProjection, ProviderCenterFocus, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
+    Route, SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsPreference, UiEffect,
+    UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -815,6 +815,13 @@ fn move_settings_nav(model: &mut Model, direction: isize) {
 
 fn activate_settings_nav(model: &mut Model) -> Vec<UiEffect> {
     model.settings_workspace.nav_focus = false;
+    if model.settings_workspace.nav_selected == 1 {
+        model.profile_center.focus = if model.profiles().profiles.is_empty() {
+            ProviderCenterFocus::Catalog
+        } else {
+            ProviderCenterFocus::Connections
+        };
+    }
     model.notice = None;
     model.dirty = true;
     Vec::new()
@@ -1100,6 +1107,13 @@ fn open_settings_tab(model: &mut Model, tab: usize) {
     navigate_to_route(model, Route::Settings);
     model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
     model.settings_workspace.nav_focus = false;
+    if model.settings_workspace.nav_selected == 1 {
+        model.profile_center.focus = if model.profiles().profiles.is_empty() {
+            ProviderCenterFocus::Catalog
+        } else {
+            ProviderCenterFocus::Connections
+        };
+    }
     model.dirty = true;
 }
 
@@ -1833,23 +1847,41 @@ fn navigate_to_route(model: &mut Model, route: Route) {
 }
 
 fn close_profile_center(model: &mut Model) {
-    navigate_to_route(model, Route::Chat);
+    if model.route() == Route::Settings {
+        model.settings_workspace.nav_focus = true;
+        model.notice = None;
+        model.dirty = true;
+    } else {
+        navigate_to_route(model, Route::Chat);
+    }
 }
 
 fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
+    let entry = PROVIDER_CATALOG
+        .get(model.profile_center.catalog_selected)
+        .copied()
+        .unwrap_or(PROVIDER_CATALOG[0]);
     model.profile_center.editor = Some(ProfileEditorState {
         mode: ProfileEditorMode::Create,
         source_id: None,
         field: 0,
-        id: String::new(),
-        kind: ProviderKindLabel::Gemini,
-        base_url: String::new(),
-        project: String::new(),
-        auth_header: String::new(),
+        id: entry.id.to_owned(),
+        kind: entry.kind,
+        base_url: entry.base_url.to_owned(),
+        project: entry.project.to_owned(),
+        auth_header: entry.auth_header.to_owned(),
     });
     model.notice = None;
     model.dirty = true;
     Vec::new()
+}
+
+fn move_provider_catalog_selection(model: &mut Model, direction: isize) {
+    let count = isize::try_from(PROVIDER_CATALOG.len()).unwrap_or(1);
+    let current = isize::try_from(model.profile_center.catalog_selected).unwrap_or(0);
+    let next = (current + direction).rem_euclid(count);
+    model.profile_center.catalog_selected = usize::try_from(next).unwrap_or(0);
+    model.dirty = true;
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1926,13 +1958,34 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             close_profile_center(model);
             Vec::new()
         }
+        Input { key: Key::Tab, .. } => {
+            model.profile_center.focus = match model.profile_center.focus {
+                ProviderCenterFocus::Connections => ProviderCenterFocus::Catalog,
+                ProviderCenterFocus::Catalog => ProviderCenterFocus::Connections,
+            };
+            model.dirty = true;
+            Vec::new()
+        }
         Input { key: Key::Up, .. } => {
-            move_profile_selection(model, -1);
+            if model.profile_center.focus == ProviderCenterFocus::Catalog {
+                move_provider_catalog_selection(model, -1);
+            } else {
+                move_profile_selection(model, -1);
+            }
             Vec::new()
         }
         Input { key: Key::Down, .. } => {
-            move_profile_selection(model, 1);
+            if model.profile_center.focus == ProviderCenterFocus::Catalog {
+                move_provider_catalog_selection(model, 1);
+            } else {
+                move_profile_selection(model, 1);
+            }
             Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } if model.profile_center.focus == ProviderCenterFocus::Catalog => {
+            create_profile_editor(model)
         }
         Input {
             key: Key::Enter, ..
@@ -1941,12 +1994,15 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('n' | 'N'),
             alt: true,
             ..
-        } => create_profile_editor(model),
+        } => {
+            model.profile_center.focus = ProviderCenterFocus::Catalog;
+            create_profile_editor(model)
+        }
         Input {
             key: Key::Char('e' | 'E'),
             alt: true,
             ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             open_profile_editor(model, ProfileEditorMode::Edit);
             Vec::new()
         }
@@ -1954,7 +2010,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('d' | 'D'),
             alt: true,
             ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             open_profile_editor(model, ProfileEditorMode::Duplicate);
             Vec::new()
         }
@@ -1962,7 +2018,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('k' | 'K'),
             alt: true,
             ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             open_profile_credential(model);
             Vec::new()
         }
@@ -1970,30 +2026,34 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('t' | 'T'),
             alt: true,
             ..
-        } => test_selected_profile(model),
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
+            test_selected_profile(model)
+        }
         Input {
             key: Key::Char('m' | 'M'),
             alt: true,
             ..
-        } => set_selected_profile_default_model(model),
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
+            set_selected_profile_default_model(model)
+        }
         Input {
             key: Key::Char('x' | 'X'),
             alt: true,
             ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             request_disconnect_profile(model);
             Vec::new()
         }
         Input {
             key: Key::Delete, ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             request_delete_profile(model);
             Vec::new()
         }
         Input {
             key: Key::Backspace,
             ..
-        } => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections => {
             model.profile_center.query.pop();
             model.sync_profile_selection();
             model.dirty = true;
@@ -2004,7 +2064,9 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: false,
             alt: false,
             ..
-        } if !character.is_control() => {
+        } if model.profile_center.focus == ProviderCenterFocus::Connections
+            && !character.is_control() =>
+        {
             model.profile_center.query.push(character);
             model.sync_profile_selection();
             model.dirty = true;
