@@ -11,8 +11,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, Notice, OverlayKind,
-    PendingKind, ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode,
+    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, MouseAction, Notice,
+    OverlayKind, PendingKind, ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode,
     ProviderKindLabel, ProviderProfileProjection, RetryPolicy, Route, SettingsPreference,
     TranscriptItem,
 };
@@ -255,8 +255,342 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::SessionCredential) => render_credential(frame, area, model),
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
+        Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
         Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
+}
+/// Resolves a left-click coordinate against the currently visible controls.
+///
+/// Hit testing is derived from the same responsive layout thresholds as the
+/// renderer and returns semantic actions for the deterministic update layer.
+pub fn hit_test(
+    model: &Model,
+    width: u16,
+    height: u16,
+    column: u16,
+    row: u16,
+) -> Option<MouseAction> {
+    let area = Rect::new(0, 0, width, height);
+    if model.overlay() == Some(OverlayKind::UserProfile) {
+        let popup = user_profile_rect(area);
+        let button_row = popup.y.saturating_add(10);
+        if button_row < popup.bottom() && row == button_row {
+            return (column < popup.x + popup.width / 2)
+                .then_some(MouseAction::UserProfileSave)
+                .or(Some(MouseAction::UserProfileCancel));
+        }
+        return None;
+    }
+    if model.overlay() == Some(OverlayKind::Confirmation) {
+        let popup = confirmation_rect(area);
+        if row == popup.bottom().saturating_sub(2) {
+            return (column < popup.x + popup.width / 2)
+                .then_some(MouseAction::Confirm)
+                .or(Some(MouseAction::Cancel));
+        }
+        return None;
+    }
+    if model.overlay() == Some(OverlayKind::ModelPicker) {
+        return picker_mouse_target(area, model, row);
+    }
+    if model.overlay() == Some(OverlayKind::CommandPalette) {
+        return palette_mouse_target(area, model, row);
+    }
+    if model.overlay() == Some(OverlayKind::SessionCredential) {
+        return modal_button_target(
+            credential_rect(area),
+            row,
+            column,
+            MouseAction::CredentialSubmit,
+            MouseAction::CredentialCancel,
+        );
+    }
+    if model.overlay() == Some(OverlayKind::ProfileCredential) {
+        return modal_button_target(
+            popup_rect(area),
+            row,
+            column,
+            MouseAction::ProfileCredentialSubmit,
+            MouseAction::ProfileCredentialCancel,
+        );
+    }
+    if model.overlay() == Some(OverlayKind::Permission) {
+        return modal_button_target(
+            credential_rect(area),
+            row,
+            column,
+            MouseAction::PermissionAllow,
+            MouseAction::PermissionDeny,
+        );
+    }
+    if model.route() == Route::Profiles
+        && (model.profile_center.editor.is_some() || model.profile_center.credential.is_some())
+    {
+        return None;
+    }
+    if model.overlay().is_some() {
+        return None;
+    }
+
+    let wide = !presentation(model).single_column && width >= 100 && height >= 16;
+    let content_x = if wide { 28 } else { 0 };
+    if wide && column < 28 {
+        if row == 1 {
+            return Some(MouseAction::OpenUserProfile);
+        }
+        let route_start = 4 + u16::from(active_session_title(model).is_some()) * 3;
+        if row >= route_start && row < route_start + 5 {
+            return Some(MouseAction::Route(
+                Route::ALL[usize::from(row - route_start)],
+            ));
+        }
+        return None;
+    }
+    if !wide && row == 0 {
+        return route_at_column(width, column).map(MouseAction::Route);
+    }
+
+    let relative_column = column.saturating_sub(content_x);
+    match model.route() {
+        Route::Chat if row == height.saturating_sub(1) && height >= 7 => {
+            if relative_column < 12 {
+                Some(MouseAction::ChatSend)
+            } else if relative_column < 30 {
+                Some(MouseAction::ChatModels)
+            } else if relative_column < 45 {
+                Some(MouseAction::ChatNewSession)
+            } else if relative_column < 62 {
+                Some(MouseAction::ChatSessions)
+            } else if relative_column < 82 {
+                Some(MouseAction::ChatCredential)
+            } else {
+                Some(MouseAction::ChatHelp)
+            }
+        }
+        Route::Sessions if row == height.saturating_sub(2) => {
+            if relative_column < 18 {
+                Some(MouseAction::SessionOpen)
+            } else if relative_column < 38 {
+                Some(MouseAction::SessionRename)
+            } else if relative_column < 58 {
+                Some(MouseAction::SessionArchive)
+            } else {
+                Some(MouseAction::SessionDelete)
+            }
+        }
+        Route::Profiles if row == 1 => Some(MouseAction::OpenUserProfile),
+        Route::Profiles
+            if profile_detail_button_rows(model, width, height)
+                .is_some_and(|(first, _)| row == first) =>
+        {
+            profile_action_at_column(relative_column)
+        }
+        Route::Profiles
+            if profile_detail_button_rows(model, width, height)
+                .is_some_and(|(_, second)| row == second) =>
+        {
+            profile_secondary_action_at_column(relative_column)
+        }
+        Route::Profiles if row == height.saturating_sub(2) => {
+            profile_action_at_column(relative_column)
+        }
+        Route::Profiles => profile_at_row(model, width, height, column, row),
+        _ => None,
+    }
+}
+
+fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
+    let popup = popup_rect(area);
+    let inner_height = popup.height.saturating_sub(2);
+    let stale_height = u16::from(
+        matches!(
+            &*model.catalog,
+            CatalogProjection::Ready { stale: true, .. }
+        ) && inner_height >= 3,
+    );
+    let help_height = u16::from(inner_height >= 4);
+    let list_height = inner_height.saturating_sub(1 + stale_height + help_height);
+    let list_start = popup.y.saturating_add(2);
+    if row < list_start || row >= list_start.saturating_add(list_height) {
+        return None;
+    }
+    let models = filtered_models(model);
+    let selected_index = model
+        .picker
+        .selected
+        .as_ref()
+        .and_then(|selected| models.iter().position(|summary| &summary.model == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list_height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(models.len().saturating_sub(visible));
+    models
+        .get(start + usize::from(row - list_start))
+        .map(|summary| MouseAction::PickerSelect(summary.model.clone()))
+}
+fn modal_button_target(
+    popup: Rect,
+    row: u16,
+    column: u16,
+    primary: MouseAction,
+    secondary: MouseAction,
+) -> Option<MouseAction> {
+    let action_row = popup.bottom().saturating_sub(2);
+    if row != action_row {
+        return None;
+    }
+    if column < popup.x + popup.width / 2 {
+        Some(primary)
+    } else {
+        Some(secondary)
+    }
+}
+
+fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
+    let popup = popup_rect(area);
+    let inner_height = popup.height.saturating_sub(2);
+    let help_height = u16::from(inner_height >= 3);
+    let list_height = inner_height.saturating_sub(1 + help_height);
+    let list_start = popup.y.saturating_add(2);
+    if row < list_start || row >= list_start.saturating_add(list_height) {
+        return None;
+    }
+    let entries = model.palette_entries();
+    let selected_index = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list_height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(entries.len().saturating_sub(visible));
+    entries
+        .get(start + usize::from(row - list_start))
+        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
+}
+fn profile_action_at_column(column: u16) -> Option<MouseAction> {
+    match column {
+        0..=6 => Some(MouseAction::ProfileNew),
+        8..=14 => Some(MouseAction::ProfileCredential),
+        16..=22 => Some(MouseAction::ProfileTest),
+        24..=34 => Some(MouseAction::ProfileDefaultModel),
+        _ => None,
+    }
+}
+
+fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
+    match column {
+        0..=13 => Some(MouseAction::ProfileDisconnect),
+        15..=24 => Some(MouseAction::ProfileDelete),
+        _ => None,
+    }
+}
+fn profile_detail_button_rows(model: &Model, width: u16, height: u16) -> Option<(u16, u16)> {
+    let selected = model.selected_profile()?;
+    let outer = Rect::new(0, 0, width, height);
+    let inner = Rect::new(
+        outer.x.saturating_add(1),
+        outer.y.saturating_add(1),
+        outer.width.saturating_sub(2),
+        outer.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(0),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let detail = if !presentation(model).single_column && rows[1].width >= 78 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(rows[1])[1]
+    } else if rows[1].height >= 9 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(rows[1])[1]
+    } else {
+        return None;
+    };
+    let mut lines = 8_u16;
+    if selected.kind == ProviderKindLabel::Router {
+        lines = lines.saturating_add(1);
+        if !selected.project.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+        if !selected.auth_header.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+    }
+    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
+        lines = lines.saturating_add(1);
+    }
+    if model.profiles().pending_recovery > 0 {
+        lines = lines.saturating_add(1);
+    }
+    let first = detail
+        .y
+        .saturating_add(1)
+        .saturating_add(lines)
+        .saturating_add(1);
+    Some((first, first.saturating_add(1)))
+}
+
+fn route_at_column(width: u16, column: u16) -> Option<Route> {
+    let mut offset = 0_u16;
+    for (index, route) in Route::ALL.into_iter().enumerate() {
+        let segment = if width >= 72 {
+            u16::try_from(route.label().len() + 5).unwrap_or(u16::MAX)
+        } else if width >= 48 {
+            u16::try_from(route.label().len() + 4).unwrap_or(u16::MAX)
+        } else {
+            return Some(route);
+        };
+        if column < offset.saturating_add(segment) {
+            return Some(Route::ALL[index]);
+        }
+        offset = offset.saturating_add(segment);
+    }
+    None
+}
+
+fn profile_at_row(
+    model: &Model,
+    width: u16,
+    height: u16,
+    column: u16,
+    row: u16,
+) -> Option<MouseAction> {
+    let content_x = if !presentation(model).single_column && width >= 100 && height >= 16 {
+        28
+    } else {
+        0
+    };
+    if column < content_x {
+        return None;
+    }
+    let list_start = if width >= 78 && height >= 7 { 5 } else { 3 };
+    let index = usize::from(row.saturating_sub(list_start));
+    model
+        .filtered_profiles()
+        .nth(index)
+        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
 }
 
 fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
@@ -303,6 +637,18 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         Line::from(""),
     ];
+    if let Some(title) = active_session_title(model) {
+        lines.push(Line::styled(
+            "SESSION",
+            visual_style(model, VisualRole::Muted),
+        ));
+        lines.push(Line::styled(
+            display_safe(&title),
+            visual_style(model, VisualRole::Normal),
+        ));
+        lines.push(Line::from(""));
+    }
+
     for (index, route) in Route::ALL.into_iter().enumerate() {
         let label = format!(" {}  {:<10}", index + 1, route.label());
         let style = if route == model.route() {
@@ -349,6 +695,47 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         visual_style(model, VisualRole::Muted),
     ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn active_session_title(model: &Model) -> Option<String> {
+    model
+        .sessions
+        .sessions
+        .iter()
+        .find(|entry| entry.active || entry.session_id == model.session.session_id)
+        .map(|entry| display_safe(&entry.title))
+}
+
+fn conversation_title(model: &Model) -> String {
+    active_session_title(model).map_or_else(
+        || " Conversation ".to_owned(),
+        |title| format!(" Conversation{}{} ", chrome_separator(model), title),
+    )
+}
+
+fn onboarding_step(model: &Model) -> (&'static str, &'static str) {
+    if model.session.selected_model.is_none() {
+        ("NEXT", "Ctrl+P choose a model")
+    } else if model.settings().provider_status.credential_connected {
+        ("READY", "Write a prompt below")
+    } else {
+        ("NEXT", "Ctrl+K connect a session-only key")
+    }
+}
+
+fn render_onboarding(lines: &mut Vec<Line<'static>>, model: &Model) {
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        "GET STARTED",
+        visual_style(model, VisualRole::User),
+    ));
+    lines.push(Line::from("1  Connect a provider in Alt+3 or Ctrl+K"));
+    lines.push(Line::from("2  Choose a compatible model with Ctrl+P"));
+    let (label, action) = onboarding_step(model);
+    lines.push(Line::styled(
+        format!("3  {label} · {action}"),
+        visual_style(model, VisualRole::Assistant),
+    ));
 }
 
 fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -478,6 +865,56 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = user_profile_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" User profile ")
+        .border_style(visual_style(model, VisualRole::Border));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let label = model
+        .user_profile
+        .display_label_editor
+        .as_deref()
+        .unwrap_or_default();
+    let user = &model.profiles().user;
+    let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let default_model = user.default_model.as_deref().unwrap_or("not set");
+    let default_mode = if user.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        user.default_mode.as_str()
+    };
+    let lines = vec![
+        Line::styled("LOCAL IDENTITY", visual_style(model, VisualRole::User)),
+        Line::styled(
+            format!("Display name  > {}", display_safe(label)),
+            visual_style(model, VisualRole::Selected),
+        ),
+        Line::styled(
+            format!("Workspace     {}", workspace_label(&user.workspace)),
+            visual_style(model, VisualRole::Muted),
+        ),
+        Line::from(""),
+        Line::styled("DEFAULTS", visual_style(model, VisualRole::User)),
+        detail_line(model, "Provider", default_profile),
+        detail_line(model, "Model", default_model),
+        detail_line(model, "Mode", default_mode),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[ Save ]", visual_style(model, VisualRole::Selected)),
+            Span::raw("  "),
+            Span::styled("[ Cancel ]", visual_style(model, VisualRole::Field)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 fn workspace_label(workspace: &str) -> String {
     workspace
         .rsplit(['/', '\\'])
@@ -567,7 +1004,8 @@ fn palette_item(
         " "
     };
     let mut label = format!(
-        "{prefix} /{} - {}",
+        "{prefix} {}  /{} - {}",
+        display_safe(entry.label),
         entry.id,
         display_safe(entry.description)
     );
@@ -741,21 +1179,31 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             )
         })
     }));
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        format!(
-            "{} select  Left/Right change  Enter edit label  R inherit  D user default  Esc chat",
-            navigation_keys(model)
-        ),
-        visual_style(model, VisualRole::Muted),
-    ));
-    let scroll = model.settings_workspace.scroll;
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height.saturating_sub(hint_height);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let scroll = settings_scroll(
+        &lines,
+        SettingsPreference::at(model.settings_workspace.selected),
+        content,
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0)),
-        inner,
+        content,
     );
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{} select/PgUp/PgDn  Left/Right change  Enter edit label  R inherit  D user default  Esc chat",
+                navigation_keys(model)
+            ))
+            .style(visual_style(model, VisualRole::Muted)),
+            hint,
+        );
+    }
 }
 
 fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
@@ -858,6 +1306,39 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
         format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
         style,
     )
+}
+
+fn settings_preference_label(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::DisplayLabel => "Display label",
+        SettingsPreference::ThemePreset => "Theme preset",
+        SettingsPreference::ColorMode => "Color mode",
+        SettingsPreference::GlyphMode => "Glyph mode",
+        SettingsPreference::ReducedMotion => "Reduced motion",
+        SettingsPreference::Density => "Density",
+        SettingsPreference::Layout => "Layout",
+        SettingsPreference::TerminalTimestampStyle => "Timestamp style",
+        SettingsPreference::ComposerSubmitBehavior => "Composer submit",
+    }
+}
+
+fn settings_scroll(lines: &[Line<'static>], selected: SettingsPreference, area: Rect) -> u16 {
+    let needle = settings_preference_label(selected);
+    let target = lines
+        .iter()
+        .position(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+                .contains(needle)
+        })
+        .unwrap_or_default();
+    let prefix_rows = Paragraph::new(Text::from(lines[..target].to_vec()))
+        .wrap(Wrap { trim: false })
+        .line_count(area.width);
+    let visible_rows = usize::from(area.height.max(1));
+    u16::try_from(prefix_rows.saturating_sub(visible_rows / 3)).unwrap_or(u16::MAX)
 }
 
 fn theme_preset_label(value: ThemePreset) -> &'static str {
@@ -990,31 +1471,15 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     if help_height > 0 {
         let hints = if model.profile_center.confirming_disconnect.is_some() {
-            "Y disconnect credential  N/Esc cancel"
+            "[ Y Disconnect ]  [ N Cancel ]"
         } else if model.profile_center.confirming_delete.is_some() {
-            "Y delete profile and credential  N/Esc cancel"
-        } else if rows[3].width >= 100 {
-            if presentation(model).ascii {
-                "Up/Down choose Enter active Alt+N new Alt+E edit Alt+K key Alt+T test Alt+M default Esc"
-            } else {
-                "↑/↓ choose Enter active Alt+N new Alt+E edit Alt+K key Alt+T test Alt+M default Esc"
-            }
+            "[ Y Delete ]  [ N Cancel ]"
         } else if rows[3].width >= 70 {
-            if presentation(model).ascii {
-                "Up/Down choose  Enter active  Alt+N new  Alt+K key  Alt+T test  Esc"
-            } else {
-                "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Alt+T test  Esc"
-            }
+            "[ New ]  [ Key ]  [ Test ]  [ Default ]  Esc"
         } else if rows[3].width >= 50 {
-            if presentation(model).ascii {
-                "Up/Down choose  Enter active  Alt+N new  Alt+K key  Esc"
-            } else {
-                "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Esc"
-            }
-        } else if presentation(model).ascii {
-            "Up/Down  Enter active  Alt+N new  Esc"
+            "[ New ]  [ Key ]  [ Test ]  Esc"
         } else {
-            "↑/↓  Enter active  Alt+N new  Esc"
+            "[ New ]  [ Key ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
@@ -1033,6 +1498,7 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let user = &model.profiles().user;
     let label = user.display_label.as_deref().unwrap_or("Local user");
     let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let default_model = user.default_model.as_deref().unwrap_or("not set");
     let default_mode = if user.default_mode.is_empty() {
         "safe agent"
     } else {
@@ -1051,6 +1517,8 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Span::raw("  "),
         Span::styled("Default ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_profile)),
+        Span::styled("  Model ", visual_style(model, VisualRole::Muted)),
+        Span::raw(display_safe(default_model)),
         Span::styled("  Mode ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_mode)),
     ]);
@@ -1134,7 +1602,20 @@ fn profile_list_item(
         visual_style(model, VisualRole::Normal)
     };
     let id = display_safe(&profile.id);
-    let label = if width >= 44 {
+    let default_model = profile
+        .default_model
+        .as_deref()
+        .map(display_safe)
+        .unwrap_or_else(|| "no default".to_owned());
+    let label = if width >= 56 {
+        format!(
+            "{marker}{active} {id}  {}  {}  {}  {}",
+            profile.kind.as_str(),
+            profile.credential_state.as_str(),
+            profile.connection.label(),
+            default_model,
+        )
+    } else if width >= 44 {
         format!(
             "{marker}{active} {id}  {}  {}  {}",
             profile.kind.as_str(),
@@ -1168,12 +1649,15 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         );
         return;
     };
+    let default_model = profile.default_model.as_deref().unwrap_or("not set");
+    let default_mode = if profile.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        profile.default_mode.as_str()
+    };
     let mut lines = vec![
         detail_line(model, "Name", &profile.id),
         detail_line(model, "Provider", profile.kind.as_str()),
-        detail_line(model, "Credential", profile.credential_state.as_str()),
-        detail_line(model, "Source", profile.credential_source.as_str()),
-        detail_line(model, "Connection", profile.connection.label()),
     ];
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));
@@ -1184,6 +1668,14 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             lines.push(detail_line(model, "Auth header", &profile.auth_header));
         }
     }
+    lines.extend([
+        detail_line(model, "Active", if profile.active { "yes" } else { "no" }),
+        detail_line(model, "Credential", profile.credential_state.as_str()),
+        detail_line(model, "Source", profile.credential_source.as_str()),
+        detail_line(model, "Connection", profile.connection.label()),
+        detail_line(model, "Default model", default_model),
+        detail_line(model, "Mode", default_mode),
+    ]);
     if let ProfileConnectionState::Failed(reason) = &profile.connection {
         lines.push(Line::from(vec![
             Span::styled("Reason      ", visual_style(model, VisualRole::Error)),
@@ -1200,25 +1692,27 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Alt+N new  Alt+E edit  Alt+D duplicate  Alt+K save/replace",
-        visual_style(model, VisualRole::Muted),
-    )));
-    lines.push(Line::from(Span::styled(
-        "Alt+T test  Alt+M set current model default",
-        visual_style(model, VisualRole::Muted),
-    )));
-    lines.push(Line::from(Span::styled(
-        "Alt+X disconnect  Delete remove",
-        visual_style(model, VisualRole::Muted),
-    )));
+    lines.push(Line::from(vec![
+        Span::styled("[ New ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Key ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Test ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Default ]", visual_style(model, VisualRole::Field)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("[ Disconnect ]", visual_style(model, VisualRole::Warning)),
+        Span::raw(" "),
+        Span::styled("[ Delete ]", visual_style(model, VisualRole::Error)),
+    ]));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn detail_line(model: &Model, label: &'static str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{label:<12}"),
+            format!("{label:<14}"),
             visual_style(model, VisualRole::Muted),
         ),
         Span::raw(display_safe(value)),
@@ -1314,18 +1808,22 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type API key"
     };
-    let lines = vec![
-        Line::from(Span::styled(
-            masked,
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{masked}\n\nStored only in the operating-system vault.",),
             visual_style(model, VisualRole::Warning),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Stored only in the operating-system vault. Enter save  Esc cancel",
-            visual_style(model, VisualRole::Muted),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        )))
+        .wrap(Wrap { trim: false }),
+        content,
+    );
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new("[ Save ] Enter    [ Cancel ] Esc")
+            .style(visual_style(model, VisualRole::Assistant)),
+        actions,
+    );
 }
 
 /// Renders the searchable session-browser overlay from local state only.
@@ -1404,17 +1902,11 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
     if help.height > 0 && !model.browser.renaming {
         let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
-            "Y confirm  N/Esc cancel"
+            "[ Y Confirm ]  [ N Cancel ]"
         } else if help.width >= 50 {
-            if presentation(model).ascii {
-                "Up/Down Enter open  ^R rename  ^A archive  ^D delete  Esc"
-            } else {
-                "↑/↓ Enter open  ^R rename  ^A archive  ^D delete  Esc"
-            }
-        } else if presentation(model).ascii {
-            "Up/Down Enter open  ^R rename  ^D delete"
+            "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
-            "↑/↓ Enter open  ^R rename  ^D delete"
+            "[ Open ]  [ Rename ]  [ Delete ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
@@ -1467,11 +1959,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     };
     let pending = model.answering_permissions.contains(&request.tool_call_id);
-    let help = if pending {
-        "Saving answer..."
-    } else {
-        "Y allow  N/Esc deny"
-    };
     let mut lines = vec![
         Line::styled(
             "A model requested an external capability.",
@@ -1501,12 +1988,23 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::raw(display_safe(&detail.value)),
         ])
     }));
-    lines.push(Line::styled(help, visual_style(model, VisualRole::Warning)));
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .scroll((model.permission_scroll, 0)),
-        inner,
+        content,
+    );
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    let action_text = if pending {
+        "Saving answer..."
+    } else {
+        "[ Allow ] Y    [ Deny ] N/Esc deny"
+    };
+    frame.render_widget(
+        Paragraph::new(action_text).style(visual_style(model, VisualRole::Warning)),
+        actions,
     );
 }
 
@@ -1726,7 +2224,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let block = bordered.then(|| {
         app_block(model)
             .borders(Borders::ALL)
-            .title(" Conversation ")
+            .title(conversation_title(model))
             .border_style(visual_style(model, VisualRole::Border))
     });
     let inner = block.as_ref().map_or(area, |block| block.inner(area));
@@ -1852,6 +2350,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                     "Enter sends"
                 };
                 lines.push(Line::styled(send, visual_style(model, VisualRole::Muted)));
+                render_onboarding(&mut lines, model);
             }
         }
         return Text::from(lines);
@@ -2306,14 +2805,11 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type key"
     };
-    let text = if inner.height < 8 || inner.width < 36 {
+    let compact = inner.height < 8 || inner.width < 36;
+    let text = if compact {
         Text::from(vec![
             Line::from("API key required"),
             Line::styled(format!(" {mask} "), visual_style(model, VisualRole::Field)),
-            Line::styled(
-                "Enter connect  Esc later",
-                visual_style(model, VisualRole::Muted),
-            ),
         ])
     } else {
         Text::from(vec![
@@ -2324,14 +2820,17 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 format!("  {mask}  "),
                 visual_style(model, VisualRole::Field),
             ),
-            Line::from(""),
-            Line::styled(
-                "Enter connect  Backspace edit  Esc later",
-                visual_style(model, VisualRole::Muted),
-            ),
         ])
     };
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new("[ Connect ] Enter    [ Cancel ] Esc")
+            .style(visual_style(model, VisualRole::Assistant)),
+        actions,
+    );
 }
 
 fn render_picker_models(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2453,7 +2952,21 @@ fn credential_rect(area: Rect) -> Rect {
         return area;
     }
     let width = area.width.saturating_sub(4).min(68);
-    let height = area.height.saturating_sub(2).min(10);
+    let height = area.height.saturating_sub(2).min(11);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.max(1),
+        height.max(1),
+    )
+}
+
+fn user_profile_rect(area: Rect) -> Rect {
+    if area.width <= 44 || area.height <= 14 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(72);
+    let height = area.height.saturating_sub(4).min(16);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,

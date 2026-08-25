@@ -9,18 +9,20 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, LocalPreferenceChange, Message,
-    Model, Notice, OverlayKind, PendingKind, ProfileCredentialAction, ProfileCredentialEditor,
-    ProfileEditorMode, ProfileEditorState, ProfilesProjection, ProviderKindLabel,
-    ProviderProfileDraft, RetryPolicy, Route, SessionProjection, SessionsProjection,
-    SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
+    Model, MouseAction, Notice, OverlayKind, PendingKind, ProfileCredentialAction,
+    ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
+    ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SessionProjection,
+    SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
+const MAX_DISPLAY_LABEL_CHARS: usize = 64;
 /// Applies one input to local UI state and returns application-owned effects.
 #[must_use]
 pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
     match message {
         Message::Input(input) => handle_input(model, input),
+        Message::Mouse(action) => handle_mouse(model, action),
         Message::Paste(text) => {
             let text = zeroize::Zeroizing::new(text);
             handle_paste(model, &text);
@@ -78,6 +80,180 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
     }
 }
+fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
+    if let Some(overlay) = model.overlay() {
+        let allowed = match overlay {
+            OverlayKind::UserProfile => matches!(
+                action,
+                MouseAction::UserProfileSave | MouseAction::UserProfileCancel
+            ),
+            OverlayKind::Confirmation => {
+                matches!(action, MouseAction::Confirm | MouseAction::Cancel)
+            }
+            OverlayKind::ModelPicker => matches!(action, MouseAction::PickerSelect(_)),
+            OverlayKind::CommandPalette => matches!(action, MouseAction::PaletteRun(_)),
+            OverlayKind::SessionCredential => {
+                matches!(
+                    action,
+                    MouseAction::CredentialSubmit | MouseAction::CredentialCancel
+                )
+            }
+            OverlayKind::ProfileCredential => matches!(
+                action,
+                MouseAction::ProfileCredentialSubmit | MouseAction::ProfileCredentialCancel
+            ),
+            OverlayKind::Permission => {
+                matches!(
+                    action,
+                    MouseAction::PermissionAllow | MouseAction::PermissionDeny
+                )
+            }
+            OverlayKind::TranscriptSearch => false,
+        };
+        if !allowed {
+            return Vec::new();
+        }
+    }
+    match action {
+        MouseAction::Route(route) => {
+            navigate_to_route(model, route);
+            Vec::new()
+        }
+        MouseAction::OpenUserProfile => {
+            open_user_profile(model);
+            Vec::new()
+        }
+        MouseAction::ChatSend => submit_prompt(model),
+        MouseAction::ChatModels => {
+            open_picker(model);
+            Vec::new()
+        }
+        MouseAction::ChatNewSession => create_session(model),
+        MouseAction::ChatSessions => {
+            navigate_to_route(model, Route::Sessions);
+            Vec::new()
+        }
+        MouseAction::ChatCredential => {
+            open_credential(model);
+            Vec::new()
+        }
+        MouseAction::ChatHelp => {
+            navigate_to_route(model, Route::Help);
+            Vec::new()
+        }
+        MouseAction::ProfileNew => create_profile_editor(model),
+        MouseAction::ProfileCredential => {
+            open_profile_credential(model);
+            Vec::new()
+        }
+        MouseAction::ProfileTest => test_selected_profile(model),
+        MouseAction::ProfileDefaultModel => set_selected_profile_default_model(model),
+        MouseAction::ProfileDisconnect => {
+            request_disconnect_profile(model);
+            Vec::new()
+        }
+        MouseAction::ProfileDelete => {
+            request_delete_profile(model);
+            Vec::new()
+        }
+        MouseAction::SelectProfile(profile_id) => {
+            if model
+                .profiles()
+                .profiles
+                .iter()
+                .any(|profile| profile.id == profile_id)
+            {
+                model.profile_center.selected = Some(profile_id);
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        MouseAction::SessionOpen => open_selected_session(model),
+        MouseAction::SessionRename => rename_selected_session(model),
+        MouseAction::SessionArchive => toggle_archive_selected_session(model),
+        MouseAction::SessionDelete => request_delete_selected_session(model),
+        MouseAction::Confirm => confirm_mouse_action(model),
+        MouseAction::Cancel => cancel_mouse_action(model),
+        MouseAction::UserProfileSave => commit_user_profile(model),
+        MouseAction::UserProfileCancel => {
+            close_user_profile(model);
+            Vec::new()
+        }
+        MouseAction::CredentialSubmit => submit_credential(model),
+        MouseAction::CredentialCancel => {
+            close_credential(model);
+            Vec::new()
+        }
+        MouseAction::ProfileCredentialSubmit => submit_profile_credential(model),
+        MouseAction::ProfileCredentialCancel => {
+            model.profile_center.credential = None;
+            let _ = model.close_overlay(OverlayKind::ProfileCredential);
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        MouseAction::PermissionAllow => answer_permission(model, true),
+        MouseAction::PermissionDeny => answer_permission(model, false),
+        MouseAction::PickerSelect(selection) => {
+            if model
+                .catalog
+                .models()
+                .iter()
+                .any(|summary| summary.selectable && summary.model == selection)
+            {
+                model.picker.selected = Some(selection);
+                select_picker_model(model)
+            } else {
+                Vec::new()
+            }
+        }
+        MouseAction::PaletteRun(command) => {
+            if model
+                .palette_entries()
+                .iter()
+                .any(|entry| entry.id == command)
+            {
+                close_palette(model);
+                run_command_by_id(model, &command).unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn confirm_mouse_action(model: &mut Model) -> Vec<UiEffect> {
+    match model.route() {
+        Route::Sessions if model.browser.confirming_archive.is_some() => {
+            confirm_archive_selected_session(model)
+        }
+        Route::Sessions if model.browser.confirming_delete.is_some() => {
+            confirm_delete_selected_session(model)
+        }
+        Route::Profiles => {
+            if let Some(profile_id) = model.profile_center.confirming_disconnect.take() {
+                dispatch_disconnect_profile(model, profile_id)
+            } else if let Some(profile_id) = model.profile_center.confirming_delete.take() {
+                dispatch_delete_profile(model, profile_id)
+            } else {
+                Vec::new()
+            }
+        }
+        Route::Sessions => Vec::new(),
+        Route::Chat | Route::Settings | Route::Help => Vec::new(),
+    }
+}
+
+fn cancel_mouse_action(model: &mut Model) -> Vec<UiEffect> {
+    model.browser.confirming_archive = None;
+    model.browser.confirming_delete = None;
+    model.profile_center.confirming_disconnect = None;
+    model.profile_center.confirming_delete = None;
+    let _ = model.close_overlay(OverlayKind::Confirmation);
+    model.notice = None;
+    model.dirty = true;
+    Vec::new()
+}
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     if model.overlay() == Some(OverlayKind::Permission) {
@@ -109,6 +285,17 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
     ) {
         navigate_to_route(model, Route::Profiles);
+        return Vec::new();
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('u' | 'U'),
+            alt: true,
+            ..
+        }
+    ) {
+        open_user_profile(model);
         return Vec::new();
     }
     if matches!(
@@ -209,6 +396,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             OverlayKind::TranscriptSearch => handle_search_input(model, input),
             OverlayKind::Permission => handle_permission_input(model, input),
             OverlayKind::ProfileCredential => handle_profile_credential_input(model, input),
+            OverlayKind::UserProfile => handle_user_profile_input(model, input),
             OverlayKind::Confirmation => match model.route() {
                 Route::Sessions => handle_browser_input(model, input),
                 Route::Profiles => handle_profile_input(model, input),
@@ -216,7 +404,6 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             },
         };
     }
-
     match model.route() {
         Route::Chat => handle_chat_input(model, input),
         Route::Sessions => handle_browser_input(model, input),
@@ -395,7 +582,9 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             alt: false,
             ..
         } if model.settings_workspace.display_label_editor.is_some() => {
-            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
+            if let Some(editor) = model.settings_workspace.display_label_editor.as_mut()
+                && editor.chars().count() < MAX_DISPLAY_LABEL_CHARS
+            {
                 editor.push_str(&display_safe(&character.to_string()));
                 model.dirty = true;
             }
@@ -407,6 +596,26 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input { key: Key::Down, .. } => {
             move_settings_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::PageUp, ..
+        } => {
+            move_settings_selection(model, -3);
+            Vec::new()
+        }
+        Input {
+            key: Key::PageDown, ..
+        } => {
+            move_settings_selection(model, 3);
+            Vec::new()
+        }
+        Input { key: Key::Home, .. } => {
+            move_settings_selection_to(model, 0);
+            Vec::new()
+        }
+        Input { key: Key::End, .. } => {
+            move_settings_selection_to(model, SettingsPreference::ALL.len().saturating_sub(1));
             Vec::new()
         }
         Input { key: Key::Left, .. } => change_selected_preference(model, -1),
@@ -439,6 +648,58 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         _ => Vec::new(),
     }
 }
+fn handle_user_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            close_user_profile(model);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        }
+        | Input {
+            key: Key::Char('s' | 'S'),
+            ctrl: true,
+            ..
+        } => commit_user_profile(model),
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            if let Some(editor) = model.user_profile.display_label_editor.as_mut() {
+                editor.pop();
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            if let Some(editor) = model.user_profile.display_label_editor.as_mut()
+                && editor.chars().count() < MAX_DISPLAY_LABEL_CHARS
+            {
+                editor.push(character);
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
+    let value = model
+        .user_profile
+        .display_label_editor
+        .take()
+        .unwrap_or_default();
+    let value = (!value.trim().is_empty()).then_some(value);
+    let effects = dispatch_local_preference(model, LocalPreferenceChange::DisplayLabel(value));
+    let _ = model.close_overlay(OverlayKind::UserProfile);
+    effects
+}
 
 fn selected_settings_preference(model: &Model) -> SettingsPreference {
     SettingsPreference::at(model.settings_workspace.selected)
@@ -447,16 +708,15 @@ fn selected_settings_preference(model: &Model) -> SettingsPreference {
 fn move_settings_selection(model: &mut Model, direction: isize) {
     let current = model.settings_workspace.selected;
     let last = SettingsPreference::ALL.len().saturating_sub(1);
-    let selected = current.saturating_add_signed(direction).min(last);
-    model.settings_workspace.selected = selected;
-    model.settings_workspace.scroll = settings_scroll_for(selected);
-    model.settings_workspace.display_label_editor = None;
-    model.dirty = true;
+    move_settings_selection_to(model, current.saturating_add_signed(direction).min(last));
 }
 
-fn settings_scroll_for(selected: usize) -> u16 {
-    const ROWS: [u16; 9] = [1, 21, 22, 23, 25, 26, 30, 31, 32];
-    ROWS[selected.min(ROWS.len().saturating_sub(1))].saturating_sub(2)
+fn move_settings_selection_to(model: &mut Model, selected: usize) {
+    let last = SettingsPreference::ALL.len().saturating_sub(1);
+    model.settings_workspace.selected = selected.min(last);
+    model.settings_workspace.scroll = 0;
+    model.settings_workspace.display_label_editor = None;
+    model.dirty = true;
 }
 
 fn begin_display_label_edit(model: &mut Model) {
@@ -703,6 +963,10 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
+        "user-profile" => {
+            open_user_profile(model);
+            Vec::new()
+        }
         "models" => {
             open_picker(model);
             Vec::new()
@@ -786,6 +1050,29 @@ fn submit_prompt_text(model: &mut Model, prompt: String) -> Vec<UiEffect> {
         request_id,
         prompt,
     })]
+}
+
+fn open_user_profile(model: &mut Model) {
+    if model.overlay() == Some(OverlayKind::Permission) {
+        return;
+    }
+    let label = model
+        .profiles()
+        .user
+        .display_label
+        .clone()
+        .unwrap_or_default();
+    model.user_profile.display_label_editor = Some(label);
+    model.notice = None;
+    let _ = model.open_overlay(OverlayKind::UserProfile);
+    model.dirty = true;
+}
+
+fn close_user_profile(model: &mut Model) {
+    model.user_profile.display_label_editor = None;
+    let _ = model.close_overlay(OverlayKind::UserProfile);
+    model.notice = None;
+    model.dirty = true;
 }
 
 /// Opens the single command-palette modal and captures the active route.
@@ -1265,6 +1552,9 @@ fn close_active_overlay_state(model: &mut Model) {
         OverlayKind::ProfileCredential => {
             model.profile_center.credential = None;
         }
+        OverlayKind::UserProfile => {
+            model.user_profile.display_label_editor = None;
+        }
         OverlayKind::Confirmation => {
             model.browser.confirming_archive = None;
             model.browser.confirming_delete = None;
@@ -1310,6 +1600,22 @@ fn navigate_to_route(model: &mut Model, route: Route) {
 
 fn close_profile_center(model: &mut Model) {
     navigate_to_route(model, Route::Chat);
+}
+
+fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
+    model.profile_center.editor = Some(ProfileEditorState {
+        mode: ProfileEditorMode::Create,
+        source_id: None,
+        field: 0,
+        id: String::new(),
+        kind: ProviderKindLabel::Gemini,
+        base_url: String::new(),
+        project: String::new(),
+        auth_header: String::new(),
+    });
+    model.notice = None;
+    model.dirty = true;
+    Vec::new()
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1401,21 +1707,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Char('n' | 'N'),
             alt: true,
             ..
-        } => {
-            model.profile_center.editor = Some(ProfileEditorState {
-                mode: ProfileEditorMode::Create,
-                source_id: None,
-                field: 0,
-                id: String::new(),
-                kind: ProviderKindLabel::Gemini,
-                base_url: String::new(),
-                project: String::new(),
-                auth_header: String::new(),
-            });
-            model.notice = None;
-            model.dirty = true;
-            Vec::new()
-        }
+        } => create_profile_editor(model),
         Input {
             key: Key::Char('e' | 'E'),
             alt: true,
@@ -2286,11 +2578,50 @@ fn handle_paste(model: &mut Model, text: &str) {
         Some(
             OverlayKind::TranscriptSearch | OverlayKind::Permission | OverlayKind::Confirmation,
         ) => {}
+        Some(OverlayKind::UserProfile) => {
+            if let Some(editor) = model.user_profile.display_label_editor.as_mut() {
+                let flattened = editable_safe(text).replace('\n', " ");
+                let remaining = MAX_DISPLAY_LABEL_CHARS.saturating_sub(editor.chars().count());
+                editor.push_str(&flattened.chars().take(remaining).collect::<String>());
+                model.dirty = true;
+            }
+        }
+        None if model.route() == Route::Profiles && model.profile_center.editor.is_some() => {
+            let editor = model
+                .profile_center
+                .editor
+                .as_mut()
+                .expect("profile editor is open");
+            if let Some(field) = profile_editor_field(editor) {
+                let flattened = editable_safe(text).replace('\n', " ");
+                let remaining = 2_048usize.saturating_sub(field.len());
+                field.push_str(&flattened.chars().take(remaining).collect::<String>());
+                model.dirty = true;
+            }
+        }
+        None if model.route() == Route::Sessions && model.browser.renaming => {
+            let flattened = editable_safe(text).replace('\n', " ");
+            let remaining = 128usize.saturating_sub(model.browser.rename_buffer.chars().count());
+            model
+                .browser
+                .rename_buffer
+                .push_str(&flattened.chars().take(remaining).collect::<String>());
+            model.dirty = true;
+        }
         None if model.route() == Route::Settings
             && model.settings_workspace.display_label_editor.is_some() =>
         {
             if let Some(editor) = model.settings_workspace.display_label_editor.as_mut() {
-                editor.push_str(&editable_safe(text).replace('\n', " "));
+                let flattened = editable_safe(text).replace('\n', " ");
+                let remaining = MAX_DISPLAY_LABEL_CHARS.saturating_sub(editor.chars().count());
+                let appended = flattened.chars().take(remaining).collect::<String>();
+                let truncated = appended.chars().count() < flattened.chars().count();
+                editor.push_str(&appended);
+                if truncated {
+                    model.notice = Some(Notice::Info(
+                        "Display label limited to 64 characters".to_owned(),
+                    ));
+                }
                 model.dirty = true;
             }
         }

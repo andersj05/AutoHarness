@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use autoharness_domain::ErrorClass;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind, MouseButton, MouseEventKind};
 use futures_util::StreamExt as _;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -181,8 +181,16 @@ where
                     return Ok(ExitReason::InputClosed);
                 };
                 let terminal_event = terminal_event.map_err(RunnerError::Input)?;
-                let effects = terminal_message(terminal_event)
-                    .map_or_else(Vec::new, |message| update(&mut model, message));
+                let size = terminal
+                    .size()
+                    .map_err(|error| RunnerError::Draw(error.to_string()))?;
+                let effects = terminal_message(
+                    terminal_event,
+                    &model,
+                    size.width,
+                    size.height,
+                )
+                .map_or_else(Vec::new, |message| update(&mut model, message));
                 if dispatch_effects(&mut model, effects, &intents) {
                     return Ok(ExitReason::UserQuit);
                 }
@@ -229,13 +237,21 @@ where
     }
 }
 
-fn terminal_message(event: Event) -> Option<Message> {
+fn terminal_message(
+    event: Event,
+    model: &crate::model::Model,
+    width: u16,
+    height: u16,
+) -> Option<Message> {
     match event {
         Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             Some(Message::Input(key.into()))
         }
         Event::Paste(text) => Some(Message::Paste(text)),
         Event::Resize(_, _) => Some(Message::Resize),
+        Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) => {
+            crate::view::hit_test(model, width, height, mouse.column, mouse.row).map(Message::Mouse)
+        }
         Event::FocusGained | Event::FocusLost | Event::Key(_) | Event::Mouse(_) => None,
     }
 }
@@ -303,10 +319,11 @@ where
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{ModelId, ModelRef, ProviderId};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui_textarea::{Input, Key};
 
     use super::*;
-    use crate::model::{ModelSummary, Notice, PendingKind};
+    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind, Route};
 
     fn selected_model() -> ModelRef {
         ModelRef::new(
@@ -399,5 +416,38 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn left_mouse_down_becomes_a_semantic_click() {
+        let model = model_with_draft();
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            terminal_message(event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::Route(Route::Chat)))
+        ));
+    }
+
+    #[test]
+    fn non_click_mouse_events_are_ignored() {
+        let model = model_with_draft();
+        for kind in [
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Moved,
+        ] {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 2,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(terminal_message(event, &model, 80, 24).is_none());
+        }
     }
 }

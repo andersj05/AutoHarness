@@ -3,9 +3,9 @@ use std::sync::Arc;
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
-    ModelSummary, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
-    ProviderKindLabel, ProviderProfileProjection, SessionProjection, SessionsProjection, UiEffect,
-    UiIntent, update, view,
+    ModelSummary, MouseAction, ProfileConnectionState, ProfileCredentialStateLabel,
+    ProfilesProjection, ProviderKindLabel, ProviderProfileProjection, SessionProjection,
+    SessionsProjection, UiEffect, UiIntent, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -180,6 +180,14 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(model.profile_selection(), Some("work-router"));
     let _ = update(&mut model, Message::Input(alt('k')));
+    assert_eq!(
+        hit_test(&model, 80, 24, 12, 19),
+        Some(MouseAction::ProfileCredentialSubmit)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 60, 19),
+        Some(MouseAction::ProfileCredentialCancel)
+    );
     let sentinel = "router-secret-sentinel";
     let _ = update(&mut model, Message::Paste(sentinel.to_owned()));
 
@@ -188,7 +196,10 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     assert!(!rendered.contains(sentinel));
     assert!(!format!("{model:?}").contains(sentinel));
 
-    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let effects = update(
+        &mut model,
+        Message::Mouse(MouseAction::ProfileCredentialSubmit),
+    );
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::SaveProfileCredential { profile_id, .. })]
@@ -237,6 +248,24 @@ fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
     ));
 }
 
+#[test]
+fn every_profile_detail_button_has_a_semantic_click_target() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    for (column, expected) in [
+        (31, MouseAction::ProfileNew),
+        (39, MouseAction::ProfileCredential),
+        (47, MouseAction::ProfileTest),
+        (57, MouseAction::ProfileDefaultModel),
+        (34, MouseAction::ProfileDisconnect),
+        (48, MouseAction::ProfileDelete),
+    ] {
+        assert!(
+            (0..40).any(|row| hit_test(&model, 120, 40, column, row) == Some(expected.clone())),
+            "missing profile click target at column {column}"
+        );
+    }
+}
 #[test]
 #[ignore = "visual review harness for the Phase 3.6 profile center"]
 fn render_profile_center_review_sizes() {

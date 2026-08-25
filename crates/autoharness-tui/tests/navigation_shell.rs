@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
+use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, PermissionDetailView,
-    PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry, SessionProjection,
-    SessionsProjection, ToolCallKey, UiFailure, update, view,
+    CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction, OverlayKind,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent,
+    hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -287,10 +289,55 @@ fn chat_empty_states_name_one_primary_recovery_action() {
 }
 
 #[test]
+fn chat_empty_state_explains_the_zero_shell_start_path() {
+    let model = model();
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("GET STARTED"));
+    assert!(rendered.contains("Ctrl+K connect a session-only key"));
+    assert!(rendered.contains("Conversation · Active conversation"));
+}
+
+#[test]
+fn ascii_glyph_mode_uses_ascii_conversation_separators() {
+    let mut model = model();
+    let settings = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{
+                "schema_version": 3,
+                "local_profile": {
+                    "preferences": {
+                        "glyph_mode": "ascii"
+                    }
+                }
+            }"#,
+        )
+        .resolve()
+        .expect("ASCII preferences");
+    model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: settings.local_profile().clone(),
+        ..SettingsProjection::default()
+    }));
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("Conversation | Active conversation"));
+    assert!(!rendered.contains("Conversation · Active conversation"));
+}
+
+#[test]
+fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::End)));
+    let rendered = render_text(&model, 40, 12);
+    assert!(rendered.contains("Composer submit"));
+    assert!(rendered.contains("PgUp/PgDn"));
+}
+#[test]
 #[ignore = "visual review harness for the Phase 3.7 routed shell"]
 fn render_route_review_matrix() {
     for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
         let mut model = model();
+
         for (key, route) in [
             ('1', Route::Chat),
             ('2', Route::Sessions),
@@ -315,4 +362,122 @@ fn render_route_review_matrix() {
         "=== Confirmation 80x24 ===\n{}",
         render_text(&confirmation, 80, 24)
     );
+}
+#[test]
+fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
+    let model = model();
+    for (index, route) in Route::ALL.into_iter().enumerate() {
+        assert_eq!(
+            hit_test(&model, 120, 40, 2, 7 + index as u16),
+            Some(MouseAction::Route(route))
+        );
+    }
+    assert_eq!(
+        hit_test(&model, 80, 24, 2, 0),
+        Some(MouseAction::Route(Route::Chat))
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 16, 23),
+        Some(MouseAction::ChatModels)
+    );
+}
+
+#[test]
+fn mouse_opens_and_saves_the_user_profile_dialog() {
+    let mut model = model();
+    assert_eq!(
+        hit_test(&model, 120, 40, 2, 1),
+        Some(MouseAction::OpenUserProfile)
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
+    assert!(model.user_profile_open());
+    assert!(render_text(&model, 120, 40).contains("User profile"));
+
+    assert_eq!(
+        hit_test(&model, 120, 40, 30, 22),
+        Some(MouseAction::UserProfileSave)
+    );
+    assert_eq!(
+        hit_test(&model, 120, 40, 70, 22),
+        Some(MouseAction::UserProfileCancel)
+    );
+    let effects = update(&mut model, Message::Mouse(MouseAction::UserProfileSave));
+    assert!(matches!(
+        effects.as_slice(),
+        [autoharness_tui::UiEffect::Dispatch(
+            UiIntent::UpdateLocalPreference { .. }
+        )]
+    ));
+    assert!(!model.user_profile_open());
+}
+
+#[test]
+fn mouse_profile_actions_share_keyboard_intents() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('3')));
+    assert_eq!(
+        hit_test(&model, 120, 40, 30, 38),
+        Some(MouseAction::ProfileNew)
+    );
+    let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
+
+    assert!(effects.is_empty());
+    assert!(render_text(&model, 120, 40).contains("Create provider profile"));
+}
+#[test]
+fn mouse_session_action_bar_exposes_each_visible_action() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('2')));
+    for (column, expected) in [
+        (2, MouseAction::SessionOpen),
+        (20, MouseAction::SessionRename),
+        (40, MouseAction::SessionArchive),
+        (60, MouseAction::SessionDelete),
+    ] {
+        assert_eq!(
+            hit_test(&model, 80, 24, column, 22),
+            Some(expected),
+            "missing session action at column {column}"
+        );
+    }
+}
+
+#[test]
+fn mouse_modal_rows_select_models_and_run_commands() {
+    let mut picker = model();
+    let _ = update(&mut picker, Message::Input(ctrl('p')));
+    let selection = hit_test(&picker, 80, 24, 12, 5);
+    assert!(matches!(selection, Some(MouseAction::PickerSelect(_))));
+    let effects = update(&mut picker, Message::Mouse(selection.expect("picker row")));
+    assert!(matches!(
+        effects.as_slice(),
+        [autoharness_tui::UiEffect::Dispatch(
+            UiIntent::SelectModel { .. }
+        )]
+    ));
+
+    let mut palette = model();
+    let _ = update(&mut palette, Message::Input(ctrl('/')));
+    let command = hit_test(&palette, 80, 24, 12, 5);
+    assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
+    let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
+    assert!(effects.is_empty());
+    assert!(!palette.palette_open());
+}
+
+#[test]
+fn mouse_credential_dialog_controls_are_clickable() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('k')));
+    assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
+    assert_eq!(
+        hit_test(&model, 80, 24, 10, 15),
+        Some(MouseAction::CredentialSubmit)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 60, 15),
+        Some(MouseAction::CredentialCancel)
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::CredentialCancel));
+    assert!(model.overlay().is_none());
 }

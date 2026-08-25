@@ -3,10 +3,10 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, Notice,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
+    AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, MouseAction,
+    Notice, PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
     SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, TranscriptItem,
-    UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, update, view,
+    UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -99,7 +99,15 @@ fn permission_overlay_scopes_the_resource_and_dispatches_one_exact_answer() {
     assert!(rendered.contains("workspace:src/lib.rs"));
     assert!(rendered.contains("Content bytes"));
     assert!(rendered.contains("27"));
-    let effects = update(&mut model, Message::Input(key_input(Key::Char('y'))));
+    assert_eq!(
+        hit_test(&model, 80, 24, 10, 15),
+        Some(MouseAction::PermissionAllow)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 60, 15),
+        Some(MouseAction::PermissionDeny)
+    );
+    let effects = update(&mut model, Message::Mouse(MouseAction::PermissionAllow));
 
     assert_eq!(effects.len(), 1);
     let UiEffect::Dispatch(UiIntent::AnswerPermission {

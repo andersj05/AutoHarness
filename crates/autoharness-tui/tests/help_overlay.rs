@@ -117,9 +117,10 @@ fn f1_opens_modal_help_showing_global_and_composer_keys() {
         "the help overlay owns the keyboard"
     );
 
-    let rendered = buffer_text(&render_model(&model, 80, 24));
+    let rendered = buffer_text(&render_model(&model, 120, 50));
     for expected in [
-        "Help", "Global", "Composer", "Ctrl+S", "Ctrl+N", "Ctrl+L", "Ctrl+P", "Esc",
+        "Help", "Global", "Composer", "Ctrl+S", "Ctrl+N", "Ctrl+L", "Ctrl+P", "Ctrl+F", "Ctrl+X",
+        "Ctrl+Y", "Ctrl+Z", "Esc",
     ] {
         assert!(rendered.contains(expected), "help must mention {expected}");
     }
@@ -144,6 +145,7 @@ fn help_content_names_the_focused_surface() {
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
     let _ = update(&mut model, Message::Input(f1()));
     let browser_help = buffer_text(&render_model(&model, 80, 24));
+
     assert!(browser_help.contains("Browser"), "browser must be named");
     assert!(
         browser_help.contains("Ctrl+R"),
@@ -154,6 +156,20 @@ fn help_content_names_the_focused_surface() {
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert_eq!(model.focus, Focus::Browser);
     assert!(model.browser_open());
+}
+
+#[test]
+fn help_content_names_settings_navigation_and_reset_actions() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('4'))));
+    let _ = update(&mut model, Message::Input(f1()));
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    for expected in ["Settings", "PageUp/PageDown", "Home/End", "R", "D"] {
+        assert!(
+            rendered.contains(expected),
+            "settings help must mention {expected}"
+        );
+    }
 }
 
 #[test]

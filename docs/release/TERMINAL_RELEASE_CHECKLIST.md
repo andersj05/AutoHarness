@@ -80,7 +80,11 @@ A failed required item blocks promotion.
 ## Accessibility and usability
 
 - [ ] Every important action is reachable without a mouse through the documented key, palette, or slash path.
-- [ ] `F1` help matches the actual keys and follows the current focus.
+- [ ] Fresh onboarding names the next provider, credential, model, and prompt action without requiring shell or database setup.
+- [ ] Settings selection keeps the selected value, provenance, and action bar visible at 40x12, 60x18, 80x24, 120x40, and 120x50; PageUp/PageDown/Home/End work.
+- [ ] Provider and local-profile surfaces expose active state, default model, mode, credential source, and connection result without relying on color or a star marker.
+- [ ] Command-palette rows show human labels, slash identifiers, descriptions, and key hints without hiding the executable command.
+- [ ] `F1` help matches the actual keys, including transcript search, tool expansion, copy, archive undo, Settings navigation, and idle-versus-active Ctrl+C behavior.
 - [ ] Focus, selection, pending state, failure, retry, and destructive confirmation remain distinguishable without relying on animation.
 - [ ] Text remains readable and no required action disappears at every supported terminal size.
 - [ ] Visual review covers every primary route at 40x12, 60x18, 80x24, 120x40, 120x50, and one exact destructive confirmation.

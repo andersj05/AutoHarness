@@ -20,7 +20,7 @@
 | 3.6. Local profile and provider connection center | Implemented locally | ADR-0013 recovery records, settings schema 2, application-owned profile workflows, distinct provider-scoped vault entries, runtime Gemini and router switching, content-free tests, default models, live safe projections, the responsive `Ctrl+G` center, fault injection, sentinel coverage, a composed restart lifecycle, a real PTY journey, and Windows Credential Manager smoke pass locally; Phase 3.7 cross-platform CI validated the full workspace and PTY suite, while macOS and Linux vault smoke evidence remains open |
 | 3.7. Unified TUI shell and navigation | Complete | Typed Chat, Sessions, Profiles, Settings, and Help routes, one modal owner, permission preemption, exact focus restoration, wide rail, compact tabs, unified safe status, redesigned Chat hierarchy and recovery states, routed settings provenance, exact confirmation dialogs, responsive goldens, all-route visual review, fresh-session list publication, and a real route and resize PTY journey pass locally and through green pull request #17 CI on Windows, macOS, and Linux |
 | 3.8. Personalization and accessibility | Implemented locally | Settings is a categorized keyboard workspace with value provenance, explanation, inherited and default reset controls, typed schema-3 local display and terminal preferences, fixed layered precedence, migration and malformed recovery, restricted workspace overrides, projection-driven theme, no-color, high-contrast, ASCII, reduced-motion, compact, and single-column rendering across security overlays, configurable composer submission, command-table shortcut reference, timestamp behavior, focused restart coverage, responsive security render matrices, and a Windows PTY ASCII-persistence journey; cross-platform pull-request evidence remains open |
-| 3.9. Terminal product validation | Planned | Validate complete cross-platform onboarding, multiple providers, vault workflows, navigation, accessibility, live-provider compatibility, visual quality, performance, migration, rollback, and zero-shell ordinary use on one release candidate |
+| 3.9. Terminal product validation | Implemented locally; evidence pending | This branch adds zero-shell onboarding, a local user-profile dialog, mouse capture and semantic click actions for routes, chat, sessions, profiles, confirmations, picker rows, palette rows, credential dialogs, and permission controls, responsive Settings action visibility, provider/profile default context, contextual-help parity, bounded paste editing, and route/session context; 118 focused TUI tests and 347 workspace tests pass while the full release-candidate evidence matrix remains open |
 | 4. Persistent context and memory | Designed and gated | Architecture is documented; runtime is not implemented and waits for Phase 3.9 validation |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
 | 6. Extension and distributed runtime | Planned | Target boundaries are documented; runtime is not implemented |
@@ -136,19 +136,24 @@
 - The routed-shell PTY journey verifies Alt route switching, overlay restoration, draft preservation, fresh-session visibility, confirmation cancellation, narrow resize, clean exit, and terminal restoration.
 - Fresh-session application composition publishes the session list before acknowledgement so Sessions immediately reflects the newly active durable session.
 - A three-sample instrumented release smoke exercised the routed shell through the real PTY loopback runner and produced valid correlated startup, dispatch, and rendered-delta intervals with network time excluded.
+- The terminal onboarding surface names the three zero-shell setup steps, includes the active durable session title in the wide shell, and keeps the next action explicit when credentials or models are missing.
+- Settings selection uses wrapped-layout-aware scrolling, fixed action-bar visibility, PageUp/PageDown/Home/End navigation, and bounded display-label editing.
+- Provider and local-profile views expose active state, default model, mode, connection, credential source, and profile actions at width-aware detail levels.
+- The command palette shows human labels beside slash identifiers, and contextual help documents transcript search, tool expansion, copy, archive undo, Settings navigation, and idle-versus-active Ctrl+C behavior.
+- Bracketed paste is accepted by profile forms and session renaming while preserving bounded editable fields and credential secrecy.
+- The local user-profile dialog edits the non-secret display label through the existing typed preference intent, shows workspace/provider/model/mode context, and offers visible Save and Cancel controls.
+- Left-button terminal clicks become semantic typed actions after application-owned mouse capture; route tabs, Chat, Sessions, Profiles, profile detail actions, confirmations, and the user-profile dialog share the deterministic update path.
+- Mouse capture restoration is tested for normal exit, partial setup failure, drop fallback, and selected Windows PTY journeys; panic-hook-specific output and cross-platform restoration remain release evidence.
 
-## Known gaps
-
-- Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence now includes a fixture recorded from the same live dialect.
+- Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
-- The routed shell is implemented, but Phase 3.8 still must add the full settings editor, typed local display preferences, theme selection, high-contrast and no-color modes, ASCII mode, reduced motion, density, and single-column accessibility presentation.
-- The opt-in platform-vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
+- The operating-system vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
+- Eight dedicated PTY scenarios, including routed shell, profile management, onboarding, offline resume, session lifecycle, forced shutdown, and permission outcomes, pass locally on Windows; Linux and refreshed Windows evidence awaits the release-candidate CI run.
+- This branch passes workspace formatting, strict Clippy, 347 workspace tests across 46 suites, 118 focused TUI tests, two ignored visual-review renders, and the relative Markdown-link check.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
-- Eight dedicated PTY scenarios, including routed shell and profile management, pass locally on Windows; Linux, macOS, and refreshed Windows evidence awaits the updated pull-request CI run.
 - The checked-in release checklist has not been executed against a committed release candidate.
 
 ## Next milestone exit target
-
-Phase 3.7 must pass green baseline and dedicated PTY pull-request gates on Windows, macOS, and Linux and merge to `dev`.
-Phase 3.8 then exits only when every shipped presentation and terminal-behavior preference can be inspected, changed, explained, reset, migrated, and verified inside the existing Settings route.
+Phase 3.9 exits only when one release-candidate commit passes the cross-platform PTY matrix, platform vault smokes, live-provider probes, benchmark and storage reports, migration and rollback rehearsal, documentation checks, and release approval.
+Phase 4 remains gated until the release checklist is approved and the terminal routes, read models, intents, settings, and credential workflows are stable on that candidate.

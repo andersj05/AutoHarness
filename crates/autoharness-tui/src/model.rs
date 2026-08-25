@@ -416,6 +416,8 @@ pub enum Focus {
     Help,
     /// The settings route owns key input.
     Settings,
+    /// The local user-profile dialog owns key input.
+    UserProfile,
     /// An exact destructive action awaits Y or N.
     Confirmation,
     /// The transcript search bar owns key input.
@@ -484,7 +486,6 @@ impl Route {
     }
 }
 
-/// One mutually exclusive modal layer above the active route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OverlayKind {
     ModelPicker,
@@ -493,6 +494,7 @@ pub enum OverlayKind {
     TranscriptSearch,
     Permission,
     ProfileCredential,
+    UserProfile,
     Confirmation,
 }
 
@@ -506,6 +508,7 @@ impl OverlayKind {
             Self::CommandPalette => Focus::Palette,
             Self::TranscriptSearch => Focus::Search,
             Self::Permission => Focus::Permission,
+            Self::UserProfile => Focus::UserProfile,
             Self::Confirmation => Focus::Confirmation,
         }
     }
@@ -1039,11 +1042,58 @@ pub enum UiNotice {
         failure: UiFailure,
     },
 }
+/// Semantic mouse actions produced by terminal hit testing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MouseAction {
+    /// Switch to one of the primary shell routes.
+    Route(Route),
+    /// Open the local user-profile dialog.
+    OpenUserProfile,
+    /// Chat footer actions.
+    ChatSend,
+    ChatModels,
+    ChatNewSession,
+    ChatSessions,
+    ChatCredential,
+    ChatHelp,
+    /// Profile-center actions.
+    ProfileNew,
+    ProfileCredential,
+    ProfileTest,
+    ProfileDefaultModel,
+    ProfileDisconnect,
+    ProfileDelete,
+    SelectProfile(String),
+    /// User-profile dialog actions.
+    UserProfileSave,
+    /// Session-browser action bar controls.
+    SessionOpen,
+    SessionRename,
+    SessionArchive,
+    SessionDelete,
+    /// Destructive confirmation controls.
+    Confirm,
+    Cancel,
+    UserProfileCancel,
+    /// Select a visible model-picker row.
+    PickerSelect(ModelRef),
+    /// Execute a visible command-palette row.
+    PaletteRun(String),
+    /// Credential and permission modal controls.
+    CredentialSubmit,
+    CredentialCancel,
+    ProfileCredentialSubmit,
+    ProfileCredentialCancel,
+    PermissionAllow,
+    PermissionDeny,
+}
 
 /// Input to the deterministic update function.
 pub enum Message {
     /// Backend-independent keyboard input.
     Input(ratatui_textarea::Input),
+    /// Semantic click action derived from a visible terminal hit region.
+    Mouse(MouseAction),
     /// Bracketed paste content.
     Paste(String),
     /// Newest session projection.
@@ -1070,6 +1120,7 @@ impl Debug for Message {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(_) => formatter.write_str("Input([REDACTED])"),
+            Self::Mouse(action) => formatter.debug_tuple("Mouse").field(action).finish(),
             Self::Paste(_) => formatter.write_str("Paste([REDACTED])"),
             Self::SessionChanged(session) => formatter
                 .debug_tuple("SessionChanged")
@@ -1292,6 +1343,13 @@ pub(crate) struct SettingsState {
     pub display_label_editor: Option<String>,
 }
 
+/// Local user-profile dialog state.
+#[derive(Debug, Default)]
+pub(crate) struct UserProfileState {
+    /// Buffered display-label edit; persisted only after Save.
+    pub display_label_editor: Option<String>,
+}
+
 /// One contextual help section shown in the help overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct HelpSection {
@@ -1313,20 +1371,28 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
                 "Alt+1..5",
                 "switch Chat, Sessions, Profiles, Settings, Help",
             ),
-            ("Ctrl+S", "send the prompt"),
+            (
+                "Ctrl+S",
+                "send the prompt by default; configurable in Settings",
+            ),
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open Sessions"),
             ("Ctrl+G", "open Profiles"),
+            ("Alt+U", "edit the local user profile"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
             ("Ctrl+R", "retry the failed attempt"),
+            ("Ctrl+F", "search the transcript"),
+            ("Ctrl+X", "expand or collapse tool rows"),
+            ("Ctrl+Y", "copy the visible transcript"),
+            ("Ctrl+Z", "undo the latest archive or unarchive"),
             ("Esc", "cancel streaming output"),
             ("Alt+Up / Alt+Down", "scroll the transcript"),
             ("Ctrl+End", "follow live output again"),
             ("Ctrl+/", "command palette"),
             ("F1", "this help"),
-            ("Ctrl+C", "quit"),
+            ("Ctrl+C", "quit when idle; cancel an active response"),
         ],
     },
     HelpSection {
@@ -1376,6 +1442,27 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         ],
     },
     HelpSection {
+        title: "Settings",
+        rows: &[
+            ("Up/Down", "choose a preference"),
+            ("PageUp/PageDown", "move through settings"),
+            ("Home/End", "jump to the first or last preference"),
+            ("Left/Right", "change the selected value"),
+            ("Enter", "edit the display label"),
+            ("R", "reset to the inherited value"),
+            ("D", "reset to the user default"),
+            ("Esc", "return to Chat"),
+        ],
+    },
+    HelpSection {
+        title: "User profile",
+        rows: &[
+            ("Type", "edit the local display name"),
+            ("Enter / Ctrl+S", "save the local profile"),
+            ("Esc", "cancel without saving"),
+        ],
+    },
+    HelpSection {
         title: "Permission",
         rows: &[
             ("Y", "allow this exact call once"),
@@ -1395,6 +1482,8 @@ impl HelpSection {
             "Browser" => focus == Focus::Browser,
             "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
+            "Settings" => focus == Focus::Settings,
+            "User profile" => focus == Focus::UserProfile,
             "Permission" => focus == Focus::Permission,
             _ => false,
         }
@@ -1446,6 +1535,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Profiles and Providers",
         description: "Manage providers, API keys, connection tests, and defaults",
         key_hint: Some("Alt+3"),
+    },
+    CommandEntry {
+        id: "user-profile",
+        label: "User profile",
+        description: "Edit the local display name and profile summary",
+        key_hint: Some("Alt+U"),
     },
     CommandEntry {
         id: "new-session",
@@ -1863,6 +1958,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
+    /// Local user-profile dialog interaction state.
+    pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
     /// In-run submitted-prompt history for recall.
@@ -1959,6 +2056,7 @@ impl Model {
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
             drafts: SessionDrafts::default(),
+            user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
             search: SearchState::default(),
             tools_expanded: false,
@@ -2112,6 +2210,11 @@ impl Model {
     #[must_use]
     pub const fn settings_open(&self) -> bool {
         matches!(self.navigation.route, Route::Settings)
+    }
+    /// Returns whether the local user-profile dialog owns the modal slot.
+    #[must_use]
+    pub fn user_profile_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::UserProfile)
     }
 
     /// Returns the effective provider label in safe provenance terms.
