@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation
 
-**Status:** The TUI audit is implemented on `feat/tui-audit`; 132 focused TUI tests, strict TUI Clippy, formatting, visual review, and a clean built-binary Windows launch smoke passed, while full Phase 3.9 release evidence remains pending
+**Status:** The chat shell polish is implemented on `feat/tui-chat-polish`; 132 focused TUI tests, strict TUI Clippy, formatting, visual review, and a clean built-binary Windows launch smoke passed, while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -66,6 +66,7 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 - On 2026-08-25, the prompt bar was refined into a single Claude-like bottom composer surface, every visible Settings option became keyboard-selectable with safe no-op rows for policy/runtime values, and Backspace on an empty slash query now closes command mode; 391 workspace tests pass.
 - On 2026-08-25, `feat/tui-redesign` removed the opaque Chat background, applied rounded borders through the shared panel helper, reduced the wide rail to previous sessions and projects with a bottom Settings action, added Settings, Providers, Profile, and Agents navigation placeholders, and passed 128 focused TUI tests, strict TUI Clippy, formatting, ignored visual review, and a clean Windows TUI launch smoke.
 - On 2026-08-25, `feat/tui-audit` made the route bar persistent above both wide and compact shells, removed duplicate compact Chat headers, added cyclic arrow-key Settings page navigation with body focus transitions, ellipsized named sidebar sessions to one line, removed session IDs from untitled fallback labels, fixed compact tab widths at 48 columns, and passed 132 focused TUI tests plus a built-binary Windows launch smoke.
+- On 2026-08-25, `feat/tui-chat-polish` removed visible route and provider status chrome, moved Profile and Settings to the bottom action bar, removed the sidebar session heading, replaced chat mode metadata with model capability-aware thinking and slash-style workspace paths, and added a transparent rounded composer with a `❯` prompt line.
 - Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
 - Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
 - Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.
