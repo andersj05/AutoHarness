@@ -130,7 +130,7 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
 
 fn visual_style(model: &Model, role: VisualRole) -> Style {
     let presentation = presentation(model);
-    match presentation.color_mode {
+    let style = match presentation.color_mode {
         ColorMode::Color => match presentation.theme {
             ThemePreset::System => match role {
                 VisualRole::Normal => Style::new()
@@ -268,9 +268,13 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 .bg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         },
+    };
+    if matches!(role, VisualRole::Border) {
+        style.bg(Color::Reset)
+    } else {
+        style
     }
 }
-
 fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
     visual_style(model, role).bg(Color::Reset)
 }
@@ -494,24 +498,27 @@ pub fn hit_test(
         );
     }
     let layout = shell_layout(area, model);
-    if row == layout.footer.y {
-        return shell_footer_action(column);
-    }
-    if let Some(sidebar) = layout.sidebar
-        && column < sidebar.right()
-    {
-        let sessions_start = sidebar.y.saturating_add(1);
-        let session_count = model
-            .sessions
-            .sessions
-            .len()
-            .min(sidebar_session_limit(sidebar));
-        let sessions_end =
-            sessions_start.saturating_add(u16::try_from(session_count).unwrap_or(u16::MAX));
-        if row >= sessions_start && row < sessions_end {
-            return Some(MouseAction::Route(Route::Sessions));
+    if let Some(sidebar) = layout.sidebar {
+        if column < sidebar.right() {
+            let footer_row = sidebar.bottom().saturating_sub(2);
+            if row == footer_row {
+                return shell_footer_action(column.saturating_sub(sidebar.x));
+            }
+            let sessions_start = sidebar.y.saturating_add(1);
+            let session_count = model
+                .sessions
+                .sessions
+                .len()
+                .min(sidebar_session_limit(sidebar));
+            let sessions_end =
+                sessions_start.saturating_add(u16::try_from(session_count).unwrap_or(u16::MAX));
+            if row >= sessions_start && row < sessions_end {
+                return Some(MouseAction::Route(Route::Sessions));
+            }
+            return None;
         }
-        return None;
+    } else if row == layout.footer.y {
+        return shell_footer_action(column);
     }
     let content = layout.content;
     if model.route() == Route::Settings && row == content.y.saturating_add(1) {
@@ -908,8 +915,9 @@ fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> ShellLayout
     let layout = shell_layout(area, model);
     if let Some(sidebar) = layout.sidebar {
         render_navigation_rail(frame, sidebar, model);
+    } else {
+        render_shell_footer(frame, layout.footer, model);
     }
-    render_shell_footer(frame, layout.footer, model);
     layout
 }
 
@@ -925,21 +933,21 @@ fn shell_footer_action(column: u16) -> Option<MouseAction> {
 
 fn shell_layout(area: Rect, model: &Model) -> ShellLayout {
     let wide = !presentation(model).single_column && area.width >= 100 && area.height >= 16;
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(area);
     if wide {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(28), Constraint::Min(1)])
-            .split(rows[0]);
+            .split(area);
         ShellLayout {
             sidebar: Some(columns[0]),
             content: columns[1],
-            footer: rows[1],
+            footer: Rect::default(),
         }
     } else {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
         ShellLayout {
             sidebar: None,
             content: rows[0],
@@ -972,10 +980,9 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         area,
     );
 }
-
 fn sidebar_session_limit(area: Rect) -> usize {
     let inner_height = area.height.saturating_sub(2);
-    usize::from(inner_height.saturating_sub(3)).max(1)
+    usize::from(inner_height.saturating_sub(4)).max(1)
 }
 
 fn single_line_label(value: &str, width: u16) -> String {
@@ -1004,9 +1011,15 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
+    let footer_height = u16::from(inner.height >= 2);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
+        .split(inner);
+    let content = sections[0];
     let mut lines = Vec::new();
     let session_limit = sidebar_session_limit(area);
-    let session_width = inner.width.saturating_sub(4);
+    let session_width = content.width.saturating_sub(4);
     for entry in model.sessions.sessions.iter().take(session_limit) {
         let marker = if entry.active || entry.session_id == model.session.session_id {
             selection_marker(model)
@@ -1040,7 +1053,10 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             visual_style(model, VisualRole::Normal),
         ),
     ]);
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), content);
+    if footer_height > 0 {
+        render_shell_footer(frame, sections[1], model);
+    }
 }
 
 fn active_session_title(model: &Model) -> Option<String> {
@@ -1210,10 +1226,10 @@ fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
     let height = u16::try_from(model.palette_entries().len())
         .unwrap_or(u16::MAX)
         .min(8)
-        .min(area.height.saturating_sub(2));
+        .min(area.height.saturating_sub(4));
     Rect::new(
         area.x,
-        area.bottom().saturating_sub(height.saturating_add(2)),
+        area.bottom().saturating_sub(height.saturating_add(4)),
         area.width,
         height,
     )
@@ -1247,9 +1263,37 @@ fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .iter()
         .skip(start)
         .take(visible)
-        .map(|entry| palette_item(entry, model.palette.selected, model))
+        .map(|entry| inline_palette_item(entry, model.palette.selected, model))
         .collect::<Vec<_>>();
     frame.render_widget(List::new(items), list);
+}
+
+fn inline_palette_item(
+    entry: &crate::model::CommandEntry,
+    selected: Option<&'static str>,
+    model: &Model,
+) -> ListItem<'static> {
+    let is_selected = selected == Some(entry.id);
+    let prefix = if is_selected {
+        selection_marker(model)
+    } else {
+        " "
+    };
+    let mut label = format!(
+        "{prefix} {}  /{} - {}",
+        display_safe(entry.label),
+        entry.id,
+        display_safe(entry.description)
+    );
+    if let Some(hint) = entry.key_hint {
+        let _ = write!(label, "  [{hint}]");
+    }
+    let style = if is_selected {
+        chat_visual_style(model, VisualRole::Assistant)
+    } else {
+        chat_visual_style(model, VisualRole::Normal)
+    };
+    ListItem::new(Line::styled(label, style))
 }
 
 /// Renders the searchable command-palette overlay from local state only.
@@ -2636,7 +2680,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let text = transparent_chat_text(transcript_text(model));
     let block = bordered.then(|| {
         app_block(model)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
             .title(conversation_title(model))
             .border_style(visual_style(model, VisualRole::Border))
     });
