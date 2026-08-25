@@ -1,11 +1,11 @@
-╭ AutoHarness ─────────────╮ AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed | 59 tok
-│PREVIOUS SESSIONS         │
-│ No previous sessions     │╭ Conversation ────────────────────────────────────────────────────────────────────────────╮
-│                          ││YOU                                                                                       │
-│PROJECTS                  ││Plan a café launch.                                                                       │
-│ workspace                ││Keep it practical.                                                                        │
-│                          ││                                                                                          │
-│                          ││AUTOHARNESS · complete                                                                    │
+ 1 Chat   2 Sessions   3 Profiles   4 Settings   5 Help
+ AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed | 59 tok
+╭ AutoHarness ─────────────╮╭ Conversation ────────────────────────────────────────────────────────────────────────────╮
+│PREVIOUS SESSIONS         ││YOU                                                                                       │
+│ No previous sessions     ││Plan a café launch.                                                                       │
+│                          ││Keep it practical.                                                                        │
+│PROJECTS                  ││                                                                                          │
+│ workspace                ││AUTOHARNESS · complete                                                                    │
 │                          ││Start with a two-week validation sprint:                                                  │
 │                          ││1. Interview ten customers.                                                               │
 │                          ││2. Price three menu bundles.                                                              │

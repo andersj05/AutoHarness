@@ -54,6 +54,13 @@ struct Presentation {
     single_column: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ShellLayout {
+    wide: bool,
+    top: Rect,
+    sidebar: Option<Rect>,
+    content: Rect,
+}
 fn presentation(model: &Model) -> Presentation {
     let preferences = model.settings().local_profile.preferences();
     Presentation {
@@ -324,7 +331,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         return;
     }
     frame.render_widget(Clear, area);
-    let content = render_shell(frame, area, model);
+    let shell = render_shell(frame, area, model);
+    let content = shell.content;
     if content.width > 0 && content.height > 0 {
         match model.route() {
             Route::Chat => {
@@ -467,7 +475,7 @@ pub fn hit_test(
     }
     if model.overlay() == Some(OverlayKind::CommandPalette) {
         if model.route() == Route::Chat {
-            let content = render_shell_layout(area, model).1;
+            let content = shell_layout(area, model).content;
             return inline_palette_mouse_target(content, model, column, row);
         }
         return palette_mouse_target(area, model, row);
@@ -499,23 +507,30 @@ pub fn hit_test(
             MouseAction::PermissionDeny,
         );
     }
-    let (wide, content) = render_shell_layout(area, model);
-    if wide && column < 28 {
-        let settings_row = height.saturating_sub(2);
-        if row == settings_row {
-            return Some(MouseAction::Route(Route::Settings));
+    let layout = shell_layout(area, model);
+    if layout.wide {
+        if row == layout.top.y {
+            return route_at_column(width, column).map(MouseAction::Route);
         }
-        let sessions_start: u16 = 2;
-        let sessions_end = sessions_start
-            .saturating_add(u16::try_from(model.sessions.sessions.len()).unwrap_or(u16::MAX));
-        if row >= sessions_start && row < sessions_end {
-            return Some(MouseAction::Route(Route::Sessions));
+        if let Some(sidebar) = layout.sidebar
+            && column < sidebar.right()
+        {
+            let settings_row = sidebar.bottom().saturating_sub(2);
+            if row == settings_row {
+                return Some(MouseAction::Route(Route::Settings));
+            }
+            let sessions_start = sidebar.y.saturating_add(2);
+            let sessions_end = sessions_start
+                .saturating_add(u16::try_from(sidebar_session_limit(sidebar)).unwrap_or(u16::MAX));
+            if row >= sessions_start && row < sessions_end && !model.sessions.sessions.is_empty() {
+                return Some(MouseAction::Route(Route::Sessions));
+            }
+            return None;
         }
-        return None;
-    }
-    if !wide && row == 0 {
+    } else if row == layout.top.y {
         return route_at_column(width, column).map(MouseAction::Route);
     }
+    let content = layout.content;
     if model.route() == Route::Settings && row == content.y.saturating_add(1) {
         return settings_nav_action(content, column);
     }
@@ -555,23 +570,6 @@ pub fn hit_test(
         }
         Route::Profiles => profile_at_row(model, content, column, row),
         _ => None,
-    }
-}
-
-fn render_shell_layout(area: Rect, model: &Model) -> (bool, Rect) {
-    if !presentation(model).single_column && area.width >= 100 && area.height >= 16 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(1)])
-            .split(area);
-        (true, columns[1])
-    } else {
-        let navigation_height = if area.height >= 3 { 2 } else { 1 };
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(navigation_height), Constraint::Min(0)])
-            .split(area);
-        (false, rows[1])
     }
 }
 
@@ -906,16 +904,28 @@ fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
     }
 }
 
+fn route_tab_label(route: Route, width: u16) -> &'static str {
+    if width >= 72 {
+        route.label()
+    } else {
+        match route {
+            Route::Chat => "Chat",
+            Route::Sessions => "Sess",
+            Route::Profiles => "Prof",
+            Route::Settings => "Set",
+            Route::Help => "Help",
+        }
+    }
+}
+
 fn route_at_column(width: u16, column: u16) -> Option<Route> {
     let mut offset = 0_u16;
     for (index, route) in Route::ALL.into_iter().enumerate() {
-        let segment = if width >= 72 {
-            u16::try_from(route.label().len() + 5).unwrap_or(u16::MAX)
-        } else if width >= 48 {
-            u16::try_from(route.label().len() + 4).unwrap_or(u16::MAX)
-        } else {
+        if width < 48 {
             return Some(route);
-        };
+        }
+        let label = route_tab_label(route, width);
+        let segment = u16::try_from(label.len().saturating_add(4)).unwrap_or(u16::MAX);
         if column < offset.saturating_add(segment) {
             return Some(Route::ALL[index]);
         }
@@ -941,23 +951,61 @@ fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
     None
 }
 
-fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
-    if !presentation(model).single_column && area.width >= 100 && area.height >= 16 {
+fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> ShellLayout {
+    let layout = shell_layout(area, model);
+    render_compact_navigation(frame, layout.top, model);
+    if let Some(sidebar) = layout.sidebar {
+        render_navigation_rail(frame, sidebar, model);
+    }
+    layout
+}
+
+fn shell_layout(area: Rect, model: &Model) -> ShellLayout {
+    let wide = !presentation(model).single_column && area.width >= 100 && area.height >= 16;
+    let navigation_height = if area.height >= 3 { 2 } else { 1 };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(navigation_height), Constraint::Min(0)])
+        .split(area);
+    if wide {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(28), Constraint::Min(1)])
-            .split(area);
-        render_navigation_rail(frame, columns[0], model);
-        columns[1]
+            .split(rows[1]);
+        ShellLayout {
+            wide: true,
+            top: rows[0],
+            sidebar: Some(columns[0]),
+            content: columns[1],
+        }
     } else {
-        let navigation_height = if area.height >= 3 { 2 } else { 1 };
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(navigation_height), Constraint::Min(0)])
-            .split(area);
-        render_compact_navigation(frame, rows[0], model);
-        rows[1]
+        ShellLayout {
+            wide: false,
+            top: rows[0],
+            sidebar: None,
+            content: rows[1],
+        }
     }
+}
+
+fn sidebar_session_limit(area: Rect) -> usize {
+    let inner_height = area.height.saturating_sub(2);
+    let footer_height = u16::from(inner_height >= 2);
+    usize::from(inner_height.saturating_sub(footer_height).saturating_sub(4)).max(1)
+}
+
+fn single_line_label(value: &str, width: u16) -> String {
+    let safe = display_safe(value);
+    let width = usize::from(width);
+    if safe.chars().count() <= width {
+        return safe;
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    let mut truncated = safe.chars().take(width - 1).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -982,7 +1030,8 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         "PREVIOUS SESSIONS",
         visual_style(model, VisualRole::Muted),
     )];
-    let session_limit = usize::from(sections[0].height.saturating_sub(4)).max(1);
+    let session_limit = sidebar_session_limit(area);
+    let session_width = inner.width.saturating_sub(4);
     for entry in model.sessions.sessions.iter().take(session_limit) {
         let marker = if entry.active || entry.session_id == model.session.session_id {
             selection_marker(model)
@@ -995,7 +1044,10 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             visual_style(model, VisualRole::Normal)
         };
         lines.push(Line::styled(
-            format!(" {marker} {}", display_safe(&entry.title)),
+            format!(
+                " {marker} {}",
+                single_line_label(&entry.title, session_width)
+            ),
             style,
         ));
     }
@@ -1013,11 +1065,7 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             visual_style(model, VisualRole::Normal),
         ),
     ]);
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        sections[0],
-    );
-
+    frame.render_widget(Paragraph::new(lines), sections[0]);
     if footer_height > 0 {
         let style = if model.route() == Route::Settings {
             visual_style(model, VisualRole::Selected)
@@ -1087,7 +1135,10 @@ fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                     visual_style(model, VisualRole::Muted)
                 };
                 [
-                    Span::styled(format!(" {} {} ", index + 1, route.label()), style),
+                    Span::styled(
+                        format!(" {} {} ", index + 1, route_tab_label(route, area.width)),
+                        style,
+                    ),
                     Span::raw(" "),
                 ]
             })
@@ -1104,7 +1155,10 @@ fn render_compact_navigation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                     } else {
                         visual_style(model, VisualRole::Muted)
                     };
-                    Span::styled(format!(" {}{} ", index + 1, route.label()), style)
+                    Span::styled(
+                        format!(" {} {} ", index + 1, route_tab_label(route, area.width)),
+                        style,
+                    )
                 })
                 .collect::<Vec<_>>(),
         )
@@ -1246,7 +1300,7 @@ fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::styled("[ Cancel ]", visual_style(model, VisualRole::Field)),
         ]),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn workspace_label(workspace: &str) -> String {
@@ -1588,7 +1642,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         let hint = Rect::new(body.x, body.y + content_height, body.width, hint_height);
         frame.render_widget(
             Paragraph::new(format!(
-                "{} select/PgUp/PgDn  Left/Right change  Tab nav  Enter edit label  R inherit  D user default  Esc chat",
+                "{} Left/Right pages  Down settings  Up/Down select  PgUp/PgDn  Enter activate/edit  R inherit  D default  Esc chat",
                 navigation_keys(model)
             ))
             .style(visual_style(model, VisualRole::Muted)),
@@ -1604,7 +1658,11 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             spans.push(Span::raw("  "));
         }
         let style = if index == model.settings_workspace.nav_selected {
-            visual_style(model, VisualRole::Selected)
+            if model.settings_workspace.nav_focus {
+                visual_style(model, VisualRole::Selected)
+            } else {
+                visual_style(model, VisualRole::User)
+            }
         } else {
             visual_style(model, VisualRole::Muted)
         };
@@ -1766,7 +1824,8 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
             "prompt submission chord",
         ),
     };
-    let selected = SettingsPreference::at(model.settings_workspace.selected) == preference;
+    let selected = !model.settings_workspace.nav_focus
+        && SettingsPreference::at(model.settings_workspace.selected) == preference;
     let marker = if selected {
         selection_marker(model)
     } else {
@@ -2587,7 +2646,6 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
@@ -2595,15 +2653,14 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(area);
 
-    render_header(frame, chunks[0], model);
-    render_transcript(frame, chunks[1], model, true);
+    render_transcript(frame, chunks[0], model, true);
     if notice_height > 0 {
-        render_notice(frame, chunks[2], model);
+        render_notice(frame, chunks[1], model);
     }
     if search_height > 0 {
-        render_search_bar(frame, chunks[3], model);
+        render_search_bar(frame, chunks[2], model);
     }
-    render_prompt_bar(frame, chunks[4], model);
+    render_prompt_bar(frame, chunks[3], model);
 }
 
 /// Renders the one-row transcript search bar.

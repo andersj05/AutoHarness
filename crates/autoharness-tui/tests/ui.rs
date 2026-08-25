@@ -804,11 +804,7 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
         } else {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
-        let expected_anchor = if width >= 100 {
-            Color::Rgb(8, 12, 24)
-        } else {
-            Color::Rgb(167, 139, 250)
-        };
+        let expected_anchor = Color::Rgb(167, 139, 250);
         assert_eq!(
             backend.buffer().cell((0, 0)).expect("shell origin").bg,
             expected_anchor,

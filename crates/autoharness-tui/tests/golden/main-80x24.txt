@@ -1,8 +1,8 @@
  1 Chat   2 Sessions   3 Profiles   4 Settings   5 Help
  AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed
- AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed
-| 59 tok
 ╭ Conversation ────────────────────────────────────────────────────────────────╮
+│Plan a café launch.                                                           │
+│Keep it practical.                                                            │
 │                                                                              │
 │AUTOHARNESS · complete                                                        │
 │Start with a two-week validation sprint:                                      │

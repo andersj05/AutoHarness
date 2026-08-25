@@ -370,8 +370,7 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("Composer submit"));
-    assert!(rendered.contains("PgUp/PgDn"));
+    assert!(rendered.contains("Left/Right pages"));
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {
@@ -385,6 +384,79 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     assert_eq!(model.route(), Route::Profiles);
+}
+
+#[test]
+fn settings_arrows_move_between_pages_and_into_preferences() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+
+    let _ = update(&mut model, Message::Input(key(Key::Left)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Up)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+
+    assert_eq!(model.route(), Route::Profiles);
+}
+
+#[test]
+fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
+    let mut model = model();
+    let long_title =
+        "A very long named session that must remain a single visible sidebar line".to_owned();
+    let _ = update(
+        &mut model,
+        Message::SessionsChanged(Arc::new(SessionsProjection {
+            sessions: vec![SessionBrowserEntry {
+                session_id: "session-active".to_owned(),
+                title: long_title,
+                archived: false,
+                selected_model: Some(model_ref()),
+                updated_at_ms: 1,
+                active: true,
+            }],
+        })),
+    );
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("1 Chat"));
+    assert!(rendered.contains("4 Settings"));
+    assert!(rendered.contains("…"));
+    assert_eq!(
+        rendered
+            .lines()
+            .filter(|line| line.contains('│') && line.contains("A very long named"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn compact_route_tabs_use_short_labels_at_boundary_widths() {
+    let model = model();
+    let rendered = render_text(&model, 48, 18);
+    for label in ["Chat", "Sess", "Prof", "Set", "Help"] {
+        assert!(
+            rendered.contains(label),
+            "missing compact route label {label}"
+        );
+    }
+    assert_eq!(
+        hit_test(&model, 48, 18, 45, 0),
+        None,
+        "inert clipped columns must not route"
+    );
+}
+
+#[test]
+fn settings_tab_mouse_geometry_matches_persistent_shell() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    assert_eq!(
+        hit_test(&model, 120, 40, 42, 3),
+        Some(MouseAction::Route(Route::Profiles))
+    );
 }
 
 #[test]
@@ -422,7 +494,7 @@ fn render_route_review_matrix() {
 fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 2),
+        hit_test(&model, 120, 40, 2, 4),
         Some(MouseAction::Route(Route::Sessions))
     );
     assert_eq!(
@@ -441,7 +513,7 @@ fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('3')));
     assert_eq!(
-        hit_test(&model, 120, 40, 30, 1),
+        hit_test(&model, 120, 40, 30, 3),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));

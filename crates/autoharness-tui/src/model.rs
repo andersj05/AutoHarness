@@ -1353,6 +1353,8 @@ impl SettingsPreference {
 /// Inline state owned exclusively by the Settings route.
 #[derive(Debug, Default)]
 pub(crate) struct SettingsState {
+    /// Whether the top-level Settings navigation owns arrow-key focus.
+    pub nav_focus: bool,
     /// Index into the top-level Settings navigation.
     pub nav_selected: usize,
     /// Index into `SettingsPreference::ALL`.
@@ -1466,13 +1468,13 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Settings",
         rows: &[
+            ("Left/Right", "move between Settings pages"),
+            ("Down", "enter Settings preferences"),
             ("Up/Down", "choose a preference"),
             ("PageUp/PageDown", "move through settings"),
             ("Home/End", "jump to the first or last preference"),
-            ("Left/Right", "change the selected value"),
-            ("Enter", "edit the display label"),
-            ("R", "reset to the inherited value"),
-            ("D", "reset to the user default"),
+            ("Enter", "activate a page or edit the display label"),
+            ("R / D", "inherit or restore the user default"),
             ("Esc", "return to Chat"),
         ],
     },
@@ -2173,6 +2175,9 @@ impl Model {
             self.navigation.route = route;
         }
         self.navigation.overlay = None;
+        if route == Route::Settings {
+            self.settings_workspace.nav_focus = true;
+        }
         self.focus = route.focus();
         self.dirty = true;
         true

@@ -1,8 +1,8 @@
- 1Chat  2Sessions  3Profiles  4Settings  5Help
+ 1 Chat  2 Sess  3 Prof  4 Set  5 Help
  AutoHarness  |  Gemini 2.5 Pro  |  failed
- AutoHarness  |  Gemini 2.5 Pro  |  failed
-
 ╭ Conversation ────────────────────────────────────────────╮
+│3. Measure repeat intent.                                 │
+│18 input tokens · 41 output tokens                        │
 │                                                          │
 │YOU                                                       │
 │What could go wrong?                                      │

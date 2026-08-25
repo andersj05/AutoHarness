@@ -1,8 +1,8 @@
  1 Chat   Alt+1..5 routes
  AutoHarness | failed
- AutoHarness | failed
-
 ╭ Conversation ────────────────────────╮
+│Error: Capacity is temporarily        │
+│exhausted; no credentials were        │
 │exposed.                              │
 │rate_limited | Ctrl+R retry | Ctrl+N  │
 │new | ref attempt-2                   │

@@ -617,11 +617,35 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } => {
             move_settings_nav(model, if shift { -1 } else { 1 });
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
             Vec::new()
         }
         Input {
             key: Key::Enter, ..
-        } if model.settings_workspace.nav_selected != 0 => activate_settings_nav(model),
+        } if model.settings_workspace.nav_focus => {
+            if model.settings_workspace.nav_selected == 0 {
+                model.settings_workspace.nav_focus = false;
+                model.dirty = true;
+                Vec::new()
+            } else {
+                activate_settings_nav(model)
+            }
+        }
+        Input { key: Key::Up, .. } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } if model.settings_workspace.nav_focus => {
+            model.settings_workspace.nav_focus = false;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } if model.settings_workspace.selected == 0 => {
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
+            Vec::new()
+        }
         Input { key: Key::Up, .. } => {
             move_settings_selection(model, -1);
             Vec::new()
@@ -633,21 +657,35 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         Input {
             key: Key::PageUp, ..
         } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection(model, -3);
             Vec::new()
         }
         Input {
             key: Key::PageDown, ..
         } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection(model, 3);
             Vec::new()
         }
         Input { key: Key::Home, .. } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection_to(model, 0);
             Vec::new()
         }
         Input { key: Key::End, .. } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection_to(model, SettingsPreference::ALL.len().saturating_sub(1));
+            Vec::new()
+        }
+        Input { key: Key::Left, .. } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, -1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Right, ..
+        } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, 1);
             Vec::new()
         }
         Input { key: Key::Left, .. } => change_selected_preference(model, -1),
@@ -742,9 +780,10 @@ fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
     effects
 }
 fn move_settings_nav(model: &mut Model, direction: isize) {
-    let current = model.settings_workspace.nav_selected;
-    let last = SETTINGS_NAV_COUNT.saturating_sub(1);
-    model.settings_workspace.nav_selected = current.saturating_add_signed(direction).min(last);
+    let count = isize::try_from(SETTINGS_NAV_COUNT).unwrap_or(1);
+    let current = isize::try_from(model.settings_workspace.nav_selected).unwrap_or(0);
+    let next = (current + direction).rem_euclid(count);
+    model.settings_workspace.nav_selected = usize::try_from(next).unwrap_or(0);
     model.settings_workspace.display_label_editor = None;
     model.dirty = true;
 }
@@ -772,9 +811,9 @@ fn move_settings_selection(model: &mut Model, direction: isize) {
     let last = SettingsPreference::ALL.len().saturating_sub(1);
     move_settings_selection_to(model, current.saturating_add_signed(direction).min(last));
 }
-
 fn move_settings_selection_to(model: &mut Model, selected: usize) {
     let last = SettingsPreference::ALL.len().saturating_sub(1);
+    model.settings_workspace.nav_focus = false;
     model.settings_workspace.selected = selected.min(last);
     model.settings_workspace.scroll = 0;
     model.settings_workspace.display_label_editor = None;
