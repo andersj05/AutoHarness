@@ -11,8 +11,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, Notice, OverlayKind,
-    PendingKind, ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode,
+    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, MouseAction, Notice,
+    OverlayKind, PendingKind, ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode,
     ProviderKindLabel, ProviderProfileProjection, RetryPolicy, Route, SettingsPreference,
     TranscriptItem,
 };
@@ -255,8 +255,130 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::SessionCredential) => render_credential(frame, area, model),
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
+        Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
         Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
+}
+/// Resolves a left-click coordinate against the currently visible controls.
+///
+/// Hit testing is derived from the same responsive layout thresholds as the
+/// renderer and returns semantic actions for the deterministic update layer.
+pub fn hit_test(
+    model: &Model,
+    width: u16,
+    height: u16,
+    column: u16,
+    row: u16,
+) -> Option<MouseAction> {
+    let area = Rect::new(0, 0, width, height);
+    if model.overlay() == Some(OverlayKind::UserProfile) {
+        let popup = user_profile_rect(area);
+        if row == popup.bottom().saturating_sub(2) {
+            return (column < popup.x + popup.width / 2)
+                .then_some(MouseAction::UserProfileSave)
+                .or(Some(MouseAction::UserProfileCancel));
+        }
+        return None;
+    }
+    if model.overlay().is_some() {
+        return None;
+    }
+
+    let wide = !presentation(model).single_column && width >= 100 && height >= 16;
+    let content_x = if wide { 28 } else { 0 };
+    if wide && column < 28 {
+        if row == 1 {
+            return Some(MouseAction::OpenUserProfile);
+        }
+        let route_start = 4 + u16::from(active_session_title(model).is_some()) * 3;
+        if row >= route_start && row < route_start + 5 {
+            return Some(MouseAction::Route(
+                Route::ALL[usize::from(row - route_start)],
+            ));
+        }
+        return None;
+    }
+    if !wide && row == 0 {
+        return route_at_column(width, column).map(MouseAction::Route);
+    }
+
+    let relative_column = column.saturating_sub(content_x);
+    match model.route() {
+        Route::Chat if row == height.saturating_sub(1) && height >= 7 => {
+            if relative_column < 12 {
+                Some(MouseAction::ChatSend)
+            } else if relative_column < 30 {
+                Some(MouseAction::ChatModels)
+            } else if relative_column < 45 {
+                Some(MouseAction::ChatNewSession)
+            } else if relative_column < 62 {
+                Some(MouseAction::ChatSessions)
+            } else if relative_column < 82 {
+                Some(MouseAction::ChatCredential)
+            } else {
+                Some(MouseAction::ChatHelp)
+            }
+        }
+        Route::Profiles if row == 1 => Some(MouseAction::OpenUserProfile),
+        Route::Profiles if row == height.saturating_sub(2) => {
+            if relative_column < 18 {
+                Some(MouseAction::ProfileNew)
+            } else if relative_column < 36 {
+                Some(MouseAction::ProfileCredential)
+            } else if relative_column < 52 {
+                Some(MouseAction::ProfileTest)
+            } else if relative_column < 70 {
+                Some(MouseAction::ProfileDefaultModel)
+            } else if relative_column < 88 {
+                Some(MouseAction::ProfileDisconnect)
+            } else {
+                Some(MouseAction::ProfileDelete)
+            }
+        }
+        Route::Profiles => profile_at_row(model, width, height, column, row),
+        _ => None,
+    }
+}
+
+fn route_at_column(width: u16, column: u16) -> Option<Route> {
+    let mut offset = 0_u16;
+    for (index, route) in Route::ALL.into_iter().enumerate() {
+        let segment = if width >= 72 {
+            u16::try_from(route.label().len() + 5).unwrap_or(u16::MAX)
+        } else if width >= 48 {
+            u16::try_from(route.label().len() + 4).unwrap_or(u16::MAX)
+        } else {
+            return Some(route);
+        };
+        if column < offset.saturating_add(segment) {
+            return Some(Route::ALL[index]);
+        }
+        offset = offset.saturating_add(segment);
+    }
+    None
+}
+
+fn profile_at_row(
+    model: &Model,
+    width: u16,
+    height: u16,
+    column: u16,
+    row: u16,
+) -> Option<MouseAction> {
+    let content_x = if !presentation(model).single_column && width >= 100 && height >= 16 {
+        28
+    } else {
+        0
+    };
+    if column < content_x {
+        return None;
+    }
+    let list_start = if width >= 78 && height >= 7 { 5 } else { 3 };
+    let index = usize::from(row.saturating_sub(list_start));
+    model
+        .filtered_profiles()
+        .nth(index)
+        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
 }
 
 fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
@@ -525,6 +647,55 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Line::from(""),
         Line::styled(
             "Y confirm  N or Esc cancel",
+            visual_style(model, VisualRole::Assistant),
+        ),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = user_profile_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" User profile ")
+        .border_style(visual_style(model, VisualRole::Border));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let label = model
+        .user_profile
+        .display_label_editor
+        .as_deref()
+        .unwrap_or_default();
+    let user = &model.profiles().user;
+    let default_profile = user.default_profile.as_deref().unwrap_or("session only");
+    let default_model = user.default_model.as_deref().unwrap_or("not set");
+    let default_mode = if user.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        user.default_mode.as_str()
+    };
+    let lines = vec![
+        Line::styled("LOCAL IDENTITY", visual_style(model, VisualRole::User)),
+        Line::styled(
+            format!("Display name  > {}", display_safe(label)),
+            visual_style(model, VisualRole::Selected),
+        ),
+        Line::styled(
+            format!("Workspace     {}", workspace_label(&user.workspace)),
+            visual_style(model, VisualRole::Muted),
+        ),
+        Line::from(""),
+        Line::styled("DEFAULTS", visual_style(model, VisualRole::User)),
+        detail_line(model, "Provider", default_profile),
+        detail_line(model, "Model", default_model),
+        detail_line(model, "Mode", default_mode),
+        Line::from(""),
+        Line::styled(
+            "Enter or Ctrl+S Save    Esc Cancel",
             visual_style(model, VisualRole::Assistant),
         ),
     ];
@@ -2571,6 +2742,20 @@ fn credential_rect(area: Rect) -> Rect {
     }
     let width = area.width.saturating_sub(4).min(68);
     let height = area.height.saturating_sub(2).min(10);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.max(1),
+        height.max(1),
+    )
+}
+
+fn user_profile_rect(area: Rect) -> Rect {
+    if area.width <= 44 || area.height <= 14 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(72);
+    let height = area.height.saturating_sub(4).min(16);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,

@@ -3,9 +3,10 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, PermissionDetailView,
-    PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry, SessionProjection,
-    SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, update, view,
+    CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction, OverlayKind,
+    PermissionDetailView, PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent,
+    hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -80,6 +81,13 @@ fn type_text(model: &mut Model, text: &str) {
     }
 }
 
+fn alt(character: char) -> Input {
+    Input {
+        key: Key::Char(character),
+        alt: true,
+        ..key(Key::Char(character))
+    }
+}
 fn render_text(model: &Model, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -336,6 +344,7 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
 fn render_route_review_matrix() {
     for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
         let mut model = model();
+
         for (key, route) in [
             ('1', Route::Chat),
             ('2', Route::Sessions),
@@ -360,4 +369,56 @@ fn render_route_review_matrix() {
         "=== Confirmation 80x24 ===\n{}",
         render_text(&confirmation, 80, 24)
     );
+}
+#[test]
+fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
+    let model = model();
+    for (index, route) in Route::ALL.into_iter().enumerate() {
+        assert_eq!(
+            hit_test(&model, 120, 40, 2, 7 + index as u16),
+            Some(MouseAction::Route(route))
+        );
+    }
+    assert_eq!(
+        hit_test(&model, 80, 24, 2, 0),
+        Some(MouseAction::Route(Route::Chat))
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 16, 23),
+        Some(MouseAction::ChatModels)
+    );
+}
+
+#[test]
+fn mouse_opens_and_saves_the_user_profile_dialog() {
+    let mut model = model();
+    assert_eq!(
+        hit_test(&model, 120, 40, 2, 1),
+        Some(MouseAction::OpenUserProfile)
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
+    assert!(model.user_profile_open());
+    assert!(render_text(&model, 120, 40).contains("User profile"));
+
+    let effects = update(&mut model, Message::Mouse(MouseAction::UserProfileSave));
+    assert!(matches!(
+        effects.as_slice(),
+        [autoharness_tui::UiEffect::Dispatch(
+            UiIntent::UpdateLocalPreference { .. }
+        )]
+    ));
+    assert!(!model.user_profile_open());
+}
+
+#[test]
+fn mouse_profile_actions_share_keyboard_intents() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('3')));
+    assert_eq!(
+        hit_test(&model, 120, 40, 30, 38),
+        Some(MouseAction::ProfileNew)
+    );
+    let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
+    assert!(effects.is_empty());
+    assert!(render_text(&model, 120, 40).contains("Create provider profile"));
 }

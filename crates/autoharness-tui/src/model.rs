@@ -416,6 +416,8 @@ pub enum Focus {
     Help,
     /// The settings route owns key input.
     Settings,
+    /// The local user-profile dialog owns key input.
+    UserProfile,
     /// An exact destructive action awaits Y or N.
     Confirmation,
     /// The transcript search bar owns key input.
@@ -484,7 +486,6 @@ impl Route {
     }
 }
 
-/// One mutually exclusive modal layer above the active route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OverlayKind {
     ModelPicker,
@@ -493,6 +494,7 @@ pub enum OverlayKind {
     TranscriptSearch,
     Permission,
     ProfileCredential,
+    UserProfile,
     Confirmation,
 }
 
@@ -506,6 +508,7 @@ impl OverlayKind {
             Self::CommandPalette => Focus::Palette,
             Self::TranscriptSearch => Focus::Search,
             Self::Permission => Focus::Permission,
+            Self::UserProfile => Focus::UserProfile,
             Self::Confirmation => Focus::Confirmation,
         }
     }
@@ -1039,11 +1042,39 @@ pub enum UiNotice {
         failure: UiFailure,
     },
 }
+/// Semantic mouse actions produced by terminal hit testing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MouseAction {
+    /// Switch to one of the primary shell routes.
+    Route(Route),
+    /// Open the local user-profile dialog.
+    OpenUserProfile,
+    /// Chat footer actions.
+    ChatSend,
+    ChatModels,
+    ChatNewSession,
+    ChatSessions,
+    ChatCredential,
+    ChatHelp,
+    /// Profile-center actions.
+    ProfileNew,
+    ProfileCredential,
+    ProfileTest,
+    ProfileDefaultModel,
+    ProfileDisconnect,
+    ProfileDelete,
+    SelectProfile(String),
+    /// User-profile dialog actions.
+    UserProfileSave,
+    UserProfileCancel,
+}
 
 /// Input to the deterministic update function.
 pub enum Message {
     /// Backend-independent keyboard input.
     Input(ratatui_textarea::Input),
+    /// Semantic click action derived from a visible terminal hit region.
+    Mouse(MouseAction),
     /// Bracketed paste content.
     Paste(String),
     /// Newest session projection.
@@ -1070,6 +1101,7 @@ impl Debug for Message {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(_) => formatter.write_str("Input([REDACTED])"),
+            Self::Mouse(action) => formatter.debug_tuple("Mouse").field(action).finish(),
             Self::Paste(_) => formatter.write_str("Paste([REDACTED])"),
             Self::SessionChanged(session) => formatter
                 .debug_tuple("SessionChanged")
@@ -1292,6 +1324,13 @@ pub(crate) struct SettingsState {
     pub display_label_editor: Option<String>,
 }
 
+/// Local user-profile dialog state.
+#[derive(Debug, Default)]
+pub(crate) struct UserProfileState {
+    /// Buffered display-label edit; persisted only after Save.
+    pub display_label_editor: Option<String>,
+}
+
 /// One contextual help section shown in the help overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct HelpSection {
@@ -1467,6 +1506,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Profiles and Providers",
         description: "Manage providers, API keys, connection tests, and defaults",
         key_hint: Some("Alt+3"),
+    },
+    CommandEntry {
+        id: "user-profile",
+        label: "User profile",
+        description: "Edit the local display name and profile summary",
+        key_hint: Some("Alt+U"),
     },
     CommandEntry {
         id: "new-session",
@@ -1884,6 +1929,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
+    /// Local user-profile dialog interaction state.
+    pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
     pub(crate) drafts: SessionDrafts,
     /// In-run submitted-prompt history for recall.
@@ -1980,6 +2027,7 @@ impl Model {
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
             drafts: SessionDrafts::default(),
+            user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
             search: SearchState::default(),
             tools_expanded: false,
@@ -2133,6 +2181,11 @@ impl Model {
     #[must_use]
     pub const fn settings_open(&self) -> bool {
         matches!(self.navigation.route, Route::Settings)
+    }
+    /// Returns whether the local user-profile dialog owns the modal slot.
+    #[must_use]
+    pub fn user_profile_open(&self) -> bool {
+        self.overlay() == Some(OverlayKind::UserProfile)
     }
 
     /// Returns the effective provider label in safe provenance terms.

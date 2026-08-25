@@ -1,7 +1,10 @@
 use std::io;
 
+use crate::error::AppError;
 use crossterm::cursor::Show;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -10,12 +13,12 @@ use ratatui::DefaultTerminal;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::error::AppError;
-
 trait LifecycleOps {
     fn initialize(&mut self) -> io::Result<()>;
     fn enable_bracketed_paste(&mut self) -> io::Result<()>;
     fn disable_bracketed_paste(&mut self) -> io::Result<()>;
+    fn enable_mouse_capture(&mut self) -> io::Result<()>;
+    fn disable_mouse_capture(&mut self) -> io::Result<()>;
     fn show_cursor(&mut self) -> io::Result<()>;
     fn restore(&mut self) -> io::Result<()>;
 }
@@ -24,6 +27,7 @@ struct Lifecycle<O: LifecycleOps> {
     ops: O,
     initialized: bool,
     bracketed_paste: bool,
+    mouse_capture: bool,
     restored: bool,
 }
 
@@ -34,9 +38,14 @@ impl<O: LifecycleOps> Lifecycle<O> {
             ops,
             initialized: true,
             bracketed_paste: true,
+            mouse_capture: true,
             restored: false,
         };
         if let Err(error) = lifecycle.ops.enable_bracketed_paste() {
+            lifecycle.restore_best_effort();
+            return Err(error);
+        }
+        if let Err(error) = lifecycle.ops.enable_mouse_capture() {
             lifecycle.restore_best_effort();
             return Err(error);
         }
@@ -46,6 +55,10 @@ impl<O: LifecycleOps> Lifecycle<O> {
     fn restore_best_effort(&mut self) {
         if self.restored {
             return;
+        }
+        if self.mouse_capture {
+            let _ = self.ops.disable_mouse_capture();
+            self.mouse_capture = false;
         }
         if self.bracketed_paste {
             let _ = self.ops.disable_bracketed_paste();
@@ -113,6 +126,13 @@ impl LifecycleOps for RealOps {
     fn disable_bracketed_paste(&mut self) -> io::Result<()> {
         execute!(io::stdout(), DisableBracketedPaste)
     }
+    fn enable_mouse_capture(&mut self) -> io::Result<()> {
+        execute!(io::stdout(), EnableMouseCapture)
+    }
+
+    fn disable_mouse_capture(&mut self) -> io::Result<()> {
+        execute!(io::stdout(), DisableMouseCapture)
+    }
 
     fn show_cursor(&mut self) -> io::Result<()> {
         execute!(io::stdout(), Show)
@@ -176,6 +196,7 @@ fn install_panic_restoration() {
 }
 
 fn restore_process_terminal() {
+    let _ = execute!(io::stdout(), DisableMouseCapture);
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     let _ = execute!(io::stdout(), Show);
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
@@ -192,6 +213,7 @@ mod tests {
     struct FakeOps {
         calls: Arc<Mutex<Vec<&'static str>>>,
         fail_enable: bool,
+        fail_mouse: bool,
     }
 
     impl FakeOps {
@@ -220,6 +242,20 @@ mod tests {
             Ok(())
         }
 
+        fn enable_mouse_capture(&mut self) -> io::Result<()> {
+            self.record("enable_mouse");
+            if self.fail_mouse {
+                Err(io::Error::other("fixture failure"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn disable_mouse_capture(&mut self) -> io::Result<()> {
+            self.record("disable_mouse");
+            Ok(())
+        }
+
         fn show_cursor(&mut self) -> io::Result<()> {
             self.record("show_cursor");
             Ok(())
@@ -243,9 +279,11 @@ mod tests {
             vec![
                 "initialize",
                 "enable_paste",
+                "enable_mouse",
+                "disable_mouse",
                 "disable_paste",
                 "show_cursor",
-                "restore"
+                "restore",
             ]
         );
     }
@@ -266,9 +304,10 @@ mod tests {
             vec![
                 "initialize",
                 "enable_paste",
+                "disable_mouse",
                 "disable_paste",
                 "show_cursor",
-                "restore"
+                "restore",
             ]
         );
     }
@@ -285,9 +324,11 @@ mod tests {
             vec![
                 "initialize",
                 "enable_paste",
+                "enable_mouse",
+                "disable_mouse",
                 "disable_paste",
                 "show_cursor",
-                "restore"
+                "restore",
             ]
         );
     }
