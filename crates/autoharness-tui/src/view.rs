@@ -280,6 +280,20 @@ pub fn hit_test(
         }
         return None;
     }
+    if model.overlay() == Some(OverlayKind::Confirmation) {
+        let popup = confirmation_rect(area);
+        if row == popup.bottom().saturating_sub(2) {
+            return (column < popup.x + popup.width / 2)
+                .then_some(MouseAction::Confirm)
+                .or(Some(MouseAction::Cancel));
+        }
+        return None;
+    }
+    if model.route() == Route::Profiles
+        && (model.profile_center.editor.is_some() || model.profile_center.credential.is_some())
+    {
+        return None;
+    }
     if model.overlay().is_some() {
         return None;
     }
@@ -319,25 +333,116 @@ pub fn hit_test(
                 Some(MouseAction::ChatHelp)
             }
         }
-        Route::Profiles if row == 1 => Some(MouseAction::OpenUserProfile),
-        Route::Profiles if row == height.saturating_sub(2) => {
+        Route::Sessions if row == height.saturating_sub(2) => {
             if relative_column < 18 {
-                Some(MouseAction::ProfileNew)
-            } else if relative_column < 36 {
-                Some(MouseAction::ProfileCredential)
-            } else if relative_column < 52 {
-                Some(MouseAction::ProfileTest)
-            } else if relative_column < 70 {
-                Some(MouseAction::ProfileDefaultModel)
-            } else if relative_column < 88 {
-                Some(MouseAction::ProfileDisconnect)
+                Some(MouseAction::SessionOpen)
+            } else if relative_column < 38 {
+                Some(MouseAction::SessionRename)
+            } else if relative_column < 58 {
+                Some(MouseAction::SessionArchive)
             } else {
-                Some(MouseAction::ProfileDelete)
+                Some(MouseAction::SessionDelete)
             }
+        }
+        Route::Profiles if row == 1 => Some(MouseAction::OpenUserProfile),
+        Route::Profiles
+            if profile_detail_button_rows(model, width, height)
+                .is_some_and(|(first, _)| row == first) =>
+        {
+            profile_action_at_column(relative_column)
+        }
+        Route::Profiles
+            if profile_detail_button_rows(model, width, height)
+                .is_some_and(|(_, second)| row == second) =>
+        {
+            profile_secondary_action_at_column(relative_column)
+        }
+        Route::Profiles if row == height.saturating_sub(2) => {
+            profile_action_at_column(relative_column)
         }
         Route::Profiles => profile_at_row(model, width, height, column, row),
         _ => None,
     }
+}
+
+fn profile_action_at_column(column: u16) -> Option<MouseAction> {
+    match column {
+        0..=6 => Some(MouseAction::ProfileNew),
+        8..=14 => Some(MouseAction::ProfileCredential),
+        16..=22 => Some(MouseAction::ProfileTest),
+        24..=34 => Some(MouseAction::ProfileDefaultModel),
+        _ => None,
+    }
+}
+
+fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
+    match column {
+        0..=13 => Some(MouseAction::ProfileDisconnect),
+        15..=24 => Some(MouseAction::ProfileDelete),
+        _ => None,
+    }
+}
+fn profile_detail_button_rows(model: &Model, width: u16, height: u16) -> Option<(u16, u16)> {
+    let selected = model.selected_profile()?;
+    let outer = Rect::new(0, 0, width, height);
+    let inner = Rect::new(
+        outer.x.saturating_add(1),
+        outer.y.saturating_add(1),
+        outer.width.saturating_sub(2),
+        outer.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(0),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let detail = if !presentation(model).single_column && rows[1].width >= 78 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(rows[1])[1]
+    } else if rows[1].height >= 9 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(rows[1])[1]
+    } else {
+        return None;
+    };
+    let mut lines = 8_u16;
+    if selected.kind == ProviderKindLabel::Router {
+        lines = lines.saturating_add(1);
+        if !selected.project.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+        if !selected.auth_header.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+    }
+    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
+        lines = lines.saturating_add(1);
+    }
+    if model.profiles().pending_recovery > 0 {
+        lines = lines.saturating_add(1);
+    }
+    let first = detail
+        .y
+        .saturating_add(1)
+        .saturating_add(lines)
+        .saturating_add(1);
+    Some((first, first.saturating_add(1)))
 }
 
 fn route_at_column(width: u16, column: u16) -> Option<Route> {
@@ -694,10 +799,11 @@ fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(model, "Model", default_model),
         detail_line(model, "Mode", default_mode),
         Line::from(""),
-        Line::styled(
-            "Enter or Ctrl+S Save    Esc Cancel",
-            visual_style(model, VisualRole::Assistant),
-        ),
+        Line::from(vec![
+            Span::styled("[ Save ]", visual_style(model, VisualRole::Selected)),
+            Span::raw("  "),
+            Span::styled("[ Cancel ]", visual_style(model, VisualRole::Field)),
+        ]),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -1495,10 +1601,20 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Alt+N new  Alt+E edit  Alt+D duplicate  Alt+K save/replace",
-        visual_style(model, VisualRole::Muted),
-    )));
+    lines.push(Line::from(vec![
+        Span::styled("[ New ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Key ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Test ]", visual_style(model, VisualRole::Field)),
+        Span::raw(" "),
+        Span::styled("[ Default ]", visual_style(model, VisualRole::Field)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("[ Disconnect ]", visual_style(model, VisualRole::Warning)),
+        Span::raw(" "),
+        Span::styled("[ Delete ]", visual_style(model, VisualRole::Error)),
+    ]));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
@@ -1691,17 +1807,11 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
     if help.height > 0 && !model.browser.renaming {
         let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
-            "Y confirm  N/Esc cancel"
+            "[ Y Confirm ]  [ N Cancel ]"
         } else if help.width >= 50 {
-            if presentation(model).ascii {
-                "Up/Down Enter open  ^R rename  ^A archive  ^D delete  Esc"
-            } else {
-                "↑/↓ Enter open  ^R rename  ^A archive  ^D delete  Esc"
-            }
-        } else if presentation(model).ascii {
-            "Up/Down Enter open  ^R rename  ^D delete"
+            "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
-            "↑/↓ Enter open  ^R rename  ^D delete"
+            "[ Open ]  [ Rename ]  [ Delete ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),

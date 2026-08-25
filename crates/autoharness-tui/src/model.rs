@@ -1066,6 +1066,14 @@ pub enum MouseAction {
     SelectProfile(String),
     /// User-profile dialog actions.
     UserProfileSave,
+    /// Session-browser action bar controls.
+    SessionOpen,
+    SessionRename,
+    SessionArchive,
+    SessionDelete,
+    /// Destructive confirmation controls.
+    Confirm,
+    Cancel,
     UserProfileCancel,
 }
 

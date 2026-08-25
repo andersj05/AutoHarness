@@ -84,10 +84,15 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
     if model.overlay() == Some(OverlayKind::Permission) {
         return Vec::new();
     }
-    if let Some(overlay) = model.overlay()
-        && overlay != OverlayKind::UserProfile
-    {
-        return Vec::new();
+    if let Some(overlay) = model.overlay() {
+        if overlay == OverlayKind::Confirmation
+            && !matches!(action, MouseAction::Confirm | MouseAction::Cancel)
+        {
+            return Vec::new();
+        }
+        if overlay != OverlayKind::UserProfile && overlay != OverlayKind::Confirmation {
+            return Vec::new();
+        }
     }
     match action {
         MouseAction::Route(route) => {
@@ -148,7 +153,46 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             close_user_profile(model);
             Vec::new()
         }
+        MouseAction::SessionOpen => open_selected_session(model),
+        MouseAction::SessionRename => rename_selected_session(model),
+        MouseAction::SessionArchive => toggle_archive_selected_session(model),
+        MouseAction::SessionDelete => request_delete_selected_session(model),
+        MouseAction::Confirm => confirm_mouse_action(model),
+        MouseAction::Cancel => cancel_mouse_action(model),
     }
+}
+
+fn confirm_mouse_action(model: &mut Model) -> Vec<UiEffect> {
+    match model.route() {
+        Route::Sessions if model.browser.confirming_archive.is_some() => {
+            confirm_archive_selected_session(model)
+        }
+        Route::Sessions if model.browser.confirming_delete.is_some() => {
+            confirm_delete_selected_session(model)
+        }
+        Route::Profiles => {
+            if let Some(profile_id) = model.profile_center.confirming_disconnect.take() {
+                dispatch_disconnect_profile(model, profile_id)
+            } else if let Some(profile_id) = model.profile_center.confirming_delete.take() {
+                dispatch_delete_profile(model, profile_id)
+            } else {
+                Vec::new()
+            }
+        }
+        Route::Sessions => Vec::new(),
+        Route::Chat | Route::Settings | Route::Help => Vec::new(),
+    }
+}
+
+fn cancel_mouse_action(model: &mut Model) -> Vec<UiEffect> {
+    model.browser.confirming_archive = None;
+    model.browser.confirming_delete = None;
+    model.profile_center.confirming_disconnect = None;
+    model.profile_center.confirming_delete = None;
+    let _ = model.close_overlay(OverlayKind::Confirmation);
+    model.notice = None;
+    model.dirty = true;
+    Vec::new()
 }
 
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {

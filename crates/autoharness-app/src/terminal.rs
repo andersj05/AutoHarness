@@ -313,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn mouse_capture_failure_restores_every_enabled_terminal_mode() {
+        let operations = FakeOps {
+            fail_mouse: true,
+            ..FakeOps::default()
+        };
+        let calls = Arc::clone(&operations.calls);
+
+        assert!(Lifecycle::enter(operations).is_err());
+        assert_eq!(
+            *calls.lock().expect("call recorder"),
+            vec![
+                "initialize",
+                "enable_paste",
+                "enable_mouse",
+                "disable_mouse",
+                "disable_paste",
+                "show_cursor",
+                "restore",
+            ]
+        );
+    }
+    #[test]
     fn drop_is_a_restoration_fallback() {
         let operations = FakeOps::default();
         let calls = Arc::clone(&operations.calls);

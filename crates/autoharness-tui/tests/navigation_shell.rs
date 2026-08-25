@@ -419,6 +419,24 @@ fn mouse_profile_actions_share_keyboard_intents() {
         Some(MouseAction::ProfileNew)
     );
     let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
+
     assert!(effects.is_empty());
     assert!(render_text(&model, 120, 40).contains("Create provider profile"));
+}
+#[test]
+fn mouse_session_action_bar_exposes_each_visible_action() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('2')));
+    for (column, expected) in [
+        (2, MouseAction::SessionOpen),
+        (20, MouseAction::SessionRename),
+        (40, MouseAction::SessionArchive),
+        (60, MouseAction::SessionDelete),
+    ] {
+        assert_eq!(
+            hit_test(&model, 80, 24, column, 22),
+            Some(expected),
+            "missing session action at column {column}"
+        );
+    }
 }
