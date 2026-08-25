@@ -524,6 +524,25 @@ pub fn hit_test(
     if model.route() == Route::Settings && row == content.y.saturating_add(1) {
         return settings_nav_action(content, column);
     }
+    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 1 {
+        let profile_area = settings_body_area(content);
+        if profile_local_hit_row(profile_area, model)
+            .is_some_and(|local| local.contains(Position::new(column, row)))
+        {
+            return Some(MouseAction::OpenUserProfile);
+        }
+        if profile_detail_button_rows(model, profile_area).is_some_and(|(first, _)| row == first) {
+            return profile_detail_action_at_column(model, profile_area, column, false);
+        }
+        if profile_detail_button_rows(model, profile_area).is_some_and(|(_, second)| row == second)
+        {
+            return profile_detail_action_at_column(model, profile_area, column, true);
+        }
+        if row == profile_area.bottom().saturating_sub(2) {
+            return profile_action_at_column(column.saturating_sub(profile_area.x));
+        }
+        return profile_at_row(model, profile_area, column, row);
+    }
     match model.route() {
         Route::Sessions if row == height.saturating_sub(2) => {
             let relative_column = column.saturating_sub(content.x);
@@ -899,12 +918,7 @@ fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
     for (index, label) in SETTINGS_NAV.iter().enumerate() {
         let width = u16::try_from(label.len().saturating_add(2)).unwrap_or(u16::MAX);
         if column >= offset && column < offset.saturating_add(width) {
-            return match index {
-                0 => Some(MouseAction::Route(Route::Settings)),
-                1 => Some(MouseAction::Route(Route::Profiles)),
-                2 => Some(MouseAction::OpenUserProfile),
-                _ => None,
-            };
+            return Some(MouseAction::SettingsTab(index));
         }
         offset = offset.saturating_add(width).saturating_add(2);
     }
@@ -923,9 +937,9 @@ fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> ShellLayout
 
 fn shell_footer_action(column: u16) -> Option<MouseAction> {
     if column < 10 {
-        Some(MouseAction::OpenUserProfile)
+        Some(MouseAction::SettingsTab(2))
     } else if column < 22 {
-        Some(MouseAction::Route(Route::Settings))
+        Some(MouseAction::SettingsTab(0))
     } else {
         None
     }
@@ -960,16 +974,18 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let profile_style = if model.route() == Route::Profiles {
-        visual_style(model, VisualRole::Selected)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    let settings_style = if model.route() == Route::Settings {
-        visual_style(model, VisualRole::Selected)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
+    let profile_style =
+        if model.route() == Route::Settings && model.settings_workspace.nav_selected == 2 {
+            visual_style(model, VisualRole::Selected)
+        } else {
+            visual_style(model, VisualRole::Normal)
+        };
+    let settings_style =
+        if model.route() == Route::Settings && model.settings_workspace.nav_selected == 0 {
+            visual_style(model, VisualRole::Selected)
+        } else {
+            visual_style(model, VisualRole::Normal)
+        };
     let line = Line::from(vec![
         Span::styled(" Profile ", profile_style),
         Span::styled(" | ", visual_style(model, VisualRole::Muted)),
@@ -1280,9 +1296,9 @@ fn inline_palette_item(
         " "
     };
     let mut label = format!(
-        "{prefix} {}  /{} - {}",
-        display_safe(entry.label),
+        "{prefix} /{}  {} - {}",
         entry.id,
+        display_safe(entry.label),
         display_safe(entry.description)
     );
     if let Some(hint) = entry.key_hint {
@@ -1378,9 +1394,9 @@ fn palette_item(
         " "
     };
     let mut label = format!(
-        "{prefix} {}  /{} - {}",
-        display_safe(entry.label),
+        "{prefix} /{}  {} - {}",
         entry.id,
+        display_safe(entry.label),
         display_safe(entry.description)
     );
     if let Some(hint) = entry.key_hint {
@@ -1460,6 +1476,15 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
+fn settings_body_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(2),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(3),
+    )
+}
+
 /// Renders resolved runtime settings and safe provenance as a primary route.
 fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
@@ -1481,29 +1506,29 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             model,
         );
     }
-    let body = Rect::new(
-        inner.x,
-        inner.y.saturating_add(nav_height),
-        inner.width,
-        inner.height.saturating_sub(nav_height),
-    );
-    if model.settings_workspace.nav_selected != 0 {
-        let section = SETTINGS_NAV[model
-            .settings_workspace
-            .nav_selected
-            .min(SETTINGS_NAV.len().saturating_sub(1))];
-        frame.render_widget(
+    let body = if nav_height > 0 {
+        settings_body_area(area)
+    } else {
+        inner
+    };
+    match model.settings_workspace.nav_selected {
+        1 => render_profile_center(frame, body, model),
+        2 => render_settings_profile(frame, body, model),
+        3 => frame.render_widget(
             Paragraph::new(vec![
-                Line::styled(section, visual_style(model, VisualRole::User)),
+                Line::styled("Agents", visual_style(model, VisualRole::User)),
                 Line::from(""),
                 Line::styled(
-                    "This settings area is reserved for a future workspace.",
+                    "Agent configuration will appear here.",
                     visual_style(model, VisualRole::Muted),
                 ),
             ])
             .wrap(Wrap { trim: false }),
             body,
-        );
+        ),
+        _ => {}
+    }
+    if model.settings_workspace.nav_selected != 0 {
         return;
     }
 
@@ -1609,6 +1634,26 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         spans.push(Span::styled(format!(" {label} "), style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" Profile ")
+        .border_style(visual_style(model, VisualRole::Border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    render_local_profile(frame, inner, model);
+    if inner.height >= 3 {
+        frame.render_widget(
+            Paragraph::new("Enter edit local profile  Esc return to Settings")
+                .style(visual_style(model, VisualRole::Muted)),
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+        );
+    }
 }
 
 fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
@@ -2584,6 +2629,7 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 .style(chat_visual_style(model, VisualRole::Assistant)),
             editor_area,
         );
+        set_palette_cursor(frame, editor_area, model);
         return;
     }
     let mut composer = model.composer.editor.clone();
@@ -3306,6 +3352,18 @@ fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model, bordere
         .saturating_add(u16::try_from(cursor.row).unwrap_or(u16::MAX));
     if x < area.right() && y < area.bottom() {
         frame.set_cursor_position((x, y));
+    }
+}
+
+fn set_palette_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if !model.palette_open() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let x = area.x.saturating_add(1).saturating_add(
+        u16::try_from(display_safe(&model.palette.query).chars().count()).unwrap_or(u16::MAX),
+    );
+    if x < area.right() {
+        frame.set_cursor_position((x, area.y));
     }
 }
 

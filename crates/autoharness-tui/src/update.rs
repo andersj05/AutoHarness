@@ -124,6 +124,10 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             navigate_to_route(model, route);
             Vec::new()
         }
+        MouseAction::SettingsTab(tab) => {
+            open_settings_tab(model, tab);
+            Vec::new()
+        }
         MouseAction::OpenUserProfile => {
             open_user_profile(model);
             Vec::new()
@@ -289,7 +293,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
     ) {
-        navigate_to_route(model, Route::Profiles);
+        open_settings_tab(model, 1);
         return Vec::new();
     }
     if matches!(
@@ -406,6 +410,9 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             OverlayKind::Confirmation => match model.route() {
                 Route::Sessions => handle_browser_input(model, input),
                 Route::Profiles => handle_profile_input(model, input),
+                Route::Settings if model.settings_workspace.nav_selected == 1 => {
+                    handle_profile_input(model, input)
+                }
                 Route::Chat | Route::Settings | Route::Help => Vec::new(),
             },
         };
@@ -571,6 +578,24 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 }
 
 fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 1 {
+        return handle_profile_input(model, input);
+    }
+    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 2 {
+        match input {
+            Input {
+                key: Key::Enter, ..
+            } => {
+                open_user_profile(model);
+                return Vec::new();
+            }
+            Input { key: Key::Esc, .. } => {
+                navigate_to_route(model, Route::Chat);
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
     match input {
         Input { key: Key::Esc, .. } => {
             navigate_to_route(model, Route::Chat);
@@ -789,17 +814,9 @@ fn move_settings_nav(model: &mut Model, direction: isize) {
 }
 
 fn activate_settings_nav(model: &mut Model) -> Vec<UiEffect> {
-    match model.settings_workspace.nav_selected {
-        1 => navigate_to_route(model, Route::Profiles),
-        2 => open_user_profile(model),
-        3 => {
-            model.notice = Some(Notice::Info(
-                "Agent settings are reserved for a future workspace.".to_owned(),
-            ));
-            model.dirty = true;
-        }
-        _ => {}
-    }
+    model.settings_workspace.nav_focus = false;
+    model.notice = None;
+    model.dirty = true;
     Vec::new()
 }
 fn selected_settings_preference(model: &Model) -> SettingsPreference {
@@ -1071,11 +1088,27 @@ fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>
     }
 }
 
+/// Resolves legacy command spellings to one canonical palette entry.
+fn canonical_command_id(id: &str) -> &str {
+    match id {
+        "profiles" => "provider",
+        _ => id,
+    }
+}
+
+fn open_settings_tab(model: &mut Model, tab: usize) {
+    navigate_to_route(model, Route::Settings);
+    model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
+    model.settings_workspace.nav_focus = false;
+    model.dirty = true;
+}
+
 /// Runs one shared command by its stable table identity.
 fn run_command_by_id(model: &mut Model, id: &str) -> Result<Vec<UiEffect>, String> {
+    let canonical = canonical_command_id(id);
     let entry = COMMANDS
         .iter()
-        .find(|entry| entry.id == id)
+        .find(|entry| entry.id == canonical)
         .ok_or_else(|| format!("Unknown command '/{id}'. Press Ctrl+/ to list commands."))?;
     Ok(execute_command(model, *entry))
 }
@@ -1093,24 +1126,20 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Sessions);
             Vec::new()
         }
-        "profiles" => {
-            navigate_to_route(model, Route::Profiles);
-            Vec::new()
-        }
         "profile" => {
-            navigate_to_route(model, Route::Profiles);
+            open_settings_tab(model, 2);
             Vec::new()
         }
         "provider" => {
-            navigate_to_route(model, Route::Profiles);
-            if model.selected_profile().is_some() {
-                open_profile_credential(model);
-            } else {
-                create_profile_editor(model);
-            }
+            open_settings_tab(model, 1);
+            Vec::new()
+        }
+        "agents" => {
+            open_settings_tab(model, 3);
             Vec::new()
         }
         "user-profile" => {
+            open_settings_tab(model, 2);
             open_user_profile(model);
             Vec::new()
         }
@@ -1119,12 +1148,12 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "connect-api-key" => {
-            navigate_to_route(model, Route::Settings);
+            open_settings_tab(model, 1);
             open_credential(model);
             Vec::new()
         }
         "settings" => {
-            navigate_to_route(model, Route::Settings);
+            open_settings_tab(model, 0);
             Vec::new()
         }
         "retry" => retry_attempt(model),
@@ -1302,6 +1331,10 @@ fn move_palette_selection(model: &mut Model, direction: isize) {
 fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
     let Some(selected) = model.palette.selected else {
         let query = model.palette.query.clone();
+        if let Ok(effects) = run_command_by_id(model, &query) {
+            close_palette(model);
+            return effects;
+        }
         close_palette(model);
         if !query.is_empty() {
             model.composer.editor.insert_str(format!("/{query}"));

@@ -1047,6 +1047,8 @@ pub enum UiNotice {
 pub enum MouseAction {
     /// Switch to one of the primary shell routes.
     Route(Route),
+    /// Switch to one of the nested Settings tabs.
+    SettingsTab(usize),
     /// Open the local user-profile dialog.
     OpenUserProfile,
     /// Chat footer actions.
@@ -1555,21 +1557,21 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Alt+2"),
     },
     CommandEntry {
-        id: "profiles",
-        label: "Profiles and Providers",
-        description: "Manage providers, API keys, connection tests, and defaults",
-        key_hint: Some("Alt+3"),
-    },
-    CommandEntry {
         id: "profile",
-        label: "Profile and Providers",
-        description: "Open local profile identity and provider connections",
+        label: "Profile settings",
+        description: "Open the Profile tab in Settings",
         key_hint: Some("Alt+3"),
     },
     CommandEntry {
         id: "provider",
-        label: "Provider setup",
-        description: "Create or connect a provider and store its API key securely",
+        label: "Provider settings",
+        description: "Open the Providers tab in Settings",
+        key_hint: None,
+    },
+    CommandEntry {
+        id: "agents",
+        label: "Agents settings",
+        description: "Open the Agents tab in Settings",
         key_hint: None,
     },
     CommandEntry {
@@ -2252,6 +2254,8 @@ impl Model {
     #[must_use]
     pub const fn profile_center_open(&self) -> bool {
         matches!(self.navigation.route, Route::Profiles)
+            || (matches!(self.navigation.route, Route::Settings)
+                && self.settings_workspace.nav_selected == 1)
     }
 
     /// Returns the highlighted provider profile identity.

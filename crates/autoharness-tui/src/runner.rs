@@ -323,7 +323,7 @@ mod tests {
     use ratatui_textarea::{Input, Key};
 
     use super::*;
-    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind, Route};
+    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind};
 
     fn selected_model() -> ModelRef {
         ModelRef::new(
@@ -429,7 +429,7 @@ mod tests {
         });
         assert!(matches!(
             terminal_message(profile_event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::OpenUserProfile))
+            Some(Message::Mouse(MouseAction::SettingsTab(2)))
         ));
         let settings_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -439,7 +439,7 @@ mod tests {
         });
         assert!(matches!(
             terminal_message(settings_event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::Route(Route::Settings)))
+            Some(Message::Mouse(MouseAction::SettingsTab(0)))
         ));
     }
 
