@@ -90,6 +90,60 @@ impl SessionTitle {
     /// Maximum persisted byte length for a session title.
     pub const MAX_BYTES: usize = 128;
 
+    /// Derives a bounded visible title from a validated, redacted prompt.
+    ///
+    /// The first line with visible content wins. Whitespace and control
+    /// characters separate words, and a title that would exceed the byte
+    /// limit is cut at the preceding word boundary whenever possible. A fixed
+    /// fallback covers prompts that contain no visible characters.
+    #[must_use]
+    pub fn derive_from_prompt(prompt: &PromptText) -> Self {
+        for line in prompt.as_str().lines() {
+            if let Some(title) = Self::derive_from_line(line) {
+                return title;
+            }
+        }
+
+        Self("New session".to_owned())
+    }
+
+    fn derive_from_line(line: &str) -> Option<Self> {
+        let mut title = String::new();
+        let mut needs_separator = false;
+        let mut word_start = 0;
+
+        for character in line.chars() {
+            if character.is_whitespace() || character.is_control() {
+                needs_separator |= !title.is_empty();
+                continue;
+            }
+
+            let character_bytes = character.len_utf8();
+            if needs_separator {
+                if title.len() + 1 + character_bytes > Self::MAX_BYTES {
+                    return Some(Self(title));
+                }
+                word_start = title.len();
+                title.push(' ');
+                needs_separator = false;
+            }
+
+            if title.len() + character_bytes > Self::MAX_BYTES {
+                if word_start > 0 {
+                    title.truncate(word_start);
+                }
+                return Some(Self(title));
+            }
+
+            if title.is_empty() {
+                title.reserve(Self::MAX_BYTES);
+            }
+            title.push(character);
+        }
+
+        (!title.is_empty()).then_some(Self(title))
+    }
+
     /// Validates a visible, bounded session title without transforming it.
     pub fn new(value: impl Into<String>) -> Result<Self, ValueError> {
         let value = value.into();
@@ -460,6 +514,42 @@ mod tests {
     #[test]
     fn prompt_rejects_whitespace_only() {
         assert_eq!(PromptText::new(" \n\t "), Err(ValueError::EmptyPrompt));
+    }
+
+    #[test]
+    fn derived_session_title_uses_the_first_visible_line() {
+        let prompt = PromptText::new("\n \t \n  Draft\u{0} rollout \t plan\nignored")
+            .expect("non-empty prompt");
+
+        assert_eq!(
+            SessionTitle::derive_from_prompt(&prompt).as_str(),
+            "Draft rollout plan"
+        );
+    }
+
+    #[test]
+    fn derived_session_title_stays_within_the_byte_limit_at_a_word_boundary() {
+        let prompt = PromptText::new(format!(
+            "short {}",
+            "x".repeat(SessionTitle::MAX_BYTES)
+        ))
+        .expect("non-empty prompt");
+
+        let title = SessionTitle::derive_from_prompt(&prompt);
+        assert_eq!(title.as_str(), "short");
+        assert!(title.as_str().len() <= SessionTitle::MAX_BYTES);
+        let unicode_prompt =
+            PromptText::new("界".repeat(43)).expect("non-empty Unicode prompt");
+        let unicode_title = SessionTitle::derive_from_prompt(&unicode_prompt);
+        assert_eq!(unicode_title.as_str(), "界".repeat(42));
+        assert!(unicode_title.as_str().len() <= SessionTitle::MAX_BYTES);
+    }
+
+    #[test]
+    fn derived_session_title_falls_back_when_the_prompt_has_no_visible_characters() {
+        let prompt = PromptText::new("\u{0}\u{7}").expect("non-whitespace prompt");
+
+        assert_eq!(SessionTitle::derive_from_prompt(&prompt).as_str(), "New session");
     }
 
     #[test]

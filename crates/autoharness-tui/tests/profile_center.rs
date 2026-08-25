@@ -117,7 +117,7 @@ fn render_text(model: &Model, width: u16, height: u16) -> String {
 }
 
 #[test]
-fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
+fn connected_accounts_show_only_saved_profiles_at_responsive_sizes() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
@@ -127,9 +127,10 @@ fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
 
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
         let rendered = render_text(&model, width, height);
-        assert!(rendered.contains("Providers & Connections"));
-        assert!(rendered.contains("Jensen"));
+        assert!(rendered.contains("Connected Accounts"));
         assert!(rendered.contains("personal-gemini"));
+        assert!(rendered.contains("work-router"));
+        assert!(!rendered.contains("OpenRouter"));
     }
     let wide = render_text(&model, 120, 40);
     assert!(wide.contains("credential vault"));
@@ -137,51 +138,19 @@ fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
 }
 
 #[test]
-fn provider_catalog_starts_safe_api_key_profiles_for_gemini_and_openai_codex() {
-    let mut gemini = model();
-    let _ = update(&mut gemini, Message::Input(ctrl('g')));
-    let _ = update(&mut gemini, Message::Input(key(Key::Tab)));
-    let _ = update(&mut gemini, Message::Input(key(Key::Enter)));
-    let effects = update(&mut gemini, Message::Input(key(Key::Enter)));
-    assert!(matches!(
-        effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "google-ai-studio" && profile.kind == ProviderKindLabel::Gemini
-    ));
-
-    let mut codex = model();
-    let _ = update(&mut codex, Message::Input(ctrl('g')));
-    let _ = update(&mut codex, Message::Input(key(Key::Tab)));
-    let _ = update(&mut codex, Message::Input(key(Key::Down)));
-    let _ = update(&mut codex, Message::Input(key(Key::Enter)));
-    let effects = update(&mut codex, Message::Input(key(Key::Enter)));
-    assert!(matches!(
-        effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "openai-codex"
-                && profile.kind == ProviderKindLabel::Router
-                && profile.base_url == "https://api.openai.com/"
-                && profile.auth_header == "Authorization"
-    ));
-}
-
-#[test]
-fn provider_catalog_names_supported_key_connections() {
+fn connected_accounts_start_a_blank_profile_editor_only_on_connect() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-    let _ = update(&mut model, Message::Input(key(Key::Tab)));
-
-    let rendered = render_text(&model, 120, 40);
-    for provider in [
-        "Google AI Studio",
-        "OpenAI / Codex",
-        "OpenRouter",
-        "Groq",
-        "Mistral AI",
-    ] {
-        assert!(rendered.contains(provider), "missing provider {provider}");
+    let _ = update(&mut model, Message::Input(alt('n')));
+    for character in "second-gemini".chars() {
+        let _ = update(&mut model, Message::Input(key(Key::Char(character))));
     }
-    assert!(rendered.contains("Provider account API key"));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
+            if profile.id == "second-gemini" && profile.kind == ProviderKindLabel::Gemini
+    ));
 }
 
 #[test]

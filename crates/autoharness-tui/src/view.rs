@@ -11,9 +11,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary, MouseAction, Notice,
-    OverlayKind, PROVIDER_CATALOG, PendingKind, ProfileConnectionState, ProfileCredentialAction,
-    ProfileEditorMode, ProviderCenterFocus, ProviderKindLabel, ProviderProfileProjection,
+    AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
+    MouseAction, Notice, OverlayKind, PendingKind, ProfileConnectionState,
+    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, ProviderProfileProjection,
     RetryPolicy, Route, SettingsPreference, TranscriptItem,
 };
 use crate::text::display_safe;
@@ -1514,18 +1514,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     match model.settings_workspace.nav_selected {
         1 => render_profile_center(frame, body, model),
         2 => render_settings_profile(frame, body, model),
-        3 => frame.render_widget(
-            Paragraph::new(vec![
-                Line::styled("Agents", visual_style(model, VisualRole::User)),
-                Line::from(""),
-                Line::styled(
-                    "Agent configuration will appear here.",
-                    visual_style(model, VisualRole::Muted),
-                ),
-            ])
-            .wrap(Wrap { trim: false }),
-            body,
-        ),
+        3 => render_agent_defaults(frame, body, model),
         _ => {}
     }
     if model.settings_workspace.nav_selected != 0 {
@@ -1941,12 +1930,12 @@ fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
         ComposerSubmitBehavior::Enter => "Enter",
     }
 }
-/// Renders the keyboard-first local provider connection center.
+/// Renders connected accounts and their safe connection state.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
     let outer = app_block(model)
         .borders(Borders::ALL)
-        .title(" Providers & Connections ")
+        .title(" Connected Accounts ")
         .border_style(visual_style(model, VisualRole::Border));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
@@ -1954,58 +1943,35 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 10 {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let user_height = if compact { 1 } else { 2 };
-    let catalog_height = if inner.height >= 24 {
-        7
-    } else if inner.height >= 14 {
-        4
-    } else if inner.height >= 9 {
-        3
-    } else {
-        0
-    };
-    let help_height = u16::from(inner.height >= 5);
+    let notice_height = u16::from(model.notice.is_some() && inner.height >= 8);
+    let help_height = u16::from(inner.height >= 4);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(user_height),
-            Constraint::Length(catalog_height),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(help_height),
         ])
         .split(inner);
-    render_local_profile(frame, rows[0], model);
-    if catalog_height > 0 {
-        render_provider_catalog(frame, rows[1], model);
-    }
-
-    if !presentation(model).single_column && rows[2].width >= 78 && rows[2].height >= 7 {
+    if !presentation(model).single_column && rows[0].width >= 78 && rows[0].height >= 7 {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[2]);
+            .split(rows[0]);
         render_profile_list(frame, columns[0], model);
         render_profile_detail(frame, columns[1], model);
-    } else if rows[2].height >= 9 {
+    } else if rows[0].height >= 9 {
         let panes = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(rows[2]);
+            .split(rows[0]);
         render_profile_list(frame, panes[0], model);
         render_profile_detail(frame, panes[1], model);
     } else {
-        render_profile_list(frame, rows[2], model);
+        render_profile_list(frame, rows[0], model);
     }
-
     if notice_height > 0 {
-        render_notice(frame, rows[3], model);
+        render_notice(frame, rows[1], model);
     }
     if help_height > 0 {
         let return_to = if model.route() == Route::Settings {
@@ -2013,20 +1979,14 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
-        let hints = match model.profile_center.focus {
-            ProviderCenterFocus::Catalog => format!(
-                "↑/↓ choose  Enter connect  Tab connections  Esc {return_to}  Provider account API key"
-            ),
-            ProviderCenterFocus::Connections if rows[4].width >= 70 => {
-                format!("↑/↓ connections  Enter activate  Tab catalog  Alt+K key  Esc {return_to}")
-            }
-            ProviderCenterFocus::Connections => {
-                format!("Enter activate  Tab catalog  Esc {return_to}")
-            }
+        let hints = if rows[2].width >= 70 {
+            format!("↑/↓ accounts  Enter activate  Alt+N connect  Alt+K key  Esc {return_to}")
+        } else {
+            format!("Enter activate  Alt+N connect  Esc {return_to}")
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
-            rows[4],
+            rows[2],
         );
     }
 
@@ -2037,54 +1997,116 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
-fn render_provider_catalog(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let title = if model.profile_center.focus == ProviderCenterFocus::Catalog {
-        " Connect a provider "
-    } else {
-        " Provider catalog "
-    };
-    let block = app_block(model).borders(Borders::ALL).title(title);
+fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" Agent Defaults ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let selected = model
-        .profile_center
-        .catalog_selected
-        .min(PROVIDER_CATALOG.len().saturating_sub(1));
-    let visible = usize::from(inner.height);
-    let start = selected
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(PROVIDER_CATALOG.len().saturating_sub(visible));
-    let items = PROVIDER_CATALOG
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(visible)
-        .map(|(index, entry)| {
-            let is_selected =
-                model.profile_center.focus == ProviderCenterFocus::Catalog && index == selected;
-            let prefix = if is_selected {
-                selection_marker(model)
-            } else {
-                " "
-            };
-            let label = if inner.width >= 48 {
-                format!("{prefix} {}  {}", entry.label, entry.description)
-            } else {
-                format!("{prefix} {}", entry.label)
-            };
-            let style = if is_selected {
-                visual_style(model, VisualRole::Selected)
-            } else {
-                visual_style(model, VisualRole::Normal)
-            };
-            ListItem::new(Line::styled(label, style))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(List::new(items), inner);
+    let step = model.agent_defaults.step;
+    let mut lines = vec![
+        Line::styled(
+            "1 Provider  2 Model  3 Thinking",
+            visual_style(model, VisualRole::Muted),
+        ),
+        Line::from(""),
+    ];
+    match step {
+        AgentDefaultStep::Provider => {
+            lines.push(Line::styled(
+                "Choose the connected provider account",
+                visual_style(model, VisualRole::User),
+            ));
+            for (index, profile) in model.profiles().profiles.iter().enumerate() {
+                let selected = index == model.agent_defaults.profile_selected;
+                let prefix = if selected {
+                    selection_marker(model)
+                } else {
+                    " "
+                };
+                let style = if selected {
+                    visual_style(model, VisualRole::Selected)
+                } else {
+                    visual_style(model, VisualRole::Normal)
+                };
+                lines.push(Line::styled(
+                    format!(
+                        "{prefix} {}  {}",
+                        display_safe(&profile.id),
+                        provider_connection_label(profile)
+                    ),
+                    style,
+                ));
+            }
+            if model.profiles().profiles.is_empty() {
+                lines.push(Line::styled(
+                    "No connected accounts. Add one from Providers first.",
+                    visual_style(model, VisualRole::Muted),
+                ));
+            }
+        }
+        AgentDefaultStep::Model => {
+            lines.push(Line::styled(
+                "Choose a compatible model",
+                visual_style(model, VisualRole::User),
+            ));
+            for (index, summary) in model.catalog.models().iter().enumerate() {
+                let selected = index == model.agent_defaults.model_selected;
+                let prefix = if selected {
+                    selection_marker(model)
+                } else {
+                    " "
+                };
+                let style = if selected {
+                    visual_style(model, VisualRole::Selected)
+                } else {
+                    visual_style(model, VisualRole::Normal)
+                };
+                lines.push(Line::styled(
+                    format!(
+                        "{prefix} {}  {}",
+                        display_safe(&summary.display_name),
+                        display_safe(&summary.detail)
+                    ),
+                    style,
+                ));
+            }
+            if model.catalog.models().is_empty() {
+                lines.push(Line::styled(
+                    "Waiting for the selected provider's compatible model catalog.",
+                    visual_style(model, VisualRole::Muted),
+                ));
+            }
+        }
+        AgentDefaultStep::Thinking => {
+            lines.push(Line::styled(
+                "Thinking mode",
+                visual_style(model, VisualRole::User),
+            ));
+            lines.push(Line::styled(
+                format!(
+                    "{} Provider default",
+                    selection_marker(model)
+                ),
+                visual_style(model, VisualRole::Selected),
+            ));
+            lines.push(Line::styled(
+                "This model advertises thinking support. Its provider does not expose portable effort levels.",
+                visual_style(model, VisualRole::Muted),
+            ));
+        }
+    }
+    if inner.height >= 2 {
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            "↑/↓ choose  Enter continue  Tab return to Settings",
+            visual_style(model, VisualRole::Muted),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2133,12 +2155,7 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let title = format!(
-        " {} - filter: {} ",
-        if model.profile_center.focus == ProviderCenterFocus::Connections {
-            "Connections"
-        } else {
-            "Saved connections"
-        },
+        " Connected accounts - filter: {} ",
         display_safe(&model.profile_center.query)
     );
     let block = app_block(model).borders(Borders::ALL).title(title);
@@ -2150,9 +2167,9 @@ fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let profiles = model.filtered_profiles().collect::<Vec<_>>();
     if profiles.is_empty() {
         let empty = if model.profiles().profiles.is_empty() {
-            "No connections yet.\nTab to the catalog, choose a provider, then press Enter."
+            "No accounts connected.\nPress Alt+N to connect an account."
         } else {
-            "No connections match this filter."
+            "No accounts match this filter."
         };
         frame.render_widget(
             Paragraph::new(empty)
@@ -2185,8 +2202,7 @@ fn profile_list_item(
     model: &Model,
     width: u16,
 ) -> ListItem<'static> {
-    let selected = model.profile_center.focus == ProviderCenterFocus::Connections
-        && model.profile_selection() == Some(profile.id.as_str());
+    let selected = model.profile_selection() == Some(profile.id.as_str());
     let marker = if selected {
         selection_marker(model)
     } else {
@@ -2232,17 +2248,10 @@ fn profile_list_item(
 }
 
 fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static str {
-    if profile.kind == ProviderKindLabel::Gemini {
-        return "Google AI Studio";
+    match profile.kind {
+        ProviderKindLabel::Gemini => "Google AI Studio",
+        ProviderKindLabel::Router => "OpenAI-compatible",
     }
-    PROVIDER_CATALOG
-        .iter()
-        .find(|entry| {
-            entry.kind == ProviderKindLabel::Router
-                && !entry.base_url.is_empty()
-                && entry.base_url == profile.base_url
-        })
-        .map_or("OpenAI-compatible", |entry| entry.label)
 }
 
 fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {

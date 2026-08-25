@@ -363,6 +363,13 @@ impl Coordinator {
                 self.set_profile_default_model(request_id, profile_id)
                     .await?;
             }
+            UiIntent::SetProfileDefault {
+                request_id,
+                profile_id,
+                model,
+            } => {
+                self.set_profile_default(request_id, profile_id, model).await?;
+            }
             UiIntent::DisconnectProfile {
                 request_id,
                 profile_id,
@@ -977,14 +984,6 @@ impl Coordinator {
         request_id: RequestId,
         profile_id: String,
     ) -> Result<(), AppError> {
-        let id = match ProfileId::new(profile_id) {
-            Ok(id) => id,
-            Err(reason) => {
-                self.reject(request_id, profile_validation_failure(reason))
-                    .await?;
-                return Ok(());
-            }
-        };
         let Some(selected_model) = self.session.selected_model().cloned() else {
             self.reject(
                 request_id,
@@ -996,6 +995,24 @@ impl Coordinator {
             )
             .await?;
             return Ok(());
+        };
+        self.set_profile_default(request_id, profile_id, selected_model)
+            .await
+    }
+
+    async fn set_profile_default(
+        &mut self,
+        request_id: RequestId,
+        profile_id: String,
+        selected_model: autoharness_domain::ModelRef,
+    ) -> Result<(), AppError> {
+        let id = match ProfileId::new(profile_id) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.reject(request_id, profile_validation_failure(reason))
+                    .await?;
+                return Ok(());
+            }
         };
         if !self.model_is_available(&selected_model) {
             self.reject(
@@ -1635,12 +1652,12 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
-        let prompt = self
+        let redacted_prompt = self
             .provider
             .as_ref()
             .expect("provider presence checked before prompt admission")
             .redact_secrets(&prompt);
-        let prompt = match PromptText::new(prompt) {
+        let prompt = match PromptText::new(redacted_prompt) {
             Ok(prompt) => prompt,
             Err(error) => {
                 self.reject(request_id, classified_failure(&error)).await?;
@@ -1663,6 +1680,7 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
+        let title_was_absent = self.session.title().is_none();
 
         let input_id = ids::input_id();
         let attempt_id = ids::attempt_id();
@@ -1678,6 +1696,9 @@ impl Coordinator {
         {
             self.reject(request_id, engine_failure(&error)).await?;
             return Ok(());
+        }
+        if title_was_absent && self.session.title().is_some() {
+            self.publish_sessions().await?;
         }
         telemetry::attempt_prepared();
         if let Err(error) = self.start_attempt(attempt_id, Some(request_id)).await {
@@ -5567,7 +5588,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn composed_cancel_retry_and_restart_path_is_replay_equivalent() {
+    async fn redacted_first_prompt_titles_the_session_and_replays_after_retry() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = directory.path().join("composition.sqlite3");
         let (actor, session_id, session) =
@@ -5610,6 +5631,18 @@ mod tests {
             .await
             .expect("submit intent");
         expect_commit(&mut ui, submit_request).await;
+        let titled_sessions = wait_for_session_list(&mut ui.session_lists, |list| {
+            list.sessions.iter().any(|entry| {
+                entry.session_id == session_id.as_str()
+                    && entry.title == "exact [REDACTED] user prompt"
+            })
+        })
+        .await;
+        assert!(titled_sessions.iter().any(|entry| {
+            entry.session_id == session_id.as_str()
+                && entry.title == "exact [REDACTED] user prompt"
+        }));
+
         let streaming = wait_for_session(&mut ui.sessions, |projection| {
             projection.transcript.iter().any(|item| {
                 matches!(
@@ -5689,6 +5722,12 @@ mod tests {
         let (reopened, recovered_session_id, recovered) =
             crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
         assert_eq!(recovered_session_id, session_id);
+        assert_eq!(
+            recovered
+                .title()
+                .map(autoharness_domain::SessionTitle::as_str),
+            Some("exact [REDACTED] user prompt")
+        );
         assert_eq!(projection::session(&recovered), *completed);
         let recovered_usage = recovered
             .attempts()

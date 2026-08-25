@@ -245,7 +245,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
         ('1', "Conversation"),
         ('2', "Sessions"),
-        ('3', "Providers & Connections"),
+        ('3', "Connected Accounts"),
         ('4', "Settings & Provenance"),
         ('5', "Help"),
     ];
@@ -391,7 +391,7 @@ fn providers_returns_to_settings_navigation_before_leaving_the_route() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    assert!(render_text(&model, 80, 24).contains("Google AI Studio"));
+    assert!(render_text(&model, 80, 24).contains("No accounts connected"));
 
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
     let _ = update(&mut model, Message::Input(key(Key::Right)));

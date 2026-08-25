@@ -855,6 +855,11 @@ pub enum PendingKind {
     TestProfile(String),
     /// Selection of the active session model as this profile's default.
     SetProfileDefaultModel(String),
+    /// One explicit profile and compatible model default.
+    SetProfileDefault {
+        profile_id: String,
+        model: ModelRef,
+    },
     /// Stored credential disconnection.
     DisconnectProfile(String),
     /// One user-layer preference update from the Settings route.
@@ -921,6 +926,12 @@ pub enum UiIntent {
     SetProfileDefaultModel {
         request_id: RequestId,
         profile_id: String,
+    },
+    /// Persists one explicit connected-provider model as that profile's default.
+    SetProfileDefault {
+        request_id: RequestId,
+        profile_id: String,
+        model: ModelRef,
     },
     /// Disconnects one stored profile credential.
     DisconnectProfile {
@@ -1012,6 +1023,7 @@ impl UiIntent {
             | Self::ReplaceProfileCredential { request_id, .. }
             | Self::TestProfile { request_id, .. }
             | Self::SetProfileDefaultModel { request_id, .. }
+            | Self::SetProfileDefault { request_id, .. }
             | Self::DisconnectProfile { request_id, .. }
             | Self::DeleteProfile { request_id, .. }
             | Self::RefreshCatalog { request_id }
@@ -1277,97 +1289,9 @@ impl Drop for ProfileCredentialEditor {
     }
 }
 
-/// Keyboard focus within the provider connection center.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ProviderCenterFocus {
-    /// A saved connection is selected for activation or maintenance.
-    #[default]
-    Connections,
-    /// A supported connection template is selected for setup.
-    Catalog,
-}
-
-/// One safe, non-secret provider connection template.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ProviderCatalogEntry {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
-    pub kind: ProviderKindLabel,
-    pub base_url: &'static str,
-    pub project: &'static str,
-    pub auth_header: &'static str,
-}
-
-/// API-key connections supported by the currently linked provider adapters.
-///
-/// An account remains with its provider. AutoHarness never accepts provider
-/// passwords, and a provider-specific OAuth or device flow is not represented
-/// until its adapter supports secure refresh and revocation semantics.
-pub(crate) const PROVIDER_CATALOG: [ProviderCatalogEntry; 6] = [
-    ProviderCatalogEntry {
-        id: "google-ai-studio",
-        label: "Google AI Studio",
-        description: "Gemini API key",
-        kind: ProviderKindLabel::Gemini,
-        base_url: "",
-        project: "",
-        auth_header: "",
-    },
-    ProviderCatalogEntry {
-        id: "openai-codex",
-        label: "OpenAI / Codex",
-        description: "OpenAI-compatible API key",
-        kind: ProviderKindLabel::Router,
-        base_url: "https://api.openai.com/",
-        project: "openai",
-        auth_header: "Authorization",
-    },
-    ProviderCatalogEntry {
-        id: "openrouter",
-        label: "OpenRouter",
-        description: "OpenAI-compatible API key",
-        kind: ProviderKindLabel::Router,
-        base_url: "https://openrouter.ai/api/",
-        project: "openrouter",
-        auth_header: "Authorization",
-    },
-    ProviderCatalogEntry {
-        id: "groq",
-        label: "Groq",
-        description: "OpenAI-compatible API key",
-        kind: ProviderKindLabel::Router,
-        base_url: "https://api.groq.com/openai/",
-        project: "groq",
-        auth_header: "Authorization",
-    },
-    ProviderCatalogEntry {
-        id: "mistral",
-        label: "Mistral AI",
-        description: "OpenAI-compatible API key",
-        kind: ProviderKindLabel::Router,
-        base_url: "https://api.mistral.ai/",
-        project: "mistral",
-        auth_header: "Authorization",
-    },
-    ProviderCatalogEntry {
-        id: "custom-openai",
-        label: "Custom compatible API",
-        description: "OpenAI-compatible API key",
-        kind: ProviderKindLabel::Router,
-        base_url: "",
-        project: "",
-        auth_header: "Authorization",
-    },
-];
-
-/// Full-screen Profiles and Providers local interaction state.
-#[derive(Debug)]
+/// Full-screen connected-provider account interaction state.
+#[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
-    /// The connection catalog or existing connections owns arrows and Enter.
-    pub focus: ProviderCenterFocus,
-    /// Selected row in [`PROVIDER_CATALOG`].
-    pub catalog_selected: usize,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,
@@ -1376,19 +1300,26 @@ pub(crate) struct ProfileCenterState {
     pub confirming_delete: Option<String>,
 }
 
-impl Default for ProfileCenterState {
-    fn default() -> Self {
-        Self {
-            focus: ProviderCenterFocus::Connections,
-            catalog_selected: 0,
-            query: String::new(),
-            selected: None,
-            confirming_disconnect: None,
-            editor: None,
-            credential: None,
-            confirming_delete: None,
-        }
-    }
+/// Step in the keyboard-first default-agent selection sequence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AgentDefaultStep {
+    /// Select a connected provider account.
+    #[default]
+    Provider,
+    /// Select one compatible model from the active provider catalog.
+    Model,
+    /// Confirm the only currently portable thinking choice.
+    Thinking,
+}
+
+/// Local state for selecting the default agent provider, model, and thinking mode.
+#[derive(Debug, Default)]
+pub(crate) struct AgentDefaultsState {
+    pub step: AgentDefaultStep,
+    pub profile_selected: usize,
+    pub model_selected: usize,
+    pub profile_id: Option<String>,
+    pub model: Option<ModelRef>,
 }
 /// Command-palette local state.
 #[derive(Debug, Default)]
@@ -2125,6 +2056,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
+    /// Keyboard-first connected-provider default agent selection state.
+    pub(crate) agent_defaults: AgentDefaultsState,
     /// Local user-profile dialog interaction state.
     pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
@@ -2236,6 +2169,7 @@ impl Model {
             startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
+            agent_defaults: AgentDefaultsState::default(),
             drafts: SessionDrafts::default(),
             user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
