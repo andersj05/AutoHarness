@@ -112,7 +112,7 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     assert!(model.palette_open());
     assert_eq!(model.focus, Focus::Palette, "the palette owns the keyboard");
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("COMMANDS"));
+    assert!(rendered.contains("/models"));
     assert!(!rendered.contains("Commands"));
     for expected in [
         "/chat",
@@ -140,11 +140,20 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
     assert!(model.palette_open());
     let all = buffer_text(&render_model(&model, 80, 24));
+    let bottom = all.lines().rev().take(10).collect::<Vec<_>>();
+    assert!(bottom.iter().any(|line| line.contains("/chat")));
     assert!(all.contains("/models"));
     assert!(all.contains("/provider"));
 
     type_text(&mut model, "mod");
     let filtered = buffer_text(&render_model(&model, 80, 24));
+    assert!(
+        filtered
+            .lines()
+            .rev()
+            .take(3)
+            .any(|line| line.contains("/mod"))
+    );
     assert!(filtered.contains("/models"));
     assert!(!filtered.contains("/sessions"));
 }

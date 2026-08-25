@@ -488,7 +488,7 @@ fn mouse_modal_rows_select_models_and_run_commands() {
 
     let mut palette = model();
     let _ = update(&mut palette, Message::Input(ctrl('/')));
-    let command = hit_test(&palette, 80, 24, 12, 5);
+    let command = hit_test(&palette, 80, 24, 12, 14);
     assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
     let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
     assert!(effects.is_empty());

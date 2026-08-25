@@ -1247,7 +1247,12 @@ fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
         .unwrap_or(u16::MAX)
         .min(8)
         .min(area.height.saturating_sub(2));
-    Rect::new(area.x, area.y.saturating_add(1), area.width, height)
+    Rect::new(
+        area.x,
+        area.bottom().saturating_sub(height.saturating_add(2)),
+        area.width,
+        height,
+    )
 }
 
 fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2376,15 +2381,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
-    if model.palette_open() {
-        return Line::styled(
-            format!(
-                " COMMANDS  /{}  ↑↓ choose  Enter run  Esc close",
-                display_safe(&model.palette.query)
-            ),
-            visual_style(model, VisualRole::Field),
-        );
-    }
     let user = &model.profiles().user;
     let thinking = if user.default_mode.is_empty() {
         "safe agent"
@@ -2441,6 +2437,14 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
     let editor_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+    if model.palette_open() {
+        frame.render_widget(
+            Paragraph::new(format!("/{}", display_safe(&model.palette.query)))
+                .style(visual_style(model, VisualRole::Selected)),
+            editor_area,
+        );
+        return;
+    }
     let mut composer = model.composer.editor.clone();
     composer.remove_block();
     composer.set_cursor_line_style(visual_style(model, VisualRole::Normal));
