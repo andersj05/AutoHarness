@@ -1,4 +1,5 @@
 ╭ Conversation ────────────────────────────────────────────────────────────────╮
+│YOU                                                                           │
 │Plan a café launch.                                                           │
 │Keep it practical.                                                            │
 │                                                                              │
@@ -16,7 +17,6 @@
 │The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                    │
 │Error: Capacity is temporarily exhausted; no credentials were exposed.        │
 │rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2                      │
-╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ think:standard  path:/workspace                                              │
 │❯ Keep the checklist concise.                                                 │

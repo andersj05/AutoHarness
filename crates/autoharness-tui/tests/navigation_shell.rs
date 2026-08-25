@@ -496,11 +496,11 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
         Some(MouseAction::Route(Route::Sessions))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 39),
+        hit_test(&model, 120, 40, 2, 38),
         Some(MouseAction::OpenUserProfile)
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 14, 39),
+        hit_test(&model, 120, 40, 14, 38),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
