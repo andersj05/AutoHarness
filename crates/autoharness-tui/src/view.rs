@@ -5,7 +5,7 @@ use autoharness_settings::{
     TerminalTimestampStyle, ThemePreset,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -323,17 +323,7 @@ pub fn hit_test(
             MouseAction::PermissionDeny,
         );
     }
-    if model.route() == Route::Profiles
-        && (model.profile_center.editor.is_some() || model.profile_center.credential.is_some())
-    {
-        return None;
-    }
-    if model.overlay().is_some() {
-        return None;
-    }
-
-    let wide = !presentation(model).single_column && width >= 100 && height >= 16;
-    let content_x = if wide { 28 } else { 0 };
+    let (wide, content) = render_shell_layout(area, model);
     if wide && column < 28 {
         if row == 1 {
             return Some(MouseAction::OpenUserProfile);
@@ -349,10 +339,9 @@ pub fn hit_test(
     if !wide && row == 0 {
         return route_at_column(width, column).map(MouseAction::Route);
     }
-
-    let relative_column = column.saturating_sub(content_x);
     match model.route() {
         Route::Chat if row == height.saturating_sub(1) && height >= 7 => {
+            let relative_column = column.saturating_sub(content.x);
             if relative_column < 12 {
                 Some(MouseAction::ChatSend)
             } else if relative_column < 30 {
@@ -368,6 +357,7 @@ pub fn hit_test(
             }
         }
         Route::Sessions if row == height.saturating_sub(2) => {
+            let relative_column = column.saturating_sub(content.x);
             if relative_column < 18 {
                 Some(MouseAction::SessionOpen)
             } else if relative_column < 38 {
@@ -378,25 +368,256 @@ pub fn hit_test(
                 Some(MouseAction::SessionDelete)
             }
         }
-        Route::Profiles if row == 1 => Some(MouseAction::OpenUserProfile),
         Route::Profiles
-            if profile_detail_button_rows(model, width, height)
+            if profile_local_hit_row(content, model)
+                .is_some_and(|local| local.contains(Position::new(column, row))) =>
+        {
+            Some(MouseAction::OpenUserProfile)
+        }
+        Route::Profiles
+            if profile_detail_button_rows(model, content)
                 .is_some_and(|(first, _)| row == first) =>
         {
-            profile_action_at_column(relative_column)
+            profile_detail_action_at_column(model, content, column, false)
         }
         Route::Profiles
-            if profile_detail_button_rows(model, width, height)
+            if profile_detail_button_rows(model, content)
                 .is_some_and(|(_, second)| row == second) =>
         {
-            profile_secondary_action_at_column(relative_column)
+            profile_detail_action_at_column(model, content, column, true)
         }
         Route::Profiles if row == height.saturating_sub(2) => {
-            profile_action_at_column(relative_column)
+            profile_action_at_column(column.saturating_sub(content.x))
         }
-        Route::Profiles => profile_at_row(model, width, height, column, row),
+        Route::Profiles => profile_at_row(model, content, column, row),
         _ => None,
     }
+}
+
+fn render_shell_layout(area: Rect, model: &Model) -> (bool, Rect) {
+    if !presentation(model).single_column && area.width >= 100 && area.height >= 16 {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(28), Constraint::Min(1)])
+            .split(area);
+        (true, columns[1])
+    } else {
+        let navigation_height = if area.height >= 3 { 2 } else { 1 };
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(navigation_height), Constraint::Min(0)])
+            .split(area);
+        (false, rows[1])
+    }
+}
+
+fn profile_local_hit_row(area: Rect, model: &Model) -> Option<Rect> {
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    Some(Rect::new(inner.x, inner.y, inner.width, user_height))
+}
+
+fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let notice_height = if model.notice.is_some() && inner.height >= 8 {
+        if compact { 1 } else { 2 }
+    } else {
+        0
+    };
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    let help_height = u16::from(inner.height >= 4);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(notice_height),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
+    let list_area =
+        if !presentation(model).single_column && rows[1].width >= 78 && rows[1].height >= 7 {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+                .split(rows[1])[0]
+        } else if rows[1].height >= 9 {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(rows[1])[0]
+        } else {
+            rows[1]
+        };
+    Some(Block::default().borders(Borders::ALL).inner(list_area))
+}
+
+fn profile_detail_area(model: &Model, area: Rect) -> Option<Rect> {
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let notice_height = if model.notice.is_some() && inner.height >= 8 {
+        if compact { 1 } else { 2 }
+    } else {
+        0
+    };
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    let help_height = u16::from(inner.height >= 4);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(notice_height),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
+    if !presentation(model).single_column && rows[1].width >= 78 {
+        Some(
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+                .split(rows[1])[1],
+        )
+    } else if rows[1].height >= 9 {
+        Some(
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(rows[1])[1],
+        )
+    } else {
+        None
+    }
+}
+
+fn profile_detail_action_at_column(
+    model: &Model,
+    area: Rect,
+    column: u16,
+    secondary: bool,
+) -> Option<MouseAction> {
+    let detail = profile_detail_area(model, area)?;
+    let relative = column.saturating_sub(detail.x.saturating_add(1));
+    if secondary {
+        profile_secondary_action_at_column(relative)
+    } else {
+        profile_action_at_column(relative)
+    }
+}
+
+fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
+    let selected = model.selected_profile()?;
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let compact = presentation(model).compact;
+    let notice_height = if model.notice.is_some() && inner.height >= 8 {
+        if compact { 1 } else { 2 }
+    } else {
+        0
+    };
+    let user_height = if compact {
+        2
+    } else if inner.height >= 12 {
+        4
+    } else {
+        2
+    };
+    let help_height = u16::from(inner.height >= 4);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(user_height),
+            Constraint::Min(1),
+            Constraint::Length(notice_height),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
+    let detail = if !presentation(model).single_column && rows[1].width >= 78 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(rows[1])[1]
+    } else if rows[1].height >= 9 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(rows[1])[1]
+    } else {
+        return None;
+    };
+    let mut lines = 8_u16;
+    if selected.kind == ProviderKindLabel::Router {
+        lines = lines.saturating_add(1);
+        if !selected.project.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+        if !selected.auth_header.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+    }
+    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
+        lines = lines.saturating_add(1);
+    }
+    if model.profiles().pending_recovery > 0 {
+        lines = lines.saturating_add(1);
+    }
+    let first = detail
+        .y
+        .saturating_add(1)
+        .saturating_add(lines)
+        .saturating_add(1);
+    Some((first, first.saturating_add(1)))
+}
+
+fn profile_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
+    let list = profile_list_inner_rect(model, area)?;
+    if !list.contains(Position::new(column, row)) {
+        return None;
+    }
+    let index = usize::from(row.saturating_sub(list.y));
+    model
+        .filtered_profiles()
+        .nth(index)
+        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
 }
 
 fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
@@ -489,68 +710,6 @@ fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
         _ => None,
     }
 }
-fn profile_detail_button_rows(model: &Model, width: u16, height: u16) -> Option<(u16, u16)> {
-    let selected = model.selected_profile()?;
-    let outer = Rect::new(0, 0, width, height);
-    let inner = Rect::new(
-        outer.x.saturating_add(1),
-        outer.y.saturating_add(1),
-        outer.width.saturating_sub(2),
-        outer.height.saturating_sub(2),
-    );
-    let compact = presentation(model).compact;
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(user_height),
-            Constraint::Min(1),
-            Constraint::Length(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let detail = if !presentation(model).single_column && rows[1].width >= 78 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[1])[1]
-    } else if rows[1].height >= 9 {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(rows[1])[1]
-    } else {
-        return None;
-    };
-    let mut lines = 8_u16;
-    if selected.kind == ProviderKindLabel::Router {
-        lines = lines.saturating_add(1);
-        if !selected.project.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-        if !selected.auth_header.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-    }
-    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
-        lines = lines.saturating_add(1);
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines = lines.saturating_add(1);
-    }
-    let first = detail
-        .y
-        .saturating_add(1)
-        .saturating_add(lines)
-        .saturating_add(1);
-    Some((first, first.saturating_add(1)))
-}
 
 fn route_at_column(width: u16, column: u16) -> Option<Route> {
     let mut offset = 0_u16;
@@ -568,29 +727,6 @@ fn route_at_column(width: u16, column: u16) -> Option<Route> {
         offset = offset.saturating_add(segment);
     }
     None
-}
-
-fn profile_at_row(
-    model: &Model,
-    width: u16,
-    height: u16,
-    column: u16,
-    row: u16,
-) -> Option<MouseAction> {
-    let content_x = if !presentation(model).single_column && width >= 100 && height >= 16 {
-        28
-    } else {
-        0
-    };
-    if column < content_x {
-        return None;
-    }
-    let list_start = if width >= 78 && height >= 7 { 5 } else { 3 };
-    let index = usize::from(row.saturating_sub(list_start));
-    model
-        .filtered_profiles()
-        .nth(index)
-        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
 }
 
 fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
