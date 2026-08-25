@@ -90,9 +90,9 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 - On this branch, focused TUI tests (108 passed), the ignored visual review (2 passed), Windows PTY onboarding, routed shell, profile center, offline resume, session lifecycle, forced shutdown, and permission/tool journeys passed.
 - Workspace formatting, strict Clippy, full workspace tests (336 passed across 46 suites), and documentation link checks passed.
 - Added a local user-profile dialog with typed display-label persistence, command-palette and `Alt+U` access, visible Save/Cancel controls, and active provider/model summary.
-- Added semantic mouse actions, responsive hit testing for route tabs, chat/session/profile controls, profile detail buttons, confirmations, and the user-profile dialog.
+- Added semantic mouse actions, responsive hit testing for route tabs, chat/session/profile controls, confirmations, picker rows, palette rows, credential dialogs, permission controls, and the user-profile dialog.
 - Terminal lifecycle now enables mouse capture and restores it precisely on normal exit and partial setup failure; selected Windows PTY journeys pass, while panic-hook-specific and cross-platform restoration evidence remains open.
-- Final local verification now reports 117 focused TUI tests, 346 workspace tests across 46 suites, strict Clippy, formatting, onboarding PTY, routed-shell PTY, and profile-center PTY success.
+- Final local verification now reports 118 focused TUI tests, 347 workspace tests across 46 suites, strict Clippy, formatting, onboarding PTY, routed-shell PTY, and profile-center PTY success.
 
 ## Immediate next actions
 
