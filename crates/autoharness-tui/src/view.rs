@@ -273,7 +273,8 @@ pub fn hit_test(
     let area = Rect::new(0, 0, width, height);
     if model.overlay() == Some(OverlayKind::UserProfile) {
         let popup = user_profile_rect(area);
-        if row == popup.bottom().saturating_sub(2) {
+        let button_row = popup.y.saturating_add(10);
+        if button_row < popup.bottom() && row == button_row {
             return (column < popup.x + popup.width / 2)
                 .then_some(MouseAction::UserProfileSave)
                 .or(Some(MouseAction::UserProfileCancel));
