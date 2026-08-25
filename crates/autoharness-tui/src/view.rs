@@ -375,7 +375,7 @@ fn active_session_title(model: &Model) -> Option<String> {
 fn conversation_title(model: &Model) -> String {
     active_session_title(model).map_or_else(
         || " Conversation ".to_owned(),
-        |title| format!(" Conversation · {title} "),
+        |title| format!(" Conversation{}{} ", chrome_separator(model), title),
     )
 }
 

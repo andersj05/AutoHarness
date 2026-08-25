@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
+use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     CatalogProjection, Focus, Message, Model, ModelSummary, OverlayKind, PermissionDetailView,
     PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry, SessionProjection,
-    SessionsProjection, ToolCallKey, UiFailure, update, view,
+    SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -293,6 +294,32 @@ fn chat_empty_state_explains_the_zero_shell_start_path() {
     assert!(rendered.contains("GET STARTED"));
     assert!(rendered.contains("Ctrl+K connect a session-only key"));
     assert!(rendered.contains("Conversation · Active conversation"));
+}
+
+#[test]
+fn ascii_glyph_mode_uses_ascii_conversation_separators() {
+    let mut model = model();
+    let settings = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{
+                "schema_version": 3,
+                "local_profile": {
+                    "preferences": {
+                        "glyph_mode": "ascii"
+                    }
+                }
+            }"#,
+        )
+        .resolve()
+        .expect("ASCII preferences");
+    model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: settings.local_profile().clone(),
+        ..SettingsProjection::default()
+    }));
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("Conversation | Active conversation"));
+    assert!(!rendered.contains("Conversation · Active conversation"));
 }
 
 #[test]
