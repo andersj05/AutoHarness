@@ -7,6 +7,6 @@ exhausted; no credentials were exposed.
 rate_limited | Ctrl+R retry | Ctrl+N new
 | ref attempt-2
 ────────────────────────────────────────
-
-
-
+ Prompt ────────────────────────────────
+Keep the checklist concise.
+────────────────────────────────────────

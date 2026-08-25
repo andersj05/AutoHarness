@@ -2240,8 +2240,8 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let compact = presentation(model).compact;
     let composer_height = u16::try_from(model.composer.lines().len())
         .unwrap_or(u16::MAX)
-        .saturating_add(if compact { 1 } else { 1 })
-        .clamp(2, if compact { 4 } else { 6 });
+        .saturating_add(1)
+        .clamp(3, if compact { 4 } else { 6 });
     let notice_height = if model.notice.is_some() {
         if compact { 1 } else { 2 }
     } else {
@@ -2273,6 +2273,7 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .border_style(visual_style(model, VisualRole::Border)),
     );
     composer.set_cursor_style(visual_style(model, VisualRole::Selected));
+    frame.render_widget(&composer, chunks[3]);
     set_composer_cursor(frame, chunks[3], model, false);
 }
 

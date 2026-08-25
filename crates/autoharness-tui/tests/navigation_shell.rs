@@ -280,7 +280,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
     assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("/settings connect a provider key"));
+    assert!(offline.contains("Provider API key: use /settings"));
 
     let _ = update(
         &mut model,
