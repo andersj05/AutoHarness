@@ -196,7 +196,10 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     assert!(!rendered.contains(sentinel));
     assert!(!format!("{model:?}").contains(sentinel));
 
-    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let effects = update(
+        &mut model,
+        Message::Mouse(MouseAction::ProfileCredentialSubmit),
+    );
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::SaveProfileCredential { profile_id, .. })]

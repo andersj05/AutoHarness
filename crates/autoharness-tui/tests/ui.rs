@@ -107,7 +107,7 @@ fn permission_overlay_scopes_the_resource_and_dispatches_one_exact_answer() {
         hit_test(&model, 80, 24, 60, 15),
         Some(MouseAction::PermissionDeny)
     );
-    let effects = update(&mut model, Message::Input(key_input(Key::Char('y'))));
+    let effects = update(&mut model, Message::Mouse(MouseAction::PermissionAllow));
 
     assert_eq!(effects.len(), 1);
     let UiEffect::Dispatch(UiIntent::AnswerPermission {
