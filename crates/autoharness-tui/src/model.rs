@@ -1537,6 +1537,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Alt+3"),
     },
     CommandEntry {
+        id: "profile",
+        label: "Profile and Providers",
+        description: "Open local profile identity and provider connections",
+        key_hint: Some("Alt+3"),
+    },
+    CommandEntry {
         id: "user-profile",
         label: "User profile",
         description: "Edit the local display name and profile summary",

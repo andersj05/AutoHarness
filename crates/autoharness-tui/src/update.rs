@@ -967,6 +967,10 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
+        "profile" => {
+            navigate_to_route(model, Route::Profiles);
+            Vec::new()
+        }
         "user-profile" => {
             open_user_profile(model);
             Vec::new()

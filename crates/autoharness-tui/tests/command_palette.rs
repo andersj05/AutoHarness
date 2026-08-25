@@ -119,6 +119,7 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
         "/models",
         "/refresh-models",
         "/connect-api-key",
+        "/profile",
         "/settings",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
@@ -246,6 +247,23 @@ fn known_slash_commands_execute_and_clear_the_composer() {
     let _ = update(&mut model, Message::Input(enter()));
     assert!(model.browser_open());
     assert!(model.composer.is_blank());
+}
+
+#[test]
+fn profile_slash_command_matches_palette_route() {
+    let mut slash = empty_model();
+    type_text(&mut slash, "/profile");
+    let _ = update(&mut slash, Message::Input(enter()));
+    assert_eq!(slash.route(), Route::Profiles);
+    assert_eq!(slash.focus, Focus::Profiles);
+    assert!(slash.composer.is_blank());
+
+    let mut palette = empty_model();
+    let _ = update(&mut palette, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut palette, "profile");
+    let _ = update(&mut palette, Message::Input(enter()));
+    assert_eq!(palette.route(), Route::Profiles);
+    assert_eq!(palette.focus, Focus::Profiles);
 }
 
 #[test]
