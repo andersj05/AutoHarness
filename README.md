@@ -19,6 +19,16 @@ Run the binary from the repository root:
 cargo run --locked -p autoharness-app --bin autoharness
 ```
 
+For a globally available short command, install the `ah` launcher once:
+
+```text
+cargo install --locked --path crates/autoharness-app --bin ah
+ah
+```
+
+Cargo installs `ah.exe` into `%USERPROFILE%\.cargo\bin` on Windows.
+Ensure that directory is on `PATH`.
+
 Gemini remains the default provider.
 When no credential is available, AutoHarness opens a masked terminal overlay.
 Paste or type the selected provider's API key and press `Enter` to validate it and load the model catalog.
