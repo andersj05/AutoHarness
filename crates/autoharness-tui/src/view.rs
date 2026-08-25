@@ -497,16 +497,16 @@ pub fn hit_test(
             MouseAction::PermissionDeny,
         );
     }
-    let (wide, content) = render_shell_layout(area, model);
     if wide && column < 28 {
-        if row == 1 {
-            return Some(MouseAction::OpenUserProfile);
+        let settings_row = height.saturating_sub(2);
+        if row == settings_row {
+            return Some(MouseAction::Route(Route::Settings));
         }
-        let route_start = 4 + u16::from(active_session_title(model).is_some()) * 3;
-        if row >= route_start && row < route_start + 5 {
-            return Some(MouseAction::Route(
-                Route::ALL[usize::from(row - route_start)],
-            ));
+        let sessions_start = 2;
+        let sessions_end = sessions_start
+            .saturating_add(u16::try_from(model.sessions.sessions.len()).unwrap_or(u16::MAX));
+        if row >= sessions_start && row < sessions_end {
+            return Some(MouseAction::Route(Route::Sessions));
         }
         return None;
     }
@@ -939,7 +939,7 @@ fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> Rect {
 
 fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let block = app_block(model)
-        .borders(Borders::RIGHT)
+        .borders(Borders::ALL)
         .title(" AutoHarness ")
         .title_style(visual_style(model, VisualRole::Header))
         .border_style(visual_style(model, VisualRole::Border));
@@ -949,77 +949,65 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let user = &model.profiles().user;
-    let local_label = user.display_label.as_deref().unwrap_or("Local user");
+    let footer_height = u16::from(inner.height >= 2);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(footer_height),
+        ])
+        .split(inner);
+
     let mut lines = vec![
         Line::styled(
-            display_safe(local_label),
-            visual_style(model, VisualRole::User),
-        ),
-        Line::styled(
-            workspace_label(&user.workspace),
+            "PREVIOUS SESSIONS",
             visual_style(model, VisualRole::Muted),
         ),
-        Line::from(""),
     ];
-    if let Some(title) = active_session_title(model) {
-        lines.push(Line::styled(
-            "SESSION",
-            visual_style(model, VisualRole::Muted),
-        ));
-        lines.push(Line::styled(
-            display_safe(&title),
-            visual_style(model, VisualRole::Normal),
-        ));
-        lines.push(Line::from(""));
-    }
-
-    for (index, route) in Route::ALL.into_iter().enumerate() {
-        let label = format!(" {}  {:<10}", index + 1, route.label());
-        let style = if route == model.route() {
+    let session_limit = usize::from(sections[0].height.saturating_sub(4)).max(1);
+    for entry in model.sessions.sessions.iter().take(session_limit) {
+        let marker = if entry.active || entry.session_id == model.session.session_id {
+            selection_marker(model)
+        } else {
+            " "
+        };
+        let style = if entry.active || entry.session_id == model.session.session_id {
             visual_style(model, VisualRole::Selected)
         } else {
             visual_style(model, VisualRole::Normal)
         };
-        lines.push(Line::styled(label, style));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "CONNECTION",
-        visual_style(model, VisualRole::Muted),
-    ));
-    lines.push(Line::from(display_safe(&model.settings_provider_label())));
-    lines.push(Line::from(display_safe(&header_credential_label(model))));
-    lines.push(Line::from(display_safe(&selected_model_label(model))));
-    let state = attempt_state_label(model);
-    let state_style = if state == "ready" {
-        visual_style(model, VisualRole::Success)
-    } else if state == "failed" || state == "cancelled" {
-        visual_style(model, VisualRole::Error)
-    } else {
-        visual_style(model, VisualRole::Warning)
-    };
-    lines.push(Line::styled(state, state_style));
-    let usage = session_usage(model);
-    if !usage.is_empty() {
-        lines.push(Line::styled(usage, visual_style(model, VisualRole::Muted)));
-    }
-    if let Some(catalog) = catalog_status_label(model) {
         lines.push(Line::styled(
-            catalog,
-            visual_style(model, VisualRole::Warning),
+            format!(" {marker} {}", display_safe(&entry.title)),
+            style,
         ));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "Ctrl+/ commands",
-        visual_style(model, VisualRole::Muted),
-    ));
-    lines.push(Line::styled(
-        "F1 contextual help",
-        visual_style(model, VisualRole::Muted),
-    ));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    if model.sessions.sessions.is_empty() {
+        lines.push(Line::styled(
+            " No previous sessions",
+            visual_style(model, VisualRole::Muted),
+        ));
+    }
+    lines.extend([
+        Line::from(""),
+        Line::styled("PROJECTS", visual_style(model, VisualRole::Muted)),
+        Line::styled(
+            format!(" {} ", workspace_label(&model.profiles().user.workspace)),
+            visual_style(model, VisualRole::Normal),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+
+    if footer_height > 0 {
+        let style = if model.route() == Route::Settings {
+            visual_style(model, VisualRole::Selected)
+        } else {
+            visual_style(model, VisualRole::Normal)
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(" Settings ", style)),
+            sections[1],
+        );
+    }
 }
 
 fn active_session_title(model: &Model) -> Option<String> {
