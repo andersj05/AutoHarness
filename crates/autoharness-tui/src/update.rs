@@ -81,23 +81,34 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
     }
 }
 fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
-    if model.overlay() == Some(OverlayKind::Permission) {
-        return Vec::new();
-    }
     if let Some(overlay) = model.overlay() {
         let allowed = match overlay {
-            OverlayKind::UserProfile => {
-                matches!(
-                    action,
-                    MouseAction::UserProfileSave | MouseAction::UserProfileCancel
-                )
-            }
+            OverlayKind::UserProfile => matches!(
+                action,
+                MouseAction::UserProfileSave | MouseAction::UserProfileCancel
+            ),
             OverlayKind::Confirmation => {
                 matches!(action, MouseAction::Confirm | MouseAction::Cancel)
             }
             OverlayKind::ModelPicker => matches!(action, MouseAction::PickerSelect(_)),
             OverlayKind::CommandPalette => matches!(action, MouseAction::PaletteRun(_)),
-            _ => false,
+            OverlayKind::SessionCredential => {
+                matches!(
+                    action,
+                    MouseAction::CredentialSubmit | MouseAction::CredentialCancel
+                )
+            }
+            OverlayKind::ProfileCredential => matches!(
+                action,
+                MouseAction::ProfileCredentialSubmit | MouseAction::ProfileCredentialCancel
+            ),
+            OverlayKind::Permission => {
+                matches!(
+                    action,
+                    MouseAction::PermissionAllow | MouseAction::PermissionDeny
+                )
+            }
+            OverlayKind::TranscriptSearch => false,
         };
         if !allowed {
             return Vec::new();
@@ -157,17 +168,32 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             }
             Vec::new()
         }
-        MouseAction::UserProfileSave => commit_user_profile(model),
-        MouseAction::UserProfileCancel => {
-            close_user_profile(model);
-            Vec::new()
-        }
         MouseAction::SessionOpen => open_selected_session(model),
         MouseAction::SessionRename => rename_selected_session(model),
         MouseAction::SessionArchive => toggle_archive_selected_session(model),
         MouseAction::SessionDelete => request_delete_selected_session(model),
         MouseAction::Confirm => confirm_mouse_action(model),
         MouseAction::Cancel => cancel_mouse_action(model),
+        MouseAction::UserProfileSave => commit_user_profile(model),
+        MouseAction::UserProfileCancel => {
+            close_user_profile(model);
+            Vec::new()
+        }
+        MouseAction::CredentialSubmit => submit_credential(model),
+        MouseAction::CredentialCancel => {
+            close_credential(model);
+            Vec::new()
+        }
+        MouseAction::ProfileCredentialSubmit => submit_profile_credential(model),
+        MouseAction::ProfileCredentialCancel => {
+            model.profile_center.credential = None;
+            let _ = model.close_overlay(OverlayKind::ProfileCredential);
+            model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        MouseAction::PermissionAllow => answer_permission(model, true),
+        MouseAction::PermissionDeny => answer_permission(model, false),
         MouseAction::PickerSelect(selection) => {
             if model
                 .catalog

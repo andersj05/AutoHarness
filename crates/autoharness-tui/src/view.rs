@@ -296,6 +296,33 @@ pub fn hit_test(
     if model.overlay() == Some(OverlayKind::CommandPalette) {
         return palette_mouse_target(area, model, row);
     }
+    if model.overlay() == Some(OverlayKind::SessionCredential) {
+        return modal_button_target(
+            credential_rect(area),
+            row,
+            column,
+            MouseAction::CredentialSubmit,
+            MouseAction::CredentialCancel,
+        );
+    }
+    if model.overlay() == Some(OverlayKind::ProfileCredential) {
+        return modal_button_target(
+            popup_rect(area),
+            row,
+            column,
+            MouseAction::ProfileCredentialSubmit,
+            MouseAction::ProfileCredentialCancel,
+        );
+    }
+    if model.overlay() == Some(OverlayKind::Permission) {
+        return modal_button_target(
+            credential_rect(area),
+            row,
+            column,
+            MouseAction::PermissionAllow,
+            MouseAction::PermissionDeny,
+        );
+    }
     if model.route() == Route::Profiles
         && (model.profile_center.editor.is_some() || model.profile_center.credential.is_some())
     {
@@ -402,6 +429,23 @@ fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseActio
     models
         .get(start + usize::from(row - list_start))
         .map(|summary| MouseAction::PickerSelect(summary.model.clone()))
+}
+fn modal_button_target(
+    popup: Rect,
+    row: u16,
+    column: u16,
+    primary: MouseAction,
+    secondary: MouseAction,
+) -> Option<MouseAction> {
+    let action_row = popup.bottom().saturating_sub(2);
+    if row != action_row {
+        return None;
+    }
+    if column < popup.x + popup.width / 2 {
+        Some(primary)
+    } else {
+        Some(secondary)
+    }
 }
 
 fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
@@ -1764,18 +1808,22 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type API key"
     };
-    let lines = vec![
-        Line::from(Span::styled(
-            masked,
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{masked}\n\nStored only in the operating-system vault.",),
             visual_style(model, VisualRole::Warning),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Stored only in the operating-system vault. Enter save  Esc cancel",
-            visual_style(model, VisualRole::Muted),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        )))
+        .wrap(Wrap { trim: false }),
+        content,
+    );
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new("[ Save ] Enter    [ Cancel ] Esc")
+            .style(visual_style(model, VisualRole::Assistant)),
+        actions,
+    );
 }
 
 /// Renders the searchable session-browser overlay from local state only.
@@ -1911,11 +1959,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     };
     let pending = model.answering_permissions.contains(&request.tool_call_id);
-    let help = if pending {
-        "Saving answer..."
-    } else {
-        "Y allow  N/Esc deny"
-    };
     let mut lines = vec![
         Line::styled(
             "A model requested an external capability.",
@@ -1945,12 +1988,23 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::raw(display_safe(&detail.value)),
         ])
     }));
-    lines.push(Line::styled(help, visual_style(model, VisualRole::Warning)));
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .scroll((model.permission_scroll, 0)),
-        inner,
+        content,
+    );
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    let action_text = if pending {
+        "Saving answer..."
+    } else {
+        "[ Allow ] Y    [ Deny ] N/Esc deny"
+    };
+    frame.render_widget(
+        Paragraph::new(action_text).style(visual_style(model, VisualRole::Warning)),
+        actions,
     );
 }
 
@@ -2751,14 +2805,11 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type key"
     };
-    let text = if inner.height < 8 || inner.width < 36 {
+    let compact = inner.height < 8 || inner.width < 36;
+    let text = if compact {
         Text::from(vec![
             Line::from("API key required"),
             Line::styled(format!(" {mask} "), visual_style(model, VisualRole::Field)),
-            Line::styled(
-                "Enter connect  Esc later",
-                visual_style(model, VisualRole::Muted),
-            ),
         ])
     } else {
         Text::from(vec![
@@ -2769,14 +2820,17 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 format!("  {mask}  "),
                 visual_style(model, VisualRole::Field),
             ),
-            Line::from(""),
-            Line::styled(
-                "Enter connect  Backspace edit  Esc later",
-                visual_style(model, VisualRole::Muted),
-            ),
         ])
     };
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
+    let content_height = inner.height.saturating_sub(1);
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
+    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new("[ Connect ] Enter    [ Cancel ] Esc")
+            .style(visual_style(model, VisualRole::Assistant)),
+        actions,
+    );
 }
 
 fn render_picker_models(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2898,7 +2952,7 @@ fn credential_rect(area: Rect) -> Rect {
         return area;
     }
     let width = area.width.saturating_sub(4).min(68);
-    let height = area.height.saturating_sub(2).min(10);
+    let height = area.height.saturating_sub(2).min(11);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,

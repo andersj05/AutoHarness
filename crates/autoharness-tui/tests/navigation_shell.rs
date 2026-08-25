@@ -464,3 +464,20 @@ fn mouse_modal_rows_select_models_and_run_commands() {
     assert!(effects.is_empty());
     assert!(!palette.palette_open());
 }
+
+#[test]
+fn mouse_credential_dialog_controls_are_clickable() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('k')));
+    assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
+    assert_eq!(
+        hit_test(&model, 80, 24, 10, 15),
+        Some(MouseAction::CredentialSubmit)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 60, 15),
+        Some(MouseAction::CredentialCancel)
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::CredentialCancel));
+    assert!(model.overlay().is_none());
+}

@@ -180,6 +180,14 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(model.profile_selection(), Some("work-router"));
     let _ = update(&mut model, Message::Input(alt('k')));
+    assert_eq!(
+        hit_test(&model, 80, 24, 12, 19),
+        Some(MouseAction::ProfileCredentialSubmit)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 60, 19),
+        Some(MouseAction::ProfileCredentialCancel)
+    );
     let sentinel = "router-secret-sentinel";
     let _ = update(&mut model, Message::Paste(sentinel.to_owned()));
 

@@ -1079,6 +1079,13 @@ pub enum MouseAction {
     PickerSelect(ModelRef),
     /// Execute a visible command-palette row.
     PaletteRun(String),
+    /// Credential and permission modal controls.
+    CredentialSubmit,
+    CredentialCancel,
+    ProfileCredentialSubmit,
+    ProfileCredentialCancel,
+    PermissionAllow,
+    PermissionDeny,
 }
 
 /// Input to the deterministic update function.
