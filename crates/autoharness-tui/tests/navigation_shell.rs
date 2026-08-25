@@ -441,3 +441,26 @@ fn mouse_session_action_bar_exposes_each_visible_action() {
         );
     }
 }
+
+#[test]
+fn mouse_modal_rows_select_models_and_run_commands() {
+    let mut picker = model();
+    let _ = update(&mut picker, Message::Input(ctrl('p')));
+    let selection = hit_test(&picker, 80, 24, 12, 5);
+    assert!(matches!(selection, Some(MouseAction::PickerSelect(_))));
+    let effects = update(&mut picker, Message::Mouse(selection.expect("picker row")));
+    assert!(matches!(
+        effects.as_slice(),
+        [autoharness_tui::UiEffect::Dispatch(
+            UiIntent::SelectModel { .. }
+        )]
+    ));
+
+    let mut palette = model();
+    let _ = update(&mut palette, Message::Input(ctrl('/')));
+    let command = hit_test(&palette, 80, 24, 12, 5);
+    assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
+    let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
+    assert!(effects.is_empty());
+    assert!(!palette.palette_open());
+}

@@ -1075,6 +1075,10 @@ pub enum MouseAction {
     Confirm,
     Cancel,
     UserProfileCancel,
+    /// Select a visible model-picker row.
+    PickerSelect(ModelRef),
+    /// Execute a visible command-palette row.
+    PaletteRun(String),
 }
 
 /// Input to the deterministic update function.

@@ -290,6 +290,12 @@ pub fn hit_test(
         }
         return None;
     }
+    if model.overlay() == Some(OverlayKind::ModelPicker) {
+        return picker_mouse_target(area, model, row);
+    }
+    if model.overlay() == Some(OverlayKind::CommandPalette) {
+        return palette_mouse_target(area, model, row);
+    }
     if model.route() == Route::Profiles
         && (model.profile_center.editor.is_some() || model.profile_center.credential.is_some())
     {
@@ -366,6 +372,62 @@ pub fn hit_test(
     }
 }
 
+fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
+    let popup = popup_rect(area);
+    let inner_height = popup.height.saturating_sub(2);
+    let stale_height = u16::from(
+        matches!(
+            &*model.catalog,
+            CatalogProjection::Ready { stale: true, .. }
+        ) && inner_height >= 3,
+    );
+    let help_height = u16::from(inner_height >= 4);
+    let list_height = inner_height.saturating_sub(1 + stale_height + help_height);
+    let list_start = popup.y.saturating_add(2);
+    if row < list_start || row >= list_start.saturating_add(list_height) {
+        return None;
+    }
+    let models = filtered_models(model);
+    let selected_index = model
+        .picker
+        .selected
+        .as_ref()
+        .and_then(|selected| models.iter().position(|summary| &summary.model == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list_height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(models.len().saturating_sub(visible));
+    models
+        .get(start + usize::from(row - list_start))
+        .map(|summary| MouseAction::PickerSelect(summary.model.clone()))
+}
+
+fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
+    let popup = popup_rect(area);
+    let inner_height = popup.height.saturating_sub(2);
+    let help_height = u16::from(inner_height >= 3);
+    let list_height = inner_height.saturating_sub(1 + help_height);
+    let list_start = popup.y.saturating_add(2);
+    if row < list_start || row >= list_start.saturating_add(list_height) {
+        return None;
+    }
+    let entries = model.palette_entries();
+    let selected_index = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list_height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(entries.len().saturating_sub(visible));
+    entries
+        .get(start + usize::from(row - list_start))
+        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
+}
 fn profile_action_at_column(column: u16) -> Option<MouseAction> {
     match column {
         0..=6 => Some(MouseAction::ProfileNew),

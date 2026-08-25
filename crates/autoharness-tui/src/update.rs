@@ -85,12 +85,21 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
         return Vec::new();
     }
     if let Some(overlay) = model.overlay() {
-        if overlay == OverlayKind::Confirmation
-            && !matches!(action, MouseAction::Confirm | MouseAction::Cancel)
-        {
-            return Vec::new();
-        }
-        if overlay != OverlayKind::UserProfile && overlay != OverlayKind::Confirmation {
+        let allowed = match overlay {
+            OverlayKind::UserProfile => {
+                matches!(
+                    action,
+                    MouseAction::UserProfileSave | MouseAction::UserProfileCancel
+                )
+            }
+            OverlayKind::Confirmation => {
+                matches!(action, MouseAction::Confirm | MouseAction::Cancel)
+            }
+            OverlayKind::ModelPicker => matches!(action, MouseAction::PickerSelect(_)),
+            OverlayKind::CommandPalette => matches!(action, MouseAction::PaletteRun(_)),
+            _ => false,
+        };
+        if !allowed {
             return Vec::new();
         }
     }
@@ -159,6 +168,31 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
         MouseAction::SessionDelete => request_delete_selected_session(model),
         MouseAction::Confirm => confirm_mouse_action(model),
         MouseAction::Cancel => cancel_mouse_action(model),
+        MouseAction::PickerSelect(selection) => {
+            if model
+                .catalog
+                .models()
+                .iter()
+                .any(|summary| summary.selectable && summary.model == selection)
+            {
+                model.picker.selected = Some(selection);
+                select_picker_model(model)
+            } else {
+                Vec::new()
+            }
+        }
+        MouseAction::PaletteRun(command) => {
+            if model
+                .palette_entries()
+                .iter()
+                .any(|entry| entry.id == command)
+            {
+                close_palette(model);
+                run_command_by_id(model, &command).unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        }
     }
 }
 
