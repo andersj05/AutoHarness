@@ -290,6 +290,7 @@ fn settings_projection(
             credential_connected: !resolved.credential.is_empty(),
         },
         local_profile,
+        git_branch: None,
     }
 }
 

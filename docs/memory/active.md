@@ -1,6 +1,6 @@
 # Active memory
 
-**Last reviewed:** 2026-08-24
+**Last reviewed:** 2026-08-25
 
 **Phase:** 3.9 terminal product validation
 
@@ -58,6 +58,12 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 ## Recently completed
 
 - Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
+- On 2026-08-25, `feat/tui-professional-overhaul` corrected compact-shell mouse geometry from the rendered content rectangle, added exact profile click coverage, added a bounded reduced-motion-safe startup boot surface, exposed `/profile` beside `/settings`, refreshed the dark preset to a dark neon cockpit palette, and passed 66 focused TUI tests, 350 workspace tests, strict Clippy, formatting, and three ignored Windows PTY journeys.
+- On 2026-08-25, the follow-up TUI cutover made the initial boot surface visible on the first draw, stopped automatic credential dialogs, routed `/settings`, `/models`, `/sessions`, `/connect-api-key`, `/retry`, `/cancel`, `/search`, and `/toggle-tools` through the shared command table, removed the prompt footer, tightened prompt/transcript borders, applied the neon palette to the default System theme, and passed 385 workspace tests plus first-run and routed-shell Windows PTY journeys.
+- On 2026-08-25, slash input now opens a live filtered command browser, `/provider` opens provider setup, `/models` supports `D` to save the selected model as the active provider default, and Aurora and Ember theme presets were added with distinct color anchors; 389 workspace tests pass with strict Clippy and formatting.
+- On 2026-08-25, the command palette became an eight-row inline Chat overlay with live filtering, and the prompt became a borderless metadata bar showing safe thinking mode, workspace basename, Git branch when available, model, and attempt state; 390 workspace tests and the routed-shell PTY journey pass.
+- On 2026-08-25, the inline command browser moved to the bottom of Chat immediately above the prompt bar, while the active command query is rendered inside the prompt editor line; the routed-shell PTY journey and 390 workspace tests remain green.
+- On 2026-08-25, the prompt bar was refined into a single Claude-like bottom composer surface, every visible Settings option became keyboard-selectable with safe no-op rows for policy/runtime values, and Backspace on an empty slash query now closes command mode; 391 workspace tests pass.
 - Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
 - Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
 - Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.

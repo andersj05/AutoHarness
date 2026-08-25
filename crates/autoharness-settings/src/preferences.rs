@@ -70,6 +70,10 @@ pub enum ThemePreset {
     Light,
     /// Prefer a dark terminal appearance.
     Dark,
+    /// Cool aurora gradients expressed through terminal-safe cyan and violet.
+    Aurora,
+    /// Warm ember gradients expressed through amber, coral, and magenta.
+    Ember,
 }
 
 /// The terminal color treatment.

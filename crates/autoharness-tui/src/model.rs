@@ -1299,28 +1299,46 @@ pub(crate) struct HelpState {
     /// Rows scrolled from the top of the help content.
     pub scroll: u16,
 }
-/// The editable leaves in deterministic Settings workspace order.
+/// The selectable rows in deterministic Settings workspace order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsPreference {
     DisplayLabel,
+    Provider,
+    Profile,
+    Credential,
+    Source,
+    Model,
+    Mode,
     ThemePreset,
     ColorMode,
     GlyphMode,
     ReducedMotion,
     Density,
+    Approvals,
+    Retention,
+    Logging,
     Layout,
     TerminalTimestampStyle,
     ComposerSubmitBehavior,
 }
 
 impl SettingsPreference {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::DisplayLabel,
+        Self::Provider,
+        Self::Profile,
+        Self::Credential,
+        Self::Source,
+        Self::Model,
+        Self::Mode,
         Self::ThemePreset,
         Self::ColorMode,
         Self::GlyphMode,
         Self::ReducedMotion,
         Self::Density,
+        Self::Approvals,
+        Self::Retention,
+        Self::Logging,
         Self::Layout,
         Self::TerminalTimestampStyle,
         Self::ComposerSubmitBehavior,
@@ -1537,6 +1555,18 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Alt+3"),
     },
     CommandEntry {
+        id: "profile",
+        label: "Profile and Providers",
+        description: "Open local profile identity and provider connections",
+        key_hint: Some("Alt+3"),
+    },
+    CommandEntry {
+        id: "provider",
+        label: "Provider setup",
+        description: "Create or connect a provider and store its API key securely",
+        key_hint: None,
+    },
+    CommandEntry {
         id: "user-profile",
         label: "User profile",
         description: "Edit the local display name and profile summary",
@@ -1551,7 +1581,7 @@ pub const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "models",
         label: "Models",
-        description: "Choose a model from the catalog",
+        description: "Choose a model or save it as the active provider default",
         key_hint: Some("Ctrl+P"),
     },
     CommandEntry {
@@ -1565,6 +1595,30 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Connect API key",
         description: "Enter or replace the provider API key",
         key_hint: Some("Ctrl+K"),
+    },
+    CommandEntry {
+        id: "retry",
+        label: "Retry response",
+        description: "Retry the latest failed or cancelled response",
+        key_hint: Some("Ctrl+R"),
+    },
+    CommandEntry {
+        id: "cancel",
+        label: "Cancel response",
+        description: "Cancel the active response",
+        key_hint: Some("Esc"),
+    },
+    CommandEntry {
+        id: "search",
+        label: "Search transcript",
+        description: "Search the current conversation",
+        key_hint: Some("Ctrl+F"),
+    },
+    CommandEntry {
+        id: "toggle-tools",
+        label: "Toggle tool details",
+        description: "Expand or collapse tool resources",
+        key_hint: Some("Ctrl+X"),
     },
     CommandEntry {
         id: "settings",
@@ -1663,6 +1717,8 @@ pub struct SettingsProjection {
     pub provider_status: ProviderStatusProjection,
     /// Effective local profile preferences and provenance for every leaf.
     pub local_profile: EffectiveLocalProfile,
+    /// Safe current Git branch for the workspace, when the workspace is a checkout.
+    pub git_branch: Option<String>,
 }
 
 impl SettingsProjection {
@@ -1977,10 +2033,26 @@ pub struct Model {
     pub(crate) retrying: BTreeSet<AttemptKey>,
     pub(crate) answering_permissions: BTreeSet<ToolCallKey>,
     pub(crate) permission_scroll: u16,
+    pub(crate) startup_complete: bool,
     pub(crate) retry_deadlines: BTreeMap<AttemptKey, UiInstant>,
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
+}
+
+const STARTUP_ANIMATION_MS: UiInstant = 1_800;
+
+impl Model {
+    pub(crate) fn startup_active(&self) -> bool {
+        !self.startup_complete && self.now < STARTUP_ANIMATION_MS
+    }
+
+    pub(crate) fn advance_startup(&mut self, now: UiInstant) {
+        self.now = now;
+        if now >= STARTUP_ANIMATION_MS {
+            self.startup_complete = true;
+        }
+    }
 }
 
 impl Model {
@@ -1992,15 +2064,10 @@ impl Model {
         catalog: Arc<CatalogProjection>,
     ) -> Self {
         let permission_pending = !session.permission_requests.is_empty();
-        let open_credential =
-            !permission_pending && matches!(&*catalog, CatalogProjection::CredentialRequired);
-        let open_picker = !open_credential
-            && session.selected_model.is_none()
+        let open_picker = session.selected_model.is_none()
             && matches!(&*catalog, CatalogProjection::Ready { models, .. } if !models.is_empty());
         let focus = if permission_pending {
             Focus::Permission
-        } else if open_credential {
-            Focus::Credential
         } else if open_picker {
             Focus::Picker
         } else {
@@ -2008,8 +2075,6 @@ impl Model {
         };
         let overlay = if permission_pending {
             Some(OverlayKind::Permission)
-        } else if open_credential {
-            Some(OverlayKind::SessionCredential)
         } else if open_picker {
             Some(OverlayKind::ModelPicker)
         } else {
@@ -2031,6 +2096,10 @@ impl Model {
                 .find(|model| model.selectable)
                 .map(|model| model.model.clone())
         });
+        let startup_complete = matches!(
+            &*catalog,
+            CatalogProjection::Ready { .. } | CatalogProjection::Failed(_)
+        );
 
         let mut model = Self {
             session,
@@ -2053,6 +2122,7 @@ impl Model {
             browser: BrowserState::default(),
             profile_center: ProfileCenterState::default(),
             palette: PaletteState::default(),
+            startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
             drafts: SessionDrafts::default(),

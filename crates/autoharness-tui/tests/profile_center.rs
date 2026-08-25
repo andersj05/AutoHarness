@@ -247,24 +247,56 @@ fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
             if profile_id == "personal-gemini"
     ));
 }
+#[test]
+fn models_picker_can_save_the_selected_model_as_profile_default() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('p')));
+    let effects = update(&mut model, Message::Input(key(Key::Char('d'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefaultModel { profile_id, .. })]
+            if profile_id == "personal-gemini"
+    ));
+}
 
 #[test]
 fn every_profile_detail_button_has_a_semantic_click_target() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
     for (column, expected) in [
-        (31, MouseAction::ProfileNew),
-        (39, MouseAction::ProfileCredential),
-        (47, MouseAction::ProfileTest),
-        (57, MouseAction::ProfileDefaultModel),
-        (34, MouseAction::ProfileDisconnect),
-        (48, MouseAction::ProfileDelete),
+        (68, MouseAction::ProfileNew),
+        (76, MouseAction::ProfileCredential),
+        (84, MouseAction::ProfileTest),
+        (92, MouseAction::ProfileDefaultModel),
+        (68, MouseAction::ProfileDisconnect),
+        (83, MouseAction::ProfileDelete),
     ] {
         assert!(
             (0..40).any(|row| hit_test(&model, 120, 40, column, row) == Some(expected.clone())),
             "missing profile click target at column {column}"
         );
     }
+}
+
+#[test]
+fn compact_profile_clicks_follow_rendered_content_rows() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+
+    assert_eq!(
+        hit_test(&model, 80, 24, 2, 3),
+        Some(MouseAction::OpenUserProfile)
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 2, 8),
+        Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 34, 17),
+        Some(MouseAction::ProfileNew)
+    );
+    assert_eq!(hit_test(&model, 80, 24, 34, 16), None);
+    assert_eq!(hit_test(&model, 80, 24, 34, 14), None);
 }
 #[test]
 #[ignore = "visual review harness for the Phase 3.6 profile center"]

@@ -53,7 +53,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             Vec::new()
         }
         Message::Tick(now) => {
-            model.now = now;
+            let was_startup_active = model.startup_active();
+            model.advance_startup(now);
+            if was_startup_active || model.startup_active() {
+                model.dirty = true;
+            }
             if model.session.active_attempt().is_some()
                 || model.session.retryable_attempt().is_some_and(|(_, retry)| {
                     matches!(retry, RetryPolicy::After { .. } | RetryPolicy::At(_))
@@ -371,6 +375,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
     ) {
         close_active_overlay_state(model);
+        navigate_to_route(model, Route::Settings);
         open_credential(model);
         return Vec::new();
     }
@@ -535,6 +540,21 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         input => {
             if !has_pending_submission(model)
+                && model.composer.is_blank()
+                && matches!(
+                    input,
+                    Input {
+                        key: Key::Char('/'),
+                        ctrl: false,
+                        alt: false,
+                        ..
+                    }
+                )
+            {
+                open_palette(model);
+                return Vec::new();
+            }
+            if !has_pending_submission(model)
                 && let Some(effects) = maybe_slash_command(model, &input)
             {
                 return effects;
@@ -638,6 +658,15 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: false,
             ..
         } => default_selected_preference(model),
+        Input {
+            key: Key::Char('k' | 'K'),
+            ctrl: false,
+            alt: false,
+            ..
+        } => {
+            open_credential(model);
+            Vec::new()
+        }
         Input {
             key: Key::Char('p' | 'P'),
             ..
@@ -745,10 +774,25 @@ fn commit_display_label(model: &mut Model) -> Vec<UiEffect> {
 fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffect> {
     let preferences = model.settings().local_profile.preferences();
     let change = match selected_settings_preference(model) {
-        SettingsPreference::DisplayLabel => return Vec::new(),
+        SettingsPreference::DisplayLabel
+        | SettingsPreference::Provider
+        | SettingsPreference::Profile
+        | SettingsPreference::Credential
+        | SettingsPreference::Source
+        | SettingsPreference::Model
+        | SettingsPreference::Mode
+        | SettingsPreference::Approvals
+        | SettingsPreference::Retention
+        | SettingsPreference::Logging => return Vec::new(),
         SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
             *preferences.theme_preset().value(),
-            &[ThemePreset::System, ThemePreset::Light, ThemePreset::Dark],
+            &[
+                ThemePreset::System,
+                ThemePreset::Light,
+                ThemePreset::Dark,
+                ThemePreset::Aurora,
+                ThemePreset::Ember,
+            ],
             direction,
         ))),
         SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(Some(cycle(
@@ -808,6 +852,15 @@ fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
         model,
         match selected_settings_preference(model) {
             SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::Provider
+            | SettingsPreference::Profile
+            | SettingsPreference::Credential
+            | SettingsPreference::Source
+            | SettingsPreference::Model
+            | SettingsPreference::Mode
+            | SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging => return Vec::new(),
             SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
             SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
             SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
@@ -829,6 +882,15 @@ fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
         model,
         match selected_settings_preference(model) {
             SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::Provider
+            | SettingsPreference::Profile
+            | SettingsPreference::Credential
+            | SettingsPreference::Source
+            | SettingsPreference::Model
+            | SettingsPreference::Mode
+            | SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging => return Vec::new(),
             SettingsPreference::ThemePreset => {
                 LocalPreferenceChange::ThemePreset(Some(ThemePreset::System))
             }
@@ -963,6 +1025,19 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
+        "profile" => {
+            navigate_to_route(model, Route::Profiles);
+            Vec::new()
+        }
+        "provider" => {
+            navigate_to_route(model, Route::Profiles);
+            if model.selected_profile().is_some() {
+                open_profile_credential(model);
+            } else {
+                create_profile_editor(model);
+            }
+            Vec::new()
+        }
         "user-profile" => {
             open_user_profile(model);
             Vec::new()
@@ -972,11 +1047,25 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "connect-api-key" => {
+            navigate_to_route(model, Route::Settings);
             open_credential(model);
             Vec::new()
         }
         "settings" => {
             navigate_to_route(model, Route::Settings);
+            Vec::new()
+        }
+        "retry" => retry_attempt(model),
+        "cancel" => cancel_attempt(model),
+        "search" => {
+            close_active_overlay_state(model);
+            navigate_to_route(model, Route::Chat);
+            open_search(model);
+            Vec::new()
+        }
+        "toggle-tools" => {
+            model.tools_expanded = !model.tools_expanded;
+            model.dirty = true;
             Vec::new()
         }
         "refresh-models" => refresh_catalog(model),
@@ -1140,6 +1229,17 @@ fn move_palette_selection(model: &mut Model, direction: isize) {
 
 fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
     let Some(selected) = model.palette.selected else {
+        let query = model.palette.query.clone();
+        close_palette(model);
+        if !query.is_empty() {
+            model.composer.editor.insert_str(format!("/{query}"));
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                format!("Unknown command '/{query}'"),
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
+        }
         return Vec::new();
     };
     let Some(entry) = COMMANDS.iter().find(|entry| entry.id == selected).copied() else {
@@ -1175,6 +1275,21 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     ) {
         return create_session(model);
     }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('/'),
+            ctrl: false,
+            alt: false,
+            ..
+        }
+    ) && model.palette.query.is_empty()
+    {
+        close_palette(model);
+        model.composer.editor.insert_str("//");
+        model.dirty = true;
+        return Vec::new();
+    }
     match input {
         Input { key: Key::Esc, .. } => {
             close_palette(model);
@@ -1189,6 +1304,14 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input { key: Key::Down, .. } => {
             move_palette_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } if model.palette.query.is_empty() => {
+            close_palette(model);
+            model.dirty = true;
             Vec::new()
         }
         Input {
@@ -1329,6 +1452,12 @@ fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             move_picker_selection(model, 1);
             Vec::new()
         }
+        Input {
+            key: Key::Char('d' | 'D'),
+            ctrl: false,
+            alt: false,
+            ..
+        } => set_selected_profile_default_model(model),
         Input {
             key: Key::Backspace,
             ..
@@ -2909,6 +3038,7 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
         let _ = model.close_overlay(OverlayKind::Permission);
     } else if session_changed
         && model.session.selected_model.is_none()
+        && model.overlay().is_none()
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
     {
         navigate_to_route(model, Route::Chat);
@@ -2923,11 +3053,6 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
     if model.route() == Route::Chat
-        && model.overlay().is_none()
-        && matches!(&*model.catalog, CatalogProjection::CredentialRequired)
-    {
-        open_credential(model);
-    } else if model.route() == Route::Chat
         && model.overlay().is_none()
         && !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
@@ -3056,9 +3181,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
             let pending = model.pending.remove(&request_id);
             match pending {
                 Some(PendingKind::CreateSession) => {}
-                Some(PendingKind::ConfigureCredential) => {
-                    open_credential(model);
-                }
+                Some(PendingKind::ConfigureCredential) => {}
                 Some(PendingKind::UpsertProfile(profile)) => {
                     let mode = if model
                         .profiles
@@ -3347,6 +3470,7 @@ fn retry_attempt(model: &mut Model) -> Vec<UiEffect> {
 
 fn refresh_catalog(model: &mut Model) -> Vec<UiEffect> {
     if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+        navigate_to_route(model, Route::Settings);
         open_credential(model);
         return Vec::new();
     }

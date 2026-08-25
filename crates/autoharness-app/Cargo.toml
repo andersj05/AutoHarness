@@ -16,6 +16,11 @@ path = "src/lib.rs"
 name = "autoharness"
 path = "src/main.rs"
 
+
+[[bin]]
+name = "ah"
+path = "src/main.rs"
+
 [features]
 benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
 

@@ -59,6 +59,20 @@ fn model() -> Model {
     Model::new(session, sessions, catalog)
 }
 
+fn loading_model() -> Model {
+    Model::new(
+        Arc::new(SessionProjection {
+            session_id: "startup-session".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Loading),
+    )
+}
+
 fn key(key: Key) -> Input {
     Input {
         key,
@@ -128,8 +142,8 @@ fn global_model_and_credential_overlays_restore_non_chat_routes() {
     let _ = update(&mut model, Message::Input(ctrl('k')));
     assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    assert_eq!(model.route(), Route::Profiles);
-    assert_eq!(model.focus, Focus::Profiles);
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
 }
 
 #[test]
@@ -266,7 +280,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
     assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("Alt+3 manage providers"));
+    assert!(offline.contains("Provider API key: use /settings"));
 
     let _ = update(
         &mut model,
@@ -285,7 +299,26 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let failed = render_text(&model, 80, 24);
     assert!(failed.contains("CONNECTION ERROR"));
+
     assert!(failed.contains("Ctrl+R retry"));
+}
+#[test]
+fn startup_boot_surface_animates_and_exits_deterministically() {
+    let mut model = loading_model();
+    let initial = render_text(&model, 80, 24);
+    assert!(initial.contains("AutoHarness / boot"));
+    let _ = update(&mut model, Message::Tick(100));
+    let first = render_text(&model, 80, 24);
+    let _ = update(&mut model, Message::Tick(200));
+    let second = render_text(&model, 80, 24);
+    assert!(first.contains("AUTOHARNESS"));
+    assert!(first.contains("CONNECTING"));
+    assert_ne!(first, second);
+
+    let _ = update(&mut model, Message::Tick(2_000));
+    let settled = render_text(&model, 80, 24);
+    assert!(!settled.contains("AutoHarness / boot"));
+    assert!(settled.contains("CONNECTING"));
 }
 
 #[test]
@@ -293,7 +326,7 @@ fn chat_empty_state_explains_the_zero_shell_start_path() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
     assert!(rendered.contains("GET STARTED"));
-    assert!(rendered.contains("Ctrl+K connect a session-only key"));
+    assert!(rendered.contains("/settings set a provider key"));
     assert!(rendered.contains("Conversation · Active conversation"));
 }
 
@@ -376,10 +409,7 @@ fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
         hit_test(&model, 80, 24, 2, 0),
         Some(MouseAction::Route(Route::Chat))
     );
-    assert_eq!(
-        hit_test(&model, 80, 24, 16, 23),
-        Some(MouseAction::ChatModels)
-    );
+    assert_eq!(hit_test(&model, 80, 24, 16, 23), None);
 }
 
 #[test]
@@ -458,7 +488,7 @@ fn mouse_modal_rows_select_models_and_run_commands() {
 
     let mut palette = model();
     let _ = update(&mut palette, Message::Input(ctrl('/')));
-    let command = hit_test(&palette, 80, 24, 12, 5);
+    let command = hit_test(&palette, 80, 24, 12, 14);
     assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
     let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
     assert!(effects.is_empty());

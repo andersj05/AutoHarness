@@ -212,23 +212,16 @@ fn help_scrolls_through_longer_content() {
 }
 
 #[test]
-fn wide_footers_advertise_help_and_commands_but_narrow_ones_stay_quiet() {
+fn prompt_has_no_footer_text_below_the_composer() {
     let model = empty_model();
-
-    let wide = buffer_text(&render_model(&model, 120, 24));
-    assert!(wide.contains("F1"), "wide footer must advertise help");
-
-    let medium = buffer_text(&render_model(&model, 80, 24));
-    assert!(
-        !medium.contains("F1"),
-        "the 80-column footer keeps its priority set"
-    );
-
-    let narrow = buffer_text(&render_model(&model, 40, 12));
-    assert!(
-        narrow.contains("^S"),
-        "narrow footer keeps its compact form"
-    );
+    for (width, height) in [(120, 24), (80, 24), (40, 12)] {
+        let rendered = buffer_text(&render_model(&model, width, height));
+        let bottom = rendered.lines().last().unwrap_or_default();
+        assert!(!bottom.contains("send"));
+        assert!(!bottom.contains("newline"));
+        assert!(!bottom.contains("models"));
+        assert!(!bottom.contains("sessions"));
+    }
 }
 
 #[test]

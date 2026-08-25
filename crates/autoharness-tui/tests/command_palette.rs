@@ -112,21 +112,60 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     assert!(model.palette_open());
     assert_eq!(model.focus, Focus::Palette, "the palette owns the keyboard");
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("/models"));
+    assert!(!rendered.contains("Commands"));
     for expected in [
+        "/chat",
         "/sessions",
+        "/profiles",
+        "/profile",
+        "/provider",
+        "/user-profile",
         "/new-session",
         "/models",
-        "/refresh-models",
-        "/connect-api-key",
-        "/settings",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
     }
+    type_text(&mut model, "settings");
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("/settings"));
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.palette_open());
     assert_eq!(model.focus, Focus::Composer);
+}
+
+#[test]
+fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+    assert!(model.palette_open());
+    let all = buffer_text(&render_model(&model, 80, 24));
+    let bottom = all.lines().rev().take(10).collect::<Vec<_>>();
+    assert!(bottom.iter().any(|line| line.contains("/chat")));
+    assert!(all.contains("/models"));
+    assert!(all.contains("/provider"));
+
+    type_text(&mut model, "mod");
+    let filtered = buffer_text(&render_model(&model, 80, 24));
+    assert!(
+        filtered
+            .lines()
+            .rev()
+            .take(3)
+            .any(|line| line.contains("/mod"))
+    );
+    assert!(filtered.contains("/models"));
+    assert!(!filtered.contains("/sessions"));
+}
+
+#[test]
+fn deleting_the_initial_slash_closes_command_browser() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+    assert!(model.palette_open());
+    let _ = update(&mut model, Message::Input(key_input(Key::Backspace)));
+    assert!(!model.palette_open());
+    assert!(model.composer.is_blank());
 }
 
 #[test]
@@ -147,7 +186,8 @@ fn palette_filtering_is_case_insensitive_and_selection_stays_valid() {
     let _ = update(&mut model, Message::Input(key_input(Key::Backspace)));
     type_text(&mut model, "zzz");
     assert!(update(&mut model, Message::Input(enter())).is_empty());
-    assert!(model.palette_open());
+    assert!(!model.palette_open());
+    assert_eq!(model.composer.text(), "/APIzzz");
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.palette_open());
@@ -245,7 +285,34 @@ fn known_slash_commands_execute_and_clear_the_composer() {
     type_text(&mut model, "/sessions");
     let _ = update(&mut model, Message::Input(enter()));
     assert!(model.browser_open());
+
     assert!(model.composer.is_blank());
+}
+#[test]
+fn provider_command_opens_provider_setup_route() {
+    let mut model = empty_model();
+    type_text(&mut model, "/provider");
+    let _ = update(&mut model, Message::Input(enter()));
+    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.focus, Focus::Profiles);
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Profiles"));
+}
+
+#[test]
+fn profile_slash_command_matches_palette_route() {
+    let mut slash = empty_model();
+    type_text(&mut slash, "/profile");
+    let _ = update(&mut slash, Message::Input(enter()));
+    assert_eq!(slash.route(), Route::Profiles);
+    assert_eq!(slash.focus, Focus::Profiles);
+    assert!(slash.composer.is_blank());
+
+    let mut palette = empty_model();
+    let _ = update(&mut palette, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut palette, "profile");
+    let _ = update(&mut palette, Message::Input(enter()));
+    assert_eq!(palette.route(), Route::Profiles);
+    assert_eq!(palette.focus, Focus::Profiles);
 }
 
 #[test]
@@ -288,7 +355,7 @@ fn multiline_slash_text_submits_as_an_ordinary_prompt() {
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
 
     let mut model = empty_model();
-    type_text(&mut model, "/");
+    type_text(&mut model, "//");
     let _ = update(
         &mut model,
         Message::Paste("code block\nline two".to_owned()),
@@ -299,7 +366,7 @@ fn multiline_slash_text_submits_as_an_ordinary_prompt() {
         matches!(
             effects.as_slice(),
             [UiEffect::Dispatch(UiIntent::SubmitPrompt { prompt, .. })]
-                if prompt == "/code block\nline two"
+                if prompt == "//code block\nline two"
         ),
         "multiline text starting with slash is a prompt, not a command"
     );

@@ -561,6 +561,14 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
         Arc::new(SessionsProjection::default()),
         Arc::new(CatalogProjection::CredentialRequired),
     );
+    assert!(!model.credential_open());
+    let _ = update(&mut model, Message::Tick(2_000));
+    for character in "/settings".chars() {
+        let _ = update(&mut model, Message::Input(key_input(Key::Char(character))));
+    }
+    let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
+    assert!(model.settings_open());
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('k'))));
     assert!(model.credential_open());
 
     let paste = Message::Paste(format!("{sentinel}\r\n"));
@@ -607,7 +615,8 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
             ),
         }),
     );
-    assert!(model.credential_open());
+    assert!(!model.credential_open());
+    assert!(model.settings_open());
     assert!(!model.credential_has_value());
 }
 
@@ -796,9 +805,9 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
         let expected_anchor = if width >= 100 {
-            Color::Cyan
+            Color::Rgb(34, 211, 238)
         } else {
-            Color::LightCyan
+            Color::Rgb(167, 139, 250)
         };
         assert_eq!(
             backend.buffer().cell((0, 0)).expect("header origin").bg,
@@ -980,7 +989,77 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     let dark = render_model(&model, 120, 40);
     assert_eq!(
         dark.buffer().cell((0, 0)).expect("header").bg,
-        Color::LightBlue
+        Color::Rgb(34, 211, 238)
     );
     assert!(!buffer_text(&dark).contains("updated 1700000000000"));
+}
+
+#[test]
+fn aurora_and_ember_themes_have_distinct_color_anchors() {
+    let mut model = Model::new(
+        session(12, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "aurora",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let aurora = render_model(&model, 120, 40);
+    assert_eq!(
+        aurora.buffer().cell((0, 0)).expect("aurora header").bg,
+        Color::Rgb(45, 212, 191)
+    );
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "ember",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let ember = render_model(&model, 120, 40);
+    assert_eq!(
+        ember.buffer().cell((0, 0)).expect("ember header").bg,
+        Color::Rgb(251, 146, 60)
+    );
+}
+
+#[test]
+fn prompt_bar_shows_safe_runtime_metadata() {
+    let mut model = Model::new(
+        session(13, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
+        user: autoharness_tui::LocalUserProfileProjection {
+            workspace: r"C:\work\autoharness".to_owned(),
+            default_mode: "deliberate".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    model.apply_settings(Arc::new(SettingsProjection {
+        git_branch: Some("feat/prompt-bar".to_owned()),
+        ..SettingsProjection::default()
+    }));
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("think:deliberate"));
+    assert!(rendered.contains("cwd:autoharness"));
+    assert!(rendered.contains("git:feat/prompt-bar"));
+    assert!(rendered.contains("model:"));
 }

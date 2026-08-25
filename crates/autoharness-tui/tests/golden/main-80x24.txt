@@ -1,24 +1,24 @@
  1 Chat   2 Sessions   3 Profiles   4 Settings   5 Help
  AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed
-┌ Conversation ────────────────────────────────────────────────────────────────┐
-│                                                                              │
-│AUTOHARNESS · complete                                                        │
-│Start with a two-week validation sprint:                                      │
-│1. Interview ten customers.                                                   │
-│2. Price three menu bundles.                                                  │
-│3. Measure repeat intent.                                                     │
-│18 input tokens · 41 output tokens                                            │
-│                                                                              │
-│YOU                                                                           │
-│What could go wrong?                                                          │
-│                                                                              │
-│AUTOHARNESS · retry · failed                                                  │
-│The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                    │
-│Error: Capacity is temporarily exhausted; no credentials were exposed.        │
-│rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2                      │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌ Prompt ──────────────────────────────────────────────────────────────────────┐
-│Retry with a smaller scope.                                                   │
-│Keep the checklist concise.                                                   │
-└──────────────────────────────────────────────────────────────────────────────┘
- Ctrl+S send   Enter newline   Ctrl+P models   Ctrl+N new   Ctrl+R retry
+ Conversation ──────────────────────────────────────────────────────────────────
+Plan a café launch.
+Keep it practical.
+
+AUTOHARNESS · complete
+Start with a two-week validation sprint:
+1. Interview ten customers.
+2. Price three menu bundles.
+3. Measure repeat intent.
+18 input tokens · 41 output tokens
+
+YOU
+What could go wrong?
+
+AUTOHARNESS · retry · failed
+The provider returned \u{1b}[31ma partial answer\u{1b}[0m.
+Error: Capacity is temporarily exhausted; no credentials were exposed.
+rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2
+────────────────────────────────────────────────────────────────────────────────
+ think:safe agent  cwd:workspace  git:no git  model:Gemini 2.5 Pro  state:failed
+Retry with a smaller scope.
+Keep the checklist concise.
