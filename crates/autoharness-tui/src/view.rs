@@ -283,7 +283,7 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
 }
 
 fn app_block(model: &Model) -> Block<'static> {
-    let block = Block::default();
+    let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
     if presentation(model).ascii {
         block.border_set(ASCII_BORDER)
     } else {
@@ -631,7 +631,12 @@ fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
         } else {
             rows[1]
         };
-    Some(Block::default().borders(Borders::ALL).inner(list_area))
+    Some(
+        Block::default()
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .borders(Borders::ALL)
+            .inner(list_area),
+    )
 }
 
 fn profile_detail_area(model: &Model, area: Rect) -> Option<Rect> {
