@@ -143,7 +143,7 @@
 - Bracketed paste is accepted by profile forms and session renaming while preserving bounded editable fields and credential secrecy.
 - The local user-profile dialog edits the non-secret display label through the existing typed preference intent, shows workspace/provider/model/mode context, and offers visible Save and Cancel controls.
 - Left-button terminal clicks become semantic typed actions after application-owned mouse capture; route tabs, Chat, Sessions, Profiles, profile detail actions, confirmations, and the user-profile dialog share the deterministic update path.
-- Mouse capture restoration is tested for normal exit, partial setup failure, panic cleanup, and forced terminal shutdown.
+- Mouse capture restoration is tested for normal exit, partial setup failure, drop fallback, and selected Windows PTY journeys; panic-hook-specific output and cross-platform restoration remain release evidence.
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
