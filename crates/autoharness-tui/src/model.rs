@@ -1573,6 +1573,30 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Ctrl+K"),
     },
     CommandEntry {
+        id: "retry",
+        label: "Retry response",
+        description: "Retry the latest failed or cancelled response",
+        key_hint: Some("Ctrl+R"),
+    },
+    CommandEntry {
+        id: "cancel",
+        label: "Cancel response",
+        description: "Cancel the active response",
+        key_hint: Some("Esc"),
+    },
+    CommandEntry {
+        id: "search",
+        label: "Search transcript",
+        description: "Search the current conversation",
+        key_hint: Some("Ctrl+F"),
+    },
+    CommandEntry {
+        id: "toggle-tools",
+        label: "Toggle tool details",
+        description: "Expand or collapse tool resources",
+        key_hint: Some("Ctrl+X"),
+    },
+    CommandEntry {
         id: "settings",
         label: "Settings",
         description: "Show effective provider, profile, and credential source",
@@ -1994,10 +2018,7 @@ const STARTUP_ANIMATION_MS: UiInstant = 1_800;
 
 impl Model {
     pub(crate) fn startup_active(&self) -> bool {
-        !self.startup_complete
-            && self.now > 0
-            && self.now < STARTUP_ANIMATION_MS
-            && matches!(&*self.catalog, CatalogProjection::Loading)
+        !self.startup_complete && self.now < STARTUP_ANIMATION_MS
     }
 
     pub(crate) fn advance_startup(&mut self, now: UiInstant) {
@@ -2005,10 +2026,6 @@ impl Model {
         if now >= STARTUP_ANIMATION_MS {
             self.startup_complete = true;
         }
-    }
-
-    pub(crate) fn complete_startup(&mut self) {
-        self.startup_complete = true;
     }
 }
 
@@ -2021,15 +2038,10 @@ impl Model {
         catalog: Arc<CatalogProjection>,
     ) -> Self {
         let permission_pending = !session.permission_requests.is_empty();
-        let open_credential =
-            !permission_pending && matches!(&*catalog, CatalogProjection::CredentialRequired);
-        let open_picker = !open_credential
-            && session.selected_model.is_none()
+        let open_picker = session.selected_model.is_none()
             && matches!(&*catalog, CatalogProjection::Ready { models, .. } if !models.is_empty());
         let focus = if permission_pending {
             Focus::Permission
-        } else if open_credential {
-            Focus::Credential
         } else if open_picker {
             Focus::Picker
         } else {
@@ -2037,8 +2049,6 @@ impl Model {
         };
         let overlay = if permission_pending {
             Some(OverlayKind::Permission)
-        } else if open_credential {
-            Some(OverlayKind::SessionCredential)
         } else if open_picker {
             Some(OverlayKind::ModelPicker)
         } else {
@@ -2060,7 +2070,10 @@ impl Model {
                 .find(|model| model.selectable)
                 .map(|model| model.model.clone())
         });
-        let startup_complete = !matches!(&*catalog, CatalogProjection::Loading);
+        let startup_complete = matches!(
+            &*catalog,
+            CatalogProjection::Ready { .. } | CatalogProjection::Failed(_)
+        );
 
         let mut model = Self {
             session,

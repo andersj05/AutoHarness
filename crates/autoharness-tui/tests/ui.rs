@@ -561,6 +561,14 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
         Arc::new(SessionsProjection::default()),
         Arc::new(CatalogProjection::CredentialRequired),
     );
+    assert!(!model.credential_open());
+    let _ = update(&mut model, Message::Tick(2_000));
+    for character in "/settings".chars() {
+        let _ = update(&mut model, Message::Input(key_input(Key::Char(character))));
+    }
+    let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
+    assert!(model.settings_open());
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('k'))));
     assert!(model.credential_open());
 
     let paste = Message::Paste(format!("{sentinel}\r\n"));
@@ -607,7 +615,8 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
             ),
         }),
     );
-    assert!(model.credential_open());
+    assert!(!model.credential_open());
+    assert!(model.settings_open());
     assert!(!model.credential_has_value());
 }
 
@@ -796,9 +805,9 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
         let expected_anchor = if width >= 100 {
-            Color::Cyan
+            Color::Rgb(34, 211, 238)
         } else {
-            Color::LightCyan
+            Color::Rgb(167, 139, 250)
         };
         assert_eq!(
             backend.buffer().cell((0, 0)).expect("header origin").bg,

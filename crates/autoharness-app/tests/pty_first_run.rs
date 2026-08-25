@@ -30,17 +30,11 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
         },
         "first draw should show the complete credential-free launch surface",
     );
-    session.send_bytes(b"\x1b");
+    session.type_text("/settings");
+    session.send_bytes(b"\r");
     session.wait_for(
-        |screen| screen.contents().contains("An API key is still required"),
-        "Esc should defer credential entry without leaving the terminal",
-    );
-
-    // Typed input echoes through the real terminal input pipeline.
-    session.type_text("first run probe");
-    session.wait_for(
-        |screen| screen.contents().contains("first run probe"),
-        "composer should echo typed text",
+        |screen| screen.contents().contains("Settings"),
+        "the settings command should open the settings route",
     );
 
     // Quit with Ctrl+C: clean exit code and restored terminal.

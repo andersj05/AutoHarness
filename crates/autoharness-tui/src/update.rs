@@ -375,6 +375,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
     ) {
         close_active_overlay_state(model);
+        navigate_to_route(model, Route::Settings);
         open_credential(model);
         return Vec::new();
     }
@@ -642,6 +643,15 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: false,
             ..
         } => default_selected_preference(model),
+        Input {
+            key: Key::Char('k' | 'K'),
+            ctrl: false,
+            alt: false,
+            ..
+        } => {
+            open_credential(model);
+            Vec::new()
+        }
         Input {
             key: Key::Char('p' | 'P'),
             ..
@@ -980,11 +990,25 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "connect-api-key" => {
+            navigate_to_route(model, Route::Settings);
             open_credential(model);
             Vec::new()
         }
         "settings" => {
             navigate_to_route(model, Route::Settings);
+            Vec::new()
+        }
+        "retry" => retry_attempt(model),
+        "cancel" => cancel_attempt(model),
+        "search" => {
+            close_active_overlay_state(model);
+            navigate_to_route(model, Route::Chat);
+            open_search(model);
+            Vec::new()
+        }
+        "toggle-tools" => {
+            model.tools_expanded = !model.tools_expanded;
+            model.dirty = true;
             Vec::new()
         }
         "refresh-models" => refresh_catalog(model),
@@ -2917,6 +2941,7 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
         let _ = model.close_overlay(OverlayKind::Permission);
     } else if session_changed
         && model.session.selected_model.is_none()
+        && model.overlay().is_none()
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
     {
         navigate_to_route(model, Route::Chat);
@@ -2928,17 +2953,9 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
 
 fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
-    if !matches!(&*model.catalog, CatalogProjection::Loading) {
-        model.complete_startup();
-    }
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
     if model.route() == Route::Chat
-        && model.overlay().is_none()
-        && matches!(&*model.catalog, CatalogProjection::CredentialRequired)
-    {
-        open_credential(model);
-    } else if model.route() == Route::Chat
         && model.overlay().is_none()
         && !selected_model_available(model)
         && matches!(&*model.catalog, CatalogProjection::Ready { models, .. } if !models.is_empty())
@@ -3067,9 +3084,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
             let pending = model.pending.remove(&request_id);
             match pending {
                 Some(PendingKind::CreateSession) => {}
-                Some(PendingKind::ConfigureCredential) => {
-                    open_credential(model);
-                }
+                Some(PendingKind::ConfigureCredential) => {}
                 Some(PendingKind::UpsertProfile(profile)) => {
                     let mode = if model
                         .profiles
@@ -3358,6 +3373,7 @@ fn retry_attempt(model: &mut Model) -> Vec<UiEffect> {
 
 fn refresh_catalog(model: &mut Model) -> Vec<UiEffect> {
     if matches!(&*model.catalog, CatalogProjection::CredentialRequired) {
+        navigate_to_route(model, Route::Settings);
         open_credential(model);
         return Vec::new();
     }

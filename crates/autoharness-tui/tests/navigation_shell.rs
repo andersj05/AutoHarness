@@ -142,8 +142,8 @@ fn global_model_and_credential_overlays_restore_non_chat_routes() {
     let _ = update(&mut model, Message::Input(ctrl('k')));
     assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    assert_eq!(model.route(), Route::Profiles);
-    assert_eq!(model.focus, Focus::Profiles);
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
     assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("Alt+3 manage providers"));
+    assert!(offline.contains("/settings connect a provider key"));
 
     let _ = update(
         &mut model,
@@ -305,6 +305,8 @@ fn chat_empty_states_name_one_primary_recovery_action() {
 #[test]
 fn startup_boot_surface_animates_and_exits_deterministically() {
     let mut model = loading_model();
+    let initial = render_text(&model, 80, 24);
+    assert!(initial.contains("AutoHarness / boot"));
     let _ = update(&mut model, Message::Tick(100));
     let first = render_text(&model, 80, 24);
     let _ = update(&mut model, Message::Tick(200));
@@ -324,7 +326,7 @@ fn chat_empty_state_explains_the_zero_shell_start_path() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
     assert!(rendered.contains("GET STARTED"));
-    assert!(rendered.contains("Ctrl+K connect a session-only key"));
+    assert!(rendered.contains("/settings set a provider key"));
     assert!(rendered.contains("Conversation · Active conversation"));
 }
 
@@ -407,10 +409,7 @@ fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
         hit_test(&model, 80, 24, 2, 0),
         Some(MouseAction::Route(Route::Chat))
     );
-    assert_eq!(
-        hit_test(&model, 80, 24, 16, 23),
-        Some(MouseAction::ChatModels)
-    );
+    assert_eq!(hit_test(&model, 80, 24, 16, 23), None);
 }
 
 #[test]

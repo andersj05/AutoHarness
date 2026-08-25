@@ -72,28 +72,44 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
     match presentation.color_mode {
         ColorMode::Color => match presentation.theme {
             ThemePreset::System => match role {
-                VisualRole::Normal => Style::default(),
+                VisualRole::Normal => Style::new()
+                    .fg(Color::Rgb(226, 232, 240))
+                    .bg(Color::Rgb(8, 12, 24)),
                 VisualRole::Header => Style::new()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(Color::Rgb(5, 10, 20))
+                    .bg(Color::Rgb(34, 211, 238))
                     .add_modifier(Modifier::BOLD),
-                VisualRole::Muted | VisualRole::Border => Style::new().fg(Color::DarkGray),
+                VisualRole::Selected => Style::new()
+                    .fg(Color::Rgb(8, 12, 24))
+                    .bg(Color::Rgb(167, 139, 250))
+                    .add_modifier(Modifier::BOLD),
+                VisualRole::Muted | VisualRole::Border => Style::new()
+                    .fg(Color::Rgb(100, 116, 139))
+                    .bg(Color::Rgb(8, 12, 24)),
                 VisualRole::User => Style::new()
-                    .fg(Color::LightBlue)
+                    .fg(Color::Rgb(96, 165, 250))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
                 VisualRole::Assistant => Style::new()
-                    .fg(Color::LightCyan)
+                    .fg(Color::Rgb(45, 212, 191))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
                 VisualRole::Error => Style::new()
-                    .fg(Color::LightRed)
+                    .fg(Color::Rgb(251, 113, 133))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
-                VisualRole::Tool | VisualRole::Warning => Style::new().fg(Color::Yellow),
-                VisualRole::Selected => Style::new()
-                    .fg(Color::Black)
-                    .bg(Color::LightCyan)
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Success => Style::new().fg(Color::LightGreen),
-                VisualRole::Field => Style::new().fg(Color::White).bg(Color::DarkGray),
+                VisualRole::Tool => Style::new()
+                    .fg(Color::Rgb(192, 132, 252))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Warning => Style::new()
+                    .fg(Color::Rgb(251, 191, 36))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Success => Style::new()
+                    .fg(Color::Rgb(74, 222, 128))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Field => Style::new()
+                    .fg(Color::Rgb(226, 232, 240))
+                    .bg(Color::Rgb(30, 41, 59)),
             },
             ThemePreset::Light => match role {
                 VisualRole::Normal => Style::new().fg(Color::Black).bg(Color::White),
@@ -245,6 +261,7 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    frame.render_widget(Clear, area);
     let content = render_shell(frame, area, model);
     if content.width > 0 && content.height > 0 {
         match model.route() {
@@ -427,22 +444,6 @@ pub fn hit_test(
         return route_at_column(width, column).map(MouseAction::Route);
     }
     match model.route() {
-        Route::Chat if row == height.saturating_sub(1) && height >= 7 => {
-            let relative_column = column.saturating_sub(content.x);
-            if relative_column < 12 {
-                Some(MouseAction::ChatSend)
-            } else if relative_column < 30 {
-                Some(MouseAction::ChatModels)
-            } else if relative_column < 45 {
-                Some(MouseAction::ChatNewSession)
-            } else if relative_column < 62 {
-                Some(MouseAction::ChatSessions)
-            } else if relative_column < 82 {
-                Some(MouseAction::ChatCredential)
-            } else {
-                Some(MouseAction::ChatHelp)
-            }
-        }
         Route::Sessions if row == height.saturating_sub(2) => {
             let relative_column = column.saturating_sub(content.x);
             if relative_column < 18 {
@@ -938,11 +939,11 @@ fn conversation_title(model: &Model) -> String {
 
 fn onboarding_step(model: &Model) -> (&'static str, &'static str) {
     if model.session.selected_model.is_none() {
-        ("NEXT", "Ctrl+P choose a model")
+        ("NEXT", "/models choose a model")
     } else if model.settings().provider_status.credential_connected {
         ("READY", "Write a prompt below")
     } else {
-        ("NEXT", "Ctrl+K connect a session-only key")
+        ("NEXT", "/settings set a provider key")
     }
 }
 
@@ -952,8 +953,8 @@ fn render_onboarding(lines: &mut Vec<Line<'static>>, model: &Model) {
         "GET STARTED",
         visual_style(model, VisualRole::User),
     ));
-    lines.push(Line::from("1  Connect a provider in Alt+3 or Ctrl+K"));
-    lines.push(Line::from("2  Choose a compatible model with Ctrl+P"));
+    lines.push(Line::from("1  /settings connect a provider key"));
+    lines.push(Line::from("2  /models choose a compatible model"));
     let (label, action) = onboarding_step(model);
     lines.push(Line::styled(
         format!("3  {label} · {action}"),
@@ -1352,7 +1353,11 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ]),
         detail_line(model, "Source", status.credential_source.as_str()),
         Line::styled(
-            "Read-only here: use P or Alt+3 to manage profiles and credentials.",
+            "API KEY  /connect-api-key or press K",
+            visual_style(model, VisualRole::Field),
+        ),
+        Line::styled(
+            "Stored provider credentials remain managed from Profiles.",
             visual_style(model, VisualRole::Muted),
         ),
         Line::from(""),
@@ -2235,8 +2240,8 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let compact = presentation(model).compact;
     let composer_height = u16::try_from(model.composer.lines().len())
         .unwrap_or(u16::MAX)
-        .saturating_add(if compact { 1 } else { 2 })
-        .clamp(if compact { 2 } else { 3 }, if compact { 5 } else { 8 });
+        .saturating_add(if compact { 1 } else { 1 })
+        .clamp(2, if compact { 4 } else { 6 });
     let notice_height = if model.notice.is_some() {
         if compact { 1 } else { 2 }
     } else {
@@ -2250,7 +2255,6 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
             Constraint::Length(composer_height),
-            Constraint::Length(1),
         ])
         .split(area);
 
@@ -2264,14 +2268,12 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let mut composer = model.composer.editor.clone();
     composer.set_block(
         app_block(model)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP | Borders::BOTTOM)
             .title(" Prompt ")
             .border_style(visual_style(model, VisualRole::Border)),
     );
     composer.set_cursor_style(visual_style(model, VisualRole::Selected));
-    frame.render_widget(&composer, chunks[3]);
-    render_footer(frame, chunks[4], model);
-    set_composer_cursor(frame, chunks[3], model, true);
+    set_composer_cursor(frame, chunks[3], model, false);
 }
 
 /// Renders the one-row transcript search bar.
@@ -2446,7 +2448,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     let text = transcript_text(model);
     let block = bordered.then(|| {
         app_block(model)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP | Borders::BOTTOM)
             .title(conversation_title(model))
             .border_style(visual_style(model, VisualRole::Border))
     });
@@ -2458,7 +2460,9 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
         return;
     }
 
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text)
+        .style(visual_style(model, VisualRole::Normal))
+        .wrap(Wrap { trim: false });
     let total_rows = paragraph.line_count(inner.width);
     let viewport_rows = usize::from(inner.height);
     let maximum_scroll = total_rows.saturating_sub(viewport_rows);
@@ -2512,8 +2516,12 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 ));
                 lines.push(Line::from("No provider credential is available."));
                 lines.push(Line::styled(
-                    "Alt+3 manage providers or Ctrl+K use a session-only key",
+                    "Provider API key: use /settings",
                     visual_style(model, VisualRole::Assistant),
+                ));
+                lines.push(Line::styled(
+                    "An API key is still required. Ask AutoHarness after setup.",
+                    visual_style(model, VisualRole::Muted),
                 ));
             }
             CatalogProjection::Loading => {
@@ -2733,168 +2741,6 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Paragraph::new(label)
             .block(app_block(model).borders(Borders::TOP).border_style(style))
             .style(style),
-        area,
-    );
-}
-
-fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    if area.width < 50 {
-        render_narrow_footer(frame, area, model);
-        return;
-    }
-
-    let control_s = *model
-        .settings()
-        .local_profile
-        .preferences()
-        .composer_submit_behavior()
-        .value()
-        == ComposerSubmitBehavior::ControlS;
-    let submit_chord = if control_s { " Ctrl+S " } else { " Enter " };
-    let newline_chord = if control_s {
-        " Enter "
-    } else {
-        " Ctrl+S/Ctrl+Enter "
-    };
-    let mut spans = vec![
-        Span::styled(submit_chord, visual_style(model, VisualRole::Selected)),
-        Span::raw("send  "),
-    ];
-    if area.width >= 72 {
-        spans.push(Span::styled(
-            newline_chord,
-            visual_style(model, VisualRole::Muted),
-        ));
-        spans.push(Span::raw("newline  "));
-    }
-    spans.extend([
-        Span::styled(" Ctrl+P ", visual_style(model, VisualRole::Field)),
-        Span::raw("models  "),
-        Span::styled(" Ctrl+N ", visual_style(model, VisualRole::Field)),
-        Span::raw("new"),
-    ]);
-    if area.width >= 88 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            " Ctrl+L ",
-            visual_style(model, VisualRole::Field),
-        ));
-        spans.push(Span::raw("sessions"));
-    }
-    if area.width >= 100 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            " Ctrl+K ",
-            visual_style(model, VisualRole::Field),
-        ));
-        spans.push(Span::raw("API key"));
-    }
-    if area.width >= 104 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(" F1 ", visual_style(model, VisualRole::Field)));
-        spans.push(Span::raw("help"));
-    }
-    if let Some((attempt_id, status)) = model.session.active_attempt() {
-        spans.push(Span::raw("  "));
-        if model.cancelling.contains(attempt_id) || matches!(status, AttemptStatus::Cancelling) {
-            spans.push(Span::styled(
-                "cancelling...",
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else {
-            spans.push(Span::styled(
-                " Esc ",
-                visual_style(model, VisualRole::Warning),
-            ));
-            spans.push(Span::raw("cancel"));
-        }
-    } else if let Some((attempt_id, retry)) = model.session.retryable_attempt() {
-        spans.push(Span::raw("  "));
-        if model.retry_requested(attempt_id) {
-            spans.push(Span::styled(
-                "retry requested",
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else if model.retry_available(attempt_id, retry) {
-            spans.push(Span::styled(
-                " Ctrl+R ",
-                visual_style(model, VisualRole::Warning),
-            ));
-            spans.push(Span::raw("retry"));
-        } else if let Some(remaining_ms) = model.retry_remaining_ms(attempt_id, retry) {
-            spans.push(Span::styled(
-                retry_countdown(remaining_ms),
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else {
-            spans.push(Span::raw("retry unavailable"));
-        }
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(visual_style(model, VisualRole::Muted)),
-        area,
-    );
-}
-
-fn render_narrow_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let submit = if *model
-        .settings()
-        .local_profile
-        .preferences()
-        .composer_submit_behavior()
-        .value()
-        == ComposerSubmitBehavior::ControlS
-    {
-        " ^S "
-    } else {
-        " Enter "
-    };
-    let mut spans = vec![
-        Span::styled(submit, visual_style(model, VisualRole::Selected)),
-        Span::raw("send  "),
-        Span::styled(" ^P ", visual_style(model, VisualRole::Field)),
-        Span::raw("models  "),
-        Span::styled(" ^N ", visual_style(model, VisualRole::Field)),
-        Span::raw("new"),
-    ];
-    if let Some((attempt_id, status)) = model.session.active_attempt() {
-        spans.push(Span::raw("  "));
-        if model.cancelling.contains(attempt_id) || matches!(status, AttemptStatus::Cancelling) {
-            spans.push(Span::styled(
-                "cancelling",
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else {
-            spans.push(Span::styled(
-                " Esc ",
-                visual_style(model, VisualRole::Warning),
-            ));
-            spans.push(Span::raw("cancel"));
-        }
-    } else if let Some((attempt_id, retry)) = model.session.retryable_attempt() {
-        spans.push(Span::raw("  "));
-        if model.retry_requested(attempt_id) {
-            spans.push(Span::styled(
-                "retrying",
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else if model.retry_available(attempt_id, retry) {
-            spans.push(Span::styled(
-                " ^R ",
-                visual_style(model, VisualRole::Warning),
-            ));
-            spans.push(Span::raw("retry"));
-        } else if let Some(remaining_ms) = model.retry_remaining_ms(attempt_id, retry) {
-            spans.push(Span::styled(
-                retry_countdown(remaining_ms),
-                visual_style(model, VisualRole::Warning),
-            ));
-        } else {
-            spans.push(Span::raw("no retry"));
-        }
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(visual_style(model, VisualRole::Muted)),
         area,
     );
 }

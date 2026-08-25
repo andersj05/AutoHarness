@@ -120,6 +120,10 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
         "/refresh-models",
         "/connect-api-key",
         "/profile",
+        "/retry",
+        "/cancel",
+        "/search",
+        "/toggle-tools",
         "/settings",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
