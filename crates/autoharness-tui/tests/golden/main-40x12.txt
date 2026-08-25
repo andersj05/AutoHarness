@@ -1,12 +1,12 @@
  1 Chat   Alt+1..5 routes
  AutoHarness | failed
- Conversation ──────────────────────────
-partial answer\u{1b}[0m.
-Error: Capacity is temporarily
-exhausted; no credentials were exposed.
-rate_limited | Ctrl+R retry | Ctrl+N new
-| ref attempt-2
-────────────────────────────────────────
+ AutoHarness | failed
+
+╭ Conversation ────────────────────────╮
+│exposed.                              │
+│rate_limited | Ctrl+R retry | Ctrl+N  │
+│new | ref attempt-2                   │
+╰──────────────────────────────────────╯
  think:safe agent  cwd:workspace  state:
 Retry with a smaller scope.
 Keep the checklist concise.

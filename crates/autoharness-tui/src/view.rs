@@ -286,6 +286,19 @@ fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
     visual_style(model, role).bg(Color::Reset)
 }
 
+fn chat_header_style(model: &Model) -> Style {
+    let style = chat_visual_style(model, VisualRole::Header);
+    if presentation(model).color_mode != ColorMode::Color {
+        return style;
+    }
+    let foreground = match presentation(model).theme {
+        ThemePreset::System | ThemePreset::Dark => Color::Rgb(34, 211, 238),
+        ThemePreset::Light => Color::Blue,
+        ThemePreset::Aurora => Color::Rgb(45, 212, 191),
+        ThemePreset::Ember => Color::Rgb(251, 146, 60),
+    };
+    style.fg(foreground)
+}
 fn app_block(model: &Model) -> Block<'static> {
     let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
     if presentation(model).ascii {
@@ -979,18 +992,13 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let footer_height = u16::from(inner.height >= 2);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(footer_height),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
         .split(inner);
 
-    let mut lines = vec![
-        Line::styled(
-            "PREVIOUS SESSIONS",
-            visual_style(model, VisualRole::Muted),
-        ),
-    ];
+    let mut lines = vec![Line::styled(
+        "PREVIOUS SESSIONS",
+        visual_style(model, VisualRole::Muted),
+    )];
     let session_limit = usize::from(sections[0].height.saturating_sub(4)).max(1);
     for entry in model.sessions.sessions.iter().take(session_limit) {
         let marker = if entry.active || entry.session_id == model.session.session_id {
@@ -1022,7 +1030,10 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             visual_style(model, VisualRole::Normal),
         ),
     ]);
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sections[0]);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        sections[0],
+    );
 
     if footer_height > 0 {
         let style = if model.route() == Route::Settings {
@@ -2593,6 +2604,7 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(2),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
@@ -2600,14 +2612,15 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(area);
 
-    render_transcript(frame, chunks[0], model, true);
+    render_header(frame, chunks[0], model);
+    render_transcript(frame, chunks[1], model, true);
     if notice_height > 0 {
-        render_notice(frame, chunks[1], model);
+        render_notice(frame, chunks[2], model);
     }
     if search_height > 0 {
-        render_search_bar(frame, chunks[2], model);
+        render_search_bar(frame, chunks[3], model);
     }
-    render_prompt_bar(frame, chunks[3], model);
+    render_prompt_bar(frame, chunks[4], model);
 }
 
 /// Renders the one-row transcript search bar.
@@ -2725,7 +2738,9 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         title
     };
     frame.render_widget(
-        Paragraph::new(display_safe(&title)).style(visual_style(model, VisualRole::Header)),
+        Paragraph::new(display_safe(&title))
+            .style(chat_header_style(model))
+            .wrap(Wrap { trim: false }),
         area,
     );
 }
@@ -2787,7 +2802,6 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-
 
     let paragraph = Paragraph::new(text)
         .style(chat_visual_style(model, VisualRole::Normal))

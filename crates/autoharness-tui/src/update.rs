@@ -11,8 +11,8 @@ use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, LocalPreferenceChange, Message,
     Model, MouseAction, Notice, OverlayKind, PendingKind, ProfileCredentialAction,
     ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
-    ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SessionProjection,
-    SessionsProjection, SettingsPreference, SETTINGS_NAV_COUNT, UiEffect, UiFailure, UiIntent,
+    ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT,
+    SessionProjection, SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent,
     UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
@@ -621,9 +621,7 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input {
             key: Key::Enter, ..
-        } if model.settings_workspace.nav_selected != 0 => {
-            activate_settings_nav(model)
-        }
+        } if model.settings_workspace.nav_selected != 0 => activate_settings_nav(model),
         Input { key: Key::Up, .. } => {
             move_settings_selection(model, -1);
             Vec::new()
@@ -733,7 +731,6 @@ fn handle_user_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
-
     let value = model
         .user_profile
         .display_label_editor

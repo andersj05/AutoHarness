@@ -805,12 +805,12 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
         let expected_anchor = if width >= 100 {
-            Color::Rgb(34, 211, 238)
+            Color::Rgb(8, 12, 24)
         } else {
             Color::Rgb(167, 139, 250)
         };
         assert_eq!(
-            backend.buffer().cell((0, 0)).expect("header origin").bg,
+            backend.buffer().cell((0, 0)).expect("shell origin").bg,
             expected_anchor,
             "shell must retain its visual anchor at {width}x{height}"
         );
@@ -970,10 +970,14 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
         },
     );
     let light = render_model(&model, 120, 40);
-    assert_eq!(light.buffer().cell((0, 0)).expect("header").bg, Color::Blue);
+    assert_eq!(
+        light.buffer().cell((29, 0)).expect("chat header").bg,
+        Color::Reset
+    );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
     assert!(buffer_text(&render_model(&model, 120, 40)).contains("updated 1700000000000"));
 
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('1'))));
     apply_visual_preferences(
         &mut model,
         VisualPreferences {
@@ -986,12 +990,12 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
             timestamp: "hidden",
         },
     );
-    let dark = render_model(&model, 120, 40);
+    let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark.buffer().cell((0, 0)).expect("header").bg,
-        Color::Rgb(34, 211, 238)
+        dark_chat.buffer().cell((29, 0)).expect("chat header").bg,
+        Color::Reset
     );
-    assert!(!buffer_text(&dark).contains("updated 1700000000000"));
+    assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
 }
 
 #[test]
@@ -1015,7 +1019,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((0, 0)).expect("aurora header").bg,
+        aurora.buffer().cell((29, 0)).expect("aurora header").bg,
+        Color::Reset
+    );
+    assert_eq!(
+        aurora.buffer().cell((29, 0)).expect("aurora header").fg,
         Color::Rgb(45, 212, 191)
     );
 
@@ -1033,7 +1041,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((0, 0)).expect("ember header").bg,
+        ember.buffer().cell((29, 0)).expect("ember header").bg,
+        Color::Reset
+    );
+    assert_eq!(
+        ember.buffer().cell((29, 0)).expect("ember header").fg,
         Color::Rgb(251, 146, 60)
     );
 }
