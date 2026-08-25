@@ -308,15 +308,16 @@ fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let bar_width = inner.width.saturating_sub(12).max(8);
     let filled = (u32::from(bar_width) * u32::try_from(percent).unwrap_or(100) / 100) as u16;
     let empty = bar_width.saturating_sub(filled);
-    let (left, right) = if presentation(model).ascii {
-        ('[', ']')
+    let ascii = presentation(model).ascii;
+    let (left, right, fill, empty_glyph) = if ascii {
+        ('[', ']', '#', '-')
     } else {
-        ('▌', '▐')
+        ('▌', '▐', '█', '░')
     };
     let bar = format!(
         "{left}{}{} {percent:>3}%{right}",
-        "█".repeat(usize::from(filled)),
-        "░".repeat(usize::from(empty))
+        fill.to_string().repeat(usize::from(filled)),
+        empty_glyph.to_string().repeat(usize::from(empty))
     );
     let phase = match frame_index % 4 {
         0 => "warming terminal",
