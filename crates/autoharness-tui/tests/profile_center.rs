@@ -128,7 +128,7 @@ fn profile_center_shows_local_profile_connections_and_responsive_layouts() {
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
     assert!(model.profile_center_open());
-    assert_eq!(model.focus, Focus::Profiles);
+    assert_eq!(model.focus, Focus::Settings);
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
@@ -282,21 +282,19 @@ fn every_profile_detail_button_has_a_semantic_click_target() {
 fn compact_profile_clicks_follow_rendered_content_rows() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 1),
+        hit_test(&model, 80, 24, 2, 3),
         Some(MouseAction::OpenUserProfile)
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 6),
+        hit_test(&model, 80, 24, 3, 8),
         Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 34, 15),
-        Some(MouseAction::ProfileNew)
+        hit_test(&model, 80, 24, 34, 20),
+        Some(MouseAction::ProfileDefaultModel)
     );
-    assert_eq!(hit_test(&model, 80, 24, 34, 14), None);
-    assert_eq!(hit_test(&model, 80, 24, 34, 13), None);
+    assert_eq!(hit_test(&model, 80, 24, 34, 19), None);
 }
 #[test]
 #[ignore = "visual review harness for the Phase 3.6 profile center"]

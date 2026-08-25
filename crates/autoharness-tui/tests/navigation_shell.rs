@@ -381,7 +381,8 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
 
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
 }
 
 #[test]
@@ -395,8 +396,7 @@ fn settings_arrows_move_between_pages_and_into_preferences() {
     let _ = update(&mut model, Message::Input(key(Key::Up)));
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-
-    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.route(), Route::Settings);
 }
 
 #[test]
@@ -439,11 +439,11 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     assert!(rendered.contains("Settings"));
     assert_eq!(
         hit_test(&model, 48, 18, 2, 17),
-        Some(MouseAction::OpenUserProfile)
+        Some(MouseAction::SettingsTab(2))
     );
     assert_eq!(
         hit_test(&model, 48, 18, 14, 17),
-        Some(MouseAction::Route(Route::Settings))
+        Some(MouseAction::SettingsTab(0))
     );
 }
 
@@ -451,9 +451,11 @@ fn compact_shell_uses_commands_and_bottom_actions() {
 fn settings_tab_mouse_geometry_matches_persistent_shell() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    assert_eq!(
-        hit_test(&model, 120, 40, 42, 1),
-        Some(MouseAction::Route(Route::Profiles))
+    assert!(
+        (28..80).any(|column| {
+            hit_test(&model, 120, 40, column, 1) == Some(MouseAction::SettingsTab(1))
+        }),
+        "provider Settings tab must have a mouse target"
     );
 }
 
@@ -497,15 +499,15 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     );
     assert_eq!(
         hit_test(&model, 120, 40, 2, 38),
-        Some(MouseAction::OpenUserProfile)
+        Some(MouseAction::SettingsTab(2))
     );
     assert_eq!(
         hit_test(&model, 120, 40, 14, 38),
-        Some(MouseAction::Route(Route::Settings))
+        Some(MouseAction::SettingsTab(0))
     );
     assert_eq!(
         hit_test(&model, 80, 24, 2, 23),
-        Some(MouseAction::OpenUserProfile)
+        Some(MouseAction::SettingsTab(2))
     );
 }
 
