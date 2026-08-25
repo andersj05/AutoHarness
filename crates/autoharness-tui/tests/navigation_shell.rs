@@ -81,13 +81,6 @@ fn type_text(model: &mut Model, text: &str) {
     }
 }
 
-fn alt(character: char) -> Input {
-    Input {
-        key: Key::Char(character),
-        alt: true,
-        ..key(Key::Char(character))
-    }
-}
 fn render_text(model: &Model, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -400,6 +393,16 @@ fn mouse_opens_and_saves_the_user_profile_dialog() {
     assert!(model.user_profile_open());
     assert!(render_text(&model, 120, 40).contains("User profile"));
 
+    assert!(
+        (0..40).any(|row| {
+            hit_test(&model, 120, 40, 30, row) == Some(MouseAction::UserProfileSave)
+        })
+    );
+    assert!(
+        (0..40).any(|row| {
+            hit_test(&model, 120, 40, 70, row) == Some(MouseAction::UserProfileCancel)
+        })
+    );
     let effects = update(&mut model, Message::Mouse(MouseAction::UserProfileSave));
     assert!(matches!(
         effects.as_slice(),

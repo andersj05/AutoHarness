@@ -37,18 +37,20 @@ impl<O: LifecycleOps> Lifecycle<O> {
         let mut lifecycle = Self {
             ops,
             initialized: true,
-            bracketed_paste: true,
-            mouse_capture: true,
+            bracketed_paste: false,
+            mouse_capture: false,
             restored: false,
         };
         if let Err(error) = lifecycle.ops.enable_bracketed_paste() {
             lifecycle.restore_best_effort();
             return Err(error);
         }
+        lifecycle.bracketed_paste = true;
         if let Err(error) = lifecycle.ops.enable_mouse_capture() {
             lifecycle.restore_best_effort();
             return Err(error);
         }
+        lifecycle.mouse_capture = true;
         Ok(lifecycle)
     }
 
@@ -301,14 +303,7 @@ mod tests {
         assert!(error.is_err());
         assert_eq!(
             *calls.lock().expect("call recorder"),
-            vec![
-                "initialize",
-                "enable_paste",
-                "disable_mouse",
-                "disable_paste",
-                "show_cursor",
-                "restore",
-            ]
+            vec!["initialize", "enable_paste", "show_cursor", "restore",]
         );
     }
 
@@ -327,7 +322,6 @@ mod tests {
                 "initialize",
                 "enable_paste",
                 "enable_mouse",
-                "disable_mouse",
                 "disable_paste",
                 "show_cursor",
                 "restore",

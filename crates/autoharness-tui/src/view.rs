@@ -1364,31 +1364,15 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     if help_height > 0 {
         let hints = if model.profile_center.confirming_disconnect.is_some() {
-            "Y disconnect credential  N/Esc cancel"
+            "[ Y Disconnect ]  [ N Cancel ]"
         } else if model.profile_center.confirming_delete.is_some() {
-            "Y delete profile and credential  N/Esc cancel"
-        } else if rows[3].width >= 100 {
-            if presentation(model).ascii {
-                "Up/Down choose Enter active Alt+N new Alt+E edit Alt+K key Alt+T test Alt+M default Esc"
-            } else {
-                "↑/↓ choose Enter active Alt+N new Alt+E edit Alt+K key Alt+T test Alt+M default Esc"
-            }
+            "[ Y Delete ]  [ N Cancel ]"
         } else if rows[3].width >= 70 {
-            if presentation(model).ascii {
-                "Up/Down choose  Enter active  Alt+N new  Alt+K key  Alt+T test  Esc"
-            } else {
-                "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Alt+T test  Esc"
-            }
+            "[ New ]  [ Key ]  [ Test ]  [ Default ]  Esc"
         } else if rows[3].width >= 50 {
-            if presentation(model).ascii {
-                "Up/Down choose  Enter active  Alt+N new  Alt+K key  Esc"
-            } else {
-                "↑/↓ choose  Enter active  Alt+N new  Alt+K key  Esc"
-            }
-        } else if presentation(model).ascii {
-            "Up/Down  Enter active  Alt+N new  Esc"
+            "[ New ]  [ Key ]  [ Test ]  Esc"
         } else {
-            "↑/↓  Enter active  Alt+N new  Esc"
+            "[ New ]  [ Key ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
