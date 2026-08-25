@@ -280,8 +280,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
 fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
-    let width = area.width.min(64).max(30);
-    let height = area.height.min(11).max(7);
+    let width = area.width.clamp(30, 64);
+    let height = area.height.clamp(7, 11);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
