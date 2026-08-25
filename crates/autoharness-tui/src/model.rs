@@ -1367,6 +1367,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open Sessions"),
             ("Ctrl+G", "open Profiles"),
+            ("Alt+U", "edit the local user profile"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
             ("Ctrl+,", "show settings provenance"),
@@ -1443,6 +1444,14 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         ],
     },
     HelpSection {
+        title: "User profile",
+        rows: &[
+            ("Type", "edit the local display name"),
+            ("Enter / Ctrl+S", "save the local profile"),
+            ("Esc", "cancel without saving"),
+        ],
+    },
+    HelpSection {
         title: "Permission",
         rows: &[
             ("Y", "allow this exact call once"),
@@ -1463,6 +1472,7 @@ impl HelpSection {
             "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
             "Settings" => focus == Focus::Settings,
+            "User profile" => focus == Focus::UserProfile,
             "Permission" => focus == Focus::Permission,
             _ => false,
         }
