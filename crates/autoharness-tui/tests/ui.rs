@@ -967,7 +967,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let light = render_model(&model, 120, 40);
     assert_eq!(
-        light.buffer().cell((29, 0)).expect("chat header").bg,
+        light.buffer().cell((1, 1)).expect("chat header").bg,
         Color::Reset
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
@@ -988,7 +988,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark_chat.buffer().cell((29, 0)).expect("chat header").bg,
+        dark_chat.buffer().cell((1, 1)).expect("chat header").bg,
         Color::Reset
     );
     assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
@@ -1015,11 +1015,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((29, 0)).expect("aurora header").bg,
+        aurora.buffer().cell((1, 1)).expect("aurora header").bg,
         Color::Reset
     );
     assert_eq!(
-        aurora.buffer().cell((29, 0)).expect("aurora header").fg,
+        aurora.buffer().cell((1, 1)).expect("aurora header").fg,
         Color::Rgb(45, 212, 191)
     );
 
@@ -1037,11 +1037,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((29, 0)).expect("ember header").bg,
+        ember.buffer().cell((1, 1)).expect("ember header").bg,
         Color::Reset
     );
     assert_eq!(
-        ember.buffer().cell((29, 0)).expect("ember header").fg,
+        ember.buffer().cell((1, 1)).expect("ember header").fg,
         Color::Rgb(251, 146, 60)
     );
 }
