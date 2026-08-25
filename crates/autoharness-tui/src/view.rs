@@ -40,7 +40,6 @@ enum VisualRole {
     Tool,
     Selected,
     Border,
-    Success,
     Warning,
     Field,
 }
@@ -68,7 +67,7 @@ fn presentation(model: &Model) -> Presentation {
 }
 
 fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
-    let (background, header, selected, user, assistant, error, tool, warning, success, field) =
+    let (background, header, selected, user, assistant, error, tool, warning, field) =
         if theme == ThemePreset::Aurora {
             (
                 Color::Rgb(4, 15, 30),
@@ -79,7 +78,6 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
                 Color::Rgb(251, 113, 133),
                 Color::Rgb(167, 139, 250),
                 Color::Rgb(250, 204, 21),
-                Color::Rgb(74, 222, 128),
                 Color::Rgb(15, 35, 60),
             )
         } else {
@@ -92,7 +90,6 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
                 Color::Rgb(248, 113, 113),
                 Color::Rgb(232, 121, 249),
                 Color::Rgb(251, 146, 60),
-                Color::Rgb(134, 239, 172),
                 Color::Rgb(62, 24, 20),
             )
         };
@@ -121,7 +118,6 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
             .add_modifier(Modifier::BOLD),
         VisualRole::Tool => Style::new().fg(tool).bg(background),
         VisualRole::Warning => Style::new().fg(warning).bg(background),
-        VisualRole::Success => Style::new().fg(success).bg(background),
         VisualRole::Field => Style::new().fg(Color::White).bg(field),
     }
 }
@@ -163,9 +159,6 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 VisualRole::Warning => Style::new()
                     .fg(Color::Rgb(251, 191, 36))
                     .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Success => Style::new()
-                    .fg(Color::Rgb(74, 222, 128))
-                    .bg(Color::Rgb(8, 12, 24)),
                 VisualRole::Field => Style::new()
                     .fg(Color::Rgb(226, 232, 240))
                     .bg(Color::Rgb(30, 41, 59)),
@@ -194,7 +187,6 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 VisualRole::Tool | VisualRole::Warning => {
                     Style::new().fg(Color::Yellow).bg(Color::White)
                 }
-                VisualRole::Success => Style::new().fg(Color::Green).bg(Color::White),
                 VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
             },
             ThemePreset::Dark => match role {
@@ -230,9 +222,6 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 VisualRole::Warning => Style::new()
                     .fg(Color::Rgb(251, 191, 36))
                     .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Success => Style::new()
-                    .fg(Color::Rgb(74, 222, 128))
-                    .bg(Color::Rgb(8, 12, 24)),
                 VisualRole::Field => Style::new()
                     .fg(Color::Rgb(226, 232, 240))
                     .bg(Color::Rgb(30, 41, 59)),
@@ -244,11 +233,9 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
             }
             VisualRole::Muted => Style::default().add_modifier(Modifier::DIM),
-            VisualRole::User
-            | VisualRole::Assistant
-            | VisualRole::Tool
-            | VisualRole::Success
-            | VisualRole::Warning => Style::default().add_modifier(Modifier::BOLD),
+            VisualRole::User | VisualRole::Assistant | VisualRole::Tool | VisualRole::Warning => {
+                Style::default().add_modifier(Modifier::BOLD)
+            }
             VisualRole::Error => {
                 Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             }
@@ -270,10 +257,6 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 .fg(Color::LightRed)
                 .bg(Color::Black)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            VisualRole::Success => Style::default()
-                .fg(Color::LightGreen)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
             VisualRole::Warning => Style::default()
                 .fg(Color::LightYellow)
                 .bg(Color::Black)
