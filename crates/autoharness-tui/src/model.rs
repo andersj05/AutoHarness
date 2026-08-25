@@ -1353,6 +1353,8 @@ impl SettingsPreference {
 /// Inline state owned exclusively by the Settings route.
 #[derive(Debug, Default)]
 pub(crate) struct SettingsState {
+    /// Index into the top-level Settings navigation.
+    pub nav_selected: usize,
     /// Index into `SettingsPreference::ALL`.
     pub selected: usize,
     /// First rendered Settings line kept visible while selecting preferences.
@@ -1360,6 +1362,8 @@ pub(crate) struct SettingsState {
     /// Buffered local-label edit; no value is persisted until Enter.
     pub display_label_editor: Option<String>,
 }
+
+pub(crate) const SETTINGS_NAV_COUNT: usize = 4;
 
 /// Local user-profile dialog state.
 #[derive(Debug, Default)]

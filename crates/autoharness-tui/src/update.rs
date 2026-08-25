@@ -12,7 +12,8 @@ use crate::model::{
     Model, MouseAction, Notice, OverlayKind, PendingKind, ProfileCredentialAction,
     ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
     ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SessionProjection,
-    SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
+    SessionsProjection, SettingsPreference, SETTINGS_NAV_COUNT, UiEffect, UiFailure, UiIntent,
+    UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -610,6 +611,19 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+        Input {
+            key: Key::Tab,
+            shift,
+            ..
+        } => {
+            move_settings_nav(model, if shift { -1 } else { 1 });
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } if model.settings_workspace.nav_selected != 0 => {
+            activate_settings_nav(model)
+        }
         Input { key: Key::Up, .. } => {
             move_settings_selection(model, -1);
             Vec::new()
@@ -719,6 +733,7 @@ fn handle_user_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
+
     let value = model
         .user_profile
         .display_label_editor
@@ -729,7 +744,28 @@ fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
     let _ = model.close_overlay(OverlayKind::UserProfile);
     effects
 }
+fn move_settings_nav(model: &mut Model, direction: isize) {
+    let current = model.settings_workspace.nav_selected;
+    let last = SETTINGS_NAV_COUNT.saturating_sub(1);
+    model.settings_workspace.nav_selected = current.saturating_add_signed(direction).min(last);
+    model.settings_workspace.display_label_editor = None;
+    model.dirty = true;
+}
 
+fn activate_settings_nav(model: &mut Model) -> Vec<UiEffect> {
+    match model.settings_workspace.nav_selected {
+        1 => navigate_to_route(model, Route::Profiles),
+        2 => open_user_profile(model),
+        3 => {
+            model.notice = Some(Notice::Info(
+                "Agent settings are reserved for a future workspace.".to_owned(),
+            ));
+            model.dirty = true;
+        }
+        _ => {}
+    }
+    Vec::new()
+}
 fn selected_settings_preference(model: &Model) -> SettingsPreference {
     SettingsPreference::at(model.settings_workspace.selected)
 }

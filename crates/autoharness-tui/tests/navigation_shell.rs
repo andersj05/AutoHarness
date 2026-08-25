@@ -258,11 +258,19 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                 rendered.contains(expected),
                 "{expected} missing at {width}x{height}"
             );
-            if width >= 48 {
-                for route in ["Chat", "Sessions", "Profiles", "Settings", "Help"] {
+            if key == '4' && width >= 60 {
+                for section in ["Settings", "Providers", "Profile", "Agents"] {
                     assert!(
-                        rendered.contains(route),
-                        "route {route} missing at {width}x{height}"
+                        rendered.contains(section),
+                        "settings nav {section} missing at {width}x{height}"
+                    );
+                }
+            }
+            if width >= 100 {
+                for label in ["PREVIOUS SESSIONS", "PROJECTS", "Settings"] {
+                    assert!(
+                        rendered.contains(label),
+                        "sidebar label {label} missing at {width}x{height}"
                     );
                 }
             }
@@ -366,6 +374,20 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     assert!(rendered.contains("PgUp/PgDn"));
 }
 #[test]
+fn settings_top_navigation_reaches_provider_and_future_sections() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let rendered = render_text(&model, 80, 24);
+    for section in ["Settings", "Providers", "Profile", "Agents"] {
+        assert!(rendered.contains(section), "missing settings nav {section}");
+    }
+
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert_eq!(model.route(), Route::Profiles);
+}
+
+#[test]
 #[ignore = "visual review harness for the Phase 3.7 routed shell"]
 fn render_route_review_matrix() {
     for (width, height) in [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)] {
@@ -397,14 +419,16 @@ fn render_route_review_matrix() {
     );
 }
 #[test]
-fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
+fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
-    for (index, route) in Route::ALL.into_iter().enumerate() {
-        assert_eq!(
-            hit_test(&model, 120, 40, 2, 7 + index as u16),
-            Some(MouseAction::Route(route))
-        );
-    }
+    assert_eq!(
+        hit_test(&model, 120, 40, 2, 2),
+        Some(MouseAction::Route(Route::Sessions))
+    );
+    assert_eq!(
+        hit_test(&model, 120, 40, 2, 38),
+        Some(MouseAction::Route(Route::Settings))
+    );
     assert_eq!(
         hit_test(&model, 80, 24, 2, 0),
         Some(MouseAction::Route(Route::Chat))
@@ -415,8 +439,9 @@ fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
 #[test]
 fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('3')));
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 1),
+        hit_test(&model, 120, 40, 30, 1),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));

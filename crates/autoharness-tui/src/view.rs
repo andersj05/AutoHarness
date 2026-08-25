@@ -282,6 +282,10 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
     }
 }
 
+fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
+    visual_style(model, role).bg(Color::Reset)
+}
+
 fn app_block(model: &Model) -> Block<'static> {
     let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
     if presentation(model).ascii {
@@ -314,6 +318,8 @@ fn navigation_keys(model: &Model) -> &'static str {
         "↑/↓"
     }
 }
+
+const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Agents"];
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -497,12 +503,13 @@ pub fn hit_test(
             MouseAction::PermissionDeny,
         );
     }
+    let (wide, content) = render_shell_layout(area, model);
     if wide && column < 28 {
         let settings_row = height.saturating_sub(2);
         if row == settings_row {
             return Some(MouseAction::Route(Route::Settings));
         }
-        let sessions_start = 2;
+        let sessions_start: u16 = 2;
         let sessions_end = sessions_start
             .saturating_add(u16::try_from(model.sessions.sessions.len()).unwrap_or(u16::MAX));
         if row >= sessions_start && row < sessions_end {
@@ -512,6 +519,9 @@ pub fn hit_test(
     }
     if !wide && row == 0 {
         return route_at_column(width, column).map(MouseAction::Route);
+    }
+    if model.route() == Route::Settings && row == content.y.saturating_add(1) {
+        return settings_nav_action(content, column);
     }
     match model.route() {
         Route::Sessions if row == height.saturating_sub(2) => {
@@ -914,6 +924,23 @@ fn route_at_column(width: u16, column: u16) -> Option<Route> {
             return Some(Route::ALL[index]);
         }
         offset = offset.saturating_add(segment);
+    }
+    None
+}
+
+fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
+    let mut offset = area.x;
+    for (index, label) in SETTINGS_NAV.iter().enumerate() {
+        let width = u16::try_from(label.len().saturating_add(2)).unwrap_or(u16::MAX);
+        if column >= offset && column < offset.saturating_add(width) {
+            return match index {
+                0 => Some(MouseAction::Route(Route::Settings)),
+                1 => Some(MouseAction::Route(Route::Profiles)),
+                2 => Some(MouseAction::OpenUserProfile),
+                _ => None,
+            };
+        }
+        offset = offset.saturating_add(width).saturating_add(2);
     }
     None
 }
@@ -1458,6 +1485,40 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
+    let nav_height = u16::from(inner.height >= 2);
+    if nav_height > 0 {
+        render_settings_nav(
+            frame,
+            Rect::new(inner.x, inner.y, inner.width, nav_height),
+            model,
+        );
+    }
+    let body = Rect::new(
+        inner.x,
+        inner.y.saturating_add(nav_height),
+        inner.width,
+        inner.height.saturating_sub(nav_height),
+    );
+    if model.settings_workspace.nav_selected != 0 {
+        let section = SETTINGS_NAV[model
+            .settings_workspace
+            .nav_selected
+            .min(SETTINGS_NAV.len().saturating_sub(1))];
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(section, visual_style(model, VisualRole::User)),
+                Line::from(""),
+                Line::styled(
+                    "This settings area is reserved for a future workspace.",
+                    visual_style(model, VisualRole::Muted),
+                ),
+            ])
+            .wrap(Wrap { trim: false }),
+            body,
+        );
+        return;
+    }
+
     let mut lines = vec![
         Line::styled(
             "LOCAL PROFILE DEFAULTS",
@@ -1515,9 +1576,9 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             )
         })
     }));
-    let hint_height = u16::from(inner.height >= 2);
-    let content_height = inner.height.saturating_sub(hint_height);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let hint_height = u16::from(body.height >= 2);
+    let content_height = body.height.saturating_sub(hint_height);
+    let content = Rect::new(body.x, body.y, body.width, content_height);
     let scroll = settings_scroll(
         &lines,
         SettingsPreference::at(model.settings_workspace.selected),
@@ -1530,16 +1591,32 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         content,
     );
     if hint_height > 0 {
-        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        let hint = Rect::new(body.x, body.y + content_height, body.width, hint_height);
         frame.render_widget(
             Paragraph::new(format!(
-                "{} select/PgUp/PgDn  Left/Right change  Enter edit label  R inherit  D user default  Esc chat",
+                "{} select/PgUp/PgDn  Left/Right change  Tab nav  Enter edit label  R inherit  D user default  Esc chat",
                 navigation_keys(model)
             ))
             .style(visual_style(model, VisualRole::Muted)),
             hint,
         );
     }
+}
+
+fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let mut spans = Vec::new();
+    for (index, label) in SETTINGS_NAV.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let style = if index == model.settings_workspace.nav_selected {
+            visual_style(model, VisualRole::Selected)
+        } else {
+            visual_style(model, VisualRole::Muted)
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
@@ -2445,28 +2522,28 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
     let state = attempt_state_label(model);
     let model_name = selected_model_label(model);
     let mut spans = vec![
-        Span::styled(" think:", visual_style(model, VisualRole::Muted)),
+        Span::styled(" think:", chat_visual_style(model, VisualRole::Muted)),
         Span::styled(
             display_safe(thinking),
-            visual_style(model, VisualRole::Assistant),
+            chat_visual_style(model, VisualRole::Assistant),
         ),
-        Span::styled("  cwd:", visual_style(model, VisualRole::Muted)),
-        Span::styled(cwd, visual_style(model, VisualRole::User)),
+        Span::styled("  cwd:", chat_visual_style(model, VisualRole::Muted)),
+        Span::styled(cwd, chat_visual_style(model, VisualRole::User)),
     ];
     if width >= 72 {
         spans.extend([
-            Span::styled("  git:", visual_style(model, VisualRole::Muted)),
-            Span::styled(branch, visual_style(model, VisualRole::Tool)),
-            Span::styled("  model:", visual_style(model, VisualRole::Muted)),
+            Span::styled("  git:", chat_visual_style(model, VisualRole::Muted)),
+            Span::styled(branch, chat_visual_style(model, VisualRole::Tool)),
+            Span::styled("  model:", chat_visual_style(model, VisualRole::Muted)),
             Span::styled(
                 display_safe(&model_name),
-                visual_style(model, VisualRole::Assistant),
+                chat_visual_style(model, VisualRole::Assistant),
             ),
         ]);
     }
     spans.extend([
-        Span::styled("  state:", visual_style(model, VisualRole::Muted)),
-        Span::styled(state, visual_style(model, VisualRole::Warning)),
+        Span::styled("  state:", chat_visual_style(model, VisualRole::Muted)),
+        Span::styled(state, chat_visual_style(model, VisualRole::Warning)),
     ]);
     Line::from(spans)
 }
@@ -2478,7 +2555,7 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let status = Rect::new(area.x, area.y, area.width, 1);
     frame.render_widget(
         Paragraph::new(prompt_metadata_line(model, area.width))
-            .style(visual_style(model, VisualRole::Field)),
+            .style(chat_visual_style(model, VisualRole::Field)),
         status,
     );
     if area.height < 2 {
@@ -2495,7 +2572,7 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     let mut composer = model.composer.editor.clone();
     composer.remove_block();
-    composer.set_cursor_line_style(visual_style(model, VisualRole::Normal));
+    composer.set_cursor_line_style(chat_visual_style(model, VisualRole::Normal));
     composer.set_cursor_style(visual_style(model, VisualRole::Selected));
     frame.render_widget(&composer, editor_area);
     set_composer_cursor(frame, editor_area, model, false);
@@ -2696,10 +2773,10 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let text = transcript_text(model);
+    let text = transparent_chat_text(transcript_text(model));
     let block = bordered.then(|| {
         app_block(model)
-            .borders(Borders::TOP | Borders::BOTTOM)
+            .borders(Borders::ALL)
             .title(conversation_title(model))
             .border_style(visual_style(model, VisualRole::Border))
     });
@@ -2711,8 +2788,9 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
         return;
     }
 
+
     let paragraph = Paragraph::new(text)
-        .style(visual_style(model, VisualRole::Normal))
+        .style(chat_visual_style(model, VisualRole::Normal))
         .wrap(Wrap { trim: false });
     let total_rows = paragraph.line_count(inner.width);
     let viewport_rows = usize::from(inner.height);
@@ -2729,6 +2807,14 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered:
     };
     let top = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((top, 0)), inner);
+}
+fn transparent_chat_text(mut text: Text<'static>) -> Text<'static> {
+    for line in &mut text.lines {
+        for span in &mut line.spans {
+            span.style = span.style.bg(Color::Reset);
+        }
+    }
+    text
 }
 
 /// Plain text of the whole transcript for clipboard copy.
@@ -2835,7 +2921,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 render_onboarding(&mut lines, model);
             }
         }
-        return Text::from(lines);
+        return transparent_chat_text(Text::from(lines));
     }
 
     for (index, item) in model.session.transcript.iter().enumerate() {
@@ -2960,7 +3046,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
             }
         }
     }
-    Text::from(lines)
+    transparent_chat_text(Text::from(lines))
 }
 
 fn push_safe_lines(lines: &mut Vec<Line<'static>>, text: &str, style: Style) {
@@ -2977,7 +3063,7 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let (label, style) = match notice {
         Notice::Info(message) => (
             display_safe(message),
-            visual_style(model, VisualRole::Warning),
+            chat_visual_style(model, VisualRole::Warning),
         ),
         Notice::Failure(failure) => (
             format!(
@@ -2985,7 +3071,7 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 display_safe(&failure.code),
                 display_safe(&failure.message)
             ),
-            visual_style(model, VisualRole::Error),
+            chat_visual_style(model, VisualRole::Error),
         ),
     };
     frame.render_widget(
