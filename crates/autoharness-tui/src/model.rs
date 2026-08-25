@@ -1977,10 +1977,33 @@ pub struct Model {
     pub(crate) retrying: BTreeSet<AttemptKey>,
     pub(crate) answering_permissions: BTreeSet<ToolCallKey>,
     pub(crate) permission_scroll: u16,
+    pub(crate) startup_complete: bool,
     pub(crate) retry_deadlines: BTreeMap<AttemptKey, UiInstant>,
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
+}
+
+const STARTUP_ANIMATION_MS: UiInstant = 1_800;
+
+impl Model {
+    pub(crate) fn startup_active(&self) -> bool {
+        !self.startup_complete
+            && self.now > 0
+            && self.now < STARTUP_ANIMATION_MS
+            && matches!(&*self.catalog, CatalogProjection::Loading)
+    }
+
+    pub(crate) fn advance_startup(&mut self, now: UiInstant) {
+        self.now = now;
+        if now >= STARTUP_ANIMATION_MS {
+            self.startup_complete = true;
+        }
+    }
+
+    pub(crate) fn complete_startup(&mut self) {
+        self.startup_complete = true;
+    }
 }
 
 impl Model {
@@ -2031,6 +2054,7 @@ impl Model {
                 .find(|model| model.selectable)
                 .map(|model| model.model.clone())
         });
+        let startup_complete = !matches!(&*catalog, CatalogProjection::Loading);
 
         let mut model = Self {
             session,
@@ -2053,6 +2077,7 @@ impl Model {
             browser: BrowserState::default(),
             profile_center: ProfileCenterState::default(),
             palette: PaletteState::default(),
+            startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
             drafts: SessionDrafts::default(),

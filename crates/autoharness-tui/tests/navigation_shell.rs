@@ -59,6 +59,20 @@ fn model() -> Model {
     Model::new(session, sessions, catalog)
 }
 
+fn loading_model() -> Model {
+    Model::new(
+        Arc::new(SessionProjection {
+            session_id: "startup-session".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Loading),
+    )
+}
+
 fn key(key: Key) -> Input {
     Input {
         key,
@@ -285,7 +299,24 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let failed = render_text(&model, 80, 24);
     assert!(failed.contains("CONNECTION ERROR"));
+
     assert!(failed.contains("Ctrl+R retry"));
+}
+#[test]
+fn startup_boot_surface_animates_and_exits_deterministically() {
+    let mut model = loading_model();
+    let _ = update(&mut model, Message::Tick(100));
+    let first = render_text(&model, 80, 24);
+    let _ = update(&mut model, Message::Tick(200));
+    let second = render_text(&model, 80, 24);
+    assert!(first.contains("AUTOHARNESS"));
+    assert!(first.contains("CONNECTING"));
+    assert_ne!(first, second);
+
+    let _ = update(&mut model, Message::Tick(2_000));
+    let settled = render_text(&model, 80, 24);
+    assert!(!settled.contains("AutoHarness / boot"));
+    assert!(settled.contains("CONNECTING"));
 }
 
 #[test]

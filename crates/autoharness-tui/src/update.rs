@@ -53,7 +53,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             Vec::new()
         }
         Message::Tick(now) => {
-            model.now = now;
+            let was_startup_active = model.startup_active();
+            model.advance_startup(now);
+            if was_startup_active || model.startup_active() {
+                model.dirty = true;
+            }
             if model.session.active_attempt().is_some()
                 || model.session.retryable_attempt().is_some_and(|(_, retry)| {
                     matches!(retry, RetryPolicy::After { .. } | RetryPolicy::At(_))
@@ -2920,6 +2924,9 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
 
 fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
+    if !matches!(&*model.catalog, CatalogProjection::Loading) {
+        model.complete_startup();
+    }
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
     if model.route() == Route::Chat

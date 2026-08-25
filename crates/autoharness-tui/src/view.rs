@@ -249,6 +249,11 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         }
     }
 
+    if model.startup_active() {
+        render_startup(frame, area, model);
+        return;
+    }
+
     match model.overlay() {
         Some(OverlayKind::Permission) => render_permission(frame, area, model),
         Some(OverlayKind::CommandPalette) => render_palette(frame, area, model),
@@ -258,6 +263,71 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
         Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
     }
+}
+
+fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    frame.render_widget(Clear, area);
+    let width = area.width.min(64).max(30);
+    let height = area.height.min(11).max(7);
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" AutoHarness / boot ")
+        .title_style(visual_style(model, VisualRole::Header))
+        .border_style(visual_style(model, VisualRole::Selected));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let animation_now = if presentation(model).reduced_motion {
+        0
+    } else {
+        model.now
+    };
+    let frame_index = animation_now / 100;
+    let percent = ((animation_now.min(1_800) * 100) / 1_800).min(100);
+    let bar_width = inner.width.saturating_sub(12).max(8);
+    let filled = (u32::from(bar_width) * u32::try_from(percent).unwrap_or(100) / 100) as u16;
+    let empty = bar_width.saturating_sub(filled);
+    let (left, right) = if presentation(model).ascii {
+        ('[', ']')
+    } else {
+        ('▌', '▐')
+    };
+    let bar = format!(
+        "{left}{}{} {percent:>3}%{right}",
+        "█".repeat(usize::from(filled)),
+        "░".repeat(usize::from(empty))
+    );
+    let phase = match frame_index % 4 {
+        0 => "warming terminal",
+        1 => "checking provider",
+        2 => "preparing workspace",
+        _ => "loading model catalog",
+    };
+    let lines = vec![
+        Line::styled("AUTOHARNESS", visual_style(model, VisualRole::Header)),
+        Line::from(""),
+        Line::styled(
+            format!("{}  {phase}", spinner(model)),
+            visual_style(model, VisualRole::Assistant),
+        ),
+        Line::from(bar),
+        Line::styled("CONNECTING", visual_style(model, VisualRole::Warning)),
+        Line::from("Loading compatible models..."),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(ratatui::layout::Alignment::Center)
+            .wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 /// Resolves a left-click coordinate against the currently visible controls.
 ///
@@ -270,6 +340,9 @@ pub fn hit_test(
     column: u16,
     row: u16,
 ) -> Option<MouseAction> {
+    if model.startup_active() {
+        return None;
+    }
     let area = Rect::new(0, 0, width, height);
     if model.overlay() == Some(OverlayKind::UserProfile) {
         let popup = user_profile_rect(area);
