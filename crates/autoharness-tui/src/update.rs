@@ -540,6 +540,21 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         input => {
             if !has_pending_submission(model)
+                && model.composer.is_blank()
+                && matches!(
+                    input,
+                    Input {
+                        key: Key::Char('/'),
+                        ctrl: false,
+                        alt: false,
+                        ..
+                    }
+                )
+            {
+                open_palette(model);
+                return Vec::new();
+            }
+            if !has_pending_submission(model)
                 && let Some(effects) = maybe_slash_command(model, &input)
             {
                 return effects;
@@ -762,7 +777,13 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
         SettingsPreference::DisplayLabel => return Vec::new(),
         SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
             *preferences.theme_preset().value(),
-            &[ThemePreset::System, ThemePreset::Light, ThemePreset::Dark],
+            &[
+                ThemePreset::System,
+                ThemePreset::Light,
+                ThemePreset::Dark,
+                ThemePreset::Aurora,
+                ThemePreset::Ember,
+            ],
             direction,
         ))),
         SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(Some(cycle(
@@ -981,6 +1002,15 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
+        "provider" => {
+            navigate_to_route(model, Route::Profiles);
+            if model.selected_profile().is_some() {
+                open_profile_credential(model);
+            } else {
+                create_profile_editor(model);
+            }
+            Vec::new()
+        }
         "user-profile" => {
             open_user_profile(model);
             Vec::new()
@@ -1172,6 +1202,17 @@ fn move_palette_selection(model: &mut Model, direction: isize) {
 
 fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
     let Some(selected) = model.palette.selected else {
+        let query = model.palette.query.clone();
+        close_palette(model);
+        if !query.is_empty() {
+            model.composer.editor.insert_str(format!("/{query}"));
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                format!("Unknown command '/{query}'"),
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
+        }
         return Vec::new();
     };
     let Some(entry) = COMMANDS.iter().find(|entry| entry.id == selected).copied() else {
@@ -1206,6 +1247,21 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
     ) {
         return create_session(model);
+    }
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('/'),
+            ctrl: false,
+            alt: false,
+            ..
+        }
+    ) && model.palette.query.is_empty()
+    {
+        close_palette(model);
+        model.composer.editor.insert_str("//");
+        model.dirty = true;
+        return Vec::new();
     }
     match input {
         Input { key: Key::Esc, .. } => {
@@ -1361,6 +1417,12 @@ fn handle_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             move_picker_selection(model, 1);
             Vec::new()
         }
+        Input {
+            key: Key::Char('d' | 'D'),
+            ctrl: false,
+            alt: false,
+            ..
+        } => set_selected_profile_default_model(model),
         Input {
             key: Key::Backspace,
             ..

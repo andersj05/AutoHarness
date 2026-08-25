@@ -247,6 +247,17 @@ fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
             if profile_id == "personal-gemini"
     ));
 }
+#[test]
+fn models_picker_can_save_the_selected_model_as_profile_default() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('p')));
+    let effects = update(&mut model, Message::Input(key(Key::Char('d'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefaultModel { profile_id, .. })]
+            if profile_id == "personal-gemini"
+    ));
+}
 
 #[test]
 fn every_profile_detail_button_has_a_semantic_click_target() {

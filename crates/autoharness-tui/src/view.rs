@@ -67,6 +67,65 @@ fn presentation(model: &Model) -> Presentation {
     }
 }
 
+fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
+    let (background, header, selected, user, assistant, error, tool, warning, success, field) =
+        if theme == ThemePreset::Aurora {
+            (
+                Color::Rgb(4, 15, 30),
+                Color::Rgb(45, 212, 191),
+                Color::Rgb(129, 140, 248),
+                Color::Rgb(56, 189, 248),
+                Color::Rgb(94, 234, 212),
+                Color::Rgb(251, 113, 133),
+                Color::Rgb(167, 139, 250),
+                Color::Rgb(250, 204, 21),
+                Color::Rgb(74, 222, 128),
+                Color::Rgb(15, 35, 60),
+            )
+        } else {
+            (
+                Color::Rgb(26, 10, 10),
+                Color::Rgb(251, 146, 60),
+                Color::Rgb(244, 63, 94),
+                Color::Rgb(253, 186, 116),
+                Color::Rgb(251, 191, 36),
+                Color::Rgb(248, 113, 113),
+                Color::Rgb(232, 121, 249),
+                Color::Rgb(251, 146, 60),
+                Color::Rgb(134, 239, 172),
+                Color::Rgb(62, 24, 20),
+            )
+        };
+    match role {
+        VisualRole::Normal => Style::new().fg(Color::Rgb(255, 241, 232)).bg(background),
+        VisualRole::Header => Style::new()
+            .fg(Color::Rgb(8, 12, 24))
+            .bg(header)
+            .add_modifier(Modifier::BOLD),
+        VisualRole::Selected => Style::new()
+            .fg(Color::Rgb(8, 12, 24))
+            .bg(selected)
+            .add_modifier(Modifier::BOLD),
+        VisualRole::Muted | VisualRole::Border => Style::new().fg(Color::Gray).bg(background),
+        VisualRole::User => Style::new()
+            .fg(user)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+        VisualRole::Assistant => Style::new()
+            .fg(assistant)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+        VisualRole::Error => Style::new()
+            .fg(error)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+        VisualRole::Tool => Style::new().fg(tool).bg(background),
+        VisualRole::Warning => Style::new().fg(warning).bg(background),
+        VisualRole::Success => Style::new().fg(success).bg(background),
+        VisualRole::Field => Style::new().fg(Color::White).bg(field),
+    }
+}
+
 fn visual_style(model: &Model, role: VisualRole) -> Style {
     let presentation = presentation(model);
     match presentation.color_mode {
@@ -178,6 +237,7 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                     .fg(Color::Rgb(226, 232, 240))
                     .bg(Color::Rgb(30, 41, 59)),
             },
+            ThemePreset::Aurora | ThemePreset::Ember => extra_theme_style(presentation.theme, role),
         },
         ColorMode::NoColor => match role {
             VisualRole::Header | VisualRole::Selected | VisualRole::Field => {
@@ -1574,6 +1634,8 @@ fn theme_preset_label(value: ThemePreset) -> &'static str {
         ThemePreset::System => "system",
         ThemePreset::Light => "light",
         ThemePreset::Dark => "dark",
+        ThemePreset::Aurora => "aurora",
+        ThemePreset::Ember => "ember",
     }
 }
 
@@ -2844,7 +2906,7 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if help.height > 0 {
         frame.render_widget(
             Paragraph::new(format!(
-                "{} choose  Enter select  Esc close",
+                "{} choose  Enter select  D default  Esc close",
                 navigation_keys(model)
             ))
             .style(visual_style(model, VisualRole::Muted)),

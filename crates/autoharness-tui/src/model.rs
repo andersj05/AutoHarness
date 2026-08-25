@@ -1543,6 +1543,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Alt+3"),
     },
     CommandEntry {
+        id: "provider",
+        label: "Provider setup",
+        description: "Create or connect a provider and store its API key securely",
+        key_hint: None,
+    },
+    CommandEntry {
         id: "user-profile",
         label: "User profile",
         description: "Edit the local display name and profile summary",
@@ -1557,7 +1563,7 @@ pub const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "models",
         label: "Models",
-        description: "Choose a model from the catalog",
+        description: "Choose a model or save it as the active provider default",
         key_hint: Some("Ctrl+P"),
     },
     CommandEntry {

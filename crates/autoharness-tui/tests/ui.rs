@@ -993,3 +993,47 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     assert!(!buffer_text(&dark).contains("updated 1700000000000"));
 }
+
+#[test]
+fn aurora_and_ember_themes_have_distinct_color_anchors() {
+    let mut model = Model::new(
+        session(12, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "aurora",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let aurora = render_model(&model, 120, 40);
+    assert_eq!(
+        aurora.buffer().cell((0, 0)).expect("aurora header").bg,
+        Color::Rgb(45, 212, 191)
+    );
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "ember",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let ember = render_model(&model, 120, 40);
+    assert_eq!(
+        ember.buffer().cell((0, 0)).expect("ember header").bg,
+        Color::Rgb(251, 146, 60)
+    );
+}

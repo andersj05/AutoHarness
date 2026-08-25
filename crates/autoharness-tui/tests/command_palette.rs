@@ -119,19 +119,36 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
         "/models",
         "/refresh-models",
         "/connect-api-key",
+        "/provider",
         "/profile",
         "/retry",
         "/cancel",
         "/search",
         "/toggle-tools",
-        "/settings",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
     }
+    type_text(&mut model, "settings");
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("/settings"));
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.palette_open());
     assert_eq!(model.focus, Focus::Composer);
+}
+
+#[test]
+fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+    assert!(model.palette_open());
+    let all = buffer_text(&render_model(&model, 80, 24));
+    assert!(all.contains("/models"));
+    assert!(all.contains("/provider"));
+
+    type_text(&mut model, "mod");
+    let filtered = buffer_text(&render_model(&model, 80, 24));
+    assert!(filtered.contains("/models"));
+    assert!(!filtered.contains("/sessions"));
 }
 
 #[test]
@@ -152,7 +169,8 @@ fn palette_filtering_is_case_insensitive_and_selection_stays_valid() {
     let _ = update(&mut model, Message::Input(key_input(Key::Backspace)));
     type_text(&mut model, "zzz");
     assert!(update(&mut model, Message::Input(enter())).is_empty());
-    assert!(model.palette_open());
+    assert!(!model.palette_open());
+    assert_eq!(model.composer.text(), "/APIzzz");
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.palette_open());
@@ -250,7 +268,17 @@ fn known_slash_commands_execute_and_clear_the_composer() {
     type_text(&mut model, "/sessions");
     let _ = update(&mut model, Message::Input(enter()));
     assert!(model.browser_open());
+
     assert!(model.composer.is_blank());
+}
+#[test]
+fn provider_command_opens_provider_setup_route() {
+    let mut model = empty_model();
+    type_text(&mut model, "/provider");
+    let _ = update(&mut model, Message::Input(enter()));
+    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.focus, Focus::Profiles);
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Profiles"));
 }
 
 #[test]
@@ -310,7 +338,7 @@ fn multiline_slash_text_submits_as_an_ordinary_prompt() {
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
 
     let mut model = empty_model();
-    type_text(&mut model, "/");
+    type_text(&mut model, "//");
     let _ = update(
         &mut model,
         Message::Paste("code block\nline two".to_owned()),
@@ -321,7 +349,7 @@ fn multiline_slash_text_submits_as_an_ordinary_prompt() {
         matches!(
             effects.as_slice(),
             [UiEffect::Dispatch(UiIntent::SubmitPrompt { prompt, .. })]
-                if prompt == "/code block\nline two"
+                if prompt == "//code block\nline two"
         ),
         "multiline text starting with slash is a prompt, not a command"
     );
