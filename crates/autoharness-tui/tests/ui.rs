@@ -980,7 +980,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     let dark = render_model(&model, 120, 40);
     assert_eq!(
         dark.buffer().cell((0, 0)).expect("header").bg,
-        Color::LightBlue
+        Color::Rgb(34, 211, 238)
     );
     assert!(!buffer_text(&dark).contains("updated 1700000000000"));
 }

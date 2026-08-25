@@ -123,31 +123,44 @@ fn visual_style(model: &Model, role: VisualRole) -> Style {
                 VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
             },
             ThemePreset::Dark => match role {
-                VisualRole::Normal => Style::new().fg(Color::White).bg(Color::Black),
-                VisualRole::Header | VisualRole::Selected => Style::new()
-                    .fg(Color::Black)
-                    .bg(Color::LightBlue)
+                VisualRole::Normal => Style::new()
+                    .fg(Color::Rgb(226, 232, 240))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Header => Style::new()
+                    .fg(Color::Rgb(5, 10, 20))
+                    .bg(Color::Rgb(34, 211, 238))
                     .add_modifier(Modifier::BOLD),
-                VisualRole::Muted | VisualRole::Border => {
-                    Style::new().fg(Color::Gray).bg(Color::Black)
-                }
+                VisualRole::Selected => Style::new()
+                    .fg(Color::Rgb(8, 12, 24))
+                    .bg(Color::Rgb(167, 139, 250))
+                    .add_modifier(Modifier::BOLD),
+                VisualRole::Muted | VisualRole::Border => Style::new()
+                    .fg(Color::Rgb(100, 116, 139))
+                    .bg(Color::Rgb(8, 12, 24)),
                 VisualRole::User => Style::new()
-                    .fg(Color::LightBlue)
-                    .bg(Color::Black)
+                    .fg(Color::Rgb(96, 165, 250))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
                 VisualRole::Assistant => Style::new()
-                    .fg(Color::LightCyan)
-                    .bg(Color::Black)
+                    .fg(Color::Rgb(45, 212, 191))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
                 VisualRole::Error => Style::new()
-                    .fg(Color::LightRed)
-                    .bg(Color::Black)
+                    .fg(Color::Rgb(251, 113, 133))
+                    .bg(Color::Rgb(8, 12, 24))
                     .add_modifier(Modifier::BOLD),
-                VisualRole::Tool | VisualRole::Warning => {
-                    Style::new().fg(Color::LightYellow).bg(Color::Black)
-                }
-                VisualRole::Success => Style::new().fg(Color::LightGreen).bg(Color::Black),
-                VisualRole::Field => Style::new().fg(Color::White).bg(Color::DarkGray),
+                VisualRole::Tool => Style::new()
+                    .fg(Color::Rgb(192, 132, 252))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Warning => Style::new()
+                    .fg(Color::Rgb(251, 191, 36))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Success => Style::new()
+                    .fg(Color::Rgb(74, 222, 128))
+                    .bg(Color::Rgb(8, 12, 24)),
+                VisualRole::Field => Style::new()
+                    .fg(Color::Rgb(226, 232, 240))
+                    .bg(Color::Rgb(30, 41, 59)),
             },
         },
         ColorMode::NoColor => match role {
