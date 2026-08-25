@@ -2058,6 +2058,14 @@ fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
 fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     match input {
         Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        } => {
+            model.should_quit = true;
+            vec![UiEffect::Quit]
+        }
+        Input {
             key: Key::Esc | Key::Tab,
             ..
         } => {

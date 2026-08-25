@@ -53,10 +53,10 @@ The application validates display labels, atomically updates the document, resol
 
 A profile is a named record containing:
 
-- The provider kind (`gemini` or `router`).
+- The provider kind (`gemini`, `router`, or `codex_cli`).
 - Non-secret connection fields such as the router base URL, project identity, authentication header name, and relative endpoint paths.
-- An optional default model identifier and the current safe-agent interaction mode.
-- An optional opaque credential reference.
+- An optional default model identifier.
+- An optional opaque credential reference for API-key providers.
 
 Profile names are validated, bounded values (`ProfileId`), as are references (`CredentialReference`).
 References never contain credential material; they only name a vault entry such as `autoharness/profile/<profile>`.
@@ -65,13 +65,17 @@ References never contain credential material; they only name a vault entry such 
 
 At launch the application resolves exactly one effective credential source:
 
-1. **Environment:** `GEMINI_API_KEY` or `AUTOHARNESS_ROUTER_API_KEY` wins outright for managed launches.
-2. **Credential vault:** the active profile's reference is resolved through the operating-system vault.
+1. **Environment:** `GEMINI_API_KEY` or `AUTOHARNESS_ROUTER_API_KEY` wins outright for managed API-key launches.
+2. **Credential vault:** the active API-key profile's reference is resolved through the operating-system vault.
 3. **Session-only:** nothing persisted applies; the user may paste a key per session under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
+
+The `codex_cli` provider is different.
+It uses only the user's authenticated official Codex CLI session and never reads, stores, or accepts Codex subscription tokens.
+Run `codex login` outside AutoHarness, then test or activate the profile.
 
 A missing or locked vault entry degrades to session-only operation rather than blocking offline use.
 AutoHarness never creates its own encrypted fallback store.
-The effective source is displayed in safe terms in both the `Ctrl+,` provenance overlay and the `Ctrl+G` Profiles and Providers surface: `environment`, `credential vault`, or `session only`.
+The effective source is displayed in safe terms in both the `Ctrl+,` provenance overlay and the Connected Accounts workspace.
 
 ## Credential-vault port
 
@@ -88,11 +92,13 @@ Vault errors never include secret material.
 The application owns one serialized profile-management workflow.
 The TUI consumes safe profile and connection read models and emits typed intents; it never calls the settings file, operating-system vault, or provider adapters directly.
 Secret-bearing save and replace intents remain ephemeral, non-serializable, zeroizing, and redacted in debug output.
-The keyboard-first Providers workspace is available through `Ctrl+G`, `/provider`, or the Settings tab.
-Its catalog starts safe non-secret profiles for Google AI Studio and compatible API-key endpoints including OpenAI or Codex, OpenRouter, Groq, Mistral AI, and a custom OpenAI-compatible API.
-It supports profile create, edit, duplicate, activate, test, disconnect, confirmed delete, explicit vault save or replace, selection of the current compatible model as the active profile default, and content-free connection health results.
-The catalog never accepts provider passwords or claims account sign-in support.
-Provider-specific OAuth, device authorization, token refresh, revocation, and account identity require a provider adapter and durable credential lifecycle before they may be offered.
+The Connected Accounts workspace is available through `Ctrl+G`, `/provider`, or the Settings tab.
+It lists saved provider accounts and their safe connection state without rendering a provider catalog.
+It supports profile create, edit, duplicate, activate, test, disconnect, confirmed delete, explicit vault save or replace, and content-free connection health results.
+Codex subscription profiles retain no AutoHarness credential.
+They invoke the official Codex CLI only after its user-owned `codex login` and use its documented read-only, ephemeral JSONL execution boundary under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
+The Agents workspace selects a connected provider, then a compatible model, then provider-default thinking when the catalog positively advertises thinking support.
+Providers that do not advertise portable thinking levels never receive an invented effort setting.
 Keyboard shortcuts, command-palette routing, and visible controls converge on the same typed intents.
 
 Each profile uses one deterministic vault reference derived from its validated profile identity.

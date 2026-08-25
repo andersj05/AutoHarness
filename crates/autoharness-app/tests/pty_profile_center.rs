@@ -6,9 +6,10 @@ use autoharness_settings::{LayerKind, SettingsBuilder};
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 const CTRL_G: [u8; 1] = [0x07];
+const ALT_N: [u8; 2] = [0x1b, b'n'];
 const ALT_D: [u8; 2] = [0x1b, b'd'];
 const TAB: [u8; 1] = *b"\t";
-const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
+const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 const DELETE: [u8; 4] = [0x1b, b'[', b'3', b'~'];
 
 #[test]
@@ -21,42 +22,35 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Providers & Connections") && text.contains("Google AI Studio")
+            text.contains("Connected Accounts") && text.contains("No accounts connected")
         },
-        "provider catalog should open from credential-free first run",
+        "connected accounts should open from credential-free first run",
     );
 
-    terminal.send_bytes(b"\r");
+    terminal.send_bytes(&ALT_N);
     terminal.wait_for(
         |screen| screen.contents().contains("Create provider profile"),
-        "Google AI Studio setup form should open",
+        "provider account form should open",
     );
-    terminal.submit_line("");
+    terminal.submit_line("personal-gemini");
     terminal.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("google-ai-studio") && text.contains("Provider profile saved")
-        },
-        "Google AI Studio profile should save inside the terminal",
+        |screen| screen.contents().contains("personal-gemini"),
+        "Gemini account should save inside the terminal",
     );
 
-    terminal.send_bytes(&DOWN);
-    terminal.send_bytes(b"\r");
-    terminal.wait_for(
-        |screen| screen.contents().contains("Create provider profile"),
-        "OpenAI and Codex setup form should open",
-    );
-    terminal.submit_line("");
-    terminal.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("openai-codex") && text.contains("api.openai.com")
-        },
-        "OpenAI and Codex profile should save with its non-secret connection fields",
-    );
-
+    terminal.send_bytes(&ALT_N);
+    terminal.type_text("work-router");
     terminal.send_bytes(&TAB);
-    terminal.send_bytes(&DOWN);
+    terminal.send_bytes(&RIGHT);
+    terminal.send_bytes(&TAB);
+    terminal.submit_line("https://router.example.test/v1/");
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("work-router") && text.contains("router.example.test")
+        },
+        "router account should save with its non-secret connection fields",
+    );
 
     terminal.send_bytes(&ALT_D);
     terminal.wait_for(
@@ -65,10 +59,7 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     );
     terminal.submit_line("router-copy");
     terminal.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("router-copy") && text.contains("Profile duplicated without a credential")
-        },
+        |screen| screen.contents().contains("router-copy"),
         "duplicate should copy configuration without a credential",
     );
 
@@ -76,7 +67,7 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Active provider switched") && text.contains("router-copy")
+            text.contains("router-copy") && text.contains("Active        yes")
         },
         "the duplicated profile should become active without leaving the terminal",
     );
@@ -94,11 +85,29 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     terminal.send_bytes(&DELETE);
     terminal.send_bytes(b"y");
     terminal.wait_for(
+        |screen| !screen.contents().contains("router-copy"),
+        "confirmed deletion should remove only the selected profile",
+    );
+
+    terminal.send_bytes(b"\x1b");
+    terminal.send_bytes(&RIGHT);
+    terminal.send_bytes(&RIGHT);
+    terminal.send_bytes(b"\r");
+    terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Provider profile deleted") && !text.contains("router-copy")
+            text.contains("Agent Defaults") && text.contains("personal-gemini")
         },
-        "confirmed deletion should remove only the selected profile",
+        "Agents should begin default selection with connected accounts",
+    );
+    terminal.send_bytes(b"\r");
+    terminal.wait_for(
+        |screen| {
+            screen
+                .contents()
+                .contains("Waiting for the selected provider")
+        },
+        "Agents should advance from provider selection to the model step",
     );
 
     terminal.send_bytes(&ctrl_c());
@@ -114,6 +123,6 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
         .profiles()
         .map(|(id, _)| id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["google-ai-studio", "openai-codex"]);
-    assert_eq!(settings.active_profile(), None);
+    assert_eq!(names, vec!["personal-gemini", "work-router"]);
+    assert_eq!(settings.active_profile(), Some("personal-gemini"));
 }

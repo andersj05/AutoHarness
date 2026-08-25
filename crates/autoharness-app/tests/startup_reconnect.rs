@@ -60,6 +60,9 @@ fn startup_resolution_publishes_provider_status_from_profile() {
             autoharness_settings::ProviderKind::Router => {
                 autoharness_tui::ProviderKindLabel::Router
             }
+            autoharness_settings::ProviderKind::CodexCli => {
+                autoharness_tui::ProviderKindLabel::CodexCli
+            }
         }),
         credential_source: match source.source_name() {
             autoharness_app::CredentialSourceName::Environment => {
