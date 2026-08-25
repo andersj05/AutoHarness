@@ -1,11 +1,9 @@
- 1 Chat   2 Sessions   3 Profiles   4 Settings   5 Help
- AutoHarness  |  gemini (default)  |  session only  |  Gemini 2.5 Pro  |  failed | 59 tok
 ╭ AutoHarness ─────────────╮╭ Conversation ────────────────────────────────────────────────────────────────────────────╮
-│PREVIOUS SESSIONS         ││YOU                                                                                       │
-│ No previous sessions     ││Plan a café launch.                                                                       │
-│                          ││Keep it practical.                                                                        │
-│PROJECTS                  ││                                                                                          │
-│ workspace                ││AUTOHARNESS · complete                                                                    │
+│ No sessions yet          ││YOU                                                                                       │
+│                          ││Plan a café launch.                                                                       │
+│PROJECTS                  ││Keep it practical.                                                                        │
+│ workspace                ││                                                                                          │
+│                          ││AUTOHARNESS · complete                                                                    │
 │                          ││Start with a two-week validation sprint:                                                  │
 │                          ││1. Interview ten customers.                                                               │
 │                          ││2. Price three menu bundles.                                                              │
@@ -35,6 +33,8 @@
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          │╰──────────────────────────────────────────────────────────────────────────────────────────╯
-│                          │ think:safe agent  cwd:workspace  git:no git  model:Gemini 2.5 Pro  state:failed
-│ Settings                 │Retry with a smaller scope.
-╰──────────────────────────╯Keep the checklist concise.
+│                          │╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│                          ││ think:standard  path:/workspace                                                          │
+│                          ││❯ Keep the checklist concise.                                                             │
+╰──────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────╯
+ Profile  |  Settings

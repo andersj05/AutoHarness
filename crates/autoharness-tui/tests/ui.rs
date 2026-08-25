@@ -428,7 +428,7 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
     );
     assert!(!model.retry_requested(&attempt));
     assert!(model.session.failed_attempt().is_none());
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("|  ready"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("recovered"));
 }
 
 #[test]
@@ -804,7 +804,7 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
         } else {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
-        let expected_anchor = Color::Rgb(167, 139, 250);
+        let expected_anchor = Color::Rgb(8, 12, 24);
         assert_eq!(
             backend.buffer().cell((0, 0)).expect("shell origin").bg,
             expected_anchor,
@@ -967,7 +967,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let light = render_model(&model, 120, 40);
     assert_eq!(
-        light.buffer().cell((1, 1)).expect("chat header").bg,
+        light.buffer().cell((29, 1)).expect("chat transcript").bg,
         Color::Reset
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
@@ -988,7 +988,11 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark_chat.buffer().cell((1, 1)).expect("chat header").bg,
+        dark_chat
+            .buffer()
+            .cell((29, 1))
+            .expect("chat transcript")
+            .bg,
         Color::Reset
     );
     assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
@@ -1015,12 +1019,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((1, 1)).expect("aurora header").bg,
+        aurora.buffer().cell((29, 1)).expect("aurora transcript").bg,
         Color::Reset
     );
     assert_eq!(
-        aurora.buffer().cell((1, 1)).expect("aurora header").fg,
-        Color::Rgb(45, 212, 191)
+        aurora.buffer().cell((29, 1)).expect("aurora transcript").fg,
+        Color::Rgb(56, 189, 248)
     );
 
     apply_visual_preferences(
@@ -1037,12 +1041,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((1, 1)).expect("ember header").bg,
+        ember.buffer().cell((29, 1)).expect("ember transcript").bg,
         Color::Reset
     );
     assert_eq!(
-        ember.buffer().cell((1, 1)).expect("ember header").fg,
-        Color::Rgb(251, 146, 60)
+        ember.buffer().cell((29, 1)).expect("ember transcript").fg,
+        Color::Rgb(253, 186, 116)
     );
 }
 
@@ -1066,8 +1070,8 @@ fn prompt_bar_shows_safe_runtime_metadata() {
         ..SettingsProjection::default()
     }));
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("think:deliberate"));
-    assert!(rendered.contains("cwd:autoharness"));
-    assert!(rendered.contains("git:feat/prompt-bar"));
-    assert!(rendered.contains("model:"));
+    assert!(rendered.contains("think:standard"));
+    assert!(rendered.contains("path:/autoharness"));
+    assert!(!rendered.contains("git:feat/prompt-bar"));
+    assert!(!rendered.contains("model:"));
 }

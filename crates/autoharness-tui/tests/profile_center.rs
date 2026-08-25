@@ -284,19 +284,19 @@ fn compact_profile_clicks_follow_rendered_content_rows() {
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 3),
+        hit_test(&model, 80, 24, 2, 1),
         Some(MouseAction::OpenUserProfile)
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 8),
+        hit_test(&model, 80, 24, 2, 6),
         Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 34, 17),
+        hit_test(&model, 80, 24, 34, 15),
         Some(MouseAction::ProfileNew)
     );
-    assert_eq!(hit_test(&model, 80, 24, 34, 16), None);
     assert_eq!(hit_test(&model, 80, 24, 34, 14), None);
+    assert_eq!(hit_test(&model, 80, 24, 34, 13), None);
 }
 #[test]
 #[ignore = "visual review harness for the Phase 3.6 profile center"]

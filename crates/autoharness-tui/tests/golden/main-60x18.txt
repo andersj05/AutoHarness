@@ -1,5 +1,3 @@
- 1 Chat  2 Sess  3 Prof  4 Set  5 Help
- AutoHarness  |  Gemini 2.5 Pro  |  failed
 ╭ Conversation ────────────────────────────────────────────╮
 │3. Measure repeat intent.                                 │
 │18 input tokens · 41 output tokens                        │
@@ -13,6 +11,8 @@
 │were exposed.                                             │
 │rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2  │
 ╰──────────────────────────────────────────────────────────╯
- think:safe agent  cwd:workspace  state:failed
-Retry with a smaller scope.
-Keep the checklist concise.
+╭──────────────────────────────────────────────────────────╮
+│ think:standard  path:/workspace                          │
+│❯ Keep the checklist concise.                             │
+╰──────────────────────────────────────────────────────────╯
+ Profile  |  Settings

@@ -140,11 +140,9 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
     assert!(model.palette_open());
     let all = buffer_text(&render_model(&model, 80, 24));
-    let bottom = all.lines().rev().take(10).collect::<Vec<_>>();
-    assert!(bottom.iter().any(|line| line.contains("/chat")));
+    assert!(all.contains("/chat"));
     assert!(all.contains("/models"));
     assert!(all.contains("/provider"));
-
     type_text(&mut model, "mod");
     let filtered = buffer_text(&render_model(&model, 80, 24));
     assert!(

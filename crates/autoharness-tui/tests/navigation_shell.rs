@@ -266,13 +266,11 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                     );
                 }
             }
+            assert!(rendered.contains("Profile"), "profile action missing");
+            assert!(rendered.contains("Settings"), "settings action missing");
             if width >= 100 {
-                for label in ["PREVIOUS SESSIONS", "PROJECTS", "Settings"] {
-                    assert!(
-                        rendered.contains(label),
-                        "sidebar label {label} missing at {width}x{height}"
-                    );
-                }
+                assert!(rendered.contains("PROJECTS"), "projects section missing");
+                assert!(!rendered.contains("PREVIOUS SESSIONS"));
             }
         }
     }
@@ -420,8 +418,9 @@ fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
         })),
     );
     let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("1 Chat"));
-    assert!(rendered.contains("4 Settings"));
+    assert!(!rendered.contains("1 Chat"));
+    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Settings"));
     assert!(rendered.contains("…"));
     assert_eq!(
         rendered
@@ -431,21 +430,20 @@ fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
         1
     );
 }
-
 #[test]
-fn compact_route_tabs_use_short_labels_at_boundary_widths() {
+fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
-    for label in ["Chat", "Sess", "Prof", "Set", "Help"] {
-        assert!(
-            rendered.contains(label),
-            "missing compact route label {label}"
-        );
-    }
+    assert!(!rendered.contains("1 Chat"));
+    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Settings"));
     assert_eq!(
-        hit_test(&model, 48, 18, 45, 0),
-        None,
-        "inert clipped columns must not route"
+        hit_test(&model, 48, 18, 2, 17),
+        Some(MouseAction::OpenUserProfile)
+    );
+    assert_eq!(
+        hit_test(&model, 48, 18, 14, 17),
+        Some(MouseAction::Route(Route::Settings))
     );
 }
 
@@ -454,7 +452,7 @@ fn settings_tab_mouse_geometry_matches_persistent_shell() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     assert_eq!(
-        hit_test(&model, 120, 40, 42, 3),
+        hit_test(&model, 120, 40, 42, 1),
         Some(MouseAction::Route(Route::Profiles))
     );
 }
@@ -494,18 +492,21 @@ fn render_route_review_matrix() {
 fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 4),
+        hit_test(&model, 120, 40, 2, 1),
         Some(MouseAction::Route(Route::Sessions))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 38),
+        hit_test(&model, 120, 40, 2, 39),
+        Some(MouseAction::OpenUserProfile)
+    );
+    assert_eq!(
+        hit_test(&model, 120, 40, 14, 39),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 0),
-        Some(MouseAction::Route(Route::Chat))
+        hit_test(&model, 80, 24, 2, 23),
+        Some(MouseAction::OpenUserProfile)
     );
-    assert_eq!(hit_test(&model, 80, 24, 16, 23), None);
 }
 
 #[test]
@@ -513,7 +514,7 @@ fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('3')));
     assert_eq!(
-        hit_test(&model, 120, 40, 30, 3),
+        hit_test(&model, 120, 40, 30, 1),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
