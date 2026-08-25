@@ -1037,3 +1037,29 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
         Color::Rgb(251, 146, 60)
     );
 }
+
+#[test]
+fn prompt_bar_shows_safe_runtime_metadata() {
+    let mut model = Model::new(
+        session(13, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
+        user: autoharness_tui::LocalUserProfileProjection {
+            workspace: r"C:\work\autoharness".to_owned(),
+            default_mode: "deliberate".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    model.apply_settings(Arc::new(SettingsProjection {
+        git_branch: Some("feat/prompt-bar".to_owned()),
+        ..SettingsProjection::default()
+    }));
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("think:deliberate"));
+    assert!(rendered.contains("cwd:autoharness"));
+    assert!(rendered.contains("git:feat/prompt-bar"));
+    assert!(rendered.contains("model:"));
+}

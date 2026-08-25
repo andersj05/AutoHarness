@@ -112,19 +112,17 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     assert!(model.palette_open());
     assert_eq!(model.focus, Focus::Palette, "the palette owns the keyboard");
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("COMMANDS"));
+    assert!(!rendered.contains("Commands"));
     for expected in [
+        "/chat",
         "/sessions",
+        "/profiles",
+        "/profile",
+        "/provider",
+        "/user-profile",
         "/new-session",
         "/models",
-        "/refresh-models",
-        "/connect-api-key",
-        "/provider",
-        "/profile",
-        "/retry",
-        "/cancel",
-        "/search",
-        "/toggle-tools",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
     }

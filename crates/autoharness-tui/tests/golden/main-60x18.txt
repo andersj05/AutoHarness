@@ -13,6 +13,6 @@ Error: Capacity is temporarily exhausted; no credentials
 were exposed.
 rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2
 ────────────────────────────────────────────────────────────
- Prompt ────────────────────────────────────────────────────
+ think:safe agent  cwd:workspace  state:failed
+Retry with a smaller scope.
 Keep the checklist concise.
-────────────────────────────────────────────────────────────

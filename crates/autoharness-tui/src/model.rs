@@ -1699,6 +1699,8 @@ pub struct SettingsProjection {
     pub provider_status: ProviderStatusProjection,
     /// Effective local profile preferences and provenance for every leaf.
     pub local_profile: EffectiveLocalProfile,
+    /// Safe current Git branch for the workspace, when the workspace is a checkout.
+    pub git_branch: Option<String>,
 }
 
 impl SettingsProjection {

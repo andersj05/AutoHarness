@@ -344,9 +344,15 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         return;
     }
 
+    if model.overlay() == Some(OverlayKind::CommandPalette) && model.route() == Route::Chat {
+        render_inline_palette(frame, content, model);
+    }
     match model.overlay() {
         Some(OverlayKind::Permission) => render_permission(frame, area, model),
-        Some(OverlayKind::CommandPalette) => render_palette(frame, area, model),
+        Some(OverlayKind::CommandPalette) if model.route() != Route::Chat => {
+            render_palette(frame, area, model)
+        }
+        Some(OverlayKind::CommandPalette) => {}
         Some(OverlayKind::SessionCredential) => render_credential(frame, area, model),
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
@@ -458,6 +464,10 @@ pub fn hit_test(
         return picker_mouse_target(area, model, row);
     }
     if model.overlay() == Some(OverlayKind::CommandPalette) {
+        if model.route() == Route::Chat {
+            let content = render_shell_layout(area, model).1;
+            return inline_palette_mouse_target(content, model, column, row);
+        }
         return palette_mouse_target(area, model, row);
     }
     if model.overlay() == Some(OverlayKind::SessionCredential) {
@@ -815,6 +825,32 @@ fn modal_button_target(
     } else {
         Some(secondary)
     }
+}
+
+fn inline_palette_mouse_target(
+    area: Rect,
+    model: &Model,
+    column: u16,
+    row: u16,
+) -> Option<MouseAction> {
+    let list = inline_palette_rect(area, model);
+    if !list.contains(Position::new(column, row)) {
+        return None;
+    }
+    let entries = model.palette_entries();
+    let selected_index = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list.height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(entries.len().saturating_sub(visible));
+    entries
+        .get(start + usize::from(row.saturating_sub(list.y)))
+        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
 }
 
 fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
@@ -1204,6 +1240,47 @@ fn workspace_label(workspace: &str) -> String {
         .rsplit(['/', '\\'])
         .find(|part| !part.is_empty())
         .map_or_else(|| "workspace".to_owned(), display_safe)
+}
+
+fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
+    let height = u16::try_from(model.palette_entries().len())
+        .unwrap_or(u16::MAX)
+        .min(8)
+        .min(area.height.saturating_sub(2));
+    Rect::new(area.x, area.y.saturating_add(1), area.width, height)
+}
+
+fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let list = inline_palette_rect(area, model);
+    if list.width == 0 || list.height == 0 {
+        return;
+    }
+    frame.render_widget(Clear, list);
+    let entries = model.palette_entries();
+    if entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No matching commands").style(visual_style(model, VisualRole::Muted)),
+            list,
+        );
+        return;
+    }
+    let selected_index = model
+        .palette
+        .selected
+        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
+        .unwrap_or(0);
+    let visible = usize::from(list.height);
+    let start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(entries.len().saturating_sub(visible));
+    let items = entries
+        .iter()
+        .skip(start)
+        .take(visible)
+        .map(|entry| palette_item(entry, model.palette.selected, model))
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(items), list);
 }
 
 /// Renders the searchable command-palette overlay from local state only.
@@ -2298,12 +2375,86 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 
+fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
+    if model.palette_open() {
+        return Line::styled(
+            format!(
+                " COMMANDS  /{}  ↑↓ choose  Enter run  Esc close",
+                display_safe(&model.palette.query)
+            ),
+            visual_style(model, VisualRole::Field),
+        );
+    }
+    let user = &model.profiles().user;
+    let thinking = if user.default_mode.is_empty() {
+        "safe agent"
+    } else {
+        user.default_mode.as_str()
+    };
+    let cwd = workspace_label(&user.workspace);
+    let branch = model
+        .settings()
+        .git_branch
+        .as_deref()
+        .map(display_safe)
+        .unwrap_or_else(|| "no git".to_owned());
+    let state = attempt_state_label(model);
+    let model_name = selected_model_label(model);
+    let mut spans = vec![
+        Span::styled(" think:", visual_style(model, VisualRole::Muted)),
+        Span::styled(
+            display_safe(thinking),
+            visual_style(model, VisualRole::Assistant),
+        ),
+        Span::styled("  cwd:", visual_style(model, VisualRole::Muted)),
+        Span::styled(cwd, visual_style(model, VisualRole::User)),
+    ];
+    if width >= 72 {
+        spans.extend([
+            Span::styled("  git:", visual_style(model, VisualRole::Muted)),
+            Span::styled(branch, visual_style(model, VisualRole::Tool)),
+            Span::styled("  model:", visual_style(model, VisualRole::Muted)),
+            Span::styled(
+                display_safe(&model_name),
+                visual_style(model, VisualRole::Assistant),
+            ),
+        ]);
+    }
+    spans.extend([
+        Span::styled("  state:", visual_style(model, VisualRole::Muted)),
+        Span::styled(state, visual_style(model, VisualRole::Warning)),
+    ]);
+    Line::from(spans)
+}
+
+fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.height == 0 {
+        return;
+    }
+    let status = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(prompt_metadata_line(model, area.width))
+            .style(visual_style(model, VisualRole::Field)),
+        status,
+    );
+    if area.height < 2 {
+        return;
+    }
+    let editor_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+    let mut composer = model.composer.editor.clone();
+    composer.remove_block();
+    composer.set_cursor_line_style(visual_style(model, VisualRole::Normal));
+    composer.set_cursor_style(visual_style(model, VisualRole::Selected));
+    frame.render_widget(&composer, editor_area);
+    set_composer_cursor(frame, editor_area, model, false);
+}
+
 fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let compact = presentation(model).compact;
     let composer_height = u16::try_from(model.composer.lines().len())
         .unwrap_or(u16::MAX)
         .saturating_add(1)
-        .clamp(3, if compact { 4 } else { 6 });
+        .clamp(2, if compact { 4 } else { 6 });
     let notice_height = if model.notice.is_some() {
         if compact { 1 } else { 2 }
     } else {
@@ -2327,16 +2478,7 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if search_height > 0 {
         render_search_bar(frame, chunks[2], model);
     }
-    let mut composer = model.composer.editor.clone();
-    composer.set_block(
-        app_block(model)
-            .borders(Borders::TOP | Borders::BOTTOM)
-            .title(" Prompt ")
-            .border_style(visual_style(model, VisualRole::Border)),
-    );
-    composer.set_cursor_style(visual_style(model, VisualRole::Selected));
-    frame.render_widget(&composer, chunks[3]);
-    set_composer_cursor(frame, chunks[3], model, false);
+    render_prompt_bar(frame, chunks[3], model);
 }
 
 /// Renders the one-row transcript search bar.
@@ -2364,15 +2506,9 @@ fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         render_transcript(frame, transcript, model, false);
     }
     if composer.height > 0 {
-        let mut editor = model.composer.editor.clone();
-        editor.remove_block();
-        editor.set_cursor_line_style(visual_style(model, VisualRole::Normal));
-        editor.set_cursor_style(visual_style(model, VisualRole::Selected));
-        frame.render_widget(&editor, composer);
-        set_composer_cursor(frame, composer, model, false);
+        render_prompt_bar(frame, composer, model);
     }
 }
-
 fn selected_model_label(model: &Model) -> String {
     model
         .session

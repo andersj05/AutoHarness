@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::process::Command;
 use std::sync::Arc;
 
 use autoharness_domain::{
@@ -81,6 +82,7 @@ pub(crate) struct ProfileRuntime {
     pub(crate) factory: ProfileProviderFactory,
     pub(crate) environment: EnvironmentCredentials,
     pub(crate) workspace: String,
+    pub(crate) git_branch: Option<String>,
     connection: BTreeMap<String, ProfileConnectionState>,
 }
 
@@ -91,14 +93,32 @@ impl ProfileRuntime {
         environment: EnvironmentCredentials,
         workspace: String,
     ) -> Self {
+        let git_branch = workspace_git_branch(&workspace);
         Self {
             manager,
             factory,
             environment,
             workspace,
+            git_branch,
             connection: BTreeMap::new(),
         }
     }
+}
+fn workspace_git_branch(workspace: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(workspace)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8(output.stdout).ok()?;
+    let branch = branch.trim();
+    (!branch.is_empty()
+        && branch.chars().count() <= 128
+        && branch.chars().all(|character| !character.is_control()))
+    .then(|| branch.to_owned())
 }
 pub(crate) struct RuntimeComposition {
     pub(crate) provider: ProviderComposition,
@@ -675,6 +695,7 @@ impl Coordinator {
                     credential_connected,
                 },
                 local_profile,
+                git_branch: runtime.git_branch.clone(),
             }));
     }
 
