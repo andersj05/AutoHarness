@@ -143,10 +143,11 @@ fn command_events_round_trip_and_replay_the_same_visible_session() {
         live.events()[3].causation(),
         &Causation::Event(live.events()[2].event_id().clone())
     );
-    assert!(live
-        .events()
-        .iter()
-        .all(|event| event.correlation_id() == &correlation_id()));
+    assert!(
+        live.events()
+            .iter()
+            .all(|event| event.correlation_id() == &correlation_id())
+    );
 
     let live_session = live
         .session(&session_id())

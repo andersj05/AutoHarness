@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use autoharness_domain::{
     AttemptFailure, Causation, CommandEnvelope, CommandId, CommandPayload, CorrelationId,
-    DeliveryMode, ErrorCode, EventId, EventPayload, InputId, ModelId, ModelRef, PromptText,
-    ProviderId, PublicMessage, RetryAdvice, SessionId, SessionTitle, EVENT_SCHEMA_V1,
+    DeliveryMode, EVENT_SCHEMA_V1, ErrorCode, EventId, EventPayload, InputId, ModelId, ModelRef,
+    PromptText, ProviderId, PublicMessage, RetryAdvice, SessionId, SessionTitle,
 };
 use autoharness_engine::{
     AttemptStatus, CommandRejection, EngineError, EventMetadataSource, GeneratedEventMetadata,
@@ -134,7 +134,8 @@ fn rename_updates_the_replayed_title_without_disturbing_other_state() {
 #[test]
 fn first_prompt_admission_renames_before_preparing_the_attempt_and_replays() {
     let mut engine = lifecycle_engine(&[create(), select()]);
-    let prompt = PromptText::new("Draft the durable title\nIgnore this line").expect("valid prompt");
+    let prompt =
+        PromptText::new("Draft the durable title\nIgnore this line").expect("valid prompt");
     let admission = CommandPayload::AdmitPromptAndPrepareAttempt {
         session_id: session_id(),
         input_id: InputId::new("input-title").expect("valid input ID"),
@@ -148,7 +149,10 @@ fn first_prompt_admission_renames_before_preparing_the_attempt_and_replays() {
         .expect("first prompt admission succeeds");
 
     assert_eq!(events.len(), 3);
-    assert!(matches!(events[0].payload(), EventPayload::InputAdmitted { .. }));
+    assert!(matches!(
+        events[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
     assert!(matches!(
         events[1].payload(),
         EventPayload::SessionRenamed { title } if title.as_str() == "Draft the durable title"
@@ -164,9 +168,11 @@ fn first_prompt_admission_renames_before_preparing_the_attempt_and_replays() {
             .collect::<Vec<_>>(),
         vec![3, 4, 5]
     );
-    assert!(events
-        .iter()
-        .all(|event| event.schema_version() == EVENT_SCHEMA_V1));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.schema_version() == EVENT_SCHEMA_V1)
+    );
     assert_eq!(
         events[0].causation(),
         &Causation::Command(command_id("command-admit-title"))
@@ -214,7 +220,10 @@ fn explicit_user_title_is_not_overwritten_by_first_prompt_admission() {
         .expect("first prompt admission succeeds");
 
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0].payload(), EventPayload::InputAdmitted { .. }));
+    assert!(matches!(
+        events[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
     assert_eq!(
         engine
             .session(&session_id())

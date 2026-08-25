@@ -101,6 +101,7 @@ dependencies = [
  "autoharness-domain",
  "autoharness-engine",
  "autoharness-provider",
+ "autoharness-provider-codex-cli",
  "autoharness-provider-gemini",
  "autoharness-provider-openai",
  "autoharness-settings",
@@ -156,6 +157,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "zeroize",
+]
+
+[[package]]
+name = "autoharness-provider-codex-cli"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "autoharness-domain",
+ "autoharness-provider",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2709,6 +2725,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]

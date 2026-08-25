@@ -30,6 +30,7 @@ autoharness-domain.workspace = true
 autoharness-engine.workspace = true
 autoharness-provider.workspace = true
 autoharness-provider-gemini.workspace = true
+autoharness-provider-codex-cli.workspace = true
 autoharness-provider-openai.workspace = true
 autoharness-settings.workspace = true
 autoharness-store.workspace = true

@@ -30,7 +30,7 @@ fn model() -> Model {
         models: vec![ModelSummary {
             model: model_ref(),
             display_name: "Gemini 2.5 Pro".to_owned(),
-            detail: String::new(),
+            detail: "thinking".to_owned(),
             selectable: true,
         }],
         stale: false,
@@ -153,6 +153,29 @@ fn connected_accounts_start_a_blank_profile_editor_only_on_connect() {
     ));
 }
 
+#[test]
+fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+
+    assert!(render_text(&model, 120, 40).contains("Agent Defaults"));
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
+        [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
+            if profile_id == "personal-gemini"
+    ));
+    assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
+    assert!(render_text(&model, 120, 40).contains("Thinking mode"));
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, .. })]
+            if profile_id == "personal-gemini" && *model == model_ref()
+    ));
+}
 #[test]
 fn credential_entry_is_masked_redacted_and_profile_scoped() {
     let mut model = model();

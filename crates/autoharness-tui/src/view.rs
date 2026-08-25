@@ -12,9 +12,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
-    MouseAction, Notice, OverlayKind, PendingKind, ProfileConnectionState,
-    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, ProviderProfileProjection,
-    RetryPolicy, Route, SettingsPreference, TranscriptItem,
+    MouseAction, Notice, OverlayKind, PendingKind, ProfileConnectionState, ProfileCredentialAction,
+    ProfileEditorMode, ProviderKindLabel, ProviderProfileProjection, RetryPolicy, Route,
+    SettingsPreference, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -2087,10 +2087,7 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 visual_style(model, VisualRole::User),
             ));
             lines.push(Line::styled(
-                format!(
-                    "{} Provider default",
-                    selection_marker(model)
-                ),
+                format!("{} Provider default", selection_marker(model)),
                 visual_style(model, VisualRole::Selected),
             ));
             lines.push(Line::styled(
@@ -2251,6 +2248,7 @@ fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static st
     match profile.kind {
         ProviderKindLabel::Gemini => "Google AI Studio",
         ProviderKindLabel::Router => "OpenAI-compatible",
+        ProviderKindLabel::CodexCli => "Codex subscription",
     }
 }
 

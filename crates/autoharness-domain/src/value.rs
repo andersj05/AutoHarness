@@ -529,17 +529,13 @@ mod tests {
 
     #[test]
     fn derived_session_title_stays_within_the_byte_limit_at_a_word_boundary() {
-        let prompt = PromptText::new(format!(
-            "short {}",
-            "x".repeat(SessionTitle::MAX_BYTES)
-        ))
-        .expect("non-empty prompt");
+        let prompt = PromptText::new(format!("short {}", "x".repeat(SessionTitle::MAX_BYTES)))
+            .expect("non-empty prompt");
 
         let title = SessionTitle::derive_from_prompt(&prompt);
         assert_eq!(title.as_str(), "short");
         assert!(title.as_str().len() <= SessionTitle::MAX_BYTES);
-        let unicode_prompt =
-            PromptText::new("界".repeat(43)).expect("non-empty Unicode prompt");
+        let unicode_prompt = PromptText::new("界".repeat(43)).expect("non-empty Unicode prompt");
         let unicode_title = SessionTitle::derive_from_prompt(&unicode_prompt);
         assert_eq!(unicode_title.as_str(), "界".repeat(42));
         assert!(unicode_title.as_str().len() <= SessionTitle::MAX_BYTES);
@@ -549,7 +545,10 @@ mod tests {
     fn derived_session_title_falls_back_when_the_prompt_has_no_visible_characters() {
         let prompt = PromptText::new("\u{0}\u{7}").expect("non-whitespace prompt");
 
-        assert_eq!(SessionTitle::derive_from_prompt(&prompt).as_str(), "New session");
+        assert_eq!(
+            SessionTitle::derive_from_prompt(&prompt).as_str(),
+            "New session"
+        );
     }
 
     #[test]

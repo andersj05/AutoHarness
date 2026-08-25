@@ -2057,7 +2057,10 @@ fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
 }
 fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     match input {
-        Input { key: Key::Esc | Key::Tab, .. } => {
+        Input {
+            key: Key::Esc | Key::Tab,
+            ..
+        } => {
             model.settings_workspace.nav_focus = true;
             model.dirty = true;
             Vec::new()
@@ -2091,7 +2094,9 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
         AgentDefaultStep::Model => &mut model.agent_defaults.model_selected,
         AgentDefaultStep::Thinking => return,
     };
-    *selected = selected.saturating_add_signed(direction).min(count.saturating_sub(1));
+    *selected = selected
+        .saturating_add_signed(direction)
+        .min(count.saturating_sub(1));
     model.dirty = true;
 }
 
@@ -2134,7 +2139,10 @@ fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
-    summary.detail.split(',').any(|detail| detail.trim() == "thinking")
+    summary
+        .detail
+        .split(',')
+        .any(|detail| detail.trim() == "thinking")
 }
 
 fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
@@ -2212,7 +2220,8 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
             if editor.mode != ProfileEditorMode::Duplicate && editor.field == 1 {
                 editor.kind = match editor.kind {
                     ProviderKindLabel::Gemini => ProviderKindLabel::Router,
-                    ProviderKindLabel::Router => ProviderKindLabel::Gemini,
+                    ProviderKindLabel::Router => ProviderKindLabel::CodexCli,
+                    ProviderKindLabel::CodexCli => ProviderKindLabel::Gemini,
                 };
             }
             model.dirty = true;
@@ -2336,6 +2345,14 @@ fn open_profile_credential(model: &mut Model) {
         model.dirty = true;
         return;
     };
+    if profile.kind == ProviderKindLabel::CodexCli {
+        model.notice = Some(Notice::Info(
+            "Run 'codex login' in another terminal, then use Alt+T to verify this subscription"
+                .to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
     if matches!(
         profile.credential_state,
         crate::model::ProfileCredentialStateLabel::RecoveryPending
@@ -3331,7 +3348,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                             "Provider connection test completed".to_owned(),
                         ));
                     }
-                    PendingKind::SetProfileDefaultModel(_) | PendingKind::SetProfileDefault { .. } => {
+                    PendingKind::SetProfileDefaultModel(_)
+                    | PendingKind::SetProfileDefault { .. } => {
                         model.notice = Some(Notice::Info("Profile default model saved".to_owned()));
                     }
                     PendingKind::DisconnectProfile(_) => {

@@ -29,6 +29,8 @@ pub enum ProviderSelection {
     Gemini,
     /// Configurable OpenAI-compatible model router.
     Router,
+    /// User-owned official Codex CLI subscription session.
+    CodexCli,
 }
 
 /// Resolved application-owned paths outside the current working directory.
@@ -54,6 +56,7 @@ pub fn provider_selection() -> Result<ProviderSelection, AppError> {
     {
         "gemini" => Ok(ProviderSelection::Gemini),
         "router" | "openai" => Ok(ProviderSelection::Router),
+        "codex" | "codex_cli" => Ok(ProviderSelection::CodexCli),
         _ => Err(AppError::Configuration),
     }
 }

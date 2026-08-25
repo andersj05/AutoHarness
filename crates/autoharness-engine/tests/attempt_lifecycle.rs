@@ -344,7 +344,10 @@ fn admission_title_and_first_attempt_prepare_commit_as_one_replayable_batch() {
     let batch = engine.execute(&command).expect("atomic command succeeds");
 
     assert_eq!(batch.len(), 3);
-    assert!(matches!(batch[0].payload(), EventPayload::InputAdmitted { .. }));
+    assert!(matches!(
+        batch[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
     assert!(matches!(
         batch[1].payload(),
         EventPayload::SessionRenamed { title } if title.as_str() == "atomic prompt"

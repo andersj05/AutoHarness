@@ -856,10 +856,7 @@ pub enum PendingKind {
     /// Selection of the active session model as this profile's default.
     SetProfileDefaultModel(String),
     /// One explicit profile and compatible model default.
-    SetProfileDefault {
-        profile_id: String,
-        model: ModelRef,
-    },
+    SetProfileDefault { profile_id: String, model: ModelRef },
     /// Stored credential disconnection.
     DisconnectProfile(String),
     /// One user-layer preference update from the Settings route.
@@ -1203,7 +1200,7 @@ pub(crate) struct ProfileEditorState {
 impl ProfileEditorState {
     pub fn field_count(&self) -> usize {
         match self.kind {
-            ProviderKindLabel::Gemini => 2,
+            ProviderKindLabel::Gemini | ProviderKindLabel::CodexCli => 2,
             ProviderKindLabel::Router => 5,
         }
     }
@@ -1702,6 +1699,8 @@ pub enum ProviderKindLabel {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
+    /// User-owned official Codex CLI subscription session.
+    CodexCli,
 }
 
 impl ProviderKindLabel {
@@ -1711,6 +1710,7 @@ impl ProviderKindLabel {
         match self {
             Self::Gemini => "gemini",
             Self::Router => "router",
+            Self::CodexCli => "codex subscription",
         }
     }
 }

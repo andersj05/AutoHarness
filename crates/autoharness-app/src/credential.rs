@@ -147,6 +147,7 @@ impl<'a> ProfileCredentialResolver<'a> {
                             "kind": match profile.kind() {
                                 ProviderKind::Gemini => "gemini",
                                 ProviderKind::Router => "router",
+                                ProviderKind::CodexCli => "codex_cli",
                             },
                             "credential": profile.credential_reference().map(|reference| {
                                 serde_json::json!({ "reference": reference })
@@ -195,14 +196,15 @@ impl<'a> ProfileCredentialResolver<'a> {
             .or(selected_provider)
             .unwrap_or(ProviderKind::Gemini);
         let environment_key = match provider_kind {
-            ProviderKind::Gemini => "GEMINI_API_KEY",
-            ProviderKind::Router => "AUTOHARNESS_ROUTER_API_KEY",
+            ProviderKind::Gemini => Some("GEMINI_API_KEY"),
+            ProviderKind::Router => Some("AUTOHARNESS_ROUTER_API_KEY"),
+            // Subscription authentication remains exclusively inside Codex CLI.
+            ProviderKind::CodexCli => None,
         };
 
         // 1. The credential matching the effective provider wins.
-        if let Some(value) = self
-            .environment
-            .get(environment_key)
+        if let Some(value) = environment_key
+            .and_then(|key| self.environment.get(key))
             .filter(|value| !value.trim().is_empty())
         {
             return Ok(CredentialSource {
@@ -307,6 +309,7 @@ fn kind_from_str(value: &str) -> Option<ProviderKind> {
     match value {
         "gemini" => Some(ProviderKind::Gemini),
         "router" => Some(ProviderKind::Router),
+        "codex_cli" => Some(ProviderKind::CodexCli),
         _ => None,
     }
 }

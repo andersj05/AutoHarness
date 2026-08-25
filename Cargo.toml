@@ -5,6 +5,7 @@ members = [
     "crates/autoharness-app",
     "crates/autoharness-provider",
     "crates/autoharness-provider-gemini",
+    "crates/autoharness-provider-codex-cli",
     "crates/autoharness-provider-openai",
     "crates/autoharness-settings",
     "crates/autoharness-store",
@@ -29,6 +30,7 @@ autoharness-provider = { path = "crates/autoharness-provider" }
 autoharness-provider-gemini = { path = "crates/autoharness-provider-gemini" }
 autoharness-provider-openai = { path = "crates/autoharness-provider-openai" }
 autoharness-settings = { path = "crates/autoharness-settings" }
+autoharness-provider-codex-cli = { path = "crates/autoharness-provider-codex-cli" }
 autoharness-store = { path = "crates/autoharness-store" }
 autoharness-store-sqlite = { path = "crates/autoharness-store-sqlite" }
 autoharness-tui = { path = "crates/autoharness-tui" }

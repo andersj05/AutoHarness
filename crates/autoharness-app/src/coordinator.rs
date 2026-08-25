@@ -66,6 +66,7 @@ impl EnvironmentCredentials {
         match kind {
             ProviderKind::Gemini => self.gemini.clone(),
             ProviderKind::Router => self.router.clone(),
+            ProviderKind::CodexCli => None,
         }
     }
 
@@ -73,6 +74,7 @@ impl EnvironmentCredentials {
         match kind {
             ProviderKind::Gemini => self.gemini.is_some(),
             ProviderKind::Router => self.router.is_some(),
+            ProviderKind::CodexCli => true,
         }
     }
 }
@@ -368,7 +370,8 @@ impl Coordinator {
                 profile_id,
                 model,
             } => {
-                self.set_profile_default(request_id, profile_id, model).await?;
+                self.set_profile_default(request_id, profile_id, model)
+                    .await?;
             }
             UiIntent::DisconnectProfile {
                 request_id,
@@ -3244,6 +3247,7 @@ fn provider_kind_label(kind: ProviderKind) -> ProviderKindLabel {
     match kind {
         ProviderKind::Gemini => ProviderKindLabel::Gemini,
         ProviderKind::Router => ProviderKindLabel::Router,
+        ProviderKind::CodexCli => ProviderKindLabel::CodexCli,
     }
 }
 
@@ -3257,6 +3261,7 @@ fn provider_profile_from_draft(
             nonempty(draft.project),
             nonempty(draft.auth_header),
         ),
+        ProviderKindLabel::CodexCli => Ok(ProviderProfile::codex_cli()),
     }
 }
 
@@ -5639,8 +5644,7 @@ mod tests {
         })
         .await;
         assert!(titled_sessions.iter().any(|entry| {
-            entry.session_id == session_id.as_str()
-                && entry.title == "exact [REDACTED] user prompt"
+            entry.session_id == session_id.as_str() && entry.title == "exact [REDACTED] user prompt"
         }));
 
         let streaming = wait_for_session(&mut ui.sessions, |projection| {
