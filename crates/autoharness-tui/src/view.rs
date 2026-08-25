@@ -1465,20 +1465,6 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let status = &model.settings().provider_status;
-    let active_profile = status.active_profile.as_deref().unwrap_or("none");
-    let connection = if status.credential_connected {
-        "connected"
-    } else if status.active_profile.is_some() {
-        "disconnected"
-    } else {
-        "session only"
-    };
-    let connection_style = if status.credential_connected {
-        visual_style(model, VisualRole::Success)
-    } else {
-        visual_style(model, VisualRole::Warning)
-    };
     let mut lines = vec![
         Line::styled(
             "LOCAL PROFILE DEFAULTS",
