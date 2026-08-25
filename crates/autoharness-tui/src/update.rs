@@ -774,7 +774,16 @@ fn commit_display_label(model: &mut Model) -> Vec<UiEffect> {
 fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffect> {
     let preferences = model.settings().local_profile.preferences();
     let change = match selected_settings_preference(model) {
-        SettingsPreference::DisplayLabel => return Vec::new(),
+        SettingsPreference::DisplayLabel
+        | SettingsPreference::Provider
+        | SettingsPreference::Profile
+        | SettingsPreference::Credential
+        | SettingsPreference::Source
+        | SettingsPreference::Model
+        | SettingsPreference::Mode
+        | SettingsPreference::Approvals
+        | SettingsPreference::Retention
+        | SettingsPreference::Logging => return Vec::new(),
         SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
             *preferences.theme_preset().value(),
             &[
@@ -843,6 +852,15 @@ fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
         model,
         match selected_settings_preference(model) {
             SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::Provider
+            | SettingsPreference::Profile
+            | SettingsPreference::Credential
+            | SettingsPreference::Source
+            | SettingsPreference::Model
+            | SettingsPreference::Mode
+            | SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging => return Vec::new(),
             SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
             SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
             SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
@@ -864,6 +882,15 @@ fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
         model,
         match selected_settings_preference(model) {
             SettingsPreference::DisplayLabel => LocalPreferenceChange::DisplayLabel(None),
+            SettingsPreference::Provider
+            | SettingsPreference::Profile
+            | SettingsPreference::Credential
+            | SettingsPreference::Source
+            | SettingsPreference::Model
+            | SettingsPreference::Mode
+            | SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging => return Vec::new(),
             SettingsPreference::ThemePreset => {
                 LocalPreferenceChange::ThemePreset(Some(ThemePreset::System))
             }
@@ -1277,6 +1304,14 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         }
         Input { key: Key::Down, .. } => {
             move_palette_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } if model.palette.query.is_empty() => {
+            close_palette(model);
+            model.dirty = true;
             Vec::new()
         }
         Input {

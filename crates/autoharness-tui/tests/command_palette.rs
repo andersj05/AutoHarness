@@ -159,6 +159,16 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
 }
 
 #[test]
+fn deleting_the_initial_slash_closes_command_browser() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+    assert!(model.palette_open());
+    let _ = update(&mut model, Message::Input(key_input(Key::Backspace)));
+    assert!(!model.palette_open());
+    assert!(model.composer.is_blank());
+}
+
+#[test]
 fn palette_filtering_is_case_insensitive_and_selection_stays_valid() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));

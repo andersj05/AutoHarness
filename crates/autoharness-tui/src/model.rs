@@ -1299,28 +1299,46 @@ pub(crate) struct HelpState {
     /// Rows scrolled from the top of the help content.
     pub scroll: u16,
 }
-/// The editable leaves in deterministic Settings workspace order.
+/// The selectable rows in deterministic Settings workspace order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsPreference {
     DisplayLabel,
+    Provider,
+    Profile,
+    Credential,
+    Source,
+    Model,
+    Mode,
     ThemePreset,
     ColorMode,
     GlyphMode,
     ReducedMotion,
     Density,
+    Approvals,
+    Retention,
+    Logging,
     Layout,
     TerminalTimestampStyle,
     ComposerSubmitBehavior,
 }
 
 impl SettingsPreference {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::DisplayLabel,
+        Self::Provider,
+        Self::Profile,
+        Self::Credential,
+        Self::Source,
+        Self::Model,
+        Self::Mode,
         Self::ThemePreset,
         Self::ColorMode,
         Self::GlyphMode,
         Self::ReducedMotion,
         Self::Density,
+        Self::Approvals,
+        Self::Retention,
+        Self::Logging,
         Self::Layout,
         Self::TerminalTimestampStyle,
         Self::ComposerSubmitBehavior,

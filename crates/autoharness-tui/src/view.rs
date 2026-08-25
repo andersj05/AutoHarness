@@ -1486,14 +1486,10 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         settings_preference_line(model, SettingsPreference::DisplayLabel),
         Line::from(""),
-        Line::styled("PROVIDERS", visual_style(model, VisualRole::User)),
-        detail_line(model, "Provider", &model.settings().provider_label()),
-        detail_line(model, "Profile", active_profile),
-        Line::from(vec![
-            Span::styled("Credential  ", visual_style(model, VisualRole::Muted)),
-            Span::styled(connection, connection_style),
-        ]),
-        detail_line(model, "Source", status.credential_source.as_str()),
+        settings_preference_line(model, SettingsPreference::Provider),
+        settings_preference_line(model, SettingsPreference::Profile),
+        settings_preference_line(model, SettingsPreference::Credential),
+        settings_preference_line(model, SettingsPreference::Source),
         Line::styled(
             "API KEY  /connect-api-key or press K",
             visual_style(model, VisualRole::Field),
@@ -1504,23 +1500,17 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ),
         Line::from(""),
         Line::styled("MODEL & MODE", visual_style(model, VisualRole::User)),
-        detail_line(model, "Model", &selected_model_label(model)),
-        detail_line(model, "Mode", "safe agent"),
+        settings_preference_line(model, SettingsPreference::Model),
+        settings_preference_line(model, SettingsPreference::Mode),
         Line::styled(
-            "Read-only here: choose models from Ctrl+P; mode is application policy.",
+            "Read-only here: choose models from /models; mode is application policy.",
             visual_style(model, VisualRole::Muted),
         ),
         Line::from(""),
         Line::styled("APPROVALS", visual_style(model, VisualRole::User)),
-        Line::styled(
-            "Read-only policy: every external capability requires an exact per-call decision.",
-            visual_style(model, VisualRole::Muted),
-        ),
+        settings_preference_line(model, SettingsPreference::Approvals),
         Line::styled("RETENTION", visual_style(model, VisualRole::User)),
-        Line::styled(
-            "Read-only policy: durable sessions retain provider-neutral history; deletion confirms.",
-            visual_style(model, VisualRole::Muted),
-        ),
+        settings_preference_line(model, SettingsPreference::Retention),
         Line::from(""),
         Line::styled("APPEARANCE", visual_style(model, VisualRole::User)),
         settings_preference_line(model, SettingsPreference::ThemePreset),
@@ -1530,10 +1520,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         settings_preference_line(model, SettingsPreference::ReducedMotion),
         settings_preference_line(model, SettingsPreference::Density),
         Line::styled("LOGGING", visual_style(model, VisualRole::User)),
-        Line::styled(
-            "Read-only policy: credentials and model content are excluded from settings diagnostics.",
-            visual_style(model, VisualRole::Muted),
-        ),
+        settings_preference_line(model, SettingsPreference::Logging),
         Line::styled("TERMINAL BEHAVIOR", visual_style(model, VisualRole::User)),
         settings_preference_line(model, SettingsPreference::Layout),
         settings_preference_line(model, SettingsPreference::TerminalTimestampStyle),
@@ -1579,6 +1566,79 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
     let profile = &model.settings().local_profile;
     let (label, value, source, explanation) = match preference {
+        SettingsPreference::Provider => (
+            "Provider",
+            model.settings().provider_label(),
+            "runtime",
+            "active provider adapter",
+        ),
+        SettingsPreference::Profile => (
+            "Profile",
+            model
+                .settings()
+                .provider_status
+                .active_profile
+                .as_deref()
+                .unwrap_or("none")
+                .to_owned(),
+            "runtime",
+            "active provider profile",
+        ),
+        SettingsPreference::Credential => (
+            "Credential",
+            if model.settings().provider_status.credential_connected {
+                "connected".to_owned()
+            } else {
+                "disconnected".to_owned()
+            },
+            "runtime",
+            "safe connection state",
+        ),
+        SettingsPreference::Source => (
+            "Source",
+            model
+                .settings()
+                .provider_status
+                .credential_source
+                .as_str()
+                .to_owned(),
+            "runtime",
+            "credential provenance",
+        ),
+        SettingsPreference::Model => (
+            "Model",
+            selected_model_label(model),
+            "runtime",
+            "active session model",
+        ),
+        SettingsPreference::Mode => (
+            "Mode",
+            if model.profiles().user.default_mode.is_empty() {
+                "safe agent".to_owned()
+            } else {
+                model.profiles().user.default_mode.clone()
+            },
+            "policy",
+            "interaction mode",
+        ),
+        SettingsPreference::Approvals => (
+            "Approvals",
+            "per-call".to_owned(),
+            "policy",
+            "exact capability decisions",
+        ),
+        SettingsPreference::Retention => (
+            "Retention",
+            "durable".to_owned(),
+            "policy",
+            "session history and deletion controls",
+        ),
+        SettingsPreference::Logging => (
+            "Logging",
+            "redacted".to_owned(),
+            "policy",
+            "credentials and content excluded",
+        ),
         SettingsPreference::DisplayLabel => (
             "Display label",
             model
@@ -1681,11 +1741,20 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
 fn settings_preference_label(preference: SettingsPreference) -> &'static str {
     match preference {
         SettingsPreference::DisplayLabel => "Display label",
+        SettingsPreference::Provider => "Provider",
+        SettingsPreference::Profile => "Profile",
+        SettingsPreference::Credential => "Credential",
+        SettingsPreference::Source => "Source",
+        SettingsPreference::Model => "Model",
+        SettingsPreference::Mode => "Mode",
         SettingsPreference::ThemePreset => "Theme preset",
         SettingsPreference::ColorMode => "Color mode",
         SettingsPreference::GlyphMode => "Glyph mode",
         SettingsPreference::ReducedMotion => "Reduced motion",
         SettingsPreference::Density => "Density",
+        SettingsPreference::Approvals => "Approvals",
+        SettingsPreference::Retention => "Retention",
+        SettingsPreference::Logging => "Logging",
         SettingsPreference::Layout => "Layout",
         SettingsPreference::TerminalTimestampStyle => "Timestamp style",
         SettingsPreference::ComposerSubmitBehavior => "Composer submit",
