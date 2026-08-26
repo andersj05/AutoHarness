@@ -431,7 +431,7 @@ fn tab_does_not_switch_settings_pages() {
 
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("Connect a provider"));
+    assert!(render_text(&model, 80, 24).contains("Add a provider"));
 }
 
 #[test]

@@ -148,20 +148,19 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("Sign in to Codex"));
-    assert!(rendered.contains("Open official browser sign-in"));
+    assert!(rendered.contains("Open browser sign-in"));
 
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::LaunchCodexLogin]
     ));
+    assert!(
+        render_text(&model, 120, 40).contains("Browser sign-in started"),
+        "the authentication popup should keep launch feedback visible"
+    );
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    assert!(render_text(&model, 120, 40).contains("Connect Codex"));
-    let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Char('s'))));
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
     assert!(matches!(
         effects.as_slice(),
@@ -207,7 +206,7 @@ fn provider_arrows_preserve_connected_profile_selection() {
     for _ in 0..6 {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
-    assert!(render_text(&model, 80, 24).contains("Connected accounts"));
+    assert!(render_text(&model, 80, 24).contains("Saved connections"));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Right)));

@@ -418,13 +418,12 @@ async fn configure_provider(
                         factory_policy.clone(),
                     ))
                 });
-                let provider: Arc<dyn Provider> =
-                    Arc::new(CodexCliProvider::from_env(CancellationToken::new()).await?);
-                let initial = Ok(managed_provider(
-                    provider,
-                    Arc::clone(&cache),
-                    policy.clone(),
-                ));
+                let initial = CodexCliProvider::from_env(CancellationToken::new())
+                    .await
+                    .map(|provider| {
+                        let provider: Arc<dyn Provider> = Arc::new(provider);
+                        managed_provider(provider, Arc::clone(&cache), policy.clone())
+                    });
                 (initial, factory)
             }
         };

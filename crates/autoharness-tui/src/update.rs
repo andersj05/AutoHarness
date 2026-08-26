@@ -1911,6 +1911,60 @@ fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
     })]
 }
 
+fn save_codex_connection(model: &mut Model) -> Vec<UiEffect> {
+    let profile_id = model
+        .profiles()
+        .profiles
+        .iter()
+        .find(|profile| profile.kind == ProviderKindLabel::CodexCli)
+        .map_or_else(
+            || available_profile_id(model, "codex"),
+            |profile| profile.id.clone(),
+        );
+    let profile = ProviderProfileDraft {
+        id: profile_id,
+        kind: ProviderKindLabel::CodexCli,
+        base_url: String::new(),
+        project: String::new(),
+        auth_header: String::new(),
+    };
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
+    model.profile_center.auth_page = None;
+    model.profile_center.auth_selected = 0;
+    model.notice = Some(Notice::Info(
+        "Saving and checking the Codex connection...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UpsertProfile {
+        request_id,
+        profile,
+    })]
+}
+
+fn available_profile_id(model: &Model, base: &str) -> String {
+    if !model
+        .profiles()
+        .profiles
+        .iter()
+        .any(|profile| profile.id == base)
+    {
+        return base.to_owned();
+    }
+    (2_u16..)
+        .map(|suffix| format!("{base}-{suffix}"))
+        .find(|candidate| {
+            !model
+                .profiles()
+                .profiles
+                .iter()
+                .any(|profile| profile.id == *candidate)
+        })
+        .expect("bounded profile collection always leaves an available suffix")
+}
+
 fn open_provider_setup(model: &mut Model, kind: ProviderKindLabel, id: &str) {
     model.profile_center.editor = Some(ProfileEditorState {
         mode: ProfileEditorMode::Create,
@@ -1969,29 +2023,20 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 ctrl: false,
                 alt: false,
                 ..
-            } => {
-                model.profile_center.auth_page = None;
-                open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
-                model.dirty = true;
-                Vec::new()
-            }
+            } => save_codex_connection(model),
             Input {
                 key: Key::Enter, ..
             } if model.profile_center.auth_selected == 0 => {
                 model.notice = Some(Notice::Info(
-                    "Opening the official Codex browser sign-in...".to_owned(),
+                    "Browser sign-in started. Complete it there, then choose Save connection."
+                        .to_owned(),
                 ));
                 model.dirty = true;
                 vec![UiEffect::LaunchCodexLogin]
             }
             Input {
                 key: Key::Enter, ..
-            } => {
-                model.profile_center.auth_page = None;
-                open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
-                model.dirty = true;
-                Vec::new()
-            }
+            } => save_codex_connection(model),
             _ => Vec::new(),
         };
     }
@@ -2593,10 +2638,9 @@ fn open_profile_credential(model: &mut Model) {
         return;
     };
     if profile.kind == ProviderKindLabel::CodexCli {
-        model.notice = Some(Notice::Info(
-            "Run 'codex login' in another terminal, then use Alt+T to verify this subscription"
-                .to_owned(),
-        ));
+        model.profile_center.auth_page = Some(ProviderChoice::Codex);
+        model.profile_center.auth_selected = 0;
+        model.notice = None;
         model.dirty = true;
         return;
     }

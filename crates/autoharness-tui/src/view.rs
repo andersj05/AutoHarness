@@ -641,7 +641,7 @@ fn profile_local_hit_row(area: Rect, model: &Model) -> Option<Rect> {
 
 fn profile_center_content_area(model: &Model, area: Rect) -> Rect {
     let inner = area;
-    let compact = presentation(model).compact;
+    let compact = presentation(model).compact || inner.width < 72;
     let notice_height = if model.notice.is_some() && inner.height >= 8 {
         if compact { 1 } else { 2 }
     } else {
@@ -852,30 +852,33 @@ fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseActi
 }
 fn profile_action_at_column(column: u16) -> Option<MouseAction> {
     match column {
-        0..=6 => Some(MouseAction::ProfileNew),
-        8..=14 => Some(MouseAction::ProfileCredential),
-        16..=22 => Some(MouseAction::ProfileTest),
-        24..=34 => Some(MouseAction::ProfileDefaultModel),
+        0..=4 => Some(MouseAction::ProfileNew),
+        7..=15 => Some(MouseAction::ProfileCredential),
+        18..=23 => Some(MouseAction::ProfileTest),
+        26..=34 => Some(MouseAction::ProfileDefaultModel),
         _ => None,
     }
 }
 
 fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
     match column {
-        0..=13 => Some(MouseAction::ProfileDisconnect),
-        15..=24 => Some(MouseAction::ProfileDelete),
+        0..=11 => Some(MouseAction::ProfileDisconnect),
+        14..=26 => Some(MouseAction::ProfileDelete),
         _ => None,
     }
 }
 
 fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
+    let compact = area.width < 48;
+    let padding = if compact { 0 } else { 2 };
+    let gap = if compact { 1 } else { 2 };
     let mut offset = area.x;
     for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        let width = u16::try_from(label.len().saturating_add(2)).unwrap_or(u16::MAX);
+        let width = u16::try_from(label.len().saturating_add(padding)).unwrap_or(u16::MAX);
         if column >= offset && column < offset.saturating_add(width) {
             return Some(MouseAction::SettingsTab(index));
         }
-        offset = offset.saturating_add(width).saturating_add(2);
+        offset = offset.saturating_add(width).saturating_add(gap);
     }
     None
 }
@@ -1599,10 +1602,11 @@ fn render_settings_page_header(
 }
 
 fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let compact = area.width < 48;
     let mut spans = Vec::new();
     for (index, label) in SETTINGS_NAV.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::raw("  "));
+            spans.push(Span::raw(if compact { " " } else { "  " }));
         }
         let style = if index == model.settings_workspace.nav_selected {
             if model.settings_workspace.nav_focus {
@@ -1613,7 +1617,14 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             visual_style(model, VisualRole::Muted)
         };
-        spans.push(Span::styled(format!(" {label} "), style));
+        spans.push(Span::styled(
+            if compact {
+                (*label).to_owned()
+            } else {
+                format!(" {label} ")
+            },
+            style,
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -2045,7 +2056,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let compact = presentation(model).compact;
+    let compact = presentation(model).compact || inner.width < 72;
     let notice_height = if model.notice.is_some() && inner.height >= 8 {
         if compact { 1 } else { 2 }
     } else {
@@ -2063,13 +2074,12 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(inner);
 
-    render_settings_page_header(
-        frame,
-        rows[0],
-        model,
-        "Providers",
-        "Connect a provider. Connected accounts stay visible alongside the list.",
-    );
+    let subtitle = if compact {
+        "Add or manage provider connections."
+    } else {
+        "Add a provider on the left. Review saved connections on the right."
+    };
+    render_settings_page_header(frame, rows[0], model, "Providers", subtitle);
     let (list_area, detail_area) = profile_list_detail_areas(rows[1], model);
     render_connected_profiles(frame, list_area, model);
     if let Some(detail_area) = detail_area {
@@ -2084,11 +2094,15 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
+        let help = if inner.width < 48 {
+            format!("↑/↓ choose  Enter open  Esc {return_to}")
+        } else if inner.width < 72 {
+            format!("↑/↓ choose  ←/→ section  Enter open  Esc {return_to}")
+        } else {
+            format!("←/→ section  ↑/↓ choose  Enter open  Alt+letter action  Esc {return_to}")
+        };
         frame.render_widget(
-            Paragraph::new(format!(
-                "←/→ section  ↑/↓ choose  Enter open/activate  Esc {return_to}"
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new(help).style(visual_style(model, VisualRole::Muted)),
             rows[3],
         );
     }
@@ -2121,7 +2135,7 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ProviderChoices;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Available providers ")
+        .title(" Add provider ")
         .border_style(visual_style(
             model,
             if focused {
@@ -2187,7 +2201,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Connected accounts ")
+        .title(" Saved connections ")
         .border_style(visual_style(
             model,
             if focused {
@@ -2202,8 +2216,10 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let Some(profile) = model.selected_profile() else {
         if inner.width > 0 && inner.height > 0 {
             frame.render_widget(
-                Paragraph::new("No connected accounts yet. Choose a provider to get started.")
-                    .style(visual_style(model, VisualRole::Muted)),
+                Paragraph::new(
+                    "No saved connections yet. Choose a provider on the left to connect.",
+                )
+                .style(visual_style(model, VisualRole::Muted)),
                 inner,
             );
         }
@@ -2234,25 +2250,36 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         })
         .collect::<Vec<_>>();
     lines.push(Line::from(""));
+    let (sign_in, managed_by) = if profile.kind == ProviderKindLabel::CodexCli {
+        ("ChatGPT subscription", "official Codex CLI")
+    } else {
+        (
+            "API key",
+            match profile.credential_source {
+                crate::model::CredentialSourceLabel::Environment => "environment variable",
+                crate::model::CredentialSourceLabel::CredentialVault => "operating-system vault",
+                crate::model::CredentialSourceLabel::SessionOnly => "not saved",
+            },
+        )
+    };
     lines.extend([
-        detail_line(model, "Name", &profile.id),
-        detail_line(model, "Provider", profile.kind.as_str()),
+        detail_line(model, "Profile", &profile.id),
+        detail_line(model, "Provider", provider_display_name(profile.kind)),
         detail_line(
             model,
-            "Status",
-            if profile.active {
-                "active"
-            } else {
-                "available"
-            },
+            "Use",
+            if profile.active { "active" } else { "saved" },
         ),
-        detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Credential", profile.credential_state.as_str()),
-        detail_line(model, "Source", profile.credential_source.as_str()),
+        detail_line(model, "Last check", profile.connection.label()),
+        detail_line(model, "Sign-in", sign_in),
+        detail_line(model, "Managed by", managed_by),
         detail_line(
             model,
             "Default model",
-            profile.default_model.as_deref().unwrap_or("not set"),
+            profile
+                .default_model
+                .as_deref()
+                .unwrap_or("provider default"),
         ),
         detail_line(model, "Thinking", &profile.default_mode),
     ]);
@@ -2273,11 +2300,11 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        "New  Credential  Test  Default model",
+        "N New  K Sign-in  T Test  M Default",
         visual_style(model, VisualRole::Assistant),
     ));
     lines.push(Line::styled(
-        "Disconnect  Delete",
+        "X Disconnect  Delete Remove",
         visual_style(model, VisualRole::Warning),
     ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -2305,35 +2332,59 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
     } else {
         " "
     };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(
-                "Connect your ChatGPT Codex subscription.",
-                visual_style(model, VisualRole::User),
+    let mut lines = vec![
+        Line::styled(
+            "Use your ChatGPT plan through the official Codex CLI.",
+            visual_style(model, VisualRole::User),
+        ),
+        Line::from(""),
+        Line::styled(
+            format!("{login_marker} 1. Open browser sign-in"),
+            visual_style(model, VisualRole::Normal),
+        ),
+        Line::styled(
+            format!("{save_marker} 2. Save connection after sign-in"),
+            visual_style(model, VisualRole::Normal),
+        ),
+        Line::from(""),
+        Line::styled(
+            "↑/↓ choose  Enter continue  S save  Esc back",
+            visual_style(model, VisualRole::Muted),
+        ),
+    ];
+    if let Some(notice) = &model.notice {
+        let (message, role) = match notice {
+            Notice::Info(message) => (display_safe(message), VisualRole::Warning),
+            Notice::Failure(failure) => (
+                format!(
+                    "{}: {}",
+                    display_safe(&failure.code),
+                    display_safe(&failure.message)
+                ),
+                VisualRole::Error,
             ),
+        };
+        lines.extend([
             Line::from(""),
-            Line::styled(
-                format!("{login_marker} Enter  Open official browser sign-in"),
-                visual_style(model, VisualRole::Normal),
-            ),
-            Line::styled(
-                format!("{save_marker} S      Save this Codex account after sign-in"),
-                visual_style(model, VisualRole::Normal),
-            ),
-            Line::from(""),
-            Line::styled(
-                "↑/↓ choose  Enter confirm  Esc return to Providers",
-                visual_style(model, VisualRole::Muted),
-            ),
-            Line::from(""),
-            Line::styled(
-                "AutoHarness never reads or stores Codex credentials.",
-                visual_style(model, VisualRole::Muted),
-            ),
-        ])
-        .wrap(Wrap { trim: false }),
-        inner,
-    );
+            Line::styled(message, visual_style(model, role)),
+        ]);
+    }
+    lines.extend([
+        Line::from(""),
+        Line::styled(
+            "Sign-in and tokens stay with Codex. If needed, run 'codex login' manually.",
+            visual_style(model, VisualRole::Muted),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn provider_display_name(kind: ProviderKindLabel) -> &'static str {
+    match kind {
+        ProviderKindLabel::Gemini => "Google AI Studio",
+        ProviderKindLabel::Router => "OpenAI-compatible API",
+        ProviderKindLabel::CodexCli => "Codex subscription",
+    }
 }
 
 fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {

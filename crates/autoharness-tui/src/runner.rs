@@ -321,19 +321,28 @@ fn dispatch_effects(
 
 #[cfg(windows)]
 fn launch_codex_login(executable: &std::ffi::OsStr) -> std::io::Result<()> {
-    std::process::Command::new("powershell.exe")
+    codex_login_command(executable).spawn().map(|_| ())
+}
+
+#[cfg(windows)]
+fn codex_login_command(executable: &std::ffi::OsStr) -> std::process::Command {
+    let mut command = std::process::Command::new("powershell.exe");
+    command
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Start-Process -FilePath $args[0] -ArgumentList 'login'",
+            "Start-Process -FilePath $env:AUTOHARNESS_CODEX_LOGIN_EXECUTABLE -ArgumentList 'login'",
         ])
-        .arg(executable)
+        // Values after PowerShell's `-Command` are appended to the command
+        // text, not exposed through `$args`. Passing the validated executable
+        // through this process-local environment entry avoids that parser trap
+        // and keeps paths out of the script itself.
+        .env("AUTOHARNESS_CODEX_LOGIN_EXECUTABLE", executable)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
+        .stderr(std::process::Stdio::null());
+    command
 }
 
 #[cfg(not(windows))]
@@ -504,5 +513,23 @@ mod tests {
             });
             assert!(terminal_message(event, &model, 80, 24).is_none());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_login_executable_is_passed_outside_powershell_command_text() {
+        let executable = std::ffi::OsStr::new(r"C:\Program Files\Codex\codex.exe");
+        let command = codex_login_command(executable);
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args.len(), 4);
+        assert!(args[3].contains("$env:AUTOHARNESS_CODEX_LOGIN_EXECUTABLE"));
+        assert!(!args.iter().any(|arg| arg.contains("Program Files")));
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "AUTOHARNESS_CODEX_LOGIN_EXECUTABLE" && value == Some(executable)
+        }));
     }
 }
