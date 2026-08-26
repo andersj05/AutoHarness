@@ -1436,11 +1436,26 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
+    let header_height = if body.height >= 8 { 2 } else { 1 };
+    let help_height = u16::from(body.height >= 3);
+    let page_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(help_height),
+        ])
+        .split(body);
+    render_settings_page_header(
+        frame,
+        page_rows[0],
+        model,
+        "General",
+        "Review runtime state, preferences, appearance, and terminal behavior.",
+    );
+
     let mut lines = vec![
-        Line::styled(
-            "LOCAL PROFILE DEFAULTS",
-            visual_style(model, VisualRole::User),
-        ),
+        Line::styled("PROFILE DEFAULTS", visual_style(model, VisualRole::User)),
         settings_preference_line(model, SettingsPreference::DisplayLabel),
         Line::from(""),
         settings_preference_line(model, SettingsPreference::Provider),
@@ -1452,7 +1467,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             visual_style(model, VisualRole::Field),
         ),
         Line::styled(
-            "Stored provider credentials remain managed from Profiles.",
+            "Stored provider credentials remain managed from Providers.",
             visual_style(model, VisualRole::Muted),
         ),
         Line::from(""),
@@ -1493,9 +1508,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             )
         })
     }));
-    let hint_height = u16::from(body.height >= 2);
-    let content_height = body.height.saturating_sub(hint_height);
-    let content = Rect::new(body.x, body.y, body.width, content_height);
+    let content = page_rows[1];
     let scroll = settings_scroll(
         &lines,
         SettingsPreference::at(model.settings_workspace.selected),
@@ -1507,15 +1520,38 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .scroll((scroll, 0)),
         content,
     );
-    if hint_height > 0 {
-        let hint = Rect::new(body.x, body.y + content_height, body.width, hint_height);
+    if help_height > 0 {
         frame.render_widget(
             Paragraph::new(format!(
-                "{} Left/Right pages  Down open  Up return  Up/Down select  PgUp/PgDn  Enter activate/edit  R inherit  D default  Esc chat",
+                "{} ←/→ page  ↑/↓ choose  Enter edit  R inherit  D reset  Esc Chat",
                 navigation_keys(model)
             ))
             .style(visual_style(model, VisualRole::Muted)),
-            hint,
+            page_rows[2],
+        );
+    }
+}
+
+fn render_settings_page_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    title: &'static str,
+    description: &'static str,
+) {
+    if area.height > 1 {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(title, visual_style(model, VisualRole::User)),
+                Line::styled(description, visual_style(model, VisualRole::Muted)),
+            ]),
+            area,
+        );
+    } else if area.height == 1 {
+        frame.render_widget(
+            Paragraph::new(format!("{title}  {description}"))
+                .style(visual_style(model, VisualRole::User)),
+            area,
         );
     }
 }
@@ -1541,12 +1577,34 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    render_local_profile(frame, area, model);
-    if area.height >= 3 {
+    let header_height = if area.height >= 8 { 2 } else { 1 };
+    let help_height = u16::from(area.height >= 3);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(help_height),
+        ])
+        .split(area);
+    render_settings_page_header(
+        frame,
+        rows[0],
+        model,
+        "Profile",
+        "Manage the local identity and workspace defaults used across sessions.",
+    );
+    let card_height = rows[1].height.min(4);
+    render_local_profile(
+        frame,
+        Rect::new(rows[1].x, rows[1].y, rows[1].width, card_height),
+        model,
+    );
+    if help_height > 0 {
         frame.render_widget(
-            Paragraph::new("Enter edit local profile  Esc return to Settings")
+            Paragraph::new("Enter edit  Up return  Left/Right pages  Esc Settings")
                 .style(visual_style(model, VisualRole::Muted)),
-            Rect::new(area.x, area.y + 2, area.width, 1),
+            rows[2],
         );
     }
 }
@@ -1864,21 +1922,13 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(inner);
 
-    let header = if header_height > 1 {
-        vec![
-            Line::styled("Providers", visual_style(model, VisualRole::User)),
-            Line::styled(
-                "Connect a provider. Connected accounts stay visible on the right.",
-                visual_style(model, VisualRole::Muted),
-            ),
-        ]
-    } else {
-        vec![Line::styled(
-            "Providers  Connect a provider",
-            visual_style(model, VisualRole::User),
-        )]
-    };
-    frame.render_widget(Paragraph::new(header), rows[0]);
+    render_settings_page_header(
+        frame,
+        rows[0],
+        model,
+        "Providers",
+        "Connect a provider. Connected accounts stay visible alongside the list.",
+    );
     let (list_area, detail_area) = profile_list_detail_areas(rows[1], model);
     render_connected_profiles(frame, list_area, model);
     if let Some(detail_area) = detail_area {
@@ -2148,7 +2198,7 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
 fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {
     match choice {
         crate::model::ProviderChoice::Gemini | crate::model::ProviderChoice::GoogleAiStudio => {
-            "Google AI Studio API key"
+            "API key"
         }
         crate::model::ProviderChoice::Codex => {
             if model
@@ -2157,22 +2207,39 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
                 .iter()
                 .any(|profile| profile.kind == ProviderKindLabel::CodexCli)
             {
-                "connected account"
+                "Connected"
             } else {
-                "ChatGPT subscription"
+                "Subscription"
             }
         }
-        crate::model::ProviderChoice::Cursor => "official CLI bridge not installed",
-        crate::model::ProviderChoice::ClaudeCode => "official CLI bridge not installed",
+        crate::model::ProviderChoice::Cursor => "Unavailable",
+        crate::model::ProviderChoice::ClaudeCode => "Unavailable",
         crate::model::ProviderChoice::OpenAiCompatible => "API key",
     }
 }
 
 fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let inner = area;
-    if inner.width == 0 || inner.height == 0 {
+    if area.width == 0 || area.height == 0 {
         return;
     }
+    let header_height = if area.height >= 8 { 2 } else { 1 };
+    let help_height = u16::from(area.height >= 3);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(help_height),
+        ])
+        .split(area);
+    render_settings_page_header(
+        frame,
+        rows[0],
+        model,
+        "Agents",
+        "Choose the provider, model, and thinking defaults for every new session.",
+    );
+    let inner = rows[1];
     let step = model.agent_defaults.step;
     let step_chip = |label, candidate| {
         Span::styled(
@@ -2305,14 +2372,16 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ));
         }
     }
-    if inner.height >= 2 {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(
-            "↑/↓ choose  Enter continue  Esc return to Settings",
-            visual_style(model, VisualRole::Muted),
-        ));
-    }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    if help_height > 0 {
+        frame.render_widget(
+            Paragraph::new(
+                "↑/↓ choose  Enter continue/save  Up return  Left/Right pages  Esc Settings",
+            )
+            .style(visual_style(model, VisualRole::Muted)),
+            rows[2],
+        );
+    }
 }
 
 fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {

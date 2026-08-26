@@ -1489,7 +1489,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ),
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open Sessions"),
-            ("Ctrl+G", "open Profiles"),
+            ("Ctrl+G", "open Providers"),
             ("Alt+U", "edit the local user profile"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
