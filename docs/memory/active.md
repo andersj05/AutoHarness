@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Settings now owns a direct Models tab for the active profile, saves model and thinking defaults together, applies them to fresh sessions without overwriting session-specific choices, and shows responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass while Phase 3.9 release evidence remains pending
+**Status:** Settings now owns a direct Models tab for the active profile, saves model and thinking defaults together, applies them to fresh sessions without overwriting session-specific choices, and shows responsive model, thinking, workspace-path, and Git-branch metadata above the composer; the native Codex adapter now sends the current GPT-5.6 client identity and Responses Lite contract, and an opt-in live `gpt-5.6-luna` request with `high` reasoning completes through the exact AutoHarness adapter path while the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -19,7 +19,7 @@ Finish validating the default-model Settings and composer-metadata flow, then pr
 - `autoharness-provider` also provides shared SSE framing, fixture conformance assertions, capability preflight, deadlines, bounded pre-stream retries, concurrency, per-project rate limits, and catalog freshness policy.
 - `autoharness-provider-gemini` implements paginated Google model discovery, stable Interactions v1 streaming, a narrow pre-stream Generate Content fallback, cancellation, retry classification, limits, environment or in-app credential admission, and credential redaction.
 - `autoharness-provider-openai` implements configurable OpenAI-compatible router discovery and streamed chat completions with a validated base URL, configurable sensitive authentication header, pagination, cumulative usage, cancellation, limits, and credential redaction.
-- `autoharness-provider-codex-cli` retains its stable package and provider identifiers for compatibility but now owns the native PKCE browser callback, vault-safe OAuth payload, refresh path, direct bounded Codex Responses stream, static supported catalog, and token redaction without an installed Codex CLI.
+- `autoharness-provider-codex-cli` retains its stable package and provider identifiers for compatibility but now owns the native PKCE browser callback, vault-safe OAuth payload, refresh path, GPT-5.6 Responses Lite request framing, direct bounded Codex Responses stream, static supported catalog, and token redaction without an installed Codex CLI.
 - `autoharness-store` and `autoharness-store-sqlite` provide an event-authoritative store, transactional projections, WAL-mode local durability, idempotent append, migration verification, projection rebuilding, and an integrity-checked provider-neutral model-catalog cache.
 - `autoharness-settings` resolves defaults, user file, workspace file, environment, and override layers in fixed precedence with per-key provenance; schema 4 adds optional profile default reasoning effort beside default models while older documents migrate on mutation (ADR-0012).
 - The atomic application-owned `autoharness.profiles.json` document stores validated named profiles, non-secret connection fields, optional default models, opaque credential references, and bounded credential-recovery records.
@@ -58,6 +58,7 @@ Finish validating the default-model Settings and composer-metadata flow, then pr
 
 ## Recently completed
 
+- On 2026-08-26, the native Codex adapter replaced the rejected AutoHarness package identity with the current Codex protocol identity and version, adopted GPT-5.6 Responses Lite framing, accepted the backend's headerless but bounded SSE response, and passed an opt-in live `gpt-5.6-luna` request with `high` reasoning through the stored AutoHarness profile and vault credential.
 - On 2026-08-26, Settings replaced the multi-profile Agents wizard with a direct Models tab for the active profile, preselects and marks the saved model, persists model and thinking together, applies the default only to fresh sessions, preserves per-session choices across catalog refresh, and renders responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass.
 - On 2026-08-26, Settings gained Midnight, Ocean, Forest, and Rose themes plus Soft and Vivid color treatments, focused editable values render previous, current, and next options as a responsive carousel, and focus-specific help distinguishes page navigation from option changes.
 - On 2026-08-26, command filtering became deterministic relevance ranking with typo tolerance, the best result becomes selected after each query edit, and `/new`, `/connect`, `/refresh`, `/tools`, and `/user` replaced longer visible spellings while the old commands remain exact compatibility aliases.
