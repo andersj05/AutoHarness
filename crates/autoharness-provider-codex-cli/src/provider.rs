@@ -23,6 +23,12 @@ use crate::oauth::{CodexOAuthCredential, extract_residency, refresh_credential};
 use crate::{CODEX_DEFAULT_MODEL_ID, CodexSettings};
 
 const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+// The ChatGPT Codex compatibility endpoint gates newer model routes on the
+// first-party client identity and protocol version, independently of this
+// crate's package version.
+const CODEX_CLIENT_ORIGINATOR: &str = "codex_cli_rs";
+const CODEX_PROTOCOL_VERSION: &str = "0.150.0";
+const CODEX_USER_AGENT: &str = "codex_cli_rs/0.150.0";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
@@ -116,7 +122,7 @@ impl CodexProvider {
             return Err(limit_error());
         }
         let (access_token, account_id, residency) = self.usable_credential().await?;
-        let mut headers = HeaderMap::new();
+        let mut headers = codex_request_headers();
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", access_token.as_str()))
@@ -126,18 +132,6 @@ impl CodexProvider {
             "chatgpt-account-id",
             HeaderValue::from_str(account_id.as_str()).map_err(|_| authentication_error())?,
         );
-        headers.insert(
-            "openai-beta",
-            HeaderValue::from_static("responses=experimental"),
-        );
-        headers.insert("originator", HeaderValue::from_static("autoharness"));
-        headers.insert(
-            "version",
-            HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
-        );
-        headers.insert(USER_AGENT, HeaderValue::from_static("autoharness/0.1.0"));
-        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Some(residency) = residency {
             headers.insert(
                 "x-openai-internal-codex-residency",
@@ -262,7 +256,6 @@ struct CodexContent<'a> {
 #[derive(Serialize)]
 struct CodexReasoning<'a> {
     effort: &'a str,
-    summary: &'static str,
 }
 
 #[derive(Serialize)]
@@ -304,12 +297,26 @@ fn request_body(
         stream: true,
         store: false,
         include: ["reasoning.encrypted_content"],
-        reasoning: reasoning_effort.map(|effort| CodexReasoning {
-            effort,
-            summary: "auto",
-        }),
+        reasoning: reasoning_effort.map(|effort| CodexReasoning { effort }),
     })
     .map_err(|_| internal_error())
+}
+
+fn codex_request_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "openai-beta",
+        HeaderValue::from_static("responses=experimental"),
+    );
+    headers.insert(
+        "originator",
+        HeaderValue::from_static(CODEX_CLIENT_ORIGINATOR),
+    );
+    headers.insert("version", HeaderValue::from_static(CODEX_PROTOCOL_VERSION));
+    headers.insert(USER_AGENT, HeaderValue::from_static(CODEX_USER_AGENT));
+    headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers
 }
 
 fn decode_stream(
@@ -667,8 +674,30 @@ mod tests {
         assert_eq!(value["stream"], true);
         assert_eq!(value["store"], false);
         assert_eq!(value["reasoning"]["effort"], "high");
+        assert!(value["reasoning"].get("summary").is_none());
         assert_eq!(value["input"][0]["content"][0]["type"], "input_text");
         assert!(!String::from_utf8(body).expect("UTF-8").contains("Bearer"));
+    }
+
+    #[test]
+    fn request_uses_codex_compatible_client_identity() {
+        let headers = codex_request_headers();
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs")
+        );
+        assert_eq!(
+            headers.get("version").and_then(|value| value.to_str().ok()),
+            Some("0.150.0")
+        );
+        assert_eq!(
+            headers
+                .get(USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs/0.150.0")
+        );
     }
 
     #[test]
