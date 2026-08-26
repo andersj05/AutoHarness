@@ -36,8 +36,8 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
 
     terminal.send_bytes(&ALT_3);
     terminal.wait_for(
-        |screen| screen.contents().contains("Profiles & Providers"),
-        "Alt+3 should open Profiles",
+        |screen| screen.contents().contains("Providers & Connections"),
+        "Alt+3 should open Providers",
     );
     terminal.send_bytes(&ALT_4);
     terminal.wait_for(
@@ -57,7 +57,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
         |screen| screen.contents().contains("Settings & Provenance"),
         "Esc should restore the exact Settings route",
     );
-    for _ in 0..3 {
+    for _ in 0..10 {
         terminal.send_bytes(&DOWN);
     }
     terminal.send_bytes(&RIGHT);
@@ -79,7 +79,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
             let text = screen.contents();
             text.contains("Conversation")
                 && text.contains("seeded navigation response")
-                && text.contains("credential needed")
+                && text.contains("Ask AutoHarness")
         },
         "Alt+1 should return to replayable offline Chat",
     );
@@ -129,9 +129,11 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Alt+1..5 routes") && text.contains("Chat")
+            text.contains("Profile")
+                && text.contains("Settings")
+                && text.contains("Ask AutoHarness")
         },
-        "narrow layout should expose the compact route switcher",
+        "narrow layout should retain compact navigation actions",
     );
 
     terminal.send_bytes(&ctrl_c());

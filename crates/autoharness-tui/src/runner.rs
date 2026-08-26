@@ -264,6 +264,16 @@ fn dispatch_effects(
     for effect in effects {
         match effect {
             UiEffect::Quit => return true,
+            UiEffect::LaunchCodexLogin => {
+                let executable = std::env::var_os("AUTOHARNESS_CODEX_EXECUTABLE")
+                    .unwrap_or_else(|| std::ffi::OsString::from("codex"));
+                let _ = std::process::Command::new(executable)
+                    .arg("login")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
             UiEffect::CopyTranscript(text) => {
                 // OSC 52 copy; failure is non-fatal because terminals may
                 // simply not advertise clipboard support.
@@ -280,12 +290,11 @@ fn dispatch_effects(
                 }
                 if let Err(error) = intents.try_send(intent) {
                     let (message, retry) = match error {
-                        TrySendError::Full(_) => (
-                            "Application is busy; the request was not queued",
-                            RetryPolicy::Now,
-                        ),
+                        TrySendError::Full(_) => {
+                            ("Application is busy; try again", RetryPolicy::Now)
+                        }
                         TrySendError::Closed(_) => {
-                            ("Application command channel is closed", RetryPolicy::Never)
+                            ("Application is no longer available", RetryPolicy::Never)
                         }
                     };
                     let _ = update(
@@ -323,7 +332,7 @@ mod tests {
     use ratatui_textarea::{Input, Key};
 
     use super::*;
-    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind, Route};
+    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind};
 
     fn selected_model() -> ModelRef {
         ModelRef::new(
@@ -421,15 +430,25 @@ mod tests {
     #[test]
     fn left_mouse_down_becomes_a_semantic_click() {
         let model = model_with_draft();
-        let event = Event::Mouse(MouseEvent {
+        let profile_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 2,
-            row: 0,
+            row: 23,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
-            terminal_message(event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::Route(Route::Chat)))
+            terminal_message(profile_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::SettingsTab(2)))
+        ));
+        let settings_event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 14,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            terminal_message(settings_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::SettingsTab(0)))
         ));
     }
 

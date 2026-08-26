@@ -855,6 +855,8 @@ pub enum PendingKind {
     TestProfile(String),
     /// Selection of the active session model as this profile's default.
     SetProfileDefaultModel(String),
+    /// One explicit profile and compatible model default.
+    SetProfileDefault { profile_id: String, model: ModelRef },
     /// Stored credential disconnection.
     DisconnectProfile(String),
     /// One user-layer preference update from the Settings route.
@@ -868,6 +870,8 @@ pub enum PendingKind {
 pub enum UiEffect {
     /// Dispatch an intent through the bounded application mailbox.
     Dispatch(UiIntent),
+    /// Start the official Codex CLI browser-login flow without handling credentials.
+    LaunchCodexLogin,
     /// Copy exact text to the system clipboard through OSC 52.
     CopyTranscript(String),
     /// Exit the terminal client.
@@ -921,6 +925,12 @@ pub enum UiIntent {
     SetProfileDefaultModel {
         request_id: RequestId,
         profile_id: String,
+    },
+    /// Persists one explicit connected-provider model as that profile's default.
+    SetProfileDefault {
+        request_id: RequestId,
+        profile_id: String,
+        model: ModelRef,
     },
     /// Disconnects one stored profile credential.
     DisconnectProfile {
@@ -1012,6 +1022,7 @@ impl UiIntent {
             | Self::ReplaceProfileCredential { request_id, .. }
             | Self::TestProfile { request_id, .. }
             | Self::SetProfileDefaultModel { request_id, .. }
+            | Self::SetProfileDefault { request_id, .. }
             | Self::DisconnectProfile { request_id, .. }
             | Self::DeleteProfile { request_id, .. }
             | Self::RefreshCatalog { request_id }
@@ -1047,6 +1058,8 @@ pub enum UiNotice {
 pub enum MouseAction {
     /// Switch to one of the primary shell routes.
     Route(Route),
+    /// Switch to one of the nested Settings tabs.
+    SettingsTab(usize),
     /// Open the local user-profile dialog.
     OpenUserProfile,
     /// Chat footer actions.
@@ -1189,7 +1202,7 @@ pub(crate) struct ProfileEditorState {
 impl ProfileEditorState {
     pub fn field_count(&self) -> usize {
         match self.kind {
-            ProviderKindLabel::Gemini => 2,
+            ProviderKindLabel::Gemini | ProviderKindLabel::CodexCli => 2,
             ProviderKindLabel::Router => 5,
         }
     }
@@ -1275,15 +1288,74 @@ impl Drop for ProfileCredentialEditor {
     }
 }
 
-/// Full-screen Profiles and Providers local interaction state.
+/// One provider choice exposed by the terminal connection catalog.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProviderChoice {
+    Gemini,
+    GoogleAiStudio,
+    Cursor,
+    Codex,
+    ClaudeCode,
+    OpenAiCompatible,
+}
+
+pub(crate) const PROVIDER_CHOICES: [ProviderChoice; 6] = [
+    ProviderChoice::Gemini,
+    ProviderChoice::GoogleAiStudio,
+    ProviderChoice::Cursor,
+    ProviderChoice::Codex,
+    ProviderChoice::ClaudeCode,
+    ProviderChoice::OpenAiCompatible,
+];
+
+impl ProviderChoice {
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini",
+            Self::GoogleAiStudio => "Google AI Studio API",
+            Self::Cursor => "Cursor",
+            Self::Codex => "Codex",
+            Self::ClaudeCode => "Claude Code",
+            Self::OpenAiCompatible => "OpenAI-compatible API",
+        }
+    }
+}
+
+/// Provider-choice, authentication-page, and account-editor state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
+    pub choice_selected: usize,
+    pub auth_page: Option<ProviderChoice>,
+    pub open_credential_after_save: Option<String>,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,
     pub editor: Option<ProfileEditorState>,
     pub credential: Option<ProfileCredentialEditor>,
     pub confirming_delete: Option<String>,
+}
+
+/// Step in the keyboard-first default-agent selection sequence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AgentDefaultStep {
+    /// Select a connected provider account.
+    #[default]
+    Provider,
+    /// Select one compatible model from the active provider catalog.
+    Model,
+    /// Confirm the only currently portable thinking choice.
+    Thinking,
+}
+
+/// Local state for selecting the default agent provider, model, and thinking mode.
+#[derive(Debug, Default)]
+pub(crate) struct AgentDefaultsState {
+    pub step: AgentDefaultStep,
+    pub profile_selected: usize,
+    pub model_selected: usize,
+    pub profile_id: Option<String>,
+    pub model: Option<ModelRef>,
 }
 /// Command-palette local state.
 #[derive(Debug, Default)]
@@ -1353,6 +1425,10 @@ impl SettingsPreference {
 /// Inline state owned exclusively by the Settings route.
 #[derive(Debug, Default)]
 pub(crate) struct SettingsState {
+    /// Whether the top-level Settings navigation owns arrow-key focus.
+    pub nav_focus: bool,
+    /// Index into the top-level Settings navigation.
+    pub nav_selected: usize,
     /// Index into `SettingsPreference::ALL`.
     pub selected: usize,
     /// First rendered Settings line kept visible while selecting preferences.
@@ -1360,6 +1436,8 @@ pub(crate) struct SettingsState {
     /// Buffered local-label edit; no value is persisted until Enter.
     pub display_label_editor: Option<String>,
 }
+
+pub(crate) const SETTINGS_NAV_COUNT: usize = 4;
 
 /// Local user-profile dialog state.
 #[derive(Debug, Default)]
@@ -1462,13 +1540,13 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Settings",
         rows: &[
+            ("Left/Right", "move between Settings pages"),
+            ("Down", "enter Settings preferences"),
             ("Up/Down", "choose a preference"),
             ("PageUp/PageDown", "move through settings"),
             ("Home/End", "jump to the first or last preference"),
-            ("Left/Right", "change the selected value"),
-            ("Enter", "edit the display label"),
-            ("R", "reset to the inherited value"),
-            ("D", "reset to the user default"),
+            ("Enter", "activate a page or edit the display label"),
+            ("R / D", "inherit or restore the user default"),
             ("Esc", "return to Chat"),
         ],
     },
@@ -1549,21 +1627,21 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Alt+2"),
     },
     CommandEntry {
-        id: "profiles",
-        label: "Profiles and Providers",
-        description: "Manage providers, API keys, connection tests, and defaults",
-        key_hint: Some("Alt+3"),
-    },
-    CommandEntry {
         id: "profile",
-        label: "Profile and Providers",
-        description: "Open local profile identity and provider connections",
+        label: "Profile settings",
+        description: "Open the Profile tab in Settings",
         key_hint: Some("Alt+3"),
     },
     CommandEntry {
         id: "provider",
-        label: "Provider setup",
-        description: "Create or connect a provider and store its API key securely",
+        label: "Provider settings",
+        description: "Open the Providers tab in Settings",
+        key_hint: None,
+    },
+    CommandEntry {
+        id: "agents",
+        label: "Agents settings",
+        description: "Open the Agents tab in Settings",
         key_hint: None,
     },
     CommandEntry {
@@ -1660,6 +1738,8 @@ pub enum ProviderKindLabel {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
+    /// User-owned official Codex CLI subscription session.
+    CodexCli,
 }
 
 impl ProviderKindLabel {
@@ -1669,6 +1749,7 @@ impl ProviderKindLabel {
         match self {
             Self::Gemini => "gemini",
             Self::Router => "router",
+            Self::CodexCli => "codex subscription",
         }
     }
 }
@@ -2014,6 +2095,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
+    /// Keyboard-first connected-provider default agent selection state.
+    pub(crate) agent_defaults: AgentDefaultsState,
     /// Local user-profile dialog interaction state.
     pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
@@ -2125,6 +2208,7 @@ impl Model {
             startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
+            agent_defaults: AgentDefaultsState::default(),
             drafts: SessionDrafts::default(),
             user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
@@ -2169,6 +2253,9 @@ impl Model {
             self.navigation.route = route;
         }
         self.navigation.overlay = None;
+        if route == Route::Settings {
+            self.settings_workspace.nav_focus = true;
+        }
         self.focus = route.focus();
         self.dirty = true;
         true
@@ -2243,6 +2330,8 @@ impl Model {
     #[must_use]
     pub const fn profile_center_open(&self) -> bool {
         matches!(self.navigation.route, Route::Profiles)
+            || (matches!(self.navigation.route, Route::Settings)
+                && self.settings_workspace.nav_selected == 1)
     }
 
     /// Returns the highlighted provider profile identity.

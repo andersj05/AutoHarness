@@ -126,14 +126,28 @@ fn command_events_round_trip_and_replay_the_same_visible_session() {
         .iter()
         .map(|event| event.sequence().get())
         .collect();
-    assert_eq!(sequences, [1, 2, 3]);
-    for (event, command) in live.events().iter().zip(&commands) {
-        assert_eq!(
-            event.causation(),
-            &Causation::Command(command.command_id().clone())
-        );
-        assert_eq!(event.correlation_id(), &correlation_id());
-    }
+    assert_eq!(sequences, [1, 2, 3, 4]);
+    assert_eq!(
+        live.events()[0].causation(),
+        &Causation::Command(commands[0].command_id().clone())
+    );
+    assert_eq!(
+        live.events()[1].causation(),
+        &Causation::Command(commands[1].command_id().clone())
+    );
+    assert_eq!(
+        live.events()[2].causation(),
+        &Causation::Command(commands[2].command_id().clone())
+    );
+    assert_eq!(
+        live.events()[3].causation(),
+        &Causation::Event(live.events()[2].event_id().clone())
+    );
+    assert!(
+        live.events()
+            .iter()
+            .all(|event| event.correlation_id() == &correlation_id())
+    );
 
     let live_session = live
         .session(&session_id())
@@ -144,12 +158,16 @@ fn command_events_round_trip_and_replay_the_same_visible_session() {
         live_session.admitted_inputs()[0].prompt().as_str(),
         exact_prompt
     );
+    assert!(matches!(
+        live.events()[3].payload(),
+        EventPayload::SessionRenamed { title } if title.as_str() == "first line"
+    ));
 
     let serialized = serde_json::to_vec(live.events()).expect("serialize event log");
     let restored_events: Vec<EventEnvelope> =
         serde_json::from_slice(&serialized).expect("deserialize event log");
     let replayed = InMemoryEngine::replay(
-        ScriptedMetadata::new([(event_id("event-4"), 400)]),
+        ScriptedMetadata::new([(event_id("event-5"), 500)]),
         restored_events,
     )
     .expect("valid replay");
@@ -165,7 +183,7 @@ fn command_events_round_trip_and_replay_the_same_visible_session() {
             "after restart",
         ))
         .expect("replayed engine accepts a later command");
-    assert_eq!(next[0].sequence().get(), 4);
+    assert_eq!(next[0].sequence().get(), 5);
 }
 
 #[test]

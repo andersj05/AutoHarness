@@ -76,7 +76,7 @@ impl SessionSummary {
     pub fn display_title(&self) -> String {
         match &self.title {
             Some(title) => title.as_str().to_owned(),
-            None => format!("Untitled session {}", self.session_id.as_str()),
+            None => "Untitled session".to_owned(),
         }
     }
 

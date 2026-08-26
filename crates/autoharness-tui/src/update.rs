@@ -8,10 +8,11 @@ use autoharness_settings::{
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus, LocalPreferenceChange, Message,
-    Model, MouseAction, Notice, OverlayKind, PendingKind, ProfileCredentialAction,
-    ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
-    ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route, SessionProjection,
+    AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus,
+    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PROVIDER_CHOICES,
+    PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
+    ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
+    ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT, SessionProjection,
     SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
@@ -121,6 +122,10 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
     match action {
         MouseAction::Route(route) => {
             navigate_to_route(model, route);
+            Vec::new()
+        }
+        MouseAction::SettingsTab(tab) => {
+            open_settings_tab(model, tab);
             Vec::new()
         }
         MouseAction::OpenUserProfile => {
@@ -288,7 +293,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
     ) {
-        navigate_to_route(model, Route::Profiles);
+        open_settings_tab(model, 1);
         return Vec::new();
     }
     if matches!(
@@ -405,6 +410,9 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             OverlayKind::Confirmation => match model.route() {
                 Route::Sessions => handle_browser_input(model, input),
                 Route::Profiles => handle_profile_input(model, input),
+                Route::Settings if model.settings_workspace.nav_selected == 1 => {
+                    handle_profile_input(model, input)
+                }
                 Route::Chat | Route::Settings | Route::Help => Vec::new(),
             },
         };
@@ -570,6 +578,27 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 }
 
 fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 1 {
+        return handle_profile_input(model, input);
+    }
+    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 3 {
+        return handle_agent_defaults_input(model, input);
+    }
+    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 2 {
+        match input {
+            Input {
+                key: Key::Enter, ..
+            } => {
+                open_user_profile(model);
+                return Vec::new();
+            }
+            Input { key: Key::Esc, .. } => {
+                navigate_to_route(model, Route::Chat);
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
     match input {
         Input { key: Key::Esc, .. } => {
             navigate_to_route(model, Route::Chat);
@@ -610,6 +639,41 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+        Input {
+            key: Key::Tab,
+            shift,
+            ..
+        } => {
+            move_settings_nav(model, if shift { -1 } else { 1 });
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } if model.settings_workspace.nav_focus => {
+            if model.settings_workspace.nav_selected == 0 {
+                model.settings_workspace.nav_focus = false;
+                model.dirty = true;
+                Vec::new()
+            } else {
+                activate_settings_nav(model)
+            }
+        }
+        Input { key: Key::Up, .. } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } if model.settings_workspace.nav_focus => {
+            model.settings_workspace.nav_focus = false;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } if model.settings_workspace.selected == 0 => {
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
+            Vec::new()
+        }
         Input { key: Key::Up, .. } => {
             move_settings_selection(model, -1);
             Vec::new()
@@ -621,21 +685,35 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         Input {
             key: Key::PageUp, ..
         } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection(model, -3);
             Vec::new()
         }
         Input {
             key: Key::PageDown, ..
         } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection(model, 3);
             Vec::new()
         }
         Input { key: Key::Home, .. } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection_to(model, 0);
             Vec::new()
         }
         Input { key: Key::End, .. } => {
+            model.settings_workspace.nav_focus = false;
             move_settings_selection_to(model, SettingsPreference::ALL.len().saturating_sub(1));
+            Vec::new()
+        }
+        Input { key: Key::Left, .. } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, -1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Right, ..
+        } if model.settings_workspace.nav_focus => {
+            move_settings_nav(model, 1);
             Vec::new()
         }
         Input { key: Key::Left, .. } => change_selected_preference(model, -1),
@@ -729,7 +807,21 @@ fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
     let _ = model.close_overlay(OverlayKind::UserProfile);
     effects
 }
+fn move_settings_nav(model: &mut Model, direction: isize) {
+    let count = isize::try_from(SETTINGS_NAV_COUNT).unwrap_or(1);
+    let current = isize::try_from(model.settings_workspace.nav_selected).unwrap_or(0);
+    let next = (current + direction).rem_euclid(count);
+    model.settings_workspace.nav_selected = usize::try_from(next).unwrap_or(0);
+    model.settings_workspace.display_label_editor = None;
+    model.dirty = true;
+}
 
+fn activate_settings_nav(model: &mut Model) -> Vec<UiEffect> {
+    model.settings_workspace.nav_focus = false;
+    model.notice = None;
+    model.dirty = true;
+    Vec::new()
+}
 fn selected_settings_preference(model: &Model) -> SettingsPreference {
     SettingsPreference::at(model.settings_workspace.selected)
 }
@@ -739,9 +831,9 @@ fn move_settings_selection(model: &mut Model, direction: isize) {
     let last = SettingsPreference::ALL.len().saturating_sub(1);
     move_settings_selection_to(model, current.saturating_add_signed(direction).min(last));
 }
-
 fn move_settings_selection_to(model: &mut Model, selected: usize) {
     let last = SettingsPreference::ALL.len().saturating_sub(1);
+    model.settings_workspace.nav_focus = false;
     model.settings_workspace.selected = selected.min(last);
     model.settings_workspace.scroll = 0;
     model.settings_workspace.display_label_editor = None;
@@ -999,11 +1091,27 @@ fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>
     }
 }
 
+/// Resolves legacy command spellings to one canonical palette entry.
+fn canonical_command_id(id: &str) -> &str {
+    match id {
+        "profiles" => "provider",
+        _ => id,
+    }
+}
+
+fn open_settings_tab(model: &mut Model, tab: usize) {
+    navigate_to_route(model, Route::Settings);
+    model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
+    model.settings_workspace.nav_focus = false;
+    model.dirty = true;
+}
+
 /// Runs one shared command by its stable table identity.
 fn run_command_by_id(model: &mut Model, id: &str) -> Result<Vec<UiEffect>, String> {
+    let canonical = canonical_command_id(id);
     let entry = COMMANDS
         .iter()
-        .find(|entry| entry.id == id)
+        .find(|entry| entry.id == canonical)
         .ok_or_else(|| format!("Unknown command '/{id}'. Press Ctrl+/ to list commands."))?;
     Ok(execute_command(model, *entry))
 }
@@ -1021,24 +1129,20 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Sessions);
             Vec::new()
         }
-        "profiles" => {
-            navigate_to_route(model, Route::Profiles);
-            Vec::new()
-        }
         "profile" => {
-            navigate_to_route(model, Route::Profiles);
+            open_settings_tab(model, 2);
             Vec::new()
         }
         "provider" => {
-            navigate_to_route(model, Route::Profiles);
-            if model.selected_profile().is_some() {
-                open_profile_credential(model);
-            } else {
-                create_profile_editor(model);
-            }
+            open_settings_tab(model, 1);
+            Vec::new()
+        }
+        "agents" => {
+            open_settings_tab(model, 3);
             Vec::new()
         }
         "user-profile" => {
+            open_settings_tab(model, 2);
             open_user_profile(model);
             Vec::new()
         }
@@ -1047,12 +1151,12 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "connect-api-key" => {
-            navigate_to_route(model, Route::Settings);
+            open_settings_tab(model, 1);
             open_credential(model);
             Vec::new()
         }
         "settings" => {
-            navigate_to_route(model, Route::Settings);
+            open_settings_tab(model, 0);
             Vec::new()
         }
         "retry" => retry_attempt(model),
@@ -1230,6 +1334,10 @@ fn move_palette_selection(model: &mut Model, direction: isize) {
 fn execute_palette_selection(model: &mut Model) -> Vec<UiEffect> {
     let Some(selected) = model.palette.selected else {
         let query = model.palette.query.clone();
+        if let Ok(effects) = run_command_by_id(model, &query) {
+            close_palette(model);
+            return effects;
+        }
         close_palette(model);
         if !query.is_empty() {
             model.composer.editor.insert_str(format!("/{query}"));
@@ -1728,23 +1836,83 @@ fn navigate_to_route(model: &mut Model, route: Route) {
 }
 
 fn close_profile_center(model: &mut Model) {
-    navigate_to_route(model, Route::Chat);
+    if model.route() == Route::Settings {
+        model.settings_workspace.nav_focus = true;
+        model.notice = None;
+        model.dirty = true;
+    } else {
+        navigate_to_route(model, Route::Chat);
+    }
 }
 
 fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
+    let choice = PROVIDER_CHOICES
+        .get(model.profile_center.choice_selected)
+        .copied()
+        .unwrap_or(ProviderChoice::Gemini);
+    match choice {
+        ProviderChoice::Gemini => open_provider_setup(model, ProviderKindLabel::Gemini, ""),
+        ProviderChoice::GoogleAiStudio => return begin_google_ai_studio_setup(model),
+        ProviderChoice::Codex => {
+            model.profile_center.auth_page = Some(ProviderChoice::Codex);
+            model.notice = None;
+        }
+        ProviderChoice::OpenAiCompatible => {
+            open_provider_setup(model, ProviderKindLabel::Router, "");
+        }
+        ProviderChoice::Cursor => {
+            model.notice = Some(Notice::Info(
+                "Cursor authentication is documented through 'agent login', but its AutoHarness CLI bridge is not installed"
+                    .to_owned(),
+            ));
+        }
+        ProviderChoice::ClaudeCode => {
+            model.notice = Some(Notice::Info(
+                "Claude Code authentication is documented through 'claude auth login', but its AutoHarness CLI bridge is not installed"
+                    .to_owned(),
+            ));
+        }
+    }
+    model.dirty = true;
+    Vec::new()
+}
+
+fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
+    let profile_id = "google-ai-studio".to_owned();
+    let profile = ProviderProfileDraft {
+        id: profile_id.clone(),
+        kind: ProviderKindLabel::Gemini,
+        base_url: String::new(),
+        project: String::new(),
+        auth_header: String::new(),
+    };
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
+    model.profile_center.open_credential_after_save = Some(profile_id);
+    model.notice = Some(Notice::Info(
+        "Preparing Google AI Studio key entry...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UpsertProfile {
+        request_id,
+        profile,
+    })]
+}
+
+fn open_provider_setup(model: &mut Model, kind: ProviderKindLabel, id: &str) {
     model.profile_center.editor = Some(ProfileEditorState {
         mode: ProfileEditorMode::Create,
         source_id: None,
         field: 0,
-        id: String::new(),
-        kind: ProviderKindLabel::Gemini,
+        id: id.to_owned(),
+        kind,
         base_url: String::new(),
         project: String::new(),
         auth_header: String::new(),
     });
     model.notice = None;
-    model.dirty = true;
-    Vec::new()
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1758,6 +1926,44 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     ) {
         model.should_quit = true;
         return vec![UiEffect::Quit];
+    }
+    if model.profile_center.auth_page == Some(ProviderChoice::Codex) {
+        return match input {
+            Input {
+                key: Key::Char('c' | 'C'),
+                ctrl: true,
+                ..
+            } => {
+                model.should_quit = true;
+                vec![UiEffect::Quit]
+            }
+            Input { key: Key::Esc, .. } => {
+                model.profile_center.auth_page = None;
+                model.dirty = true;
+                Vec::new()
+            }
+            Input {
+                key: Key::Enter, ..
+            } => {
+                model.notice = Some(Notice::Info(
+                    "Opening the official Codex browser sign-in...".to_owned(),
+                ));
+                model.dirty = true;
+                vec![UiEffect::LaunchCodexLogin]
+            }
+            Input {
+                key: Key::Char('s' | 'S'),
+                ctrl: false,
+                alt: false,
+                ..
+            } => {
+                model.profile_center.auth_page = None;
+                open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
+                model.dirty = true;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
     }
     if model.profile_center.credential.is_some() {
         return handle_profile_credential_input(model, input);
@@ -1821,18 +2027,29 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             close_profile_center(model);
             Vec::new()
         }
+        Input { key: Key::Tab, .. } => {
+            close_profile_center(model);
+            Vec::new()
+        }
         Input { key: Key::Up, .. } => {
-            move_profile_selection(model, -1);
+            model.profile_center.choice_selected = model
+                .profile_center
+                .choice_selected
+                .checked_sub(1)
+                .unwrap_or(PROVIDER_CHOICES.len().saturating_sub(1));
+            model.dirty = true;
             Vec::new()
         }
         Input { key: Key::Down, .. } => {
-            move_profile_selection(model, 1);
+            model.profile_center.choice_selected =
+                (model.profile_center.choice_selected + 1) % PROVIDER_CHOICES.len();
+            model.dirty = true;
             Vec::new()
         }
         Input {
             key: Key::Enter, ..
-        } => activate_selected_profile(model),
-        Input {
+        }
+        | Input {
             key: Key::Char('n' | 'N'),
             alt: true,
             ..
@@ -1915,6 +2132,7 @@ fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
         model.dirty = true;
         return;
     };
+
     model.profile_center.editor = Some(ProfileEditorState {
         mode,
         source_id: Some(profile.id.clone()),
@@ -1935,6 +2153,128 @@ fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
     });
     model.notice = None;
     model.dirty = true;
+}
+fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        } => {
+            model.should_quit = true;
+            vec![UiEffect::Quit]
+        }
+        Input {
+            key: Key::Esc | Key::Tab,
+            ..
+        } => {
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } => {
+            move_agent_selection(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_agent_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => advance_agent_defaults(model),
+        _ => Vec::new(),
+    }
+}
+
+fn move_agent_selection(model: &mut Model, direction: isize) {
+    let count = match model.agent_defaults.step {
+        AgentDefaultStep::Provider => model.profiles().profiles.len(),
+        AgentDefaultStep::Model => model.catalog.models().len(),
+        AgentDefaultStep::Thinking => return,
+    };
+    if count == 0 {
+        return;
+    }
+    let selected = match model.agent_defaults.step {
+        AgentDefaultStep::Provider => &mut model.agent_defaults.profile_selected,
+        AgentDefaultStep::Model => &mut model.agent_defaults.model_selected,
+        AgentDefaultStep::Thinking => return,
+    };
+    *selected = selected
+        .saturating_add_signed(direction)
+        .min(count.saturating_sub(1));
+    model.dirty = true;
+}
+
+fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
+    match model.agent_defaults.step {
+        AgentDefaultStep::Provider => {
+            let Some(profile_id) = model
+                .profiles()
+                .profiles
+                .get(model.agent_defaults.profile_selected)
+                .map(|profile| profile.id.clone())
+            else {
+                return Vec::new();
+            };
+            model.agent_defaults.profile_id = Some(profile_id.clone());
+            model.agent_defaults.model_selected = 0;
+            model.agent_defaults.step = AgentDefaultStep::Model;
+            activate_profile(model, profile_id)
+        }
+        AgentDefaultStep::Model => {
+            let Some(summary) = model
+                .catalog
+                .models()
+                .get(model.agent_defaults.model_selected)
+                .filter(|summary| summary.selectable)
+            else {
+                return Vec::new();
+            };
+            model.agent_defaults.model = Some(summary.model.clone());
+            model.agent_defaults.step = if model_supports_thinking(summary) {
+                AgentDefaultStep::Thinking
+            } else {
+                return persist_agent_default(model);
+            };
+            model.dirty = true;
+            Vec::new()
+        }
+        AgentDefaultStep::Thinking => persist_agent_default(model),
+    }
+}
+
+fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
+    summary
+        .detail
+        .split(',')
+        .any(|detail| detail.trim() == "thinking")
+}
+
+fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model.agent_defaults.profile_id.clone() else {
+        return Vec::new();
+    };
+    let Some(selected_model) = model.agent_defaults.model.clone() else {
+        return Vec::new();
+    };
+    let request_id = model.allocate_request();
+    model.pending.insert(
+        request_id,
+        PendingKind::SetProfileDefault {
+            profile_id: profile_id.clone(),
+            model: selected_model.clone(),
+        },
+    );
+    model.notice = Some(Notice::Info("Saving agent default...".to_owned()));
+    model.agent_defaults.step = AgentDefaultStep::Provider;
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::SetProfileDefault {
+        request_id,
+        profile_id,
+        model: selected_model,
+    })]
 }
 
 fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1987,7 +2327,8 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
             if editor.mode != ProfileEditorMode::Duplicate && editor.field == 1 {
                 editor.kind = match editor.kind {
                     ProviderKindLabel::Gemini => ProviderKindLabel::Router,
-                    ProviderKindLabel::Router => ProviderKindLabel::Gemini,
+                    ProviderKindLabel::Router => ProviderKindLabel::CodexCli,
+                    ProviderKindLabel::CodexCli => ProviderKindLabel::Gemini,
                 };
             }
             model.dirty = true;
@@ -2111,6 +2452,14 @@ fn open_profile_credential(model: &mut Model) {
         model.dirty = true;
         return;
     };
+    if profile.kind == ProviderKindLabel::CodexCli {
+        model.notice = Some(Notice::Info(
+            "Run 'codex login' in another terminal, then use Alt+T to verify this subscription"
+                .to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
     if matches!(
         profile.credential_state,
         crate::model::ProfileCredentialStateLabel::RecoveryPending
@@ -2245,10 +2594,7 @@ fn submit_profile_credential(model: &mut Model) -> Vec<UiEffect> {
     vec![UiEffect::Dispatch(intent)]
 }
 
-fn activate_selected_profile(model: &mut Model) -> Vec<UiEffect> {
-    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
-        return Vec::new();
-    };
+fn activate_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
     let request_id = model.allocate_request();
     model
         .pending
@@ -2363,29 +2709,6 @@ fn dispatch_delete_profile(model: &mut Model, profile_id: String) -> Vec<UiEffec
     })]
 }
 
-fn move_profile_selection(model: &mut Model, direction: isize) {
-    let visible: Vec<String> = model
-        .filtered_profiles()
-        .map(|profile| profile.id.clone())
-        .collect();
-    if visible.is_empty() {
-        model.profile_center.selected = None;
-        model.dirty = true;
-        return;
-    }
-    let current = model
-        .profile_center
-        .selected
-        .as_ref()
-        .and_then(|selected| visible.iter().position(|profile| profile == selected))
-        .unwrap_or(0);
-    let next = current
-        .saturating_add_signed(direction)
-        .min(visible.len().saturating_sub(1));
-    model.profile_center.selected = visible.get(next).cloned();
-    model.dirty = true;
-}
-
 fn apply_sessions(model: &mut Model, sessions: Arc<SessionsProjection>) {
     model.sessions = sessions;
     model.sync_browser_selection();
@@ -2446,6 +2769,7 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::ReplaceProfileCredential(_)
         | PendingKind::TestProfile(_)
         | PendingKind::SetProfileDefaultModel(_)
+        | PendingKind::SetProfileDefault { .. }
         | PendingKind::DisconnectProfile(_)
         | PendingKind::UpdateLocalPreference(_)
         | PendingKind::DeleteProfile(_)
@@ -3076,8 +3400,22 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
                     }
                     PendingKind::UpsertProfile(profile) => {
-                        model.profile_center.selected = Some(profile.id);
-                        model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
+                        let open_credential =
+                            model.profile_center.open_credential_after_save.as_deref()
+                                == Some(profile.id.as_str());
+                        model.profile_center.selected = Some(profile.id.clone());
+                        model.profile_center.editor = None;
+                        if open_credential {
+                            model.profile_center.open_credential_after_save = None;
+                            model.profile_center.credential = Some(ProfileCredentialEditor::new(
+                                profile.id,
+                                ProfileCredentialAction::Save,
+                            ));
+                            let _ = model.open_overlay(OverlayKind::ProfileCredential);
+                            model.notice = None;
+                        } else {
+                            model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
+                        }
                     }
                     PendingKind::DuplicateProfile { destination, .. } => {
                         model.profile_center.selected = Some(destination);
@@ -3101,7 +3439,8 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                             "Provider connection test completed".to_owned(),
                         ));
                     }
-                    PendingKind::SetProfileDefaultModel(_) => {
+                    PendingKind::SetProfileDefaultModel(_)
+                    | PendingKind::SetProfileDefault { .. } => {
                         model.notice = Some(Notice::Info("Profile default model saved".to_owned()));
                     }
                     PendingKind::DisconnectProfile(_) => {
@@ -3249,6 +3588,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::ActivateProfile(_)
                     | PendingKind::TestProfile(_)
                     | PendingKind::SetProfileDefaultModel(_)
+                    | PendingKind::SetProfileDefault { .. }
                     | PendingKind::DisconnectProfile(_)
                     | PendingKind::UpdateLocalPreference(_)
                     | PendingKind::DeleteProfile(_)
@@ -3699,6 +4039,7 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::ReplaceProfileCredential(_)
             | PendingKind::TestProfile(_)
             | PendingKind::SetProfileDefaultModel(_)
+            | PendingKind::SetProfileDefault { .. }
             | PendingKind::DisconnectProfile(_)
             | PendingKind::UpdateLocalPreference(_)
             | PendingKind::DeleteProfile(_)

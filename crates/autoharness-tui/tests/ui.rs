@@ -309,7 +309,7 @@ fn submission_keeps_draft_until_commit_and_rejection_keeps_it_editable() {
         .first()
         .and_then(|effect| match effect {
             UiEffect::Dispatch(intent) => Some(intent.request_id()),
-            UiEffect::CopyTranscript(_) | UiEffect::Quit => None,
+            UiEffect::LaunchCodexLogin | UiEffect::CopyTranscript(_) | UiEffect::Quit => None,
         })
         .expect("second request ID");
     let _ = update(
@@ -428,7 +428,7 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
     );
     assert!(!model.retry_requested(&attempt));
     assert!(model.session.failed_attempt().is_none());
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("|  ready"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("recovered"));
 }
 
 #[test]
@@ -804,13 +804,9 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
         } else {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
-        let expected_anchor = if width >= 100 {
-            Color::Rgb(34, 211, 238)
-        } else {
-            Color::Rgb(167, 139, 250)
-        };
+        let expected_anchor = Color::Reset;
         assert_eq!(
-            backend.buffer().cell((0, 0)).expect("header origin").bg,
+            backend.buffer().cell((0, 0)).expect("shell origin").bg,
             expected_anchor,
             "shell must retain its visual anchor at {width}x{height}"
         );
@@ -970,10 +966,14 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
         },
     );
     let light = render_model(&model, 120, 40);
-    assert_eq!(light.buffer().cell((0, 0)).expect("header").bg, Color::Blue);
+    assert_eq!(
+        light.buffer().cell((29, 1)).expect("chat transcript").bg,
+        Color::Reset
+    );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
     assert!(buffer_text(&render_model(&model, 120, 40)).contains("updated 1700000000000"));
 
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('1'))));
     apply_visual_preferences(
         &mut model,
         VisualPreferences {
@@ -986,12 +986,16 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
             timestamp: "hidden",
         },
     );
-    let dark = render_model(&model, 120, 40);
+    let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark.buffer().cell((0, 0)).expect("header").bg,
-        Color::Rgb(34, 211, 238)
+        dark_chat
+            .buffer()
+            .cell((29, 1))
+            .expect("chat transcript")
+            .bg,
+        Color::Reset
     );
-    assert!(!buffer_text(&dark).contains("updated 1700000000000"));
+    assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
 }
 
 #[test]
@@ -1015,8 +1019,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((0, 0)).expect("aurora header").bg,
-        Color::Rgb(45, 212, 191)
+        aurora.buffer().cell((29, 1)).expect("aurora transcript").bg,
+        Color::Reset
+    );
+    assert_eq!(
+        aurora.buffer().cell((29, 1)).expect("aurora transcript").fg,
+        Color::Rgb(56, 189, 248)
     );
 
     apply_visual_preferences(
@@ -1033,8 +1041,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((0, 0)).expect("ember header").bg,
-        Color::Rgb(251, 146, 60)
+        ember.buffer().cell((29, 1)).expect("ember transcript").bg,
+        Color::Reset
+    );
+    assert_eq!(
+        ember.buffer().cell((29, 1)).expect("ember transcript").fg,
+        Color::Rgb(253, 186, 116)
     );
 }
 
@@ -1058,8 +1070,8 @@ fn prompt_bar_shows_safe_runtime_metadata() {
         ..SettingsProjection::default()
     }));
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("think:deliberate"));
-    assert!(rendered.contains("cwd:autoharness"));
-    assert!(rendered.contains("git:feat/prompt-bar"));
-    assert!(rendered.contains("model:"));
+    assert!(rendered.contains("think:standard"));
+    assert!(rendered.contains("path:/autoharness"));
+    assert!(!rendered.contains("git:feat/prompt-bar"));
+    assert!(!rendered.contains("model:"));
 }

@@ -78,42 +78,28 @@ fn buffer_text(backend: &TestBackend) -> String {
 }
 
 #[test]
-fn wide_header_shows_provider_profile_credential_and_session_state() {
-    let model = empty_model(SettingsProjection {
-        provider_status: ProviderStatusProjection {
-            active_profile: Some("home-router".to_owned()),
-            provider_kind: Some(ProviderKindLabel::Router),
-            credential_source: CredentialSourceLabel::CredentialVault,
-            credential_connected: true,
-        },
-        ..SettingsProjection::default()
-    });
-
-    let header = buffer_text(&render_model(&model, 120, 40));
-
-    for expected in [
-        "AutoHarness",
-        "router via 'home-router'",
-        "credential vault",
-        "Gemini 2.5 Pro",
-        "ready",
-    ] {
-        assert!(header.contains(expected), "header must show {expected}");
-    }
-}
-
-#[test]
-fn default_launch_reports_gemini_default_and_session_only() {
+fn chat_surface_uses_compact_transparent_composer_metadata() {
     let model = empty_model(SettingsProjection::default());
-
-    let header = buffer_text(&render_model(&model, 120, 40));
-
-    assert!(header.contains("gemini (default)"));
-    assert!(header.contains("session only"));
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("think:"));
+    assert!(rendered.contains("path:/workspace"));
+    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Settings"));
+    assert!(!rendered.contains("AutoHarness  |"));
+    assert!(!rendered.contains("state:ready"));
 }
 
 #[test]
-fn disconnected_vault_profile_never_claims_a_connected_credential() {
+fn chat_surface_omits_provider_status_chrome() {
+    let model = empty_model(SettingsProjection::default());
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(!rendered.contains("gemini (default)"));
+    assert!(!rendered.contains("session only"));
+    assert!(rendered.contains("path:/workspace"));
+}
+
+#[test]
+fn chat_surface_omits_credential_status_labels() {
     let model = empty_model(SettingsProjection {
         provider_status: ProviderStatusProjection {
             active_profile: Some("home-router".to_owned()),
@@ -123,18 +109,13 @@ fn disconnected_vault_profile_never_claims_a_connected_credential() {
         },
         ..SettingsProjection::default()
     });
-
-    let header = buffer_text(&render_model(&model, 120, 40));
-
-    assert!(
-        !header.contains("credential vault"),
-        "an unconnected vault source must not display as connected"
-    );
-    assert!(header.contains("disconnected"));
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(!rendered.contains("credential vault"));
+    assert!(!rendered.contains("disconnected"));
 }
 
 #[test]
-fn stale_catalog_is_visible_in_the_status_surface() {
+fn chat_surface_omits_catalog_status_chrome() {
     let mut model = empty_model(SettingsProjection::default());
     let stale = match &*catalog_ready() {
         CatalogProjection::Ready { models, .. } => Arc::new(CatalogProjection::Ready {
@@ -144,9 +125,8 @@ fn stale_catalog_is_visible_in_the_status_surface() {
         _ => unreachable!(),
     };
     let _ = update(&mut model, Message::CatalogChanged(stale));
-
-    let header = buffer_text(&render_model(&model, 120, 40));
-    assert!(header.contains("stale"));
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(!rendered.contains("stale"));
 }
 
 #[test]
@@ -168,27 +148,23 @@ fn aggregate_usage_appears_in_the_status_surface_after_turns() {
         catalog_ready(),
     );
 
-    let header = buffer_text(&render_model(&model, 120, 40));
-    assert!(
-        header.contains("460 tok") || header.contains("460 tokens"),
-        "aggregate usage must appear, got: {header}"
-    );
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("120 input tokens"));
+    assert!(rendered.contains("340 output tokens"));
 }
 
 #[test]
-fn narrow_header_keeps_the_essential_state_only() {
+fn narrow_chat_keeps_prompt_metadata_without_status_header() {
     let model = empty_model(SettingsProjection::default());
 
-    let header = buffer_text(&render_model(&model, 40, 12));
-    assert!(header.contains("AutoHarness"));
-    assert!(header.contains("ready"), "work state stays visible");
+    let rendered = buffer_text(&render_model(&model, 40, 12));
+    assert!(rendered.contains("think:"));
+    assert!(rendered.contains("path:/"));
+    assert!(!rendered.contains("AutoHarness  |"));
 
     let tiny = buffer_text(&render_model(&model, 24, 7));
-    assert!(tiny.contains("AutoHarness"));
-    assert!(
-        !tiny.contains("gemini (default)"),
-        "details drop before state"
-    );
+    assert!(!tiny.contains("1 Chat"));
+    assert!(!tiny.contains("state:ready"));
 }
 
 #[test]

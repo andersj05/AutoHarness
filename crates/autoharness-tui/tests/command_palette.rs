@@ -117,9 +117,9 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     for expected in [
         "/chat",
         "/sessions",
-        "/profiles",
         "/profile",
         "/provider",
+        "/agents",
         "/user-profile",
         "/new-session",
         "/models",
@@ -140,11 +140,9 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
     assert!(model.palette_open());
     let all = buffer_text(&render_model(&model, 80, 24));
-    let bottom = all.lines().rev().take(10).collect::<Vec<_>>();
-    assert!(bottom.iter().any(|line| line.contains("/chat")));
+    assert!(all.contains("/chat"));
     assert!(all.contains("/models"));
     assert!(all.contains("/provider"));
-
     type_text(&mut model, "mod");
     let filtered = buffer_text(&render_model(&model, 80, 24));
     assert!(
@@ -158,6 +156,44 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     assert!(!filtered.contains("/sessions"));
 }
 
+#[test]
+fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    assert!(rendered.contains("/profile  Profile settings"));
+    assert!(rendered.contains("/agents  Agents settings"));
+    assert_eq!(rendered.matches("/profile").count(), 1);
+    assert!(!rendered.contains("/profiles"));
+
+    type_text(&mut model, "profile");
+    let filtered = buffer_text(&render_model(&model, 80, 24));
+    assert!(filtered.contains("❯ /profile"));
+}
+
+#[test]
+fn inline_command_rows_preserve_the_chat_panel_border_at_narrow_width() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
+
+    let rendered = render_model(&model, 40, 12);
+    assert_eq!(
+        rendered
+            .buffer()
+            .cell((0, 1))
+            .expect("left transcript border")
+            .symbol(),
+        "│"
+    );
+    assert_eq!(
+        rendered
+            .buffer()
+            .cell((1, 1))
+            .expect("first command column")
+            .symbol(),
+        "›"
+    );
+}
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {
     let mut model = empty_model();
@@ -279,6 +315,11 @@ fn known_slash_commands_execute_and_clear_the_composer() {
         model.composer.is_blank(),
         "a executed command must not linger in the composer"
     );
+    let mut model = empty_model();
+    type_text(&mut model, "/profiles");
+    let _ = update(&mut model, Message::Input(enter()));
+    assert_eq!(model.route(), Route::Settings);
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 
     // The historical /sessions spelling keeps working through the shared table.
     let mut model = empty_model();
@@ -293,9 +334,9 @@ fn provider_command_opens_provider_setup_route() {
     let mut model = empty_model();
     type_text(&mut model, "/provider");
     let _ = update(&mut model, Message::Input(enter()));
-    assert_eq!(model.route(), Route::Profiles);
-    assert_eq!(model.focus, Focus::Profiles);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Profiles"));
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 }
 
 #[test]
@@ -303,16 +344,26 @@ fn profile_slash_command_matches_palette_route() {
     let mut slash = empty_model();
     type_text(&mut slash, "/profile");
     let _ = update(&mut slash, Message::Input(enter()));
-    assert_eq!(slash.route(), Route::Profiles);
-    assert_eq!(slash.focus, Focus::Profiles);
+    assert_eq!(slash.route(), Route::Settings);
+    assert_eq!(slash.focus, Focus::Settings);
     assert!(slash.composer.is_blank());
+    assert!(buffer_text(&render_model(&slash, 80, 24)).contains("Profile"));
 
     let mut palette = empty_model();
     let _ = update(&mut palette, Message::Input(ctrl(Key::Char('/'))));
     type_text(&mut palette, "profile");
     let _ = update(&mut palette, Message::Input(enter()));
-    assert_eq!(palette.route(), Route::Profiles);
-    assert_eq!(palette.focus, Focus::Profiles);
+    assert_eq!(palette.route(), Route::Settings);
+    assert_eq!(palette.focus, Focus::Settings);
+}
+
+#[test]
+fn agents_command_opens_the_integrated_settings_tab() {
+    let mut model = empty_model();
+    type_text(&mut model, "/agents");
+    let _ = update(&mut model, Message::Input(enter()));
+    assert_eq!(model.route(), Route::Settings);
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("1 Provider  2 Model"));
 }
 
 #[test]

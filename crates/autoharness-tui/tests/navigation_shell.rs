@@ -245,7 +245,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
         ('1', "Conversation"),
         ('2', "Sessions"),
-        ('3', "Profiles & Providers"),
+        ('3', "Providers"),
         ('4', "Settings & Provenance"),
         ('5', "Help"),
     ];
@@ -258,13 +258,19 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                 rendered.contains(expected),
                 "{expected} missing at {width}x{height}"
             );
-            if width >= 48 {
-                for route in ["Chat", "Sessions", "Profiles", "Settings", "Help"] {
+            if key == '4' && width >= 60 {
+                for section in ["Settings", "Providers", "Profile", "Agents"] {
                     assert!(
-                        rendered.contains(route),
-                        "route {route} missing at {width}x{height}"
+                        rendered.contains(section),
+                        "settings nav {section} missing at {width}x{height}"
                     );
                 }
+            }
+            assert!(rendered.contains("Profile"), "profile action missing");
+            assert!(rendered.contains("Settings"), "settings action missing");
+            if width >= 100 {
+                assert!(rendered.contains("PROJECTS"), "projects section missing");
+                assert!(!rendered.contains("PREVIOUS SESSIONS"));
             }
         }
     }
@@ -362,9 +368,114 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("Composer submit"));
-    assert!(rendered.contains("PgUp/PgDn"));
+    assert!(rendered.contains("Left/Right pages"));
 }
+#[test]
+fn settings_top_navigation_reaches_provider_and_future_sections() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let rendered = render_text(&model, 80, 24);
+    for section in ["Settings", "Providers", "Profile", "Agents"] {
+        assert!(rendered.contains(section), "missing settings nav {section}");
+    }
+
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::Settings);
+}
+
+#[test]
+fn providers_returns_to_settings_navigation_before_leaving_the_route() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(render_text(&model, 80, 24).contains("Gemini"));
+
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+
+    assert_eq!(model.route(), Route::Settings);
+    assert_eq!(model.focus, Focus::UserProfile);
+}
+
+#[test]
+fn settings_arrows_move_between_pages_and_into_preferences() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+
+    let _ = update(&mut model, Message::Input(key(Key::Left)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Up)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert_eq!(model.route(), Route::Settings);
+}
+
+#[test]
+fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
+    let mut model = model();
+    let long_title =
+        "A very long named session that must remain a single visible sidebar line".to_owned();
+    let _ = update(
+        &mut model,
+        Message::SessionsChanged(Arc::new(SessionsProjection {
+            sessions: vec![SessionBrowserEntry {
+                session_id: "session-active".to_owned(),
+                title: long_title,
+                archived: false,
+                selected_model: Some(model_ref()),
+                updated_at_ms: 1,
+                active: true,
+            }],
+        })),
+    );
+    let rendered = render_text(&model, 120, 40);
+    assert!(!rendered.contains("1 Chat"));
+    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("…"));
+    assert_eq!(
+        rendered
+            .lines()
+            .filter(|line| line.contains('│') && line.contains("A very long named"))
+            .count(),
+        1
+    );
+}
+#[test]
+fn compact_shell_uses_commands_and_bottom_actions() {
+    let model = model();
+    let rendered = render_text(&model, 48, 18);
+    assert!(!rendered.contains("1 Chat"));
+    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Settings"));
+    assert_eq!(
+        hit_test(&model, 48, 18, 2, 17),
+        Some(MouseAction::SettingsTab(2))
+    );
+    assert_eq!(
+        hit_test(&model, 48, 18, 14, 17),
+        Some(MouseAction::SettingsTab(0))
+    );
+}
+
+#[test]
+fn settings_tab_mouse_geometry_matches_persistent_shell() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    assert!(
+        (28..80).any(|column| {
+            hit_test(&model, 120, 40, column, 1) == Some(MouseAction::SettingsTab(1))
+        }),
+        "provider Settings tab must have a mouse target"
+    );
+}
+
 #[test]
 #[ignore = "visual review harness for the Phase 3.7 routed shell"]
 fn render_route_review_matrix() {
@@ -397,26 +508,32 @@ fn render_route_review_matrix() {
     );
 }
 #[test]
-fn mouse_hit_testing_covers_wide_routes_and_chat_controls() {
+fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
-    for (index, route) in Route::ALL.into_iter().enumerate() {
-        assert_eq!(
-            hit_test(&model, 120, 40, 2, 7 + index as u16),
-            Some(MouseAction::Route(route))
-        );
-    }
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 0),
-        Some(MouseAction::Route(Route::Chat))
+        hit_test(&model, 120, 40, 2, 1),
+        Some(MouseAction::Route(Route::Sessions))
     );
-    assert_eq!(hit_test(&model, 80, 24, 16, 23), None);
+    assert_eq!(
+        hit_test(&model, 120, 40, 2, 38),
+        Some(MouseAction::SettingsTab(2))
+    );
+    assert_eq!(
+        hit_test(&model, 120, 40, 14, 38),
+        Some(MouseAction::SettingsTab(0))
+    );
+    assert_eq!(
+        hit_test(&model, 80, 24, 2, 23),
+        Some(MouseAction::SettingsTab(2))
+    );
 }
 
 #[test]
 fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('3')));
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 1),
+        hit_test(&model, 120, 40, 30, 1),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
@@ -452,7 +569,7 @@ fn mouse_profile_actions_share_keyboard_intents() {
     let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
 
     assert!(effects.is_empty());
-    assert!(render_text(&model, 120, 40).contains("Create provider profile"));
+    assert!(render_text(&model, 120, 40).contains("Connect Gemini"));
 }
 #[test]
 fn mouse_session_action_bar_exposes_each_visible_action() {

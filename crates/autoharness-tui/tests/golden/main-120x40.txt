@@ -1,40 +1,40 @@
- AutoHarness               │ Conversation ──────────────────────────────────────────────────────────────────────────────
-Local user                 │YOU
-workspace                  │Plan a café launch.
-                           │Keep it practical.
- 1  Chat                   │
- 2  Sessions               │AUTOHARNESS · complete
- 3  Profiles               │Start with a two-week validation sprint:
- 4  Settings               │1. Interview ten customers.
- 5  Help                   │2. Price three menu bundles.
-                           │3. Measure repeat intent.
-CONNECTION                 │18 input tokens · 41 output tokens
-gemini (default)           │
-session only               │YOU
-Gemini 2.5 Pro             │What could go wrong?
-failed                     │
-59 tok                     │AUTOHARNESS · retry · failed
-                           │The provider returned \u{1b}[31ma partial answer\u{1b}[0m.
-Ctrl+/ commands            │Error: Capacity is temporarily exhausted; no credentials were exposed.
-F1 contextual help         │rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │
-                           │────────────────────────────────────────────────────────────────────────────────────────────
-                           │ think:safe agent  cwd:workspace  git:no git  model:Gemini 2.5 Pro  state:failed
-                           │Retry with a smaller scope.
-                           │Keep the checklist concise.
+╭ AutoHarness ─────────────╮╭ Conversation ────────────────────────────────────────────────────────────────────────────╮
+│ No sessions yet          ││YOU                                                                                       │
+│                          ││Plan a café launch.                                                                       │
+│PROJECTS                  ││Keep it practical.                                                                        │
+│ workspace                ││                                                                                          │
+│                          ││AUTOHARNESS · complete                                                                    │
+│                          ││Start with a two-week validation sprint:                                                  │
+│                          ││1. Interview ten customers.                                                               │
+│                          ││2. Price three menu bundles.                                                              │
+│                          ││3. Measure repeat intent.                                                                 │
+│                          ││18 input tokens · 41 output tokens                                                        │
+│                          ││                                                                                          │
+│                          ││YOU                                                                                       │
+│                          ││What could go wrong?                                                                      │
+│                          ││                                                                                          │
+│                          ││AUTOHARNESS · retry · failed                                                              │
+│                          ││The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                                │
+│                          ││Error: Capacity is temporarily exhausted; no credentials were exposed.                    │
+│                          ││rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2                                  │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          │╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│                          ││ think:standard  path:/workspace                                                          │
+│ Profile  |  Settings     ││❯ Keep the checklist concise.                                                             │
+╰──────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────╯

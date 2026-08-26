@@ -127,6 +127,8 @@ pub enum ProviderKind {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
+    /// User-owned official Codex CLI subscription session.
+    CodexCli,
 }
 
 /// Non-secret connection fields for one named provider configuration.
@@ -156,6 +158,21 @@ impl ProviderProfile {
     pub const fn gemini() -> Self {
         Self {
             kind: ProviderKind::Gemini,
+            base_url: None,
+            project: None,
+            auth_header: None,
+            models_path: None,
+            chat_path: None,
+            default_model: None,
+            credential: None,
+        }
+    }
+
+    /// Creates a profile backed by the user's official Codex CLI session.
+    #[must_use]
+    pub const fn codex_cli() -> Self {
+        Self {
+            kind: ProviderKind::CodexCli,
             base_url: None,
             project: None,
             auth_header: None,

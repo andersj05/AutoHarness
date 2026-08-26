@@ -21,6 +21,7 @@ use autoharness_domain::{ClassifiedError as _, RetryAdvice};
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
 };
+use autoharness_provider_codex_cli::{CodexCliProvider, CodexCliSettings};
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
 use autoharness_settings::{LayerKind, ProviderKind, ProviderProfile, SettingsBuilder};
@@ -78,7 +79,7 @@ async fn run() -> Result<(), AppError> {
         .unwrap_or_default();
     let vault: Arc<dyn VaultPort> = Arc::new(KeyringVault::new());
     let resolved = resolve_launch(&profile_store, vault.as_ref());
-    let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved)?;
+    let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved).await?;
     let profile_manager = Arc::new(ProfileManager::new(profile_store, vault));
     let profile_runtime = ProfileRuntime::new(
         profile_manager,
@@ -248,6 +249,7 @@ fn environment_launch() -> LaunchResolution {
         .map(|selection| match selection {
             config::ProviderSelection::Gemini => autoharness_settings::ProviderKind::Gemini,
             config::ProviderSelection::Router => autoharness_settings::ProviderKind::Router,
+            config::ProviderSelection::CodexCli => autoharness_settings::ProviderKind::CodexCli,
         });
     let credential = provider_kind
         .and_then(|kind| match kind {
@@ -255,6 +257,7 @@ fn environment_launch() -> LaunchResolution {
             autoharness_settings::ProviderKind::Router => {
                 env::var("AUTOHARNESS_ROUTER_API_KEY").ok()
             }
+            autoharness_settings::ProviderKind::CodexCli => None,
         })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_default();
@@ -281,6 +284,7 @@ fn settings_projection(
             provider_kind: resolved.provider_kind.map(|kind| match kind {
                 autoharness_settings::ProviderKind::Gemini => ProviderKindLabel::Gemini,
                 autoharness_settings::ProviderKind::Router => ProviderKindLabel::Router,
+                autoharness_settings::ProviderKind::CodexCli => ProviderKindLabel::CodexCli,
             }),
             credential_source: match resolved.source {
                 CredentialSourceName::Environment => CredentialSourceLabel::Environment,
@@ -318,7 +322,7 @@ fn configure_tool_runtime(paths: &AppPaths) -> Result<Arc<ToolRuntime>, AppError
     .map_err(|_| AppError::Configuration)
 }
 
-fn configure_provider(
+async fn configure_provider(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
     resolved: &LaunchResolution,
@@ -328,6 +332,7 @@ fn configure_provider(
         Some(kind) => Ok(match kind {
             autoharness_settings::ProviderKind::Gemini => config::ProviderSelection::Gemini,
             autoharness_settings::ProviderKind::Router => config::ProviderSelection::Router,
+            autoharness_settings::ProviderKind::CodexCli => config::ProviderSelection::CodexCli,
         }),
         None => config::provider_selection(),
     };
@@ -400,6 +405,28 @@ fn configure_provider(
                 };
                 (initial, factory)
             }
+            config::ProviderSelection::CodexCli => {
+                let factory_cache = Arc::clone(&cache);
+                let factory_policy = policy.clone();
+                let factory: ProviderFactory = Arc::new(move |_credential: ApiCredential| {
+                    let provider: Arc<dyn Provider> = Arc::new(CodexCliProvider::new_blocking(
+                        CodexCliSettings::from_env()?,
+                    )?);
+                    Ok(managed_provider(
+                        provider,
+                        Arc::clone(&factory_cache),
+                        factory_policy.clone(),
+                    ))
+                });
+                let provider: Arc<dyn Provider> =
+                    Arc::new(CodexCliProvider::from_env(CancellationToken::new()).await?);
+                let initial = Ok(managed_provider(
+                    provider,
+                    Arc::clone(&cache),
+                    policy.clone(),
+                ));
+                (initial, factory)
+            }
         };
 
     let (provider, catalog) = match initial {
@@ -458,6 +485,9 @@ fn configure_profile_provider_factory(
                 let credential = RouterCredential::new(credential.into_string())?;
                 Arc::new(OpenAiRouterProvider::new(settings, credential)?)
             }
+            ProviderKind::CodexCli => Arc::new(CodexCliProvider::new_blocking(
+                CodexCliSettings::from_env()?,
+            )?),
         };
         Ok(managed_provider(
             provider,
