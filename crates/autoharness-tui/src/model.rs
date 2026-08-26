@@ -863,6 +863,8 @@ pub enum PendingKind {
     UpdateLocalPreference(LocalPreferenceChange),
     /// Confirmed profile deletion.
     DeleteProfile(String),
+    /// Native Codex browser authentication.
+    CodexLogin,
 }
 
 /// Runner-side side effects the pure update layer cannot perform itself.
@@ -870,10 +872,6 @@ pub enum PendingKind {
 pub enum UiEffect {
     /// Dispatch an intent through the bounded application mailbox.
     Dispatch(UiIntent),
-    /// Start the official Codex CLI browser-login flow without handling credentials.
-    LaunchCodexLogin,
-    /// Stop an in-progress Codex CLI browser-login flow.
-    CancelCodexLogin,
     /// Copy exact text to the system clipboard through OSC 52.
     CopyTranscript(String),
     /// Exit the terminal client.
@@ -890,6 +888,10 @@ pub enum UiIntent {
         request_id: RequestId,
         credential: ApiCredential,
     },
+    /// Start application-owned Codex subscription authentication.
+    StartCodexLogin { request_id: RequestId },
+    /// Cancel application-owned Codex subscription authentication.
+    CancelCodexLogin { request_id: RequestId },
     /// Creates or edits one non-secret provider profile.
     UpsertProfile {
         request_id: RequestId,
@@ -1018,6 +1020,8 @@ impl UiIntent {
         match self {
             Self::CreateSession { request_id }
             | Self::ConfigureCredential { request_id, .. }
+            | Self::StartCodexLogin { request_id }
+            | Self::CancelCodexLogin { request_id }
             | Self::UpsertProfile { request_id, .. }
             | Self::DuplicateProfile { request_id, .. }
             | Self::ActivateProfile { request_id, .. }
@@ -1055,6 +1059,10 @@ pub enum UiNotice {
         request_id: RequestId,
         failure: UiFailure,
     },
+    /// The Codex authorization page was handed to the default browser.
+    CodexLoginBrowserOpened { request_id: RequestId },
+    /// Codex authentication completed and the connected profile is active.
+    CodexLoginCompleted { request_id: RequestId },
 }
 /// Semantic mouse actions produced by terminal hit testing.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1127,14 +1135,6 @@ pub enum Message {
     SettingsChanged(Arc<SettingsProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
-    /// The official Codex authentication URL was opened in the default browser.
-    CodexLoginBrowserOpened,
-    /// The Codex CLI already had a valid ChatGPT sign-in.
-    CodexLoginAlreadyAuthenticated,
-    /// The official Codex browser callback completed successfully.
-    CodexLoginCompleted,
-    /// The Codex login process or browser handoff failed safely.
-    CodexLoginFailed,
     /// Deterministic monotonic time update.
     Tick(UiInstant),
     /// Terminal resize notification.
@@ -1170,12 +1170,6 @@ impl Debug for Message {
                 .field(settings)
                 .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
-            Self::CodexLoginBrowserOpened => formatter.write_str("CodexLoginBrowserOpened"),
-            Self::CodexLoginAlreadyAuthenticated => {
-                formatter.write_str("CodexLoginAlreadyAuthenticated")
-            }
-            Self::CodexLoginCompleted => formatter.write_str("CodexLoginCompleted"),
-            Self::CodexLoginFailed => formatter.write_str("CodexLoginFailed"),
             Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
             Self::Resize => formatter.write_str("Resize"),
             Self::ShutdownRequested => formatter.write_str("ShutdownRequested"),

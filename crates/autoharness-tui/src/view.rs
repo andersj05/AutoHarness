@@ -2207,7 +2207,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Saved connections ")
+        .title(" Connected providers ")
         .border_style(visual_style(
             model,
             if focused {
@@ -2257,7 +2257,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .collect::<Vec<_>>();
     lines.push(Line::from(""));
     let (sign_in, managed_by) = if profile.kind == ProviderKindLabel::CodexCli {
-        ("ChatGPT subscription", "official Codex CLI")
+        ("ChatGPT browser login", "AutoHarness + OS vault")
     } else {
         (
             "API key",
@@ -2273,12 +2273,12 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(model, "Provider", provider_display_name(profile.kind)),
         detail_line(
             model,
-            "Use",
+            "Status",
             if profile.active { "active" } else { "saved" },
         ),
-        detail_line(model, "Last check", profile.connection.label()),
-        detail_line(model, "Sign-in", sign_in),
-        detail_line(model, "Managed by", managed_by),
+        detail_line(model, "Connection", profile.connection.label()),
+        detail_line(model, "Authentication", sign_in),
+        detail_line(model, "Credential", managed_by),
         detail_line(
             model,
             "Default model",
@@ -2306,7 +2306,11 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        "[ Sign in ] [ Test ] [ Model ]",
+        if profile.kind == ProviderKindLabel::CodexCli {
+            "[ Sign in ] [ Test ] [ Model ]"
+        } else {
+            "[ API key ] [ Test ] [ Model ]"
+        },
         visual_style(model, VisualRole::Assistant),
     ));
     lines.push(Line::styled(
@@ -2334,8 +2338,8 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
             "The browser will open for secure sign-in.",
         ),
         crate::model::CodexLoginState::Starting => (
-            format!("{} Starting secure sign-in...", spinner(model)),
-            "Checking the installed Codex CLI.",
+            format!("{} Opening your browser...", spinner(model)),
+            "AutoHarness is preparing a secure local callback.",
         ),
         crate::model::CodexLoginState::BrowserOpened => (
             "Browser opened".to_owned(),
@@ -2343,12 +2347,12 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
         ),
         crate::model::CodexLoginState::Failed => (
             format!("{} Try sign-in again", selection_marker(model)),
-            "Could not start sign-in. Retry or run 'codex login' in another terminal.",
+            "Sign-in did not finish. Press Enter to retry.",
         ),
     };
     let mut lines = vec![
         Line::styled(
-            "Use your ChatGPT subscription with the official Codex CLI.",
+            "Connect your Codex subscription in your default browser.",
             visual_style(model, VisualRole::User),
         ),
         Line::from(""),
@@ -2363,7 +2367,7 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
     lines.extend([
         Line::from(""),
         Line::styled(
-            "AutoHarness never reads or stores your Codex credentials.",
+            "Sign-in tokens are kept in your operating-system credential vault.",
             visual_style(model, VisualRole::Muted),
         ),
     ]);
@@ -2384,12 +2388,13 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
             "API key"
         }
         crate::model::ProviderChoice::Codex => {
-            if model
-                .profiles()
-                .profiles
-                .iter()
-                .any(|profile| profile.kind == ProviderKindLabel::CodexCli)
-            {
+            if model.profiles().profiles.iter().any(|profile| {
+                profile.kind == ProviderKindLabel::CodexCli
+                    && matches!(
+                        profile.credential_state,
+                        crate::model::ProfileCredentialStateLabel::Stored
+                    )
+            }) {
                 "Connected"
             } else {
                 "Subscription"
@@ -2681,7 +2686,7 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     lines.push(Line::from(""));
     if editor.mode == ProfileEditorMode::Create && editor.kind == ProviderKindLabel::CodexCli {
         lines.push(Line::styled(
-            "Run 'codex login' in another terminal, complete browser sign-in, then save and test.",
+            "Use the Codex provider card instead. AutoHarness opens browser sign-in directly.",
             visual_style(model, VisualRole::Muted),
         ));
     } else {

@@ -15,6 +15,7 @@ use autoharness_provider::{
     ModelCatalog, ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
     ProviderToolCall, ProviderToolDefinition,
 };
+use autoharness_provider_codex_cli::{CodexAuthProgress, login_with_browser};
 #[cfg(test)]
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_settings::{DisplayLabel, ProfileId, ProviderKind, ProviderProfile};
@@ -49,7 +50,11 @@ pub(crate) struct ProviderComposition {
     pub(crate) factory: ProviderFactory,
 }
 pub(crate) type ProfileProviderFactory = Arc<
-    dyn Fn(&ProviderProfile, ApiCredential) -> Result<Arc<dyn Provider>, ProviderError>
+    dyn Fn(
+            &ProfileId,
+            &ProviderProfile,
+            Zeroizing<String>,
+        ) -> Result<Arc<dyn Provider>, ProviderError>
         + Send
         + Sync
         + 'static,
@@ -74,7 +79,7 @@ impl EnvironmentCredentials {
         match kind {
             ProviderKind::Gemini => self.gemini.is_some(),
             ProviderKind::Router => self.router.is_some(),
-            ProviderKind::CodexCli => true,
+            ProviderKind::CodexCli => false,
         }
     }
 }
@@ -154,6 +159,13 @@ enum AsyncMessage {
         request_id: RequestId,
         result: Result<ModelCatalog, ProviderError>,
     },
+    CodexLoginBrowserOpened {
+        request_id: RequestId,
+    },
+    CodexLoginFinished {
+        request_id: RequestId,
+        result: Result<Zeroizing<String>, ProviderError>,
+    },
 }
 
 struct ActiveAttempt {
@@ -185,6 +197,7 @@ pub struct Coordinator {
     catalog_models: Vec<ModelDescriptor>,
     catalog_generation: u64,
     catalog_cancellation: Option<CancellationToken>,
+    codex_login: Option<(RequestId, CancellationToken)>,
 }
 
 impl Coordinator {
@@ -263,6 +276,7 @@ impl Coordinator {
             catalog_models: Vec::new(),
             catalog_generation: 0,
             catalog_cancellation: None,
+            codex_login: None,
         }
     }
 
@@ -285,6 +299,9 @@ impl Coordinator {
                         active.cancellation.cancel();
                     }
                     if let Some(cancellation) = &self.catalog_cancellation {
+                        cancellation.cancel();
+                    }
+                    if let Some((_, cancellation)) = &self.codex_login {
                         cancellation.cancel();
                     }
                     return Ok(());
@@ -315,6 +332,12 @@ impl Coordinator {
                 credential,
             } => {
                 self.configure_credential(request_id, credential).await?;
+            }
+            UiIntent::StartCodexLogin { request_id } => {
+                self.start_codex_login(request_id).await?;
+            }
+            UiIntent::CancelCodexLogin { request_id } => {
+                self.cancel_codex_login(request_id).await?;
             }
             UiIntent::UpsertProfile {
                 request_id,
@@ -1247,7 +1270,7 @@ impl Coordinator {
             .into_iter()
             .find(|profile| profile.id == *id)
             .ok_or_else(|| profile_validation_failure("that profile does not exist"))?;
-        let mut secret = match runtime.environment.credential(managed.profile.kind()) {
+        let secret = match runtime.environment.credential(managed.profile.kind()) {
             Some(secret) => secret,
             None => match runtime.manager.credential_for_test(id) {
                 Ok(secret) => secret,
@@ -1255,9 +1278,7 @@ impl Coordinator {
                 Err(error) => return Err(profile_failure(&error)),
             },
         };
-        let credential =
-            ApiCredential::new(std::mem::take(&mut *secret)).map_err(profile_validation_failure)?;
-        (runtime.factory)(&managed.profile, credential)
+        (runtime.factory)(id, &managed.profile, secret)
             .map(Some)
             .map_err(|error| provider_failure(&error))
     }
@@ -1674,6 +1695,145 @@ impl Coordinator {
         Ok(())
     }
 
+    async fn start_codex_login(&mut self, request_id: RequestId) -> Result<(), AppError> {
+        if self.active.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "Wait for or cancel the active response before signing in to Codex",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+        if self.codex_login.is_some() {
+            self.reject(
+                request_id,
+                UiFailure::new(
+                    ErrorClass::Conflict,
+                    "A Codex sign-in is already in progress",
+                    RetryPolicy::Now,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let cancellation = self.shutdown.child_token();
+        self.codex_login = Some((request_id, cancellation.clone()));
+        let messages = self.messages.clone();
+        tokio::spawn(async move {
+            let progress_messages = messages.clone();
+            let result = login_with_browser(cancellation, move |progress| {
+                if progress == CodexAuthProgress::BrowserOpened {
+                    let _ = progress_messages
+                        .try_send(AsyncMessage::CodexLoginBrowserOpened { request_id });
+                }
+            })
+            .await;
+            let _ = messages
+                .send(AsyncMessage::CodexLoginFinished { request_id, result })
+                .await;
+        });
+        Ok(())
+    }
+
+    async fn cancel_codex_login(&mut self, request_id: RequestId) -> Result<(), AppError> {
+        if self
+            .codex_login
+            .as_ref()
+            .is_some_and(|(active_request, _)| *active_request == request_id)
+        {
+            if let Some((_, cancellation)) = self.codex_login.take() {
+                cancellation.cancel();
+            }
+        }
+        self.commit(request_id).await
+    }
+
+    async fn handle_codex_login_finished(
+        &mut self,
+        request_id: RequestId,
+        result: Result<Zeroizing<String>, ProviderError>,
+    ) -> Result<(), AppError> {
+        if !self
+            .codex_login
+            .as_ref()
+            .is_some_and(|(active_request, _)| *active_request == request_id)
+        {
+            return Ok(());
+        }
+        self.codex_login = None;
+        let credential = match result {
+            Ok(credential) => credential,
+            Err(error) => {
+                self.reject(request_id, provider_failure(&error)).await?;
+                return Ok(());
+            }
+        };
+        let Some(manager) = self
+            .profiles
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.manager))
+        else {
+            self.reject(request_id, profile_unavailable_failure())
+                .await?;
+            return Ok(());
+        };
+        let snapshot = match manager.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.reject(request_id, profile_failure(&error)).await?;
+                return Ok(());
+            }
+        };
+        let existing = snapshot
+            .profiles
+            .iter()
+            .find(|managed| managed.profile.kind() == ProviderKind::CodexCli);
+        let id = match existing {
+            Some(managed) => managed.id.clone(),
+            None => available_codex_profile_id(&snapshot.profiles),
+        };
+        if existing.is_none()
+            && let Err(error) = manager.upsert(&id, &ProviderProfile::codex_cli())
+        {
+            self.reject(request_id, profile_failure(&error)).await?;
+            return Ok(());
+        }
+        let credential_result = if existing
+            .is_some_and(|managed| managed.credential_state == StoredCredentialState::Stored)
+        {
+            manager.replace_credential(&id, &credential)
+        } else {
+            manager.save_credential(&id, &credential).map(|_| ())
+        };
+        if let Err(error) = credential_result {
+            self.publish_profiles();
+            self.reject(request_id, profile_failure(&error)).await?;
+            return Ok(());
+        }
+        if let Err(error) = manager.activate(Some(&id)) {
+            self.publish_profiles();
+            self.reject(request_id, profile_failure(&error)).await?;
+            return Ok(());
+        }
+        if let Some(runtime) = self.profiles.as_mut() {
+            runtime
+                .connection
+                .insert(id.as_str().to_owned(), ProfileConnectionState::Ready);
+        }
+        self.configure_active_profile(&id);
+        self.publish_profiles();
+        self.ports
+            .notices
+            .send(UiNotice::CodexLoginCompleted { request_id })
+            .await
+            .map_err(|_| AppError::WorkerStopped)
+    }
+
     async fn submit_prompt(
         &mut self,
         request_id: RequestId,
@@ -2026,6 +2186,23 @@ impl Coordinator {
             } => {
                 self.handle_profile_test(profile_id, request_id, result)
                     .await
+            }
+            AsyncMessage::CodexLoginBrowserOpened { request_id } => {
+                if self
+                    .codex_login
+                    .as_ref()
+                    .is_some_and(|(active_request, _)| *active_request == request_id)
+                {
+                    self.ports
+                        .notices
+                        .send(UiNotice::CodexLoginBrowserOpened { request_id })
+                        .await
+                        .map_err(|_| AppError::WorkerStopped)?;
+                }
+                Ok(())
+            }
+            AsyncMessage::CodexLoginFinished { request_id, result } => {
+                self.handle_codex_login_finished(request_id, result).await
             }
         }
     }
@@ -3313,6 +3490,23 @@ fn provider_profile_from_draft(
     }
 }
 
+fn available_codex_profile_id(profiles: &[autoharness_app::profiles::ManagedProfile]) -> ProfileId {
+    for suffix in 1_u32..=10_000 {
+        let candidate = if suffix == 1 {
+            "codex".to_owned()
+        } else {
+            format!("codex-{suffix}")
+        };
+        if !profiles
+            .iter()
+            .any(|managed| managed.id.as_str() == candidate)
+        {
+            return ProfileId::new(candidate).expect("generated Codex profile IDs are valid");
+        }
+    }
+    ProfileId::new("codex-connected").expect("fallback Codex profile ID is valid")
+}
+
 fn nonempty(value: String) -> Option<String> {
     let value = value.trim().to_owned();
     (!value.is_empty()).then_some(value)
@@ -3997,7 +4191,7 @@ mod tests {
         let manager = Arc::new(ProfileManager::new(store.clone(), vault.clone()));
         let built_kinds = Arc::new(Mutex::new(Vec::new()));
         let kinds = Arc::clone(&built_kinds);
-        let profile_factory: ProfileProviderFactory = Arc::new(move |profile, _credential| {
+        let profile_factory: ProfileProviderFactory = Arc::new(move |_id, profile, _credential| {
             kinds.lock().expect("kind mutex").push(profile.kind());
             Ok(Arc::new(FakeProvider::default()) as Arc<dyn Provider>)
         });

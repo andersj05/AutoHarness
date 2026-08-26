@@ -73,11 +73,15 @@ mod tests {
     #[test]
     fn settings_accept_only_supported_reasoning_efforts() {
         assert!(CodexSettings::new().is_ok());
-        assert!(CodexSettings::new()
-            .and_then(|settings| settings.with_reasoning_effort(Some("high")))
-            .is_ok());
-        assert!(CodexSettings::new()
-            .and_then(|settings| settings.with_reasoning_effort(Some("extreme")))
-            .is_err());
+        assert!(
+            CodexSettings::new()
+                .and_then(|settings| settings.with_reasoning_effort(Some("high")))
+                .is_ok()
+        );
+        assert!(
+            CodexSettings::new()
+                .and_then(|settings| settings.with_reasoning_effort(Some("extreme")))
+                .is_err()
+        );
     }
 }

@@ -23,8 +23,7 @@ const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const CALLBACK_ADDRESS: &str = "127.0.0.1:1455";
 const CALLBACK_PATH: &str = "/auth/callback";
-const SCOPE: &str =
-    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const SCOPE: &str = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
@@ -274,7 +273,10 @@ async fn read_callback(
     let mut request = Vec::new();
     let mut chunk = [0_u8; 1024];
     loop {
-        let read = stream.read(&mut chunk).await.map_err(|_| transport_error())?;
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| transport_error())?;
         if read == 0 {
             return Err(protocol_error());
         }
@@ -291,7 +293,11 @@ async fn read_callback(
 }
 
 fn parse_callback_request(request: &str, expected_state: &str) -> Result<String, ProviderError> {
-    let mut fields = request.lines().next().ok_or_else(protocol_error)?.split_whitespace();
+    let mut fields = request
+        .lines()
+        .next()
+        .ok_or_else(protocol_error)?
+        .split_whitespace();
     if fields.next() != Some("GET") {
         return Err(ProviderError::new(
             ProviderErrorKind::InvalidRequest,
@@ -377,11 +383,7 @@ fn pkce_verifier() -> String {
 }
 
 fn random_urlsafe_value() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 fn extract_account_id(token: &str) -> Option<String> {
@@ -473,21 +475,38 @@ mod tests {
     #[test]
     fn authorization_url_uses_pkce_and_the_fixed_loopback_callback() {
         let url = authorization_url("state-value", "challenge-value").expect("URL");
-        let pairs = url.query_pairs().collect::<std::collections::BTreeMap<_, _>>();
+        let pairs = url
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
 
-        assert_eq!(url.origin().ascii_serialization(), "https://auth.openai.com");
-        assert_eq!(pairs.get("client_id").map(|value| value.as_ref()), Some(CLIENT_ID));
-        assert_eq!(pairs.get("redirect_uri").map(|value| value.as_ref()), Some(REDIRECT_URI));
-        assert_eq!(pairs.get("state").map(|value| value.as_ref()), Some("state-value"));
         assert_eq!(
-            pairs.get("code_challenge_method").map(|value| value.as_ref()),
+            url.origin().ascii_serialization(),
+            "https://auth.openai.com"
+        );
+        assert_eq!(
+            pairs.get("client_id").map(|value| value.as_ref()),
+            Some(CLIENT_ID)
+        );
+        assert_eq!(
+            pairs.get("redirect_uri").map(|value| value.as_ref()),
+            Some(REDIRECT_URI)
+        );
+        assert_eq!(
+            pairs.get("state").map(|value| value.as_ref()),
+            Some("state-value")
+        );
+        assert_eq!(
+            pairs
+                .get("code_challenge_method")
+                .map(|value| value.as_ref()),
             Some("S256")
         );
     }
 
     #[test]
     fn callback_requires_the_exact_path_state_and_code() {
-        let request = "GET /auth/callback?code=auth-code&state=expected HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request =
+            "GET /auth/callback?code=auth-code&state=expected HTTP/1.1\r\nHost: localhost\r\n\r\n";
         assert_eq!(
             parse_callback_request(request, "expected").expect("callback"),
             "auth-code"
@@ -498,9 +517,7 @@ mod tests {
 
     #[test]
     fn credential_round_trip_and_debug_are_secret_safe() {
-        let access = jwt(
-            r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"account-1"}}"#,
-        );
+        let access = jwt(r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"account-1"}}"#);
         let credential = CodexOAuthCredential {
             schema: CREDENTIAL_SCHEMA,
             access_token: access.clone(),
@@ -530,6 +547,9 @@ mod tests {
     fn browser_command_passes_the_url_as_one_direct_argument() {
         let (program, arguments) = browser_command("https://auth.openai.com/example?a=b&c=d");
         assert!(!program.is_empty());
-        assert_eq!(arguments.last(), Some(&"https://auth.openai.com/example?a=b&c=d"));
+        assert_eq!(
+            arguments.last(),
+            Some(&"https://auth.openai.com/example?a=b&c=d")
+        );
     }
 }

@@ -7,9 +7,7 @@ mod oauth;
 mod provider;
 mod settings;
 
-pub use oauth::{
-    CodexAuthProgress, CodexOAuthCredential, login_with_browser,
-};
+pub use oauth::{CodexAuthProgress, CodexOAuthCredential, login_with_browser};
 pub use provider::{CodexCredentialPersistence, CodexProvider};
 pub use settings::CodexSettings;
 

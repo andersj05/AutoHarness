@@ -127,7 +127,7 @@ pub enum ProviderKind {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
-    /// User-owned official Codex CLI subscription session.
+    /// User-owned Codex subscription session.
     CodexCli,
 }
 

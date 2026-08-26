@@ -54,30 +54,6 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             apply_notice(model, notice);
             Vec::new()
         }
-        Message::CodexLoginBrowserOpened => {
-            model.profile_center.codex_login = CodexLoginState::BrowserOpened;
-            model.notice = None;
-            model.dirty = true;
-            Vec::new()
-        }
-        Message::CodexLoginAlreadyAuthenticated => {
-            model.notice = Some(Notice::Info(
-                "Existing Codex sign-in found. Connecting...".to_owned(),
-            ));
-            save_codex_connection(model)
-        }
-        Message::CodexLoginCompleted => {
-            model.notice = Some(Notice::Info(
-                "Codex sign-in complete. Connecting...".to_owned(),
-            ));
-            save_codex_connection(model)
-        }
-        Message::CodexLoginFailed => {
-            model.profile_center.codex_login = CodexLoginState::Failed;
-            model.notice = None;
-            model.dirty = true;
-            Vec::new()
-        }
         Message::Tick(now) => {
             let was_startup_active = model.startup_active();
             model.advance_startup(now);
@@ -1924,8 +1900,10 @@ fn begin_codex_login(model: &mut Model) -> Vec<UiEffect> {
     }
     model.profile_center.codex_login = CodexLoginState::Starting;
     model.notice = None;
+    let request_id = model.allocate_request();
+    model.pending.insert(request_id, PendingKind::CodexLogin);
     model.dirty = true;
-    vec![UiEffect::LaunchCodexLogin]
+    vec![UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })]
 }
 
 fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
@@ -1950,60 +1928,6 @@ fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
         request_id,
         profile,
     })]
-}
-
-fn save_codex_connection(model: &mut Model) -> Vec<UiEffect> {
-    let profile_id = model
-        .profiles()
-        .profiles
-        .iter()
-        .find(|profile| profile.kind == ProviderKindLabel::CodexCli)
-        .map_or_else(
-            || available_profile_id(model, "codex"),
-            |profile| profile.id.clone(),
-        );
-    let profile = ProviderProfileDraft {
-        id: profile_id,
-        kind: ProviderKindLabel::CodexCli,
-        base_url: String::new(),
-        project: String::new(),
-        auth_header: String::new(),
-    };
-    let request_id = model.allocate_request();
-    model
-        .pending
-        .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
-    model.profile_center.auth_page = None;
-    model.profile_center.codex_login = CodexLoginState::Idle;
-    model.notice = Some(Notice::Info(
-        "Saving and checking the Codex connection...".to_owned(),
-    ));
-    model.dirty = true;
-    vec![UiEffect::Dispatch(UiIntent::UpsertProfile {
-        request_id,
-        profile,
-    })]
-}
-
-fn available_profile_id(model: &Model, base: &str) -> String {
-    if !model
-        .profiles()
-        .profiles
-        .iter()
-        .any(|profile| profile.id == base)
-    {
-        return base.to_owned();
-    }
-    (2_u16..)
-        .map(|suffix| format!("{base}-{suffix}"))
-        .find(|candidate| {
-            !model
-                .profiles()
-                .profiles
-                .iter()
-                .any(|profile| profile.id == *candidate)
-        })
-        .expect("bounded profile collection always leaves an available suffix")
 }
 
 fn open_provider_setup(model: &mut Model, kind: ProviderKindLabel, id: &str) {
@@ -2043,19 +1967,18 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 vec![UiEffect::Quit]
             }
             Input { key: Key::Esc, .. } => {
-                let was_running = matches!(
-                    model.profile_center.codex_login,
-                    CodexLoginState::Starting | CodexLoginState::BrowserOpened
-                );
+                let login_request = model.pending.iter().find_map(|(request_id, pending)| {
+                    matches!(pending, PendingKind::CodexLogin).then_some(*request_id)
+                });
                 model.profile_center.auth_page = None;
                 model.profile_center.codex_login = CodexLoginState::Idle;
                 model.notice = None;
                 model.dirty = true;
-                if was_running {
-                    vec![UiEffect::CancelCodexLogin]
-                } else {
-                    Vec::new()
-                }
+                login_request.map_or_else(Vec::new, |request_id| {
+                    vec![UiEffect::Dispatch(UiIntent::CancelCodexLogin {
+                        request_id,
+                    })]
+                })
             }
             Input {
                 key: Key::Enter, ..
@@ -2992,7 +2915,8 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::CancelAttempt(_)
         | PendingKind::RetryAttempt(_)
         | PendingKind::AnswerPermission(_)
-        | PendingKind::ExportTranscript => false,
+        | PendingKind::ExportTranscript
+        | PendingKind::CodexLogin => false,
     })
 }
 
@@ -3726,6 +3650,10 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     PendingKind::ExportTranscript => {
                         model.notice = Some(Notice::Info("Transcript exported".to_owned()));
                     }
+                    PendingKind::CodexLogin => {
+                        model.profile_center.codex_login = CodexLoginState::Idle;
+                        model.notice = Some(Notice::Info("Codex sign-in cancelled".to_owned()));
+                    }
                 }
             }
         }
@@ -3821,8 +3749,34 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     | PendingKind::ExportTranscript,
                 )
                 | None => {}
+                Some(PendingKind::CodexLogin) => {
+                    model.profile_center.codex_login = CodexLoginState::Failed;
+                }
             }
             model.notice = Some(Notice::Failure(failure));
+        }
+        UiNotice::CodexLoginBrowserOpened { request_id } => {
+            if matches!(
+                model.pending.get(&request_id),
+                Some(PendingKind::CodexLogin)
+            ) {
+                model.profile_center.codex_login = CodexLoginState::BrowserOpened;
+                model.notice = Some(Notice::Info(
+                    "Finish signing in with Codex in your browser".to_owned(),
+                ));
+            }
+        }
+        UiNotice::CodexLoginCompleted { request_id } => {
+            if matches!(
+                model.pending.remove(&request_id),
+                Some(PendingKind::CodexLogin)
+            ) {
+                model.profile_center.auth_page = None;
+                model.profile_center.codex_login = CodexLoginState::Idle;
+                model.notice = Some(Notice::Info(
+                    "Codex subscription connected and ready".to_owned(),
+                ));
+            }
         }
     }
     model.dirty = true;
@@ -4270,7 +4224,8 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::UnarchiveSession(_)
             | PendingKind::DeleteSession(_)
             | PendingKind::OpenSession(_)
-            | PendingKind::ExportTranscript => false,
+            | PendingKind::ExportTranscript
+            | PendingKind::CodexLogin => false,
         })
 }
 

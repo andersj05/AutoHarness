@@ -85,7 +85,10 @@ impl CodexProvider {
             if let Some(persistence) = &self.persistence {
                 persistence(&encoded)?;
             }
-            let mut secrets = self.redaction_secrets.write().map_err(|_| internal_error())?;
+            let mut secrets = self
+                .redaction_secrets
+                .write()
+                .map_err(|_| internal_error())?;
             *secrets = vec![
                 Zeroizing::new(refreshed.access_token().to_owned()),
                 Zeroizing::new(refreshed.refresh_token().to_owned()),
@@ -123,9 +126,15 @@ impl CodexProvider {
             "chatgpt-account-id",
             HeaderValue::from_str(account_id.as_str()).map_err(|_| authentication_error())?,
         );
-        headers.insert("openai-beta", HeaderValue::from_static("responses=experimental"));
+        headers.insert(
+            "openai-beta",
+            HeaderValue::from_static("responses=experimental"),
+        );
         headers.insert("originator", HeaderValue::from_static("autoharness"));
-        headers.insert("version", HeaderValue::from_static(env!("CARGO_PKG_VERSION")));
+        headers.insert(
+            "version",
+            HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+        );
         headers.insert(USER_AGENT, HeaderValue::from_static("autoharness/0.1.0"));
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -400,16 +409,31 @@ impl CodexStreamState {
             };
         }
         let value: Value = serde_json::from_str(data).map_err(|_| protocol_error())?;
-        let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        let event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match event_type {
             "response.output_text.delta" | "response.refusal.delta" => {
-                let delta = value.get("delta").and_then(Value::as_str).unwrap_or_default();
+                let delta = value
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if delta.is_empty() {
                     return Ok(Vec::new());
                 }
-                let secrets = self.redaction_secrets.read().map_err(|_| internal_error())?;
-                let secret_refs = secrets.iter().map(|secret| secret.as_str()).collect::<Vec<_>>();
-                if self.text_secret_accumulator.observe_text(delta, &secret_refs) {
+                let secrets = self
+                    .redaction_secrets
+                    .read()
+                    .map_err(|_| internal_error())?;
+                let secret_refs = secrets
+                    .iter()
+                    .map(|secret| secret.as_str())
+                    .collect::<Vec<_>>();
+                if self
+                    .text_secret_accumulator
+                    .observe_text(delta, &secret_refs)
+                {
                     return Err(protocol_error());
                 }
                 Ok(vec![ProviderStreamEvent::TextDelta(TextDelta::new(delta)?)])
@@ -443,7 +467,9 @@ impl CodexStreamState {
 }
 
 fn usage(value: &Value) -> Option<UsageSnapshot> {
-    let usage = value.pointer("/response/usage").or_else(|| value.get("usage"))?;
+    let usage = value
+        .pointer("/response/usage")
+        .or_else(|| value.get("usage"))?;
     let snapshot = UsageSnapshot {
         input_tokens: usage.get("input_tokens").and_then(Value::as_u64),
         output_tokens: usage.get("output_tokens").and_then(Value::as_u64),
@@ -466,10 +492,30 @@ fn usage(value: &Value) -> Option<UsageSnapshot> {
 
 fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, ProviderError> {
     [
-        (CODEX_DEFAULT_MODEL_ID, "Codex default", "The current default model for the authenticated Codex subscription.", CapabilitySupport::Unknown),
-        ("gpt-5.6-sol", "GPT-5.6 Sol", "Frontier capability for complex coding work.", CapabilitySupport::Supported),
-        ("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced capability and responsiveness.", CapabilitySupport::Supported),
-        ("gpt-5.6-luna", "GPT-5.6 Luna", "Fast, efficient coding model.", CapabilitySupport::Supported),
+        (
+            CODEX_DEFAULT_MODEL_ID,
+            "Codex default",
+            "The current default model for the authenticated Codex subscription.",
+            CapabilitySupport::Unknown,
+        ),
+        (
+            "gpt-5.6-sol",
+            "GPT-5.6 Sol",
+            "Frontier capability for complex coding work.",
+            CapabilitySupport::Supported,
+        ),
+        (
+            "gpt-5.6-terra",
+            "GPT-5.6 Terra",
+            "Balanced capability and responsiveness.",
+            CapabilitySupport::Supported,
+        ),
+        (
+            "gpt-5.6-luna",
+            "GPT-5.6 Luna",
+            "Fast, efficient coding model.",
+            CapabilitySupport::Supported,
+        ),
     ]
     .into_iter()
     .map(|(id, name, description, thinking)| {
@@ -494,9 +540,9 @@ fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, Provid
 
 fn request_model_name(model: &ModelId) -> Result<&str, ProviderError> {
     let name = model.as_str();
-    if name == CODEX_DEFAULT_MODEL_ID
-        || ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].contains(&name)
-    {
+    if name == CODEX_DEFAULT_MODEL_ID {
+        Ok("gpt-5.6-terra")
+    } else if ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].contains(&name) {
         Ok(name)
     } else {
         Err(ProviderError::new(
@@ -531,13 +577,25 @@ fn classify_stream_error(value: &Value) -> ProviderError {
     let code = value
         .pointer("/error/code")
         .and_then(Value::as_str)
-        .or_else(|| value.pointer("/response/error/code").and_then(Value::as_str));
+        .or_else(|| {
+            value
+                .pointer("/response/error/code")
+                .and_then(Value::as_str)
+        });
     match code {
-        Some("rate_limit_exceeded" | "rate_limit_error") => ProviderError::new(ProviderErrorKind::RateLimited, RetryAdvice::Backoff),
+        Some("rate_limit_exceeded" | "rate_limit_error") => {
+            ProviderError::new(ProviderErrorKind::RateLimited, RetryAdvice::Backoff)
+        }
         Some("authentication_error" | "invalid_token") => authentication_error(),
-        Some("permission_denied") => ProviderError::new(ProviderErrorKind::PermissionDenied, RetryAdvice::Never),
-        Some("model_not_found") => ProviderError::new(ProviderErrorKind::ModelNotFound, RetryAdvice::Never),
-        Some("server_error" | "internal_error") => ProviderError::new(ProviderErrorKind::Unavailable, RetryAdvice::Backoff),
+        Some("permission_denied") => {
+            ProviderError::new(ProviderErrorKind::PermissionDenied, RetryAdvice::Never)
+        }
+        Some("model_not_found") => {
+            ProviderError::new(ProviderErrorKind::ModelNotFound, RetryAdvice::Never)
+        }
+        Some("server_error" | "internal_error") => {
+            ProviderError::new(ProviderErrorKind::Unavailable, RetryAdvice::Backoff)
+        }
         _ => protocol_error(),
     }
 }
@@ -546,7 +604,11 @@ fn is_event_stream(headers: &HeaderMap) -> bool {
     headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(';').next().is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream")))
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type.trim().eq_ignore_ascii_case("text/event-stream")
+            })
+        })
 }
 
 fn classify_transport_error(error: reqwest::Error) -> ProviderError {
@@ -559,13 +621,27 @@ fn classify_transport_error(error: reqwest::Error) -> ProviderError {
     }
 }
 
-fn authentication_error() -> ProviderError { ProviderError::new(ProviderErrorKind::Authentication, RetryAdvice::Never) }
-fn cancelled_error() -> ProviderError { ProviderError::new(ProviderErrorKind::Cancelled, RetryAdvice::Never) }
-fn internal_error() -> ProviderError { ProviderError::new(ProviderErrorKind::Internal, RetryAdvice::Never) }
-fn limit_error() -> ProviderError { ProviderError::new(ProviderErrorKind::LimitExceeded, RetryAdvice::Never) }
-fn missing_credential_error() -> ProviderError { ProviderError::new(ProviderErrorKind::MissingCredential, RetryAdvice::Never) }
-fn protocol_error() -> ProviderError { ProviderError::new(ProviderErrorKind::Protocol, RetryAdvice::Never) }
-fn unsupported_error() -> ProviderError { ProviderError::new(ProviderErrorKind::Unsupported, RetryAdvice::Never) }
+fn authentication_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Authentication, RetryAdvice::Never)
+}
+fn cancelled_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Cancelled, RetryAdvice::Never)
+}
+fn internal_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Internal, RetryAdvice::Never)
+}
+fn limit_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::LimitExceeded, RetryAdvice::Never)
+}
+fn missing_credential_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::MissingCredential, RetryAdvice::Never)
+}
+fn protocol_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Protocol, RetryAdvice::Never)
+}
+fn unsupported_error() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Unsupported, RetryAdvice::Never)
+}
 
 #[cfg(test)]
 mod tests {
@@ -575,7 +651,10 @@ mod tests {
     fn request() -> ChatRequest {
         ChatRequest::new(
             ModelId::new("gpt-5.6-terra").expect("model"),
-            vec![ChatMessage::text(ChatRole::User, ChatContent::new("hello").expect("content"))],
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("hello").expect("content"),
+            )],
         )
         .expect("request")
     }
@@ -596,15 +675,29 @@ mod tests {
     fn responses_sse_normalizes_text_usage_and_completion() {
         let secrets = Arc::new(RwLock::new(Vec::new()));
         let mut state = CodexStreamState::new(secrets);
-        let text = state.handle(r#"{"type":"response.output_text.delta","delta":"hello"}"#).expect("text");
+        let text = state
+            .handle(r#"{"type":"response.output_text.delta","delta":"hello"}"#)
+            .expect("text");
         let completed = state.handle(r#"{"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}"#).expect("completion");
-        assert!(matches!(text.as_slice(), [ProviderStreamEvent::TextDelta(_)]));
+        assert!(matches!(
+            text.as_slice(),
+            [ProviderStreamEvent::TextDelta(_)]
+        ));
         assert!(matches!(completed[0], ProviderStreamEvent::Usage(_)));
-        assert_eq!(completed[1], ProviderStreamEvent::Completed { reason: CompletionReason::Stop });
+        assert_eq!(
+            completed[1],
+            ProviderStreamEvent::Completed {
+                reason: CompletionReason::Stop
+            }
+        );
     }
 
     #[test]
     fn unknown_models_fail_closed() {
+        assert_eq!(
+            request_model_name(&ModelId::new(CODEX_DEFAULT_MODEL_ID).expect("model")),
+            Ok("gpt-5.6-terra")
+        );
         assert!(request_model_name(&ModelId::new("unknown").expect("model")).is_err());
     }
 }

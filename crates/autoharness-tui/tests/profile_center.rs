@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use autoharness_domain::{ModelId, ModelRef, ProviderId};
+use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
     ModelSummary, MouseAction, ProfileConnectionState, ProfileCredentialStateLabel,
-    ProfilesProjection, ProviderKindLabel, ProviderProfileProjection, SessionProjection,
-    SessionsProjection, UiEffect, UiIntent, hit_test, update, view,
+    ProfilesProjection, ProviderKindLabel, ProviderProfileProjection, RetryPolicy,
+    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice, hit_test,
+    update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -149,7 +150,7 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("Sign in to Codex"));
     assert!(rendered.contains("Sign in with ChatGPT"));
-    assert!(rendered.contains("official Codex CLI"));
+    assert!(rendered.contains("default browser"));
     assert!((0..40).any(|row| {
         (0..120).any(|column| {
             matches!(
@@ -159,22 +160,26 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
         })
     }));
 
-    assert!(matches!(
-        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::LaunchCodexLogin]
-    ));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let request_id = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected login effects: {other:?}"),
+    };
     assert!(
-        render_text(&model, 120, 40).contains("Starting secure sign-in"),
+        render_text(&model, 120, 40).contains("Opening your browser"),
         "the authentication popup should show launch progress"
     );
-    let _ = update(&mut model, Message::CodexLoginBrowserOpened);
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::CodexLoginBrowserOpened { request_id }),
+    );
     assert!(render_text(&model, 120, 40).contains("Browser opened"));
-    let effects = update(&mut model, Message::CodexLoginCompleted);
-    assert!(matches!(
-        effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "codex" && profile.kind == ProviderKindLabel::CodexCli
-    ));
+    let effects = update(
+        &mut model,
+        Message::Notice(UiNotice::CodexLoginCompleted { request_id }),
+    );
+    assert!(effects.is_empty());
+    assert!(render_text(&model, 120, 40).contains("Codex subscription connected"));
 }
 
 #[test]
@@ -185,18 +190,42 @@ fn codex_sign_in_can_be_cancelled_or_retried_after_failure() {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let request_id = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected login effects: {other:?}"),
+    };
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Esc))).as_slice(),
-        [UiEffect::CancelCodexLogin]
+        [UiEffect::Dispatch(UiIntent::CancelCodexLogin { request_id: cancelled })]
+            if *cancelled == request_id
     ));
 
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted { request_id }),
+    );
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::CodexLoginFailed);
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let failed_request = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected retry effects: {other:?}"),
+    };
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentRejected {
+            request_id: failed_request,
+            failure: UiFailure::new(
+                ErrorClass::Unavailable,
+                "The browser could not be opened",
+                RetryPolicy::Now,
+            ),
+        }),
+    );
     assert!(render_text(&model, 120, 40).contains("Try sign-in again"));
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::LaunchCodexLogin]
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { .. })]
     ));
 }
 
@@ -237,7 +266,7 @@ fn provider_arrows_preserve_connected_profile_selection() {
     for _ in 0..6 {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
-    assert!(render_text(&model, 80, 24).contains("Saved connections"));
+    assert!(render_text(&model, 80, 24).contains("Connected providers"));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Right)));

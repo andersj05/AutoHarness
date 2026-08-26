@@ -37,8 +37,8 @@ impl fmt::Display for VaultError {
 
 impl std::error::Error for VaultError {}
 
-/// Maximum accepted credential length, matching the TUI entry bound.
-const MAX_SECRET_BYTES: usize = 4_096;
+/// Maximum accepted opaque credential payload length.
+const MAX_SECRET_BYTES: usize = 32 * 1_024;
 
 /// Application-owned port to the operating-system credential store.
 pub trait VaultPort: Send + Sync {

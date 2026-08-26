@@ -21,10 +21,10 @@ use autoharness_domain::{ClassifiedError as _, RetryAdvice};
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
 };
-use autoharness_provider_codex_cli::{CodexCliProvider, CodexCliSettings};
+use autoharness_provider_codex_cli::{CodexCredentialPersistence, CodexProvider, CodexSettings};
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
-use autoharness_settings::{LayerKind, ProviderKind, ProviderProfile, SettingsBuilder};
+use autoharness_settings::{LayerKind, ProfileId, ProviderKind, ProviderProfile, SettingsBuilder};
 use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
@@ -79,11 +79,17 @@ async fn run() -> Result<(), AppError> {
         .unwrap_or_default();
     let vault: Arc<dyn VaultPort> = Arc::new(KeyringVault::new());
     let resolved = resolve_launch(&profile_store, vault.as_ref());
-    let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved).await?;
     let profile_manager = Arc::new(ProfileManager::new(profile_store, vault));
+    let provider = configure_provider(
+        Arc::clone(&cache),
+        policy.clone(),
+        &resolved,
+        Arc::clone(&profile_manager),
+    )
+    .await?;
     let profile_runtime = ProfileRuntime::new(
-        profile_manager,
-        configure_profile_provider_factory(Arc::clone(&cache), policy),
+        Arc::clone(&profile_manager),
+        configure_profile_provider_factory(Arc::clone(&cache), policy, profile_manager),
         environment_credentials(),
         config::workspace_root()?.display().to_string(),
     );
@@ -326,6 +332,7 @@ async fn configure_provider(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
     resolved: &LaunchResolution,
+    profile_manager: Arc<ProfileManager>,
 ) -> Result<ConfiguredProvider, AppError> {
     // A profile selects its adapter; otherwise the environment variable wins.
     let selection = match resolved.provider_kind {
@@ -408,9 +415,12 @@ async fn configure_provider(
             config::ProviderSelection::CodexCli => {
                 let factory_cache = Arc::clone(&cache);
                 let factory_policy = policy.clone();
-                let factory: ProviderFactory = Arc::new(move |_credential: ApiCredential| {
-                    let provider: Arc<dyn Provider> = Arc::new(CodexCliProvider::new_blocking(
-                        CodexCliSettings::from_env()?,
+                let factory: ProviderFactory = Arc::new(move |credential: ApiCredential| {
+                    let credential = Zeroizing::new(credential.into_string());
+                    let provider: Arc<dyn Provider> = Arc::new(CodexProvider::new(
+                        CodexSettings::new()?,
+                        &credential,
+                        None,
                     )?);
                     Ok(managed_provider(
                         provider,
@@ -418,12 +428,23 @@ async fn configure_provider(
                         factory_policy.clone(),
                     ))
                 });
-                let initial = CodexCliProvider::from_env(CancellationToken::new())
-                    .await
-                    .map(|provider| {
-                        let provider: Arc<dyn Provider> = Arc::new(provider);
-                        managed_provider(provider, Arc::clone(&cache), policy.clone())
-                    });
+                let initial = if resolved.credential.is_empty() {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                } else {
+                    let persistence = resolved
+                        .active_profile
+                        .as_deref()
+                        .and_then(|id| ProfileId::new(id).ok())
+                        .map(|id| codex_persistence(Arc::clone(&profile_manager), id));
+                    CodexProvider::new(CodexSettings::new()?, &resolved.credential, persistence)
+                        .map(|provider| {
+                            let provider: Arc<dyn Provider> = Arc::new(provider);
+                            managed_provider(provider, Arc::clone(&cache), policy.clone())
+                        })
+                };
                 (initial, factory)
             }
         };
@@ -472,21 +493,23 @@ fn environment_credentials() -> EnvironmentCredentials {
 fn configure_profile_provider_factory(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
+    manager: Arc<ProfileManager>,
 ) -> ProfileProviderFactory {
-    Arc::new(move |profile, credential| {
+    Arc::new(move |profile_id, profile, credential| {
         let provider: Arc<dyn Provider> = match profile.kind() {
             ProviderKind::Gemini => {
-                let key = GeminiApiKey::new(credential.into_string())?;
+                let key = GeminiApiKey::new(credential.as_str())?;
                 Arc::new(GeminiProvider::new(key)?)
             }
             ProviderKind::Router => {
                 let settings = router_settings_for_profile(profile)?;
-                let credential = RouterCredential::new(credential.into_string())?;
+                let credential = RouterCredential::new(credential.as_str())?;
                 Arc::new(OpenAiRouterProvider::new(settings, credential)?)
             }
-            ProviderKind::CodexCli => Arc::new(CodexCliProvider::new_blocking(
-                CodexCliSettings::from_env()?
-                    .with_reasoning_effort(profile.default_reasoning_effort())?,
+            ProviderKind::CodexCli => Arc::new(CodexProvider::new(
+                CodexSettings::new()?.with_reasoning_effort(profile.default_reasoning_effort())?,
+                &credential,
+                Some(codex_persistence(Arc::clone(&manager), profile_id.clone())),
             )?),
         };
         Ok(managed_provider(
@@ -494,6 +517,17 @@ fn configure_profile_provider_factory(
             Arc::clone(&cache),
             policy.clone(),
         ))
+    })
+}
+
+fn codex_persistence(
+    manager: Arc<ProfileManager>,
+    profile_id: ProfileId,
+) -> CodexCredentialPersistence {
+    Arc::new(move |credential| {
+        manager
+            .replace_credential(&profile_id, credential)
+            .map_err(|_| ProviderError::new(ProviderErrorKind::Unavailable, RetryAdvice::Immediate))
     })
 }
 
