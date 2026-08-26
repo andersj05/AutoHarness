@@ -363,8 +363,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
 fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
-    let width = area.width.clamp(30, 64);
-    let height = area.height.clamp(7, 11);
+    let width = area.width.clamp(28, 48);
+    let height = area.height.clamp(4, 5);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -373,7 +373,7 @@ fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" AutoHarness / boot ")
+        .title(" AutoHarness ")
         .title_style(visual_style(model, VisualRole::Header))
         .border_style(visual_style(model, VisualRole::Selected));
     let inner = block.inner(popup);
@@ -381,43 +381,15 @@ fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let animation_now = if presentation(model).reduced_motion {
-        0
-    } else {
-        model.now
-    };
-    let frame_index = animation_now / 100;
-    let percent = ((animation_now.min(1_800) * 100) / 1_800).min(100);
-    let bar_width = inner.width.saturating_sub(12).max(8);
-    let filled = (u32::from(bar_width) * u32::try_from(percent).unwrap_or(100) / 100) as u16;
-    let empty = bar_width.saturating_sub(filled);
-    let ascii = presentation(model).ascii;
-    let (left, right, fill, empty_glyph) = if ascii {
-        ('[', ']', '#', '-')
-    } else {
-        ('▌', '▐', '█', '░')
-    };
-    let bar = format!(
-        "{left}{}{} {percent:>3}%{right}",
-        fill.to_string().repeat(usize::from(filled)),
-        empty_glyph.to_string().repeat(usize::from(empty))
-    );
-    let phase = match frame_index % 4 {
-        0 => "warming terminal",
-        1 => "checking provider",
-        2 => "preparing workspace",
-        _ => "loading model catalog",
-    };
     let lines = vec![
-        Line::styled("AUTOHARNESS", visual_style(model, VisualRole::Header)),
-        Line::from(""),
         Line::styled(
-            format!("{}  {phase}", spinner(model)),
+            format!("{}  Starting", spinner(model)),
             visual_style(model, VisualRole::Assistant),
         ),
-        Line::from(bar),
-        Line::styled("CONNECTING", visual_style(model, VisualRole::Warning)),
-        Line::from("Loading compatible models..."),
+        Line::styled(
+            "Loading provider models...",
+            visual_style(model, VisualRole::Muted),
+        ),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -3016,10 +2988,10 @@ fn transcript_text(model: &Model) -> Text<'static> {
             }
             CatalogProjection::Loading => {
                 lines.push(Line::styled(
-                    "CONNECTING",
+                    format!("{}  CONNECTING", spinner(model)),
                     visual_style(model, VisualRole::Warning),
                 ));
-                lines.push(Line::from("Loading compatible models..."));
+                lines.push(Line::from("Loading provider models..."));
             }
             CatalogProjection::Failed(failure) => {
                 lines.push(Line::styled(

@@ -3510,6 +3510,9 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
 }
 
 fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
+    if !matches!(&*catalog, CatalogProjection::Loading) {
+        model.startup_complete = true;
+    }
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);

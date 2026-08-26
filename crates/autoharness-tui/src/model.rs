@@ -2139,11 +2139,13 @@ pub struct Model {
     pub(crate) now: UiInstant,
 }
 
-const STARTUP_ANIMATION_MS: UiInstant = 1_800;
+const STARTUP_ANIMATION_MS: UiInstant = 400;
 
 impl Model {
     pub(crate) fn startup_active(&self) -> bool {
-        !self.startup_complete && self.now < STARTUP_ANIMATION_MS
+        !self.startup_complete
+            && self.now < STARTUP_ANIMATION_MS
+            && matches!(&*self.catalog, CatalogProjection::Loading)
     }
 
     pub(crate) fn advance_startup(&mut self, now: UiInstant) {

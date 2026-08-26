@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Providers now presents one stable keyboard-navigable provider catalog beside always-visible connected accounts, Settings pages share a consistent title, description, content, and navigation hierarchy, and Agents persists model and reasoning defaults for fresh sessions; focused TUI and visual-review tests pass while full Phase 3.9 release evidence remains pending
+**Status:** Providers and Settings navigation are consistent, Agents persists model and reasoning defaults for fresh sessions, and startup now uses a catalog-bound indicator capped at 400 ms before exposing the real model-loading state; formatting, strict Clippy, and the full workspace suite pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -57,6 +57,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 
 ## Recently completed
 
+- On 2026-08-26, the fixed 1.8-second startup presentation was replaced by a two-line indicator capped at 400 ms that exits immediately when model discovery resolves, removes fake progress and phase copy, and hands longer work to the actual provider-model loading state.
 - On 2026-08-26, Providers became a stable catalog beside always-visible connected accounts, Left and Right explicitly switch sections, Up and Down stay within a section, provider statuses remain compact at narrow widths, and General, Providers, Profile, and Agents share one page hierarchy and navigation vocabulary.
 - On 2026-08-25, the Providers and Agents follow-up made Codex browser login launch in a separate visible Windows process, activated saved Codex profiles immediately, exposed the documented GPT-5.6 Codex model choices, persisted model and reasoning effort together in settings schema 4, and applied the selected model during fresh-session creation.
 - On 2026-08-25, Codex opens a dedicated in-app browser-login wizard whose Enter action launches the official `codex login` command without credential handling, Google AI Studio API opens the masked OS-vault key dialog after non-secret profile creation, and General, Providers, Profile, and Agents now share the single outer Settings frame; focused TUI tests, strict Clippy, and the real Windows Codex-login PTY journey passed.

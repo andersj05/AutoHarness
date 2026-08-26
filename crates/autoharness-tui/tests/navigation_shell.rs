@@ -312,19 +312,34 @@ fn chat_empty_states_name_one_primary_recovery_action() {
 fn startup_boot_surface_animates_and_exits_deterministically() {
     let mut model = loading_model();
     let initial = render_text(&model, 80, 24);
-    assert!(initial.contains("AutoHarness / boot"));
+    assert!(initial.contains("AutoHarness"));
+    assert!(initial.contains("Loading provider models..."));
+    assert!(!initial.contains('%'));
     let _ = update(&mut model, Message::Tick(100));
     let first = render_text(&model, 80, 24);
     let _ = update(&mut model, Message::Tick(200));
     let second = render_text(&model, 80, 24);
-    assert!(first.contains("AUTOHARNESS"));
-    assert!(first.contains("CONNECTING"));
+    assert!(first.contains("Starting"));
     assert_ne!(first, second);
 
-    let _ = update(&mut model, Message::Tick(2_000));
+    let _ = update(&mut model, Message::Tick(400));
     let settled = render_text(&model, 80, 24);
-    assert!(!settled.contains("AutoHarness / boot"));
+    assert!(!settled.contains("Starting"));
     assert!(settled.contains("CONNECTING"));
+    assert!(settled.contains("Loading provider models..."));
+}
+
+#[test]
+fn startup_surface_exits_as_soon_as_model_loading_finishes() {
+    let mut model = loading_model();
+    let _ = update(
+        &mut model,
+        Message::CatalogChanged(Arc::new(CatalogProjection::CredentialRequired)),
+    );
+
+    let rendered = render_text(&model, 80, 24);
+    assert!(!rendered.contains("Starting"));
+    assert!(rendered.contains("OFFLINE"));
 }
 
 #[test]
