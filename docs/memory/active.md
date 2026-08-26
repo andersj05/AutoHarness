@@ -1,10 +1,10 @@
 # Active memory
 
-**Last reviewed:** 2026-08-25
+**Last reviewed:** 2026-08-26
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** The provider and Agents follow-up launches Codex login visibly, activates a saved Codex profile, exposes explicit Codex model choices, persists model and reasoning defaults together, and applies the model before publishing each fresh session; focused tests, strict workspace Clippy, formatting, documentation links, and the real Windows provider PTY journey pass while full Phase 3.9 release evidence remains pending
+**Status:** Providers now presents one stable keyboard-navigable provider catalog beside always-visible connected accounts, Settings pages share a consistent title, description, content, and navigation hierarchy, and Agents persists model and reasoning defaults for fresh sessions; focused TUI and visual-review tests pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -57,6 +57,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 
 ## Recently completed
 
+- On 2026-08-26, Providers became a stable catalog beside always-visible connected accounts, Left and Right explicitly switch sections, Up and Down stay within a section, provider statuses remain compact at narrow widths, and General, Providers, Profile, and Agents share one page hierarchy and navigation vocabulary.
 - On 2026-08-25, the Providers and Agents follow-up made Codex browser login launch in a separate visible Windows process, activated saved Codex profiles immediately, exposed the documented GPT-5.6 Codex model choices, persisted model and reasoning effort together in settings schema 4, and applied the selected model during fresh-session creation.
 - On 2026-08-25, Codex opens a dedicated in-app browser-login wizard whose Enter action launches the official `codex login` command without credential handling, Google AI Studio API opens the masked OS-vault key dialog after non-secret profile creation, and General, Providers, Profile, and Agents now share the single outer Settings frame; focused TUI tests, strict Clippy, and the real Windows Codex-login PTY journey passed.
 - On 2026-08-25, `feat/tui-navigation-audit` removed Tab-driven page switching, made Settings and provider connection surfaces arrow-key-first, preserved connected-profile selection across provider navigation, rendered connected accounts beside safe details, added arrow-selected Codex login actions and profile-editor fields, and passed focused TUI tests, strict TUI Clippy, formatting, routed-shell PTY, and Codex provider PTY smoke.

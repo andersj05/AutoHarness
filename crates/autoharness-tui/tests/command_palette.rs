@@ -363,7 +363,10 @@ fn agents_command_opens_the_integrated_settings_tab() {
     type_text(&mut model, "/agents");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("1 Provider  2 Model"));
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    assert!(rendered.contains("Agents"));
+    assert!(rendered.contains("1  PROVIDER"));
+    assert!(rendered.contains("2  MODEL"));
 }
 
 #[test]
