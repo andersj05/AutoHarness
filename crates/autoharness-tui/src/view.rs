@@ -1943,7 +1943,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Providers & Profiles ")
+        .title(" Providers & Connections ")
         .border_style(visual_style(model, VisualRole::Border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
