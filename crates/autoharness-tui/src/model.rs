@@ -870,6 +870,8 @@ pub enum PendingKind {
 pub enum UiEffect {
     /// Dispatch an intent through the bounded application mailbox.
     Dispatch(UiIntent),
+    /// Start the official Codex CLI browser-login flow without handling credentials.
+    LaunchCodexLogin,
     /// Copy exact text to the system clipboard through OSC 52.
     CopyTranscript(String),
     /// Exit the terminal client.
@@ -1320,10 +1322,12 @@ impl ProviderChoice {
     }
 }
 
-/// Provider-choice and account-editor state owned by the Providers workspace.
+/// Provider-choice, authentication-page, and account-editor state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
     pub choice_selected: usize,
+    pub auth_page: Option<ProviderChoice>,
+    pub open_credential_after_save: Option<String>,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,

@@ -147,9 +147,14 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
     }
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("Connect Codex subscription"));
-    assert!(rendered.contains("codex login"));
+    assert!(rendered.contains("Sign in to Codex"));
+    assert!(rendered.contains("Open official browser sign-in"));
 
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
+        [UiEffect::LaunchCodexLogin]
+    ));
+    let _ = update(&mut model, Message::Input(key(Key::Char('s'))));
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
     assert!(matches!(
         effects.as_slice(),
@@ -167,7 +172,7 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
 
-    assert!(render_text(&model, 120, 40).contains("Agent Defaults"));
+    assert!(render_text(&model, 120, 40).contains("1 Provider  2 Model  3 Thinking"));
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]

@@ -264,6 +264,16 @@ fn dispatch_effects(
     for effect in effects {
         match effect {
             UiEffect::Quit => return true,
+            UiEffect::LaunchCodexLogin => {
+                let executable = std::env::var_os("AUTOHARNESS_CODEX_EXECUTABLE")
+                    .unwrap_or_else(|| std::ffi::OsString::from("codex"));
+                let _ = std::process::Command::new(executable)
+                    .arg("login")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
             UiEffect::CopyTranscript(text) => {
                 // OSC 52 copy; failure is non-fatal because terminals may
                 // simply not advertise clipboard support.
@@ -280,12 +290,11 @@ fn dispatch_effects(
                 }
                 if let Err(error) = intents.try_send(intent) {
                     let (message, retry) = match error {
-                        TrySendError::Full(_) => (
-                            "Application is busy; the request was not queued",
-                            RetryPolicy::Now,
-                        ),
+                        TrySendError::Full(_) => {
+                            ("Application is busy; try again", RetryPolicy::Now)
+                        }
                         TrySendError::Closed(_) => {
-                            ("Application command channel is closed", RetryPolicy::Never)
+                            ("Application is no longer available", RetryPolicy::Never)
                         }
                     };
                     let _ = update(

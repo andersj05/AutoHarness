@@ -1851,11 +1851,11 @@ fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
         .copied()
         .unwrap_or(ProviderChoice::Gemini);
     match choice {
-        ProviderChoice::Gemini | ProviderChoice::GoogleAiStudio => {
-            open_provider_setup(model, ProviderKindLabel::Gemini, "");
-        }
+        ProviderChoice::Gemini => open_provider_setup(model, ProviderKindLabel::Gemini, ""),
+        ProviderChoice::GoogleAiStudio => return begin_google_ai_studio_setup(model),
         ProviderChoice::Codex => {
-            open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
+            model.profile_center.auth_page = Some(ProviderChoice::Codex);
+            model.notice = None;
         }
         ProviderChoice::OpenAiCompatible => {
             open_provider_setup(model, ProviderKindLabel::Router, "");
@@ -1875,6 +1875,30 @@ fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
     }
     model.dirty = true;
     Vec::new()
+}
+
+fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
+    let profile_id = "google-ai-studio".to_owned();
+    let profile = ProviderProfileDraft {
+        id: profile_id.clone(),
+        kind: ProviderKindLabel::Gemini,
+        base_url: String::new(),
+        project: String::new(),
+        auth_header: String::new(),
+    };
+    let request_id = model.allocate_request();
+    model
+        .pending
+        .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
+    model.profile_center.open_credential_after_save = Some(profile_id);
+    model.notice = Some(Notice::Info(
+        "Preparing Google AI Studio key entry...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::UpsertProfile {
+        request_id,
+        profile,
+    })]
 }
 
 fn open_provider_setup(model: &mut Model, kind: ProviderKindLabel, id: &str) {
@@ -1902,6 +1926,44 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     ) {
         model.should_quit = true;
         return vec![UiEffect::Quit];
+    }
+    if model.profile_center.auth_page == Some(ProviderChoice::Codex) {
+        return match input {
+            Input {
+                key: Key::Char('c' | 'C'),
+                ctrl: true,
+                ..
+            } => {
+                model.should_quit = true;
+                vec![UiEffect::Quit]
+            }
+            Input { key: Key::Esc, .. } => {
+                model.profile_center.auth_page = None;
+                model.dirty = true;
+                Vec::new()
+            }
+            Input {
+                key: Key::Enter, ..
+            } => {
+                model.notice = Some(Notice::Info(
+                    "Opening the official Codex browser sign-in...".to_owned(),
+                ));
+                model.dirty = true;
+                vec![UiEffect::LaunchCodexLogin]
+            }
+            Input {
+                key: Key::Char('s' | 'S'),
+                ctrl: false,
+                alt: false,
+                ..
+            } => {
+                model.profile_center.auth_page = None;
+                open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
+                model.dirty = true;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
     }
     if model.profile_center.credential.is_some() {
         return handle_profile_credential_input(model, input);
@@ -3338,9 +3400,22 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         model.notice = Some(Notice::Info("API key accepted".to_owned()));
                     }
                     PendingKind::UpsertProfile(profile) => {
-                        model.profile_center.selected = Some(profile.id);
+                        let open_credential =
+                            model.profile_center.open_credential_after_save.as_deref()
+                                == Some(profile.id.as_str());
+                        model.profile_center.selected = Some(profile.id.clone());
                         model.profile_center.editor = None;
-                        model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
+                        if open_credential {
+                            model.profile_center.open_credential_after_save = None;
+                            model.profile_center.credential = Some(ProfileCredentialEditor::new(
+                                profile.id,
+                                ProfileCredentialAction::Save,
+                            ));
+                            let _ = model.open_overlay(OverlayKind::ProfileCredential);
+                            model.notice = None;
+                        } else {
+                            model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
+                        }
                     }
                     PendingKind::DuplicateProfile { destination, .. } => {
                         model.profile_center.selected = Some(destination);

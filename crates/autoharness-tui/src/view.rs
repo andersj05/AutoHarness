@@ -1626,21 +1626,12 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Profile ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    render_local_profile(frame, inner, model);
-    if inner.height >= 3 {
+    render_local_profile(frame, area, model);
+    if area.height >= 3 {
         frame.render_widget(
             Paragraph::new("Enter edit local profile  Esc return to Settings")
                 .style(visual_style(model, VisualRole::Muted)),
-            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+            Rect::new(area.x, area.y + 2, area.width, 1),
         );
     }
 }
@@ -1932,13 +1923,7 @@ fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
 }
 /// Renders provider choices and opens provider-specific setup from selection.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    frame.render_widget(Clear, area);
-    let outer = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Providers ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = outer.inner(area);
-    frame.render_widget(outer, area);
+    let inner = area;
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -1978,7 +1963,17 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ))
         })
         .collect::<Vec<_>>();
-    frame.render_widget(List::new(items), rows[0]);
+    let choice_area = Rect::new(
+        rows[0].x,
+        rows[0].y.saturating_add(1),
+        rows[0].width,
+        rows[0].height.saturating_sub(1),
+    );
+    frame.render_widget(
+        Paragraph::new("Providers").style(visual_style(model, VisualRole::User)),
+        Rect::new(rows[0].x, rows[0].y, rows[0].width, 1),
+    );
+    frame.render_widget(List::new(items), choice_area);
     if notice_height > 0 {
         render_notice(frame, rows[1], model);
     }
@@ -1994,11 +1989,46 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             rows[2],
         );
     }
-    if model.profile_center.editor.is_some() {
+    if model.profile_center.auth_page == Some(crate::model::ProviderChoice::Codex) {
+        render_codex_authentication(frame, area, model);
+    } else if model.profile_center.editor.is_some() {
         render_profile_editor(frame, area, model);
     } else if model.profile_center.credential.is_some() {
         render_profile_credential(frame, area, model);
     }
+}
+
+fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let popup = popup_rect(area);
+    frame.render_widget(Clear, popup);
+    let block = app_block(model)
+        .borders(Borders::ALL)
+        .title(" Sign in to Codex ")
+        .border_style(visual_style(model, VisualRole::Border));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                "Connect your ChatGPT Codex subscription.",
+                visual_style(model, VisualRole::User),
+            ),
+            Line::from(""),
+            Line::from("Enter  Open official browser sign-in"),
+            Line::from("S      Save this Codex account after sign-in"),
+            Line::from("Esc    Return to Providers"),
+            Line::from(""),
+            Line::styled(
+                "AutoHarness never reads or stores Codex credentials.",
+                visual_style(model, VisualRole::Muted),
+            ),
+        ])
+        .wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {
@@ -2025,11 +2055,7 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
 }
 
 fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Agent Defaults ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
     if inner.width == 0 || inner.height == 0 {
         return;
     }

@@ -34,7 +34,7 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Connect Codex subscription") && text.contains("codex login")
+            text.contains("Sign in to Codex") && text.contains("Open official browser sign-in")
         },
         "Codex should open its subscription authentication page",
     );
