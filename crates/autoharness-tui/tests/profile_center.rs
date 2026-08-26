@@ -154,6 +154,13 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::LaunchCodexLogin]
     ));
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(render_text(&model, 120, 40).contains("Connect Codex"));
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let _ = update(&mut model, Message::Input(key(Key::Char('s'))));
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
     assert!(matches!(
@@ -185,6 +192,47 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
         [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, .. })]
             if profile_id == "personal-gemini" && *model == model_ref()
     ));
+}
+
+#[test]
+fn provider_arrows_preserve_connected_profile_selection() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    for _ in 0..6 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    assert!(render_text(&model, 80, 24).contains("Connected accounts"));
+    assert_eq!(model.profile_selection(), Some("personal-gemini"));
+
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    assert_eq!(model.profile_selection(), Some("work-router"));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
+            if profile_id == "work-router"
+    ));
+
+    let _ = update(&mut model, Message::Input(key(Key::Up)));
+    assert_eq!(model.profile_selection(), Some("personal-gemini"));
+    let _ = update(&mut model, Message::Input(key(Key::Up)));
+    for _ in 0..5 {
+        let _ = update(&mut model, Message::Input(key(Key::Up)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(render_text(&model, 120, 40).contains("Connect Gemini"));
+}
+
+#[test]
+fn provider_editor_uses_arrows_instead_of_tab() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let before = render_text(&model, 80, 24);
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    assert_eq!(render_text(&model, 80, 24), before);
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    assert!(render_text(&model, 80, 24).contains("> Provider"));
 }
 #[test]
 fn credential_entry_is_masked_redacted_and_profile_scoped() {

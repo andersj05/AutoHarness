@@ -386,6 +386,19 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
 }
 
 #[test]
+fn tab_does_not_switch_settings_pages() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let before = render_text(&model, 80, 24);
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    assert_eq!(render_text(&model, 80, 24), before);
+
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    assert!(render_text(&model, 80, 24).contains("Connect a provider"));
+}
+
+#[test]
 fn providers_returns_to_settings_navigation_before_leaving_the_route() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
