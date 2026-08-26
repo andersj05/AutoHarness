@@ -471,8 +471,18 @@ fn run_codex_login(
     };
 
     let (output_tx, output_rx) = std_mpsc::channel();
-    drain_codex_login_output(stdout, output_tx.clone());
-    drain_codex_login_output(stderr, output_tx);
+    if drain_codex_login_output(stdout, output_tx.clone()).is_err()
+        || drain_codex_login_output(stderr, output_tx).is_err()
+    {
+        terminate_child(&mut child);
+        send_codex_login_event(
+            &events,
+            &cancellation,
+            generation,
+            CodexLoginEventKind::Failed,
+        );
+        return;
+    }
     let deadline = Instant::now() + CODEX_LOGIN_TIMEOUT;
     let mut streams_open = 2_u8;
     let mut browser_reported = false;
@@ -596,8 +606,8 @@ fn wait_for_child(
 fn drain_codex_login_output(
     output: impl std::io::Read + Send + 'static,
     sender: std_mpsc::Sender<Option<String>>,
-) {
-    let _ = std::thread::Builder::new()
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
         .name("autoharness-codex-login-output".to_owned())
         .spawn(move || {
             for line in BufReader::new(output).lines().map_while(Result::ok) {
@@ -606,7 +616,8 @@ fn drain_codex_login_output(
                 }
             }
             let _ = sender.send(None);
-        });
+        })
+        .map(|_| ())
 }
 
 fn contains_codex_auth_url(line: &str) -> bool {

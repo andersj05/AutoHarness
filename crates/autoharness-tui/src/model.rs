@@ -1073,7 +1073,6 @@ pub enum MouseAction {
     ChatCredential,
     ChatHelp,
     /// Profile-center actions.
-    ProfileNew,
     ProfileCredential,
     ProfileTest,
     ProfileDefaultModel,

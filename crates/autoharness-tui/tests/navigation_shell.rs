@@ -611,17 +611,10 @@ fn mouse_opens_and_saves_the_user_profile_dialog() {
 }
 
 #[test]
-fn mouse_profile_actions_share_keyboard_intents() {
+fn profile_help_row_has_no_hidden_mouse_action() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('3')));
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 38),
-        Some(MouseAction::ProfileNew)
-    );
-    let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
-
-    assert!(effects.is_empty());
-    assert!(render_text(&model, 120, 40).contains("Connect Gemini"));
+    assert_eq!(hit_test(&model, 120, 40, 30, 38), None);
 }
 #[test]
 fn mouse_session_action_bar_exposes_each_visible_action() {

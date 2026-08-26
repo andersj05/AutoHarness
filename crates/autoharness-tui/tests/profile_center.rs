@@ -325,7 +325,6 @@ fn every_profile_detail_button_has_a_semantic_click_target() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
     for expected in [
-        MouseAction::ProfileNew,
         MouseAction::ProfileCredential,
         MouseAction::ProfileTest,
         MouseAction::ProfileDefaultModel,

@@ -56,10 +56,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::CodexLoginBrowserOpened => {
             model.profile_center.codex_login = CodexLoginState::BrowserOpened;
-            model.notice = Some(Notice::Info(
-                "Browser opened. Finish signing in there; AutoHarness will connect automatically."
-                    .to_owned(),
-            ));
+            model.notice = None;
             model.dirty = true;
             Vec::new()
         }
@@ -77,11 +74,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::CodexLoginFailed => {
             model.profile_center.codex_login = CodexLoginState::Failed;
-            model.notice = Some(Notice::Failure(UiFailure::new(
-                ErrorClass::Unavailable,
-                "Codex sign-in could not open the browser. Try again or run 'codex login' in another terminal.",
-                RetryPolicy::Now,
-            )));
+            model.notice = None;
             model.dirty = true;
             Vec::new()
         }
@@ -182,7 +175,6 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             navigate_to_route(model, Route::Help);
             Vec::new()
         }
-        MouseAction::ProfileNew => create_profile_editor(model),
         MouseAction::ProfileCredential => {
             open_profile_credential(model);
             Vec::new()
@@ -1931,9 +1923,7 @@ fn begin_codex_login(model: &mut Model) -> Vec<UiEffect> {
         return Vec::new();
     }
     model.profile_center.codex_login = CodexLoginState::Starting;
-    model.notice = Some(Notice::Info(
-        "Checking Codex sign-in and preparing the browser...".to_owned(),
-    ));
+    model.notice = None;
     model.dirty = true;
     vec![UiEffect::LaunchCodexLogin]
 }

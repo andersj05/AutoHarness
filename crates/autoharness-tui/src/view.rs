@@ -538,7 +538,7 @@ pub fn hit_test(
         );
     }
     if model.profile_center.auth_page == Some(crate::model::ProviderChoice::Codex) {
-        let popup = popup_rect(area);
+        let popup = codex_auth_rect(area);
         let action_row = popup.y.saturating_add(3);
         return (row == action_row && column > popup.x && column < popup.right())
             .then_some(MouseAction::CodexLogin);
@@ -631,9 +631,6 @@ pub fn hit_test(
                 .is_some_and(|(_, second)| row == second) =>
         {
             profile_detail_action_at_column(model, content, column, true)
-        }
-        Route::Profiles if row == height.saturating_sub(2) => {
-            profile_action_at_column(column.saturating_sub(content.x))
         }
         Route::Profiles => profile_at_row(model, content, column, row),
         _ => None,
@@ -858,18 +855,17 @@ fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseActi
 }
 fn profile_action_at_column(column: u16) -> Option<MouseAction> {
     match column {
-        0..=4 => Some(MouseAction::ProfileNew),
-        7..=15 => Some(MouseAction::ProfileCredential),
-        18..=23 => Some(MouseAction::ProfileTest),
-        26..=34 => Some(MouseAction::ProfileDefaultModel),
+        0..=10 => Some(MouseAction::ProfileCredential),
+        12..=19 => Some(MouseAction::ProfileTest),
+        21..=29 => Some(MouseAction::ProfileDefaultModel),
         _ => None,
     }
 }
 
 fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
     match column {
-        0..=11 => Some(MouseAction::ProfileDisconnect),
-        14..=26 => Some(MouseAction::ProfileDelete),
+        0..=13 => Some(MouseAction::ProfileDisconnect),
+        15..=24 => Some(MouseAction::ProfileDelete),
         _ => None,
     }
 }
@@ -2104,8 +2100,12 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             format!("↑/↓ choose  Enter open  Esc {return_to}")
         } else if inner.width < 72 {
             format!("↑/↓ choose  ←/→ section  Enter open  Esc {return_to}")
+        } else if inner.width < 96 {
+            format!("←/→ section  ↑/↓ choose  Enter open  Alt+K sign-in  Esc {return_to}")
         } else {
-            format!("←/→ section  ↑/↓ choose  Enter open  Alt+letter action  Esc {return_to}")
+            format!(
+                "←/→ section  ↑/↓ choose  Enter open  Alt+K sign-in  Alt+T test  Del remove  Esc {return_to}"
+            )
         };
         frame.render_widget(
             Paragraph::new(help).style(visual_style(model, VisualRole::Muted)),
@@ -2306,18 +2306,18 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        "N New  K Sign-in  T Test  M Default",
+        "[ Sign in ] [ Test ] [ Model ]",
         visual_style(model, VisualRole::Assistant),
     ));
     lines.push(Line::styled(
-        "X Disconnect  Delete Remove",
+        "[ Disconnect ] [ Remove ]",
         visual_style(model, VisualRole::Warning),
     ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = popup_rect(area);
+    let popup = codex_auth_rect(area);
     frame.render_widget(Clear, popup);
     let block = app_block(model)
         .borders(Borders::ALL)
@@ -2343,12 +2343,12 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
         ),
         crate::model::CodexLoginState::Failed => (
             format!("{} Try sign-in again", selection_marker(model)),
-            "The previous browser handoff did not complete.",
+            "Could not start sign-in. Retry or run 'codex login' in another terminal.",
         ),
     };
     let mut lines = vec![
         Line::styled(
-            "Connect your ChatGPT subscription through the official Codex CLI.",
+            "Use your ChatGPT subscription with the official Codex CLI.",
             visual_style(model, VisualRole::User),
         ),
         Line::from(""),
@@ -2360,23 +2360,6 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
             visual_style(model, VisualRole::Muted),
         ),
     ];
-    if let Some(notice) = &model.notice {
-        let (message, role) = match notice {
-            Notice::Info(message) => (display_safe(message), VisualRole::Warning),
-            Notice::Failure(failure) => (
-                format!(
-                    "{}: {}",
-                    display_safe(&failure.code),
-                    display_safe(&failure.message)
-                ),
-                VisualRole::Error,
-            ),
-        };
-        lines.extend([
-            Line::from(""),
-            Line::styled(message, visual_style(model, role)),
-        ]);
-    }
     lines.extend([
         Line::from(""),
         Line::styled(
@@ -3698,6 +3681,20 @@ fn popup_rect(area: Rect) -> Rect {
     }
     let width = area.width.saturating_mul(4) / 5;
     let height = area.height.saturating_mul(3) / 4;
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width.max(1),
+        height.max(1),
+    )
+}
+
+fn codex_auth_rect(area: Rect) -> Rect {
+    if area.width <= 40 || area.height <= 12 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(72);
+    let height = area.height.saturating_sub(2).min(14);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
