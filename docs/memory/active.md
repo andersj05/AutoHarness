@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Codex subscription login is now application-owned, opens a verified visible Chrome authentication tab from Enter without requiring the `codex` executable, persists refreshable credentials only in the operating-system vault, supports cancellation and honest failure states, and keeps startup recovery reachable; final workspace gates remain in progress while full Phase 3.9 release evidence remains pending
+**Status:** Codex subscription login is now application-owned, opens a verified visible Chrome authentication tab from Enter without requiring the `codex` executable, persists refreshable credentials only in the operating-system vault, supports cancellation and honest failure states, and keeps startup recovery reachable; formatting, strict Clippy, full workspace tests, focused Windows PTY journeys, the real browser handoff, the large Windows vault smoke, and Markdown-link validation pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 

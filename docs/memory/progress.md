@@ -171,7 +171,7 @@
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
 - The operating-system vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
-- This branch has passed focused Codex provider, provider-center, application, real-browser, and both Windows provider-login PTY paths; final workspace formatting, strict Clippy, full tests, and Markdown-link validation remain to be rerun on the completed patch.
+- This branch passes workspace formatting, strict workspace Clippy, the full locked workspace test suite, Markdown-link validation, focused Codex provider and provider-center tests, both Windows provider-login PTY journeys, a real TUI-to-Chrome browser handoff, and an opt-in Windows Credential Manager save, rotate, reload, and delete smoke with oversized OAuth-shaped payloads.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
 - The checked-in release checklist has not been executed against a committed release candidate.
 
