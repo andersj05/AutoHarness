@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::preferences::LocalProfile;
 
 /// Supported settings schema version.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// Bounded profile-name value type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -149,6 +149,8 @@ pub struct ProviderProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) credential: Option<CredentialDocument>,
 }
 
@@ -164,6 +166,7 @@ impl ProviderProfile {
             models_path: None,
             chat_path: None,
             default_model: None,
+            default_reasoning_effort: None,
             credential: None,
         }
     }
@@ -179,6 +182,7 @@ impl ProviderProfile {
             models_path: None,
             chat_path: None,
             default_model: None,
+            default_reasoning_effort: None,
             credential: None,
         }
     }
@@ -209,6 +213,7 @@ impl ProviderProfile {
             models_path: None,
             chat_path: None,
             default_model: None,
+            default_reasoning_effort: None,
             credential: None,
         })
     }
@@ -237,6 +242,28 @@ impl ProviderProfile {
     #[must_use]
     pub fn default_model(&self) -> Option<&str> {
         self.default_model.as_deref()
+    }
+
+    /// Replaces the optional provider-native default reasoning effort.
+    pub fn with_default_reasoning_effort(
+        mut self,
+        effort: Option<String>,
+    ) -> Result<Self, &'static str> {
+        const SUPPORTED: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        if effort
+            .as_deref()
+            .is_some_and(|value| !SUPPORTED.contains(&value))
+        {
+            return Err("default reasoning effort is invalid");
+        }
+        self.default_reasoning_effort = effort;
+        Ok(self)
+    }
+
+    /// Returns the configured provider-native reasoning effort.
+    #[must_use]
+    pub fn default_reasoning_effort(&self) -> Option<&str> {
+        self.default_reasoning_effort.as_deref()
     }
 
     /// Returns the provider adapter this profile selects.

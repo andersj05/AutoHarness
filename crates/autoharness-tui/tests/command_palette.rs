@@ -120,8 +120,8 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
         "/profile",
         "/provider",
         "/agents",
-        "/user-profile",
-        "/new-session",
+        "/user",
+        "/new",
         "/models",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
@@ -212,7 +212,7 @@ fn palette_filtering_is_case_insensitive_and_selection_stays_valid() {
 
     assert!(!model.palette_query().is_empty());
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("/connect-api-key"));
+    assert!(rendered.contains("/connect"));
     assert!(!rendered.contains("/sessions"));
 
     // An empty result set must keep the palette open and ignore Enter.
@@ -227,6 +227,28 @@ fn palette_filtering_is_case_insensitive_and_selection_stays_valid() {
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.palette_open());
+}
+
+#[test]
+fn palette_ranks_exact_prefixes_and_typo_matches_first() {
+    let mut model = empty_model();
+    let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut model, "new");
+    assert_eq!(model.palette_selection(), Some("new"));
+    assert_eq!(
+        model.palette_entries().first().map(|entry| entry.id),
+        Some("new")
+    );
+
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key_input(Key::Backspace)));
+    }
+    type_text(&mut model, "settngs");
+    assert_eq!(model.palette_selection(), Some("settings"));
+    assert_eq!(
+        model.palette_entries().first().map(|entry| entry.id),
+        Some("settings")
+    );
 }
 
 #[test]
@@ -259,6 +281,23 @@ fn palette_new_session_dispatches_the_same_typed_intent_as_ctrl_n() {
         "the palette must converge on the identical typed intent"
     );
     assert!(!model.palette_open());
+}
+
+#[test]
+fn concise_command_names_execute_and_legacy_names_remain_compatible() {
+    for command in ["/new", "/new-session"] {
+        let mut model = empty_model();
+        type_text(&mut model, command);
+        assert!(matches!(
+            update(&mut model, Message::Input(enter())).as_slice(),
+            [UiEffect::Dispatch(UiIntent::CreateSession { .. })]
+        ));
+    }
+
+    let mut model = empty_model();
+    type_text(&mut model, "/tools");
+    assert!(update(&mut model, Message::Input(enter())).is_empty());
+    assert!(model.composer.is_blank());
 }
 
 #[test]
@@ -363,7 +402,10 @@ fn agents_command_opens_the_integrated_settings_tab() {
     type_text(&mut model, "/agents");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("1 Provider  2 Model"));
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    assert!(rendered.contains("Agents"));
+    assert!(rendered.contains("1  PROVIDER"));
+    assert!(rendered.contains("2  MODEL"));
 }
 
 #[test]

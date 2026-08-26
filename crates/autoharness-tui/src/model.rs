@@ -931,6 +931,7 @@ pub enum UiIntent {
         request_id: RequestId,
         profile_id: String,
         model: ModelRef,
+        reasoning_effort: Option<String>,
     },
     /// Disconnects one stored profile credential.
     DisconnectProfile {
@@ -1370,6 +1371,7 @@ pub(crate) struct AgentDefaultsState {
     pub model_selected: usize,
     pub profile_id: Option<String>,
     pub model: Option<ModelRef>,
+    pub thinking_selected: usize,
 }
 /// Command-palette local state.
 #[derive(Debug, Default)]
@@ -1487,7 +1489,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ),
             ("Ctrl+N", "create a fresh session"),
             ("Ctrl+L", "open Sessions"),
-            ("Ctrl+G", "open Profiles"),
+            ("Ctrl+G", "open Providers"),
             ("Alt+U", "edit the local user profile"),
             ("Ctrl+P", "choose a model"),
             ("Ctrl+K", "connect or replace the API key"),
@@ -1659,13 +1661,13 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: None,
     },
     CommandEntry {
-        id: "user-profile",
+        id: "user",
         label: "User profile",
         description: "Edit the local display name and profile summary",
         key_hint: Some("Alt+U"),
     },
     CommandEntry {
-        id: "new-session",
+        id: "new",
         label: "New session",
         description: "Create and activate a fresh durable session",
         key_hint: Some("Ctrl+N"),
@@ -1677,13 +1679,13 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Ctrl+P"),
     },
     CommandEntry {
-        id: "refresh-models",
+        id: "refresh",
         label: "Refresh models",
         description: "Reload the model catalog from the provider",
         key_hint: Some("Ctrl+R in the picker"),
     },
     CommandEntry {
-        id: "connect-api-key",
+        id: "connect",
         label: "Connect API key",
         description: "Enter or replace the provider API key",
         key_hint: Some("Ctrl+K"),
@@ -1707,7 +1709,7 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Ctrl+F"),
     },
     CommandEntry {
-        id: "toggle-tools",
+        id: "tools",
         label: "Toggle tool details",
         description: "Expand or collapse tool resources",
         key_hint: Some("Ctrl+X"),
@@ -2137,11 +2139,13 @@ pub struct Model {
     pub(crate) now: UiInstant,
 }
 
-const STARTUP_ANIMATION_MS: UiInstant = 1_800;
+const STARTUP_ANIMATION_MS: UiInstant = 400;
 
 impl Model {
     pub(crate) fn startup_active(&self) -> bool {
-        !self.startup_complete && self.now < STARTUP_ANIMATION_MS
+        !self.startup_complete
+            && self.now < STARTUP_ANIMATION_MS
+            && matches!(&*self.catalog, CatalogProjection::Loading)
     }
 
     pub(crate) fn advance_startup(&mut self, now: UiInstant) {
@@ -2465,17 +2469,7 @@ impl Model {
     /// Returns palette rows matching the query in table order.
     #[must_use]
     pub fn palette_entries(&self) -> Vec<CommandEntry> {
-        let query = self.palette.query.to_lowercase();
-        COMMANDS
-            .iter()
-            .filter(|entry| {
-                query.is_empty()
-                    || entry.id.contains(&query)
-                    || entry.label.to_lowercase().contains(&query)
-                    || entry.description.to_lowercase().contains(&query)
-            })
-            .copied()
-            .collect()
+        ranked_command_entries(&self.palette.query)
     }
 
     /// Returns the highlighted palette command identity.
@@ -2740,4 +2734,78 @@ impl Model {
             | CatalogProjection::Failed(_) => None,
         };
     }
+}
+
+fn ranked_command_entries(query: &str) -> Vec<CommandEntry> {
+    let query = query.trim_start_matches('/').trim().to_ascii_lowercase();
+    let mut entries = COMMANDS
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            command_match_score(entry, &query).map(|score| (score, index, entry))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(score, index, _)| (*score, *index));
+    entries.into_iter().map(|(_, _, entry)| entry).collect()
+}
+
+fn command_match_score(entry: CommandEntry, query: &str) -> Option<(u8, usize)> {
+    if query.is_empty() {
+        return Some((0, 0));
+    }
+    let label = entry.label.to_ascii_lowercase();
+    let description = entry.description.to_ascii_lowercase();
+    if entry.id == query {
+        return Some((0, 0));
+    }
+    if entry.id.starts_with(query) {
+        return Some((1, entry.id.len().saturating_sub(query.len())));
+    }
+    if label.starts_with(query) {
+        return Some((2, label.len().saturating_sub(query.len())));
+    }
+    if entry.id.split('-').any(|word| word.starts_with(query))
+        || label.split_whitespace().any(|word| word.starts_with(query))
+    {
+        return Some((3, 0));
+    }
+    if let Some(position) = entry.id.find(query) {
+        return Some((4, position));
+    }
+    if let Some(position) = label.find(query) {
+        return Some((5, position));
+    }
+    let fuzzy_limit = 1.max(query.chars().count() / 3);
+    let id_distance = edit_distance(entry.id, query);
+    if id_distance <= fuzzy_limit {
+        return Some((6, id_distance));
+    }
+    let label_distance = label
+        .split_whitespace()
+        .map(|candidate| edit_distance(candidate, query))
+        .min()
+        .unwrap_or(usize::MAX);
+    if label_distance <= fuzzy_limit {
+        return Some((7, label_distance));
+    }
+    description.find(query).map(|position| (8, position))
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    for (left_index, left_character) in left.chars().enumerate() {
+        let mut current = Vec::with_capacity(right.len() + 1);
+        current.push(left_index + 1);
+        for (right_index, right_character) in right.iter().enumerate() {
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            let substitution =
+                previous[right_index] + usize::from(left_character != *right_character);
+            current.push(insertion.min(deletion).min(substitution));
+        }
+        previous = current;
+    }
+    previous[right.len()]
 }

@@ -888,6 +888,10 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
                 ThemePreset::Dark,
                 ThemePreset::Aurora,
                 ThemePreset::Ember,
+                ThemePreset::Midnight,
+                ThemePreset::Ocean,
+                ThemePreset::Forest,
+                ThemePreset::Rose,
             ],
             direction,
         ))),
@@ -895,6 +899,8 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
             *preferences.color_mode().value(),
             &[
                 ColorMode::Color,
+                ColorMode::Soft,
+                ColorMode::Vivid,
                 ColorMode::NoColor,
                 ColorMode::HighContrast,
             ],
@@ -1099,6 +1105,11 @@ fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>
 fn canonical_command_id(id: &str) -> &str {
     match id {
         "profiles" => "provider",
+        "user-profile" => "user",
+        "new-session" => "new",
+        "refresh-models" => "refresh",
+        "connect-api-key" => "connect",
+        "toggle-tools" => "tools",
         _ => id,
     }
 }
@@ -1148,7 +1159,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_settings_tab(model, 3);
             Vec::new()
         }
-        "user-profile" => {
+        "user" => {
             open_settings_tab(model, 2);
             open_user_profile(model);
             Vec::new()
@@ -1157,7 +1168,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_picker(model);
             Vec::new()
         }
-        "connect-api-key" => {
+        "connect" => {
             open_settings_tab(model, 1);
             open_credential(model);
             Vec::new()
@@ -1174,13 +1185,13 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_search(model);
             Vec::new()
         }
-        "toggle-tools" => {
+        "tools" => {
             model.tools_expanded = !model.tools_expanded;
             model.dirty = true;
             Vec::new()
         }
-        "refresh-models" => refresh_catalog(model),
-        "new-session" => create_session(model),
+        "refresh" => refresh_catalog(model),
+        "new" => create_session(model),
         "help" => {
             navigate_to_route(model, Route::Help);
             Vec::new()
@@ -1292,17 +1303,7 @@ fn close_palette(model: &mut Model) {
 }
 
 fn filtered_palette_commands(model: &Model) -> Vec<CommandEntry> {
-    let query = model.palette.query.to_lowercase();
-    COMMANDS
-        .iter()
-        .filter(|entry| {
-            query.is_empty()
-                || entry.id.contains(&query)
-                || entry.label.to_lowercase().contains(&query)
-                || entry.description.to_lowercase().contains(&query)
-        })
-        .copied()
-        .collect()
+    model.palette_entries()
 }
 
 fn normalize_palette_selection(model: &mut Model) {
@@ -1434,6 +1435,7 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } => {
             model.palette.query.pop();
+            model.palette.selected = None;
             normalize_palette_selection(model);
             model.dirty = true;
             Vec::new()
@@ -1445,6 +1447,7 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } if !character.is_control() => {
             model.palette.query.push(character);
+            model.palette.selected = None;
             normalize_palette_selection(model);
             model.dirty = true;
             Vec::new()
@@ -2054,6 +2057,23 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             close_profile_center(model);
             Vec::new()
         }
+        Input { key: Key::Left, .. }
+            if model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles =>
+        {
+            model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Right, ..
+        } if model.profile_center.focus == ProfileCenterFocus::ProviderChoices
+            && model.filtered_profiles().next().is_some() =>
+        {
+            model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
+            model.sync_profile_selection();
+            model.dirty = true;
+            Vec::new()
+        }
         Input { key: Key::Up, .. }
             if model.profile_center.focus == ProfileCenterFocus::ProviderChoices =>
         {
@@ -2173,14 +2193,6 @@ fn move_provider_choice(model: &mut Model, direction: isize) {
             return;
         }
         model.profile_center.choice_selected = last;
-    } else if direction > 0 && model.profile_center.choice_selected == last {
-        if model.filtered_profiles().next().is_some() {
-            model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
-            model.sync_profile_selection();
-            model.dirty = true;
-            return;
-        }
-        model.profile_center.choice_selected = 0;
     } else {
         model.profile_center.choice_selected = model
             .profile_center
@@ -2207,13 +2219,10 @@ fn move_connected_profile(model: &mut Model, direction: isize) {
         .as_ref()
         .and_then(|selected| profile_ids.iter().position(|id| id == selected))
         .unwrap_or_default();
-    if direction < 0 && current == 0 {
-        model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
-        model.dirty = true;
-        return;
-    }
-    let next = (isize::try_from(current).unwrap_or(0) + direction)
-        .rem_euclid(isize::try_from(profile_ids.len()).unwrap_or(1));
+    let next = (isize::try_from(current).unwrap_or(0) + direction).clamp(
+        0,
+        isize::try_from(profile_ids.len().saturating_sub(1)).unwrap_or(0),
+    );
     model.profile_center.selected = profile_ids.get(usize::try_from(next).unwrap_or(0)).cloned();
     model.dirty = true;
 }
@@ -2303,7 +2312,7 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
             .iter()
             .filter(|summary| summary.selectable)
             .count(),
-        AgentDefaultStep::Thinking => return,
+        AgentDefaultStep::Thinking => AGENT_THINKING_LEVELS.len(),
     };
     if count == 0 {
         return;
@@ -2311,7 +2320,7 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
     let selected = match model.agent_defaults.step {
         AgentDefaultStep::Provider => &mut model.agent_defaults.profile_selected,
         AgentDefaultStep::Model => &mut model.agent_defaults.model_selected,
-        AgentDefaultStep::Thinking => return,
+        AgentDefaultStep::Thinking => &mut model.agent_defaults.thinking_selected,
     };
     *selected = selected
         .saturating_add_signed(direction)
@@ -2346,6 +2355,7 @@ fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
                 return Vec::new();
             };
             model.agent_defaults.model = Some(summary.model.clone());
+            model.agent_defaults.thinking_selected = 0;
             model.agent_defaults.step = if model_supports_thinking(summary) {
                 AgentDefaultStep::Thinking
             } else {
@@ -2364,6 +2374,16 @@ fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
         .split(',')
         .any(|detail| detail.trim() == "thinking")
 }
+
+const AGENT_THINKING_LEVELS: [&str; 7] = [
+    "provider default",
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+];
 
 fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
     let Some(profile_id) = model.agent_defaults.profile_id.clone() else {
@@ -2387,6 +2407,10 @@ fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
         request_id,
         profile_id,
         model: selected_model,
+        reasoning_effort: AGENT_THINKING_LEVELS
+            .get(model.agent_defaults.thinking_selected)
+            .filter(|effort| **effort != "provider default")
+            .map(|effort| (*effort).to_owned()),
     })]
 }
 
@@ -3489,6 +3513,9 @@ fn apply_session(model: &mut Model, session: Arc<SessionProjection>) {
 }
 
 fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
+    if !matches!(&*catalog, CatalogProjection::Loading) {
+        model.startup_complete = true;
+    }
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);

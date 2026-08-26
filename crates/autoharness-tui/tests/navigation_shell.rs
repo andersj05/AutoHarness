@@ -312,19 +312,34 @@ fn chat_empty_states_name_one_primary_recovery_action() {
 fn startup_boot_surface_animates_and_exits_deterministically() {
     let mut model = loading_model();
     let initial = render_text(&model, 80, 24);
-    assert!(initial.contains("AutoHarness / boot"));
+    assert!(initial.contains("AutoHarness"));
+    assert!(initial.contains("Loading provider models..."));
+    assert!(!initial.contains('%'));
     let _ = update(&mut model, Message::Tick(100));
     let first = render_text(&model, 80, 24);
     let _ = update(&mut model, Message::Tick(200));
     let second = render_text(&model, 80, 24);
-    assert!(first.contains("AUTOHARNESS"));
-    assert!(first.contains("CONNECTING"));
+    assert!(first.contains("Starting"));
     assert_ne!(first, second);
 
-    let _ = update(&mut model, Message::Tick(2_000));
+    let _ = update(&mut model, Message::Tick(400));
     let settled = render_text(&model, 80, 24);
-    assert!(!settled.contains("AutoHarness / boot"));
+    assert!(!settled.contains("Starting"));
     assert!(settled.contains("CONNECTING"));
+    assert!(settled.contains("Loading provider models..."));
+}
+
+#[test]
+fn startup_surface_exits_as_soon_as_model_loading_finishes() {
+    let mut model = loading_model();
+    let _ = update(
+        &mut model,
+        Message::CatalogChanged(Arc::new(CatalogProjection::CredentialRequired)),
+    );
+
+    let rendered = render_text(&model, 80, 24);
+    assert!(!rendered.contains("Starting"));
+    assert!(rendered.contains("OFFLINE"));
 }
 
 #[test]
@@ -368,7 +383,28 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("Left/Right pages"));
+    assert!(rendered.contains("←/→ option"));
+}
+
+#[test]
+fn editable_settings_show_adjacent_values_as_a_scroll_wheel() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    for _ in 0..7 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+
+    for (width, height) in [(120, 40), (80, 24), (40, 12)] {
+        let rendered = render_text(&model, width, height);
+        assert!(rendered.contains("Theme preset"));
+        assert!(
+            rendered.contains("[system]"),
+            "missing wheel at {width}x{height}"
+        );
+        assert!(rendered.contains("←/→ option"));
+    }
+    assert!(render_text(&model, 120, 40).contains("‹rose  [system]  light›"));
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {
@@ -544,9 +580,12 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
 #[test]
 fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
-    let _ = update(&mut model, Message::Input(ctrl('3')));
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(
-        hit_test(&model, 120, 40, 30, 1),
+        hit_test(&model, 120, 40, 30, 4),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));

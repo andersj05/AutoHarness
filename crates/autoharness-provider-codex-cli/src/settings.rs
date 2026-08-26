@@ -18,6 +18,7 @@ const OFFICIAL_EXECUTABLE_NAMES: [&str; 4] = ["codex", "codex.exe", "codex.cmd",
 pub struct CodexCliSettings {
     executable: PathBuf,
     provider_id: ProviderId,
+    reasoning_effort: Option<String>,
 }
 
 impl CodexCliSettings {
@@ -30,6 +31,7 @@ impl CodexCliSettings {
         Ok(Self {
             executable,
             provider_id,
+            reasoning_effort: None,
         })
     }
 
@@ -51,6 +53,22 @@ impl CodexCliSettings {
     #[must_use]
     pub const fn provider_id(&self) -> &ProviderId {
         &self.provider_id
+    }
+
+    /// Applies a validated Codex reasoning-effort override to each execution.
+    pub fn with_reasoning_effort(mut self, effort: Option<&str>) -> Result<Self, ProviderError> {
+        const SUPPORTED: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        if effort.is_some_and(|value| !SUPPORTED.contains(&value)) {
+            return Err(invalid_configuration());
+        }
+        self.reasoning_effort = effort.map(str::to_owned);
+        Ok(self)
+    }
+
+    /// Returns the configured reasoning effort.
+    #[must_use]
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.reasoning_effort.as_deref()
     }
 }
 
