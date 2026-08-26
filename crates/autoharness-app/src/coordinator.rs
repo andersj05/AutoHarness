@@ -1619,27 +1619,7 @@ impl Coordinator {
             Ok(reply) => {
                 self.session_id = session_id;
                 self.session = reply.session;
-                let default_model = self.profiles.as_ref().and_then(|runtime| {
-                    runtime.manager.snapshot().ok().and_then(|snapshot| {
-                        snapshot
-                            .profiles
-                            .into_iter()
-                            .find(|profile| profile.active)
-                            .and_then(|profile| profile.profile.default_model().map(str::to_owned))
-                    })
-                });
-                if let Some(default_model) = default_model
-                    && let Some(model) = self
-                        .catalog_models
-                        .iter()
-                        .find(|model| model.model_id.as_str() == default_model)
-                        .map(|model| {
-                            autoharness_domain::ModelRef::new(
-                                model.provider_id.clone(),
-                                model.model_id.clone(),
-                            )
-                        })
-                {
+                if let Some(model) = self.active_profile_default_model() {
                     self.execute(CommandPayload::SelectModel {
                         session_id: self.session_id.clone(),
                         model,
@@ -1655,6 +1635,24 @@ impl Coordinator {
             Err(error) => self.reject(request_id, engine_failure(&error)).await?,
         }
         Ok(())
+    }
+
+    fn active_profile_default_model(&self) -> Option<autoharness_domain::ModelRef> {
+        let default_model = self.profiles.as_ref().and_then(|runtime| {
+            runtime.manager.snapshot().ok().and_then(|snapshot| {
+                snapshot
+                    .profiles
+                    .into_iter()
+                    .find(|profile| profile.active)
+                    .and_then(|profile| profile.profile.default_model().map(str::to_owned))
+            })
+        })?;
+        self.catalog_models
+            .iter()
+            .find(|model| model.model_id.as_str() == default_model)
+            .map(|model| {
+                autoharness_domain::ModelRef::new(model.provider_id.clone(), model.model_id.clone())
+            })
     }
 
     async fn configure_credential(
@@ -2304,27 +2302,8 @@ impl Coordinator {
                 self.ports
                     .catalogs
                     .send_replace(Arc::new(projection::catalog(models, stale)));
-                let default_model = self.profiles.as_ref().and_then(|runtime| {
-                    runtime.manager.snapshot().ok().and_then(|snapshot| {
-                        snapshot
-                            .profiles
-                            .into_iter()
-                            .find(|profile| profile.active)
-                            .and_then(|profile| profile.profile.default_model().map(str::to_owned))
-                    })
-                });
-                if let Some(default_model) = default_model
-                    && let Some(model) = self
-                        .catalog_models
-                        .iter()
-                        .find(|model| model.model_id.as_str() == default_model)
-                        .map(|model| {
-                            autoharness_domain::ModelRef::new(
-                                model.provider_id.clone(),
-                                model.model_id.clone(),
-                            )
-                        })
-                    && self.session.selected_model() != Some(&model)
+                if self.session.selected_model().is_none()
+                    && let Some(model) = self.active_profile_default_model()
                 {
                     let _ = self
                         .execute(CommandPayload::SelectModel {
@@ -3632,7 +3611,7 @@ mod tests {
             _cancellation: CancellationToken,
         ) -> Result<ModelCatalog, ProviderError> {
             Ok(ModelCatalog::new(
-                vec![fixture_model_descriptor()],
+                vec![fixture_model_descriptor(), alternate_model_descriptor()],
                 CatalogFreshness::Live,
             ))
         }
@@ -4123,6 +4102,32 @@ mod tests {
         }
     }
 
+    fn alternate_model() -> ModelRef {
+        ModelRef::new(
+            ProviderId::new("google-ai-studio").expect("provider ID"),
+            ModelId::new("models/gemini-alternate").expect("model ID"),
+        )
+    }
+
+    fn alternate_model_descriptor() -> ModelDescriptor {
+        let model = alternate_model();
+        ModelDescriptor {
+            provider_id: model.provider_id().clone(),
+            model_id: model.model_id().clone(),
+            display_name: "Gemini alternate".to_owned(),
+            description: None,
+            input_token_limit: Some(1_024),
+            output_token_limit: Some(1_024),
+            capabilities: ModelCapabilities {
+                chat: CapabilitySupport::Supported,
+                streaming: CapabilitySupport::Supported,
+                managed_interactions: CapabilitySupport::Unknown,
+                thinking: CapabilitySupport::Unknown,
+                tool_calling: CapabilitySupport::Supported,
+            },
+        }
+    }
+
     async fn wait_for_catalog(ui: &mut UiPorts) {
         loop {
             if matches!(
@@ -4291,20 +4296,14 @@ mod tests {
         expect_commit(&mut ui, RequestId::new(5)).await;
         wait_for_catalog(&mut ui).await;
         ui.intents
-            .send(UiIntent::SelectModel {
-                request_id: RequestId::new(100),
-                model: fixture_model(),
-            })
-            .await
-            .expect("select Gemini default model");
-        expect_commit(&mut ui, RequestId::new(100)).await;
-        ui.intents
-            .send(UiIntent::SetProfileDefaultModel {
+            .send(UiIntent::SetProfileDefault {
                 request_id: RequestId::new(101),
                 profile_id: "personal-gemini".to_owned(),
+                model: fixture_model(),
+                reasoning_effort: Some("high".to_owned()),
             })
             .await
-            .expect("set Gemini default model");
+            .expect("set Gemini model and thinking defaults");
         expect_commit(&mut ui, RequestId::new(101)).await;
         assert_eq!(
             manager
@@ -4316,6 +4315,22 @@ mod tests {
                 .and_then(|profile| profile.profile.default_model().map(str::to_owned))
                 .as_deref(),
             Some("models/gemini-fixture")
+        );
+        assert_eq!(
+            manager
+                .snapshot()
+                .expect("default snapshot")
+                .profiles
+                .into_iter()
+                .find(|profile| profile.id.as_str() == "personal-gemini")
+                .and_then(|profile| {
+                    profile
+                        .profile
+                        .default_reasoning_effort()
+                        .map(str::to_owned)
+                })
+                .as_deref(),
+            Some("high")
         );
         let previous_session = ui.sessions.borrow().session_id.clone();
         ui.intents
@@ -4330,6 +4345,26 @@ mod tests {
         })
         .await;
         assert_eq!(created.selected_model.as_ref(), Some(&fixture_model()));
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: RequestId::new(103),
+                model: alternate_model(),
+            })
+            .await
+            .expect("select a session-specific model");
+        expect_commit(&mut ui, RequestId::new(103)).await;
+        ui.intents
+            .send(UiIntent::RefreshCatalog {
+                request_id: RequestId::new(104),
+            })
+            .await
+            .expect("refresh catalog without replacing the session model");
+        expect_commit(&mut ui, RequestId::new(104)).await;
+        assert_eq!(
+            ui.sessions.borrow().selected_model.as_ref(),
+            Some(&alternate_model()),
+            "catalog refresh must not overwrite a session-specific model with the profile default"
+        );
         ui.intents
             .send(UiIntent::TestProfile {
                 request_id: RequestId::new(6),
