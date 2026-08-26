@@ -2,13 +2,13 @@
 
 **Last reviewed:** 2026-08-25
 
-**Phase:** 3.9 terminal product validation
+**Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Command and Settings integration is implemented on `feat/tui-command-settings`; 134 focused TUI tests, strict TUI Clippy, formatting, visual review, and a clean built-binary Windows launch smoke passed, while full Phase 3.9 release evidence remains pending
+**Status:** `feat/tui-navigation-audit` makes Settings, provider choices, connected profiles, Codex login actions, Agents, and profile editors arrow-key-first with continuous selection; 140 focused TUI tests, strict TUI Clippy, formatting, routed-shell Windows PTY, and Codex provider PTY smoke pass, while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Run and record the release-candidate baseline, PTY, migration, benchmark, live-provider, vault, and rollback gates without reopening stabilized terminal contracts.
+Keep the routed TUI navigation contract consistent across Settings and provider connection surfaces, then preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
 
 ## Current repository state
 
@@ -58,6 +58,7 @@ Run and record the release-candidate baseline, PTY, migration, benchmark, live-p
 ## Recently completed
 
 - On 2026-08-25, Codex opens a dedicated in-app browser-login wizard whose Enter action launches the official `codex login` command without credential handling, Google AI Studio API opens the masked OS-vault key dialog after non-secret profile creation, and General, Providers, Profile, and Agents now share the single outer Settings frame; focused TUI tests, strict Clippy, and the real Windows Codex-login PTY journey passed.
+- On 2026-08-25, `feat/tui-navigation-audit` removed Tab-driven page switching, made Settings and provider connection surfaces arrow-key-first, preserved connected-profile selection across provider navigation, rendered connected accounts beside safe details, added arrow-selected Codex login actions and profile-editor fields, and passed focused TUI tests, strict TUI Clippy, formatting, routed-shell PTY, and Codex provider PTY smoke.
 - Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
 - On 2026-08-25, `feat/tui-professional-overhaul` corrected compact-shell mouse geometry from the rendered content rectangle, added exact profile click coverage, added a bounded reduced-motion-safe startup boot surface, exposed `/profile` beside `/settings`, refreshed the dark preset to a dark neon cockpit palette, and passed 66 focused TUI tests, 350 workspace tests, strict Clippy, formatting, and three ignored Windows PTY journeys.
 - On 2026-08-25, the follow-up TUI cutover made the initial boot surface visible on the first draw, stopped automatic credential dialogs, routed `/settings`, `/models`, `/sessions`, `/connect-api-key`, `/retry`, `/cancel`, `/search`, and `/toggle-tools` through the shared command table, removed the prompt footer, tightened prompt/transcript borders, applied the neon palette to the default System theme, and passed 385 workspace tests plus first-run and routed-shell Windows PTY journeys.
