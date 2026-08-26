@@ -4,11 +4,11 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Codex subscription login is now application-owned, opens a verified visible Chrome authentication tab from Enter without requiring the `codex` executable, persists refreshable credentials only in the operating-system vault, supports cancellation and honest failure states, and keeps startup recovery reachable; formatting, strict Clippy, full workspace tests, focused Windows PTY journeys, the real browser handoff, the large Windows vault smoke, and Markdown-link validation pass while full Phase 3.9 release evidence remains pending
+**Status:** Settings now owns a direct Models tab for the active profile, saves model and thinking defaults together, applies them to fresh sessions without overwriting session-specific choices, and shows responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass while Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Keep the routed TUI navigation contract consistent across Settings and provider connection surfaces, then preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
+Finish validating the default-model Settings and composer-metadata flow, then preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
 
 ## Current repository state
 
@@ -25,7 +25,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 - The atomic application-owned `autoharness.profiles.json` document stores validated named profiles, non-secret connection fields, optional default models, opaque credential references, and bounded credential-recovery records.
 - `autoharness-app::vault` defines the credential-vault port with an operating-system implementation through the `keyring` crate and a fake implementation for tests; Windows Credential Manager save, load, replace, and delete passed the opt-in platform smoke.
 - Startup and runtime switching resolve one provider-matched credential source in precedence order: environment, then the active profile's vault entry, then session-only; locked or unavailable vaults preserve offline use without plaintext fallback.
-- Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; a compatible selected model can be saved as the profile default and reapplied after catalog refresh.
+- Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; the Models tab saves a compatible model and reasoning effort as the active profile default, fresh sessions select it durably, and catalog refresh does not overwrite an intentional session-specific model.
 - The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
 - `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
 - Wide terminals show a persistent rail with local profile and runtime status; narrower terminals show compact route tabs and one prioritized status line.
@@ -58,6 +58,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 
 ## Recently completed
 
+- On 2026-08-26, Settings replaced the multi-profile Agents wizard with a direct Models tab for the active profile, preselects and marks the saved model, persists model and thinking together, applies the default only to fresh sessions, preserves per-session choices across catalog refresh, and renders responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass.
 - On 2026-08-26, Settings gained Midnight, Ocean, Forest, and Rose themes plus Soft and Vivid color treatments, focused editable values render previous, current, and next options as a responsive carousel, and focus-specific help distinguishes page navigation from option changes.
 - On 2026-08-26, command filtering became deterministic relevance ranking with typo tolerance, the best result becomes selected after each query edit, and `/new`, `/connect`, `/refresh`, `/tools`, and `/user` replaced longer visible spellings while the old commands remain exact compatibility aliases.
 - On 2026-08-26, the fixed 1.8-second startup presentation was replaced by a two-line indicator capped at 400 ms that exits immediately when model discovery resolves, removes fake progress and phase copy, and hands longer work to the actual provider-model loading state.

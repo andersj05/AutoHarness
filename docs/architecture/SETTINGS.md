@@ -103,8 +103,11 @@ Pressing Enter opens the default browser directly without requiring a `codex` ex
 Successful authentication stores the opaque token payload in the operating-system vault, writes only the profile's opaque reference to settings, activates the profile, and loads the native Codex catalog under [ADR-0015](../adr/0015-use-native-codex-subscription-adapter.md).
 The login can be cancelled from the TUI, stale callback results are ignored, and safe failure copy never claims that a browser opened when launch failed.
 Cursor and Claude Code choices name their official CLI login commands but remain unavailable until equivalent repository-owned process adapters exist, rather than claiming a saved or invokable account.
-The Agents workspace selects a connected provider, then a compatible model, then a validated reasoning effort when the catalog positively advertises thinking support.
+The Models tab in Settings lists compatible models for the active provider profile, clearly marks the saved default, and preselects the saved model and reasoning effort.
+The provider is changed separately in the Providers tab, so model selection never races profile activation or catalog replacement.
+When the selected model advertises thinking support, the Models tab offers a validated provider-native reasoning effort before saving.
 The selected model and effort are persisted together, and a newly created session durably selects that model before its first session projection is published.
+Catalog refresh applies the profile default only when a fresh session has no selected model, and never overwrites an intentional session-specific choice.
 Provider-default effort remains available when the user does not want an override.
 Keyboard shortcuts, command-palette routing, and visible controls converge on the same typed intents.
 
