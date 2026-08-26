@@ -37,6 +37,7 @@ autoharness-tui = { path = "crates/autoharness-tui" }
 autoharness-tool = { path = "crates/autoharness-tool" }
 async-stream = "0.3"
 async-trait = "0.1"
+base64 = "0.22"
 bytes = "1"
 crossterm = "0.29"
 futures-core = "0.3"
@@ -45,6 +46,7 @@ ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.11.0"
 tokio = "1"
 tokio-util = "0.7"
 tracing = "0.1"
@@ -52,6 +54,7 @@ tracing-appender = "0.2"
 tracing-subscriber = "0.3"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 uuid = "1"
+url = "2"
 zeroize = "1"
 
 [workspace.lints.rust]

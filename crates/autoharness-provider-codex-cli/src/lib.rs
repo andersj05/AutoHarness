@@ -1,17 +1,19 @@
-//! Official Codex CLI adapter.
+//! Native Codex subscription authentication and Responses transport.
 //!
-//! The adapter delegates authentication to the installed `codex` executable,
-//! invokes only documented non-interactive commands, and keeps Codex-owned tool
-//! activity outside AutoHarness's provider-neutral tool authority.
+//! The adapter owns the browser PKCE callback, stores opaque OAuth credentials
+//! through the application vault boundary, and does not require a separate CLI.
 
-mod jsonl;
+mod oauth;
 mod provider;
 mod settings;
 
-pub use provider::CodexCliProvider;
-pub use settings::{CODEX_EXECUTABLE_ENV, CodexCliSettings};
+pub use oauth::{
+    CodexAuthProgress, CodexOAuthCredential, login_with_browser,
+};
+pub use provider::{CodexCredentialPersistence, CodexProvider};
+pub use settings::CodexSettings;
 
-/// Stable provider identity for the official Codex CLI adapter.
+/// Stable provider identity retained for settings compatibility.
 pub const CODEX_PROVIDER_ID: &str = "codex-cli";
-/// Placeholder model representing the authenticated CLI's configured default.
+/// Placeholder model representing the subscription's current default.
 pub const CODEX_DEFAULT_MODEL_ID: &str = "codex/default";

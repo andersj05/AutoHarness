@@ -167,11 +167,17 @@ dependencies = [
  "async-trait",
  "autoharness-domain",
  "autoharness-provider",
+ "base64",
  "futures-util",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "tokio-util",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
