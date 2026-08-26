@@ -486,7 +486,8 @@ fn configure_profile_provider_factory(
                 Arc::new(OpenAiRouterProvider::new(settings, credential)?)
             }
             ProviderKind::CodexCli => Arc::new(CodexCliProvider::new_blocking(
-                CodexCliSettings::from_env()?,
+                CodexCliSettings::from_env()?
+                    .with_reasoning_effort(profile.default_reasoning_effort())?,
             )?),
         };
         Ok(managed_provider(

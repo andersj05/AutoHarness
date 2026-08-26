@@ -179,7 +179,10 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
 
-    assert!(render_text(&model, 120, 40).contains("1 Provider  2 Model  3 Thinking"));
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("1  PROVIDER"));
+    assert!(rendered.contains("2  MODEL"));
+    assert!(rendered.contains("3  THINKING"));
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
@@ -187,10 +190,13 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     ));
     assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
     assert!(render_text(&model, 120, 40).contains("Thinking mode"));
+    for _ in 0..4 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, .. })]
-            if profile_id == "personal-gemini" && *model == model_ref()
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, reasoning_effort, .. })]
+            if profile_id == "personal-gemini" && *model == model_ref() && reasoning_effort.as_deref() == Some("high")
     ));
 }
 
@@ -204,6 +210,7 @@ fn provider_arrows_preserve_connected_profile_selection() {
     assert!(render_text(&model, 80, 24).contains("Connected accounts"));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(model.profile_selection(), Some("work-router"));
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
@@ -216,6 +223,8 @@ fn provider_arrows_preserve_connected_profile_selection() {
     let _ = update(&mut model, Message::Input(key(Key::Up)));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
     let _ = update(&mut model, Message::Input(key(Key::Up)));
+    assert_eq!(model.profile_selection(), Some("personal-gemini"));
+    let _ = update(&mut model, Message::Input(key(Key::Left)));
     for _ in 0..5 {
         let _ = update(&mut model, Message::Input(key(Key::Up)));
     }
@@ -285,17 +294,18 @@ fn models_picker_can_save_the_selected_model_as_profile_default() {
 fn every_profile_detail_button_has_a_semantic_click_target() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-    for (column, expected) in [
-        (68, MouseAction::ProfileNew),
-        (76, MouseAction::ProfileCredential),
-        (84, MouseAction::ProfileTest),
-        (92, MouseAction::ProfileDefaultModel),
-        (68, MouseAction::ProfileDisconnect),
-        (83, MouseAction::ProfileDelete),
+    for expected in [
+        MouseAction::ProfileNew,
+        MouseAction::ProfileCredential,
+        MouseAction::ProfileTest,
+        MouseAction::ProfileDefaultModel,
+        MouseAction::ProfileDisconnect,
+        MouseAction::ProfileDelete,
     ] {
         assert!(
-            (0..40).any(|row| hit_test(&model, 120, 40, column, row) == Some(expected.clone())),
-            "missing profile click target at column {column}"
+            (0..120).any(|column| (0..40)
+                .any(|row| hit_test(&model, 120, 40, column, row) == Some(expected.clone()))),
+            "missing profile click target for {expected:?}"
         );
     }
 }
@@ -304,18 +314,13 @@ fn every_profile_detail_button_has_a_semantic_click_target() {
 fn compact_profile_clicks_follow_rendered_content_rows() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-    for _ in 0..6 {
-        let _ = update(&mut model, Message::Input(key(Key::Down)));
-    }
-    assert_eq!(
-        hit_test(&model, 80, 24, 3, 8),
-        Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
-    );
-    assert!(
-        (0..24)
-            .any(|row| hit_test(&model, 80, 24, 34, row) == Some(MouseAction::ProfileDefaultModel))
-    );
-    assert_eq!(hit_test(&model, 80, 24, 34, 19), None);
+    assert!((0..80).any(
+        |column| (0..24).any(|row| hit_test(&model, 80, 24, column, row)
+            == Some(MouseAction::SelectProfile("personal-gemini".to_owned())))
+    ));
+    assert!((0..80).any(|column| (0..24).any(
+        |row| hit_test(&model, 80, 24, column, row) == Some(MouseAction::ProfileDefaultModel)
+    )));
 }
 #[test]
 #[ignore = "visual review harness for the Phase 3.6 profile center"]

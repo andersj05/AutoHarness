@@ -89,10 +89,18 @@ impl CodexCliProvider {
         }
     }
 
-    fn chat_command(&self, prompt: &str) -> Command {
+    fn chat_command(&self, model: &ModelId, prompt: &str) -> Command {
         let mut command = Command::new(self.settings.executable());
+        command.args(CHAT_ARGUMENTS);
+        if model.as_str() != CODEX_DEFAULT_MODEL_ID {
+            command.arg("--model").arg(model.as_str());
+        }
+        if let Some(effort) = self.settings.reasoning_effort() {
+            command
+                .arg("--config")
+                .arg(format!("model_reasoning_effort=\"{effort}\""));
+        }
         command
-            .args(CHAT_ARGUMENTS)
             .arg(prompt)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -143,10 +151,10 @@ impl Catalog for CodexCliProvider {
         }
         self.ensure_ready()?;
         Ok(ModelCatalog::new(
-            vec![default_model(self.provider_id())?],
-            // The official CLI has no documented stable model-catalog schema. This
-            // is the configured CLI default, not a discovered provider catalog.
-            CatalogFreshness::Live,
+            codex_models(self.provider_id())?,
+            // Codex has no stable non-interactive catalog command. These are the
+            // documented model choices bundled with this adapter version.
+            CatalogFreshness::Cached,
         ))
     }
 }
@@ -164,7 +172,7 @@ impl Chat for CodexCliProvider {
         self.ensure_ready()?;
         let prompt = render_prompt(&request)?;
         let mut child = self
-            .chat_command(&prompt)
+            .chat_command(&request.model_id, &prompt)
             .spawn()
             .map_err(|_| unavailable_error())?;
         let stdout = child.stdout.take().ok_or_else(internal_error)?;
@@ -194,6 +202,44 @@ fn default_model(provider_id: &ProviderId) -> Result<ModelDescriptor, ProviderEr
     })
 }
 
+fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, ProviderError> {
+    let mut models = vec![default_model(provider_id)?];
+    for (id, name, description) in [
+        (
+            "gpt-5.6-sol",
+            "GPT-5.6 Sol",
+            "Frontier capability for complex coding work.",
+        ),
+        (
+            "gpt-5.6-terra",
+            "GPT-5.6 Terra",
+            "Balanced capability and responsiveness.",
+        ),
+        (
+            "gpt-5.6-luna",
+            "GPT-5.6 Luna",
+            "Fast, efficient coding model.",
+        ),
+    ] {
+        models.push(ModelDescriptor {
+            provider_id: provider_id.clone(),
+            model_id: ModelId::new(id).map_err(|_| internal_error())?,
+            display_name: name.to_owned(),
+            description: Some(description.to_owned()),
+            input_token_limit: None,
+            output_token_limit: None,
+            capabilities: ModelCapabilities {
+                chat: CapabilitySupport::Supported,
+                streaming: CapabilitySupport::Supported,
+                managed_interactions: CapabilitySupport::Unsupported,
+                thinking: CapabilitySupport::Supported,
+                tool_calling: CapabilitySupport::Unsupported,
+            },
+        });
+    }
+    Ok(models)
+}
+
 #[derive(Serialize)]
 struct TranscriptMessage<'a> {
     role: &'static str,
@@ -201,7 +247,9 @@ struct TranscriptMessage<'a> {
 }
 
 fn render_prompt(request: &ChatRequest) -> Result<String, ProviderError> {
-    if request.model_id.as_str() != CODEX_DEFAULT_MODEL_ID {
+    let known_model = request.model_id.as_str() == CODEX_DEFAULT_MODEL_ID
+        || ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].contains(&request.model_id.as_str());
+    if !known_model {
         return Err(invalid_request());
     }
     if !request.tools.is_empty() {
@@ -459,6 +507,35 @@ mod tests {
                 .expect_err("only default model is supported")
                 .kind(),
             ProviderErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn explicit_model_and_reasoning_are_passed_as_separate_cli_arguments() {
+        let settings = CodexCliSettings::new("codex")
+            .expect("settings")
+            .with_reasoning_effort(Some("high"))
+            .expect("effort");
+        let provider = CodexCliProvider {
+            settings,
+            availability: ProviderAvailability::Ready,
+        };
+        let model = ModelId::new("gpt-5.6-terra").expect("model");
+        let command = provider.chat_command(&model, "prompt");
+        let arguments = command
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--model", "gpt-5.6-terra"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair == ["--config", "model_reasoning_effort=\"high\""] })
         );
     }
 }

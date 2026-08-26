@@ -74,6 +74,14 @@ pub enum ThemePreset {
     Aurora,
     /// Warm ember gradients expressed through amber, coral, and magenta.
     Ember,
+    /// Deep navy surfaces with crisp indigo and electric-blue accents.
+    Midnight,
+    /// Ocean-blue surfaces with bright aqua and sea-glass accents.
+    Ocean,
+    /// Forest-green surfaces with mint, moss, and amber accents.
+    Forest,
+    /// Rose-dark surfaces with pink, plum, and coral accents.
+    Rose,
 }
 
 /// The terminal color treatment.
@@ -83,6 +91,10 @@ pub enum ColorMode {
     /// Render the standard color palette.
     #[default]
     Color,
+    /// Soften non-essential color and reduce visual intensity.
+    Soft,
+    /// Strengthen semantic color and focus emphasis.
+    Vivid,
     /// Render without color distinctions.
     NoColor,
     /// Render a high-contrast palette.
