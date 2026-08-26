@@ -1106,6 +1106,9 @@ fn open_settings_tab(model: &mut Model, tab: usize) {
     navigate_to_route(model, Route::Settings);
     model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
     model.settings_workspace.nav_focus = false;
+    if model.settings_workspace.nav_selected == 1 {
+        model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+    }
     model.dirty = true;
 }
 
@@ -2134,7 +2137,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         Input {
             key: Key::Backspace,
             ..
-        } => {
+        } if model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles => {
             model.profile_center.query.pop();
             model.sync_profile_selection();
             model.dirty = true;
@@ -2145,7 +2148,9 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: false,
             alt: false,
             ..
-        } if !character.is_control() => {
+        } if !character.is_control()
+            && model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles =>
+        {
             model.profile_center.query.push(character);
             model.sync_profile_selection();
             model.dirty = true;
