@@ -1503,7 +1503,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         settings_preference_line(model, SettingsPreference::Credential),
         settings_preference_line(model, SettingsPreference::Source),
         Line::styled(
-            "API KEY  /connect-api-key or press K",
+            "API KEY  /connect or press K",
             visual_style(model, VisualRole::Field),
         ),
         Line::styled(

@@ -1105,6 +1105,11 @@ fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>
 fn canonical_command_id(id: &str) -> &str {
     match id {
         "profiles" => "provider",
+        "user-profile" => "user",
+        "new-session" => "new",
+        "refresh-models" => "refresh",
+        "connect-api-key" => "connect",
+        "toggle-tools" => "tools",
         _ => id,
     }
 }
@@ -1154,7 +1159,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_settings_tab(model, 3);
             Vec::new()
         }
-        "user-profile" => {
+        "user" => {
             open_settings_tab(model, 2);
             open_user_profile(model);
             Vec::new()
@@ -1163,7 +1168,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_picker(model);
             Vec::new()
         }
-        "connect-api-key" => {
+        "connect" => {
             open_settings_tab(model, 1);
             open_credential(model);
             Vec::new()
@@ -1180,13 +1185,13 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_search(model);
             Vec::new()
         }
-        "toggle-tools" => {
+        "tools" => {
             model.tools_expanded = !model.tools_expanded;
             model.dirty = true;
             Vec::new()
         }
-        "refresh-models" => refresh_catalog(model),
-        "new-session" => create_session(model),
+        "refresh" => refresh_catalog(model),
+        "new" => create_session(model),
         "help" => {
             navigate_to_route(model, Route::Help);
             Vec::new()
@@ -1298,17 +1303,7 @@ fn close_palette(model: &mut Model) {
 }
 
 fn filtered_palette_commands(model: &Model) -> Vec<CommandEntry> {
-    let query = model.palette.query.to_lowercase();
-    COMMANDS
-        .iter()
-        .filter(|entry| {
-            query.is_empty()
-                || entry.id.contains(&query)
-                || entry.label.to_lowercase().contains(&query)
-                || entry.description.to_lowercase().contains(&query)
-        })
-        .copied()
-        .collect()
+    model.palette_entries()
 }
 
 fn normalize_palette_selection(model: &mut Model) {
@@ -1440,6 +1435,7 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } => {
             model.palette.query.pop();
+            model.palette.selected = None;
             normalize_palette_selection(model);
             model.dirty = true;
             Vec::new()
@@ -1451,6 +1447,7 @@ fn handle_palette_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } if !character.is_control() => {
             model.palette.query.push(character);
+            model.palette.selected = None;
             normalize_palette_selection(model);
             model.dirty = true;
             Vec::new()
