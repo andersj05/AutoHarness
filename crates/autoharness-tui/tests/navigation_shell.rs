@@ -544,9 +544,12 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
 #[test]
 fn mouse_opens_and_saves_the_user_profile_dialog() {
     let mut model = model();
-    let _ = update(&mut model, Message::Input(ctrl('3')));
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(
-        hit_test(&model, 120, 40, 30, 1),
+        hit_test(&model, 120, 40, 30, 4),
         Some(MouseAction::OpenUserProfile)
     );
     let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));

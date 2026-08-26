@@ -546,6 +546,12 @@ pub fn hit_test(
         }
         return profile_at_row(model, profile_area, column, row);
     }
+    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 2 {
+        let profile_area = settings_body_area(content);
+        if profile_area.contains(Position::new(column, row)) {
+            return Some(MouseAction::OpenUserProfile);
+        }
+    }
     match model.route() {
         Route::Sessions if row == height.saturating_sub(2) => {
             let relative_column = column.saturating_sub(content.x);
@@ -589,61 +595,35 @@ pub fn hit_test(
 }
 
 fn profile_local_hit_row(area: Rect, model: &Model) -> Option<Rect> {
-    let inner = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    let compact = presentation(model).compact;
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
-    Some(Rect::new(inner.x, inner.y, inner.width, user_height))
+    let _ = (area, model);
+    None
 }
 
-fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
-    let inner = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
+fn profile_center_content_area(model: &Model, area: Rect) -> Rect {
+    let inner = area;
     let compact = presentation(model).compact;
     let notice_height = if model.notice.is_some() && inner.height >= 8 {
         if compact { 1 } else { 2 }
     } else {
         0
     };
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
+    let header_height = if inner.height >= 8 { 2 } else { 1 };
     let help_height = u16::from(inner.height >= 4);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(user_height),
+            Constraint::Length(header_height),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(help_height),
         ])
         .split(inner);
-    let list_area = if !presentation(model).single_column && rows[1].width >= 60 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[1])[0]
-    } else {
-        rows[1]
-    };
+    rows[1]
+}
+
+fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
+    let content = profile_center_content_area(model, area);
+    let (list_area, _) = profile_list_detail_areas(content, model);
     Some(
         Block::default()
             .border_set(ratatui::symbols::border::ROUNDED)
@@ -653,45 +633,8 @@ fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
 }
 
 fn profile_detail_area(model: &Model, area: Rect) -> Option<Rect> {
-    let inner = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
-    let help_height = u16::from(inner.height >= 4);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(user_height),
-            Constraint::Min(1),
-            Constraint::Length(notice_height),
-            Constraint::Length(help_height),
-        ])
-        .split(inner);
-    if !presentation(model).single_column && rows[1].width >= 60 {
-        Some(
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-                .split(rows[1])[1],
-        )
-    } else {
-        None
-    }
+    let content = profile_center_content_area(model, area);
+    profile_list_detail_areas(content, model).1
 }
 
 fn profile_detail_action_at_column(
@@ -711,44 +654,10 @@ fn profile_detail_action_at_column(
 
 fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
     let selected = model.selected_profile()?;
-    let inner = Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
-    let help_height = u16::from(inner.height >= 4);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(user_height),
-            Constraint::Min(1),
-            Constraint::Length(notice_height),
-            Constraint::Length(help_height),
-        ])
-        .split(inner);
-    let detail = if !presentation(model).single_column && rows[1].width >= 60 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[1])[1]
-    } else {
-        return None;
-    };
-    let mut lines = 8_u16;
+    let detail = profile_detail_area(model, area)?;
+    let mut lines = u16::try_from(model.filtered_profiles().count())
+        .unwrap_or(u16::MAX)
+        .saturating_add(9);
     if selected.kind == ProviderKindLabel::Router {
         lines = lines.saturating_add(1);
         if !selected.project.is_empty() {
@@ -773,9 +682,6 @@ fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
 }
 
 fn provider_choice_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    if model.profile_center.focus != ProfileCenterFocus::ProviderChoices {
-        return None;
-    }
     let list = profile_list_inner_rect(model, area)?;
     if !list.contains(Position::new(column, row)) {
         return None;
@@ -791,21 +697,15 @@ fn provider_choice_at_row(model: &Model, area: Rect, column: u16, row: u16) -> O
 }
 
 fn profile_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    if model.profile_center.focus != ProfileCenterFocus::ConnectedProfiles {
-        return None;
-    }
-    let list = profile_list_inner_rect(model, area)?;
+    let list = Block::default()
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .borders(Borders::ALL)
+        .inner(profile_detail_area(model, area)?);
     if !list.contains(Position::new(column, row)) {
         return None;
     }
     let profiles = model.filtered_profiles().collect::<Vec<_>>();
-    let selected = profiles
-        .iter()
-        .position(|profile| model.profile_selection() == Some(profile.id.as_str()))
-        .unwrap_or_default();
-    let index = usize::from(row.saturating_sub(list.y)).saturating_add(usize::from(
-        profile_list_scroll(selected, profiles.len(), list.height),
-    ));
+    let index = usize::from(row.saturating_sub(list.y));
     profiles
         .get(index)
         .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
@@ -1941,12 +1841,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Providers & Connections ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -1957,25 +1852,33 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         0
     };
-    let user_height = if compact {
-        2
-    } else if inner.height >= 12 {
-        4
-    } else {
-        2
-    };
+    let header_height = if inner.height >= 8 { 2 } else { 1 };
     let help_height = u16::from(inner.height >= 4);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(user_height),
+            Constraint::Length(header_height),
             Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(help_height),
         ])
         .split(inner);
 
-    render_local_profile(frame, rows[0], model);
+    let header = if header_height > 1 {
+        vec![
+            Line::styled("Providers", visual_style(model, VisualRole::User)),
+            Line::styled(
+                "Connect a provider. Connected accounts stay visible on the right.",
+                visual_style(model, VisualRole::Muted),
+            ),
+        ]
+    } else {
+        vec![Line::styled(
+            "Providers  Connect a provider",
+            visual_style(model, VisualRole::User),
+        )]
+    };
+    frame.render_widget(Paragraph::new(header), rows[0]);
     let (list_area, detail_area) = profile_list_detail_areas(rows[1], model);
     render_connected_profiles(frame, list_area, model);
     if let Some(detail_area) = detail_area {
@@ -1992,7 +1895,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         };
         frame.render_widget(
             Paragraph::new(format!(
-                "↑/↓ choose  Enter setup/activate  Up from first returns  Esc {return_to}"
+                "←/→ section  ↑/↓ choose  Enter open/activate  Esc {return_to}"
             ))
             .style(visual_style(model, VisualRole::Muted)),
             rows[3],
@@ -2011,103 +1914,66 @@ fn profile_list_detail_areas(area: Rect, model: &Model) -> (Rect, Option<Rect>) 
     if !presentation(model).single_column && area.width >= 60 {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
             .split(area);
         (columns[0], Some(columns[1]))
     } else {
-        (area, None)
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .split(area);
+        (rows[0], Some(rows[1]))
     }
 }
 
 fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let connected = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
-    let title = if connected {
-        " Connected accounts "
-    } else {
-        " Connect a provider "
-    };
+    let focused = model.profile_center.focus == ProfileCenterFocus::ProviderChoices;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(title)
-        .border_style(visual_style(model, VisualRole::Border));
+        .title(" Available providers ")
+        .border_style(visual_style(
+            model,
+            if focused {
+                VisualRole::Selected
+            } else {
+                VisualRole::Border
+            },
+        ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    let (lines, selected, empty) = if connected {
-        let profiles = model.filtered_profiles().collect::<Vec<_>>();
-        let selected = profiles
-            .iter()
-            .position(|profile| model.profile_selection() == Some(profile.id.as_str()))
-            .unwrap_or_default();
-        let lines = profiles
-            .iter()
-            .map(|profile| {
-                let selected = model.profile_selection() == Some(profile.id.as_str());
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                let marker = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                Line::styled(
-                    format!(
-                        "{marker} {:<22} {}  {}",
-                        display_safe(&profile.id),
-                        provider_connection_label(profile),
-                        profile.connection.label()
-                    ),
-                    style,
-                )
-            })
-            .collect::<Vec<_>>();
-        (lines, selected, profiles.is_empty())
-    } else {
-        let selected = model
-            .profile_center
-            .choice_selected
-            .min(PROVIDER_CHOICES.len().saturating_sub(1));
-        let lines = PROVIDER_CHOICES
-            .iter()
-            .enumerate()
-            .map(|(index, choice)| {
-                let selected = index == selected;
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                let marker = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                Line::styled(
-                    format!(
-                        "{marker} {:<22} {}",
-                        choice.label(),
-                        provider_choice_status(model, *choice)
-                    ),
-                    style,
-                )
-            })
-            .collect::<Vec<_>>();
-        (lines, selected, false)
-    };
-    let lines = if empty {
-        vec![Line::styled(
-            "No connected accounts yet",
-            visual_style(model, VisualRole::Muted),
-        )]
-    } else {
-        lines
-    };
+    let selected = model
+        .profile_center
+        .choice_selected
+        .min(PROVIDER_CHOICES.len().saturating_sub(1));
+    let lines = PROVIDER_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let selected = index == selected;
+            let style = if selected && focused {
+                visual_style(model, VisualRole::Selected)
+            } else {
+                visual_style(model, VisualRole::Normal)
+            };
+            let marker = if selected {
+                selection_marker(model)
+            } else {
+                " "
+            };
+            Line::styled(
+                format!(
+                    "{marker} {:<22} {}",
+                    choice.label(),
+                    provider_choice_status(model, *choice)
+                ),
+                style,
+            )
+        })
+        .collect::<Vec<_>>();
     let scroll = profile_list_scroll(selected, lines.len(), inner.height);
     frame.render_widget(
         Paragraph::new(lines)
@@ -2127,23 +1993,57 @@ fn profile_list_scroll(selected: usize, count: usize, visible: u16) -> u16 {
 }
 
 fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let focused = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Selected account ")
-        .border_style(visual_style(model, VisualRole::Border));
+        .title(" Connected accounts ")
+        .border_style(visual_style(
+            model,
+            if focused {
+                VisualRole::Selected
+            } else {
+                VisualRole::Border
+            },
+        ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let profiles = model.filtered_profiles().collect::<Vec<_>>();
     let Some(profile) = model.selected_profile() else {
         if inner.width > 0 && inner.height > 0 {
             frame.render_widget(
-                Paragraph::new("Select a connected account to inspect it.")
+                Paragraph::new("No connected accounts yet. Choose a provider to get started.")
                     .style(visual_style(model, VisualRole::Muted)),
                 inner,
             );
         }
         return;
     };
-    let mut lines = vec![
+    let mut lines = profiles
+        .iter()
+        .map(|candidate| {
+            let selected = candidate.id == profile.id;
+            let marker = if selected {
+                selection_marker(model)
+            } else {
+                " "
+            };
+            let state = if candidate.active {
+                "active"
+            } else {
+                candidate.connection.label()
+            };
+            Line::styled(
+                format!("{marker} {:<20} {state}", display_safe(&candidate.id)),
+                if selected && focused {
+                    visual_style(model, VisualRole::Selected)
+                } else {
+                    visual_style(model, VisualRole::Normal)
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.push(Line::from(""));
+    lines.extend([
         detail_line(model, "Name", &profile.id),
         detail_line(model, "Provider", profile.kind.as_str()),
         detail_line(
@@ -2164,7 +2064,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             profile.default_model.as_deref().unwrap_or("not set"),
         ),
         detail_line(model, "Thinking", &profile.default_mode),
-    ];
+    ]);
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));
         if !profile.project.is_empty() {

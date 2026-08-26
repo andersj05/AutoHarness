@@ -2054,6 +2054,23 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             close_profile_center(model);
             Vec::new()
         }
+        Input { key: Key::Left, .. }
+            if model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles =>
+        {
+            model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Right, ..
+        } if model.profile_center.focus == ProfileCenterFocus::ProviderChoices
+            && model.filtered_profiles().next().is_some() =>
+        {
+            model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
+            model.sync_profile_selection();
+            model.dirty = true;
+            Vec::new()
+        }
         Input { key: Key::Up, .. }
             if model.profile_center.focus == ProfileCenterFocus::ProviderChoices =>
         {
@@ -2173,14 +2190,6 @@ fn move_provider_choice(model: &mut Model, direction: isize) {
             return;
         }
         model.profile_center.choice_selected = last;
-    } else if direction > 0 && model.profile_center.choice_selected == last {
-        if model.filtered_profiles().next().is_some() {
-            model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
-            model.sync_profile_selection();
-            model.dirty = true;
-            return;
-        }
-        model.profile_center.choice_selected = 0;
     } else {
         model.profile_center.choice_selected = model
             .profile_center
@@ -2207,13 +2216,10 @@ fn move_connected_profile(model: &mut Model, direction: isize) {
         .as_ref()
         .and_then(|selected| profile_ids.iter().position(|id| id == selected))
         .unwrap_or_default();
-    if direction < 0 && current == 0 {
-        model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
-        model.dirty = true;
-        return;
-    }
-    let next = (isize::try_from(current).unwrap_or(0) + direction)
-        .rem_euclid(isize::try_from(profile_ids.len()).unwrap_or(1));
+    let next = (isize::try_from(current).unwrap_or(0) + direction).clamp(
+        0,
+        isize::try_from(profile_ids.len().saturating_sub(1)).unwrap_or(0),
+    );
     model.profile_center.selected = profile_ids.get(usize::try_from(next).unwrap_or(0)).cloned();
     model.dirty = true;
 }
