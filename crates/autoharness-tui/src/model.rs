@@ -1286,9 +1286,44 @@ impl Drop for ProfileCredentialEditor {
     }
 }
 
-/// Full-screen connected-provider account interaction state.
+/// One provider choice exposed by the terminal connection catalog.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProviderChoice {
+    Gemini,
+    GoogleAiStudio,
+    Cursor,
+    Codex,
+    ClaudeCode,
+    OpenAiCompatible,
+}
+
+pub(crate) const PROVIDER_CHOICES: [ProviderChoice; 6] = [
+    ProviderChoice::Gemini,
+    ProviderChoice::GoogleAiStudio,
+    ProviderChoice::Cursor,
+    ProviderChoice::Codex,
+    ProviderChoice::ClaudeCode,
+    ProviderChoice::OpenAiCompatible,
+];
+
+impl ProviderChoice {
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini",
+            Self::GoogleAiStudio => "Google AI Studio API",
+            Self::Cursor => "Cursor",
+            Self::Codex => "Codex",
+            Self::ClaudeCode => "Claude Code",
+            Self::OpenAiCompatible => "OpenAI-compatible API",
+        }
+    }
+}
+
+/// Provider-choice and account-editor state owned by the Providers workspace.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
+    pub choice_selected: usize,
     pub query: String,
     pub selected: Option<String>,
     pub confirming_disconnect: Option<String>,

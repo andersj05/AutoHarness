@@ -92,11 +92,11 @@ Vault errors never include secret material.
 The application owns one serialized profile-management workflow.
 The TUI consumes safe profile and connection read models and emits typed intents; it never calls the settings file, operating-system vault, or provider adapters directly.
 Secret-bearing save and replace intents remain ephemeral, non-serializable, zeroizing, and redacted in debug output.
-The Connected Accounts workspace is available through `Ctrl+G`, `/provider`, or the Settings tab.
-It lists saved provider accounts and their safe connection state without rendering a provider catalog.
-It supports profile create, edit, duplicate, activate, test, disconnect, confirmed delete, explicit vault save or replace, and content-free connection health results.
-Codex subscription profiles retain no AutoHarness credential.
-They invoke the official Codex CLI only after its user-owned `codex login` and use its documented read-only, ephemeral JSONL execution boundary under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
+The Providers workspace is available through `Ctrl+G`, `/provider`, or the Settings tab.
+It lists Gemini, Google AI Studio API, Cursor, Codex, Claude Code, and OpenAI-compatible API choices.
+Gemini and Google AI Studio API share the same Gemini API-key adapter and open the API-key setup form.
+Codex opens the subscription authentication page, retains no AutoHarness credential, and invokes the official Codex CLI only after its user-owned `codex login` through the documented read-only, ephemeral JSONL boundary under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
+Cursor and Claude Code choices name their official CLI login commands but remain unavailable until equivalent repository-owned process adapters exist, rather than claiming a saved or invokable account.
 The Agents workspace selects a connected provider, then a compatible model, then provider-default thinking when the catalog positively advertises thinking support.
 Providers that do not advertise portable thinking levels never receive an invented effort setting.
 Keyboard shortcuts, command-palette routing, and visible controls converge on the same typed intents.

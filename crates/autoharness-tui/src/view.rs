@@ -12,9 +12,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
-    MouseAction, Notice, OverlayKind, PendingKind, ProfileConnectionState, ProfileCredentialAction,
-    ProfileEditorMode, ProviderKindLabel, ProviderProfileProjection, RetryPolicy, Route,
-    SettingsPreference, TranscriptItem,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileConnectionState,
+    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, ProviderProfileProjection,
+    RetryPolicy, Route, SettingsPreference, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -1930,20 +1930,19 @@ fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
         ComposerSubmitBehavior::Enter => "Enter",
     }
 }
-/// Renders connected accounts and their safe connection state.
+/// Renders provider choices and opens provider-specific setup from selection.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
     let outer = app_block(model)
         .borders(Borders::ALL)
-        .title(" Connected Accounts ")
+        .title(" Providers ")
         .border_style(visual_style(model, VisualRole::Border));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-
-    let notice_height = u16::from(model.notice.is_some() && inner.height >= 8);
+    let notice_height = u16::from(model.notice.is_some() && inner.height >= 6);
     let help_height = u16::from(inner.height >= 4);
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1953,23 +1952,33 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Constraint::Length(help_height),
         ])
         .split(inner);
-    if !presentation(model).single_column && rows[0].width >= 78 && rows[0].height >= 7 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(rows[0]);
-        render_profile_list(frame, columns[0], model);
-        render_profile_detail(frame, columns[1], model);
-    } else if rows[0].height >= 9 {
-        let panes = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(rows[0]);
-        render_profile_list(frame, panes[0], model);
-        render_profile_detail(frame, panes[1], model);
-    } else {
-        render_profile_list(frame, rows[0], model);
-    }
+    let selected = model
+        .profile_center
+        .choice_selected
+        .min(PROVIDER_CHOICES.len().saturating_sub(1));
+    let items = PROVIDER_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let selected = index == selected;
+            let prefix = if selected {
+                selection_marker(model)
+            } else {
+                " "
+            };
+            let status = provider_choice_status(model, *choice);
+            let style = if selected {
+                visual_style(model, VisualRole::Selected)
+            } else {
+                visual_style(model, VisualRole::Normal)
+            };
+            ListItem::new(Line::styled(
+                format!("{prefix} {}  {status}", choice.label()),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(items), rows[0]);
     if notice_height > 0 {
         render_notice(frame, rows[1], model);
     }
@@ -1979,21 +1988,39 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
-        let hints = if rows[2].width >= 70 {
-            format!("↑/↓ accounts  Enter activate  Alt+N connect  Alt+K key  Esc {return_to}")
-        } else {
-            format!("Enter activate  Alt+N connect  Esc {return_to}")
-        };
         frame.render_widget(
-            Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new(format!("↑/↓ choose  Enter setup  Esc {return_to}"))
+                .style(visual_style(model, VisualRole::Muted)),
             rows[2],
         );
     }
-
     if model.profile_center.editor.is_some() {
         render_profile_editor(frame, area, model);
     } else if model.profile_center.credential.is_some() {
         render_profile_credential(frame, area, model);
+    }
+}
+
+fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {
+    match choice {
+        crate::model::ProviderChoice::Gemini | crate::model::ProviderChoice::GoogleAiStudio => {
+            "Google AI Studio API key"
+        }
+        crate::model::ProviderChoice::Codex => {
+            if model
+                .profiles()
+                .profiles
+                .iter()
+                .any(|profile| profile.kind == ProviderKindLabel::CodexCli)
+            {
+                "connected account"
+            } else {
+                "ChatGPT subscription"
+            }
+        }
+        crate::model::ProviderChoice::Cursor => "official CLI bridge not installed",
+        crate::model::ProviderChoice::ClaudeCode => "official CLI bridge not installed",
+        crate::model::ProviderChoice::OpenAiCompatible => "API key",
     }
 }
 
@@ -2150,181 +2177,12 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 
-fn render_profile_list(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let title = format!(
-        " Connected accounts - filter: {} ",
-        display_safe(&model.profile_center.query)
-    );
-    let block = app_block(model).borders(Borders::ALL).title(title);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let profiles = model.filtered_profiles().collect::<Vec<_>>();
-    if profiles.is_empty() {
-        let empty = if model.profiles().profiles.is_empty() {
-            "No accounts connected.\nPress Alt+N to connect an account."
-        } else {
-            "No accounts match this filter."
-        };
-        frame.render_widget(
-            Paragraph::new(empty)
-                .style(visual_style(model, VisualRole::Muted))
-                .wrap(Wrap { trim: false }),
-            inner,
-        );
-        return;
-    }
-    let selected_index = model
-        .profile_selection()
-        .and_then(|selected| profiles.iter().position(|profile| profile.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(inner.height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(profiles.len().saturating_sub(visible));
-    let items = profiles
-        .iter()
-        .skip(start)
-        .take(visible)
-        .map(|profile| profile_list_item(profile, model, inner.width))
-        .collect::<Vec<_>>();
-    frame.render_widget(List::new(items), inner);
-}
-
-fn profile_list_item(
-    profile: &ProviderProfileProjection,
-    model: &Model,
-    width: u16,
-) -> ListItem<'static> {
-    let selected = model.profile_selection() == Some(profile.id.as_str());
-    let marker = if selected {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let active = if profile.active { "*" } else { " " };
-    let style = if selected {
-        visual_style(model, VisualRole::Selected)
-    } else if profile.active {
-        visual_style(model, VisualRole::Assistant)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    let id = display_safe(&profile.id);
-    let provider = provider_connection_label(profile);
-    let default_model = profile
-        .default_model
-        .as_deref()
-        .map(display_safe)
-        .unwrap_or_else(|| "no default".to_owned());
-    let label = if width >= 56 {
-        format!(
-            "{marker}{active} {id}  {provider}  {}  {}  {}",
-            profile.credential_state.as_str(),
-            profile.connection.label(),
-            default_model,
-        )
-    } else if width >= 44 {
-        format!(
-            "{marker}{active} {id}  {provider}  {}  {}",
-            profile.credential_state.as_str(),
-            profile.connection.label(),
-        )
-    } else if width >= 32 {
-        format!(
-            "{marker}{active} {id}  {provider}  {}",
-            profile.credential_state.as_str(),
-        )
-    } else {
-        format!("{marker}{active} {id}  {provider}")
-    };
-    ListItem::new(Line::from(label)).style(style)
-}
-
 fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static str {
     match profile.kind {
         ProviderKindLabel::Gemini => "Google AI Studio",
         ProviderKindLabel::Router => "OpenAI-compatible",
         ProviderKindLabel::CodexCli => "Codex subscription",
     }
-}
-
-fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let block = app_block(model).borders(Borders::ALL).title(" Connection ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let Some(profile) = model.selected_profile() else {
-        frame.render_widget(
-            Paragraph::new("Select or create a profile.")
-                .style(visual_style(model, VisualRole::Muted)),
-            inner,
-        );
-        return;
-    };
-    let default_model = profile.default_model.as_deref().unwrap_or("not set");
-    let default_mode = if profile.default_mode.is_empty() {
-        "safe agent"
-    } else {
-        profile.default_mode.as_str()
-    };
-    let mut lines = vec![
-        detail_line(model, "Name", &profile.id),
-        detail_line(model, "Provider", provider_connection_label(profile)),
-    ];
-    if profile.kind == ProviderKindLabel::Router {
-        lines.push(detail_line(model, "Base URL", &profile.base_url));
-        if !profile.project.is_empty() {
-            lines.push(detail_line(model, "Project", &profile.project));
-        }
-        if !profile.auth_header.is_empty() {
-            lines.push(detail_line(model, "Auth header", &profile.auth_header));
-        }
-    }
-    lines.extend([
-        detail_line(model, "Active", if profile.active { "yes" } else { "no" }),
-        detail_line(model, "Credential", profile.credential_state.as_str()),
-        detail_line(model, "Source", profile.credential_source.as_str()),
-        detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Default model", default_model),
-        detail_line(model, "Mode", default_mode),
-    ]);
-    if let ProfileConnectionState::Failed(reason) = &profile.connection {
-        lines.push(Line::from(vec![
-            Span::styled("Reason      ", visual_style(model, VisualRole::Error)),
-            Span::raw(display_safe(reason)),
-        ]));
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{} credential repair operation(s) pending",
-                model.profiles().pending_recovery
-            ),
-            visual_style(model, VisualRole::Warning),
-        )));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("[ New ]", visual_style(model, VisualRole::Field)),
-        Span::raw(" "),
-        Span::styled("[ Key ]", visual_style(model, VisualRole::Field)),
-        Span::raw(" "),
-        Span::styled("[ Test ]", visual_style(model, VisualRole::Field)),
-        Span::raw(" "),
-        Span::styled("[ Default ]", visual_style(model, VisualRole::Field)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("[ Disconnect ]", visual_style(model, VisualRole::Warning)),
-        Span::raw(" "),
-        Span::styled("[ Delete ]", visual_style(model, VisualRole::Error)),
-    ]));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn detail_line(model: &Model, label: &'static str, value: &str) -> Line<'static> {
@@ -2345,10 +2203,12 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .expect("profile editor is open");
     let popup = popup_rect(area);
     frame.render_widget(Clear, popup);
-    let title = match editor.mode {
-        ProfileEditorMode::Create => " Create provider profile ",
-        ProfileEditorMode::Edit => " Edit provider profile ",
-        ProfileEditorMode::Duplicate => " Duplicate provider profile ",
+    let title = match (editor.mode, editor.kind) {
+        (ProfileEditorMode::Create, ProviderKindLabel::CodexCli) => " Connect Codex subscription ",
+        (ProfileEditorMode::Create, ProviderKindLabel::Gemini) => " Connect Gemini ",
+        (ProfileEditorMode::Create, ProviderKindLabel::Router) => " Connect compatible API ",
+        (ProfileEditorMode::Edit, _) => " Edit provider profile ",
+        (ProfileEditorMode::Duplicate, _) => " Duplicate provider profile ",
     };
     let block = app_block(model)
         .borders(Borders::ALL)
@@ -2386,10 +2246,17 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Tab next field  Left/Right provider  Enter save  Esc cancel",
-        visual_style(model, VisualRole::Muted),
-    )));
+    if editor.mode == ProfileEditorMode::Create && editor.kind == ProviderKindLabel::CodexCli {
+        lines.push(Line::styled(
+            "Run 'codex login' in another terminal, complete browser sign-in, then save and test.",
+            visual_style(model, VisualRole::Muted),
+        ));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Tab next field  Left/Right provider  Enter save  Esc cancel",
+            visual_style(model, VisualRole::Muted),
+        )));
+    }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 

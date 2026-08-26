@@ -155,8 +155,8 @@
 - The 2026-08-25 chat shell polish removes numbered route tabs and provider status strings from the visible shell, keeps Profile and Settings as the only bottom actions, removes the sidebar session heading, renders capability-aware `think:` and `/workspace` metadata, and gives the composer a transparent rounded box with a `❯` input line.
 - The 2026-08-25 visual refinement relocates Profile and Settings into the wide sidebar, keeps compact actions only where no sidebar exists, makes Border styles terminal-transparent across themes, renders inline slash rows without fills, and removes the transcript-bottom plus composer-top double line.
 - The 2026-08-25 command integration removes duplicate Profile/Profiles suggestions, renders `/command` before the human label, keeps the cursor visible inside the filtered composer, and makes Provider, Profile, and Agents command destinations render inside Settings tabs.
-- The 2026-08-25 Providers workspace renders connected accounts only, while the Agents workspace persistently selects a provider and compatible model, then confirms provider-default thinking only for positively advertised thinking support.
-- The official `codex_cli` provider checks the user-owned `codex login` session, launches only documented read-only ephemeral Codex CLI JSONL execution, retains no Codex credential material, and fails closed on malformed protocol or tool activity.
+- The 2026-08-25 Providers workspace renders Gemini, Google AI Studio API, Cursor, Codex, Claude Code, and OpenAI-compatible API choices, with a provider-specific Gemini key setup page and an official Codex CLI subscription-authentication page.
+- Cursor and Claude Code choices accurately report that their repository-owned CLI bridges are unavailable rather than persisting or invoking unsupported accounts.
 - The first successfully admitted redacted prompt atomically persists one deterministic session title before its prepared attempt, while user-chosen titles remain authoritative.
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
@@ -164,7 +164,7 @@
 - The operating-system vault smoke passed Windows Credential Manager; macOS Keychain and Linux Secret Service evidence remains open.
 - Session deletion archives events but does not yet garbage-collect content-addressed artifacts owned exclusively by the deleted session; Markdown export files are written beside the database but never garbage-collected after session deletion either.
 - Eight dedicated PTY scenarios, including routed shell, profile management, onboarding, offline resume, session lifecycle, forced shutdown, and permission outcomes, pass locally on Windows; Linux and refreshed Windows evidence awaits the release-candidate CI run.
-- This branch passes workspace formatting, strict Clippy, 413 workspace tests across 48 suites, 55 focused TUI tests, the real Windows provider and routed-shell PTY journeys, the real Windows account-and-agent PTY journey, and the relative Markdown-link check.
+- This branch passes workspace formatting, strict Clippy, 412 workspace tests across 48 suites, focused TUI tests, the real Windows Codex authentication-page PTY journey, and the relative Markdown-link check.
 - No reviewed reference-machine benchmark report exists; runtime markers and report automation are implemented, but authoritative storage and terminal latency numbers require an approved machine and release-candidate run.
 - The checked-in release checklist has not been executed against a committed release candidate.
 

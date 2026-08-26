@@ -2,19 +2,14 @@
 
 mod pty_support;
 
-use autoharness_settings::{LayerKind, SettingsBuilder};
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 const CTRL_G: [u8; 1] = [0x07];
-const ALT_N: [u8; 2] = [0x1b, b'n'];
-const ALT_D: [u8; 2] = [0x1b, b'd'];
-const TAB: [u8; 1] = *b"\t";
-const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
-const DELETE: [u8; 4] = [0x1b, b'[', b'3', b'~'];
+const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 
 #[test]
 #[ignore = "runs in the cross-platform terminal PTY CI gate"]
-fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
+fn providers_open_the_official_codex_subscription_authentication_page() {
     let environment = ScenarioEnvironment::prepare();
     let mut terminal = PtySession::start(&environment, 30, 100);
 
@@ -22,107 +17,28 @@ fn profiles_are_created_switched_duplicated_and_deleted_without_shell_setup() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Connected Accounts") && text.contains("No accounts connected")
+            text.contains("Providers")
+                && text.contains("Gemini")
+                && text.contains("Google AI Studio API")
+                && text.contains("Cursor")
+                && text.contains("Codex")
+                && text.contains("Claude Code")
         },
-        "connected accounts should open from credential-free first run",
+        "provider choices should open from credential-free first run",
     );
 
-    terminal.send_bytes(&ALT_N);
-    terminal.wait_for(
-        |screen| screen.contents().contains("Create provider profile"),
-        "provider account form should open",
-    );
-    terminal.submit_line("personal-gemini");
-    terminal.wait_for(
-        |screen| screen.contents().contains("personal-gemini"),
-        "Gemini account should save inside the terminal",
-    );
-
-    terminal.send_bytes(&ALT_N);
-    terminal.type_text("work-router");
-    terminal.send_bytes(&TAB);
-    terminal.send_bytes(&RIGHT);
-    terminal.send_bytes(&TAB);
-    terminal.submit_line("https://router.example.test/v1/");
-    terminal.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("work-router") && text.contains("router.example.test")
-        },
-        "router account should save with its non-secret connection fields",
-    );
-
-    terminal.send_bytes(&ALT_D);
-    terminal.wait_for(
-        |screen| screen.contents().contains("Duplicate provider profile"),
-        "duplicate form should open",
-    );
-    terminal.submit_line("router-copy");
-    terminal.wait_for(
-        |screen| screen.contents().contains("router-copy"),
-        "duplicate should copy configuration without a credential",
-    );
-
+    for _ in 0..3 {
+        terminal.send_bytes(&DOWN);
+    }
     terminal.send_bytes(b"\r");
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("router-copy") && text.contains("Active        yes")
+            text.contains("Connect Codex subscription") && text.contains("codex login")
         },
-        "the duplicated profile should become active without leaving the terminal",
-    );
-
-    terminal.send_bytes(&DELETE);
-    terminal.wait_for(
-        |screen| screen.contents().contains("Delete profile 'router-copy'"),
-        "profile deletion should require explicit confirmation",
-    );
-    terminal.send_bytes(b"n");
-    terminal.wait_for(
-        |screen| !screen.contents().contains("Delete profile 'router-copy'"),
-        "cancelled deletion should leave the profile intact",
-    );
-    terminal.send_bytes(&DELETE);
-    terminal.send_bytes(b"y");
-    terminal.wait_for(
-        |screen| !screen.contents().contains("router-copy"),
-        "confirmed deletion should remove only the selected profile",
-    );
-
-    terminal.send_bytes(b"\x1b");
-    terminal.send_bytes(&RIGHT);
-    terminal.send_bytes(&RIGHT);
-    terminal.send_bytes(b"\r");
-    terminal.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("Agent Defaults") && text.contains("personal-gemini")
-        },
-        "Agents should begin default selection with connected accounts",
-    );
-    terminal.send_bytes(b"\r");
-    terminal.wait_for(
-        |screen| {
-            screen
-                .contents()
-                .contains("Waiting for the selected provider")
-        },
-        "Agents should advance from provider selection to the model step",
+        "Codex should open its subscription authentication page",
     );
 
     terminal.send_bytes(&ctrl_c());
     assert_eq!(terminal.wait_for_exit(), 0);
-
-    let document = std::fs::read_to_string(environment.profiles_document())
-        .expect("profile document after PTY journey");
-    let settings = SettingsBuilder::new()
-        .with_layer(LayerKind::UserFile, document)
-        .resolve()
-        .expect("resolved profiles");
-    let names = settings
-        .profiles()
-        .map(|(id, _)| id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names, vec!["personal-gemini", "work-router"]);
-    assert_eq!(settings.active_profile(), Some("personal-gemini"));
 }

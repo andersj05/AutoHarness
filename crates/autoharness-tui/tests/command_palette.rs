@@ -319,7 +319,7 @@ fn known_slash_commands_execute_and_clear_the_composer() {
     type_text(&mut model, "/profiles");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Connected Accounts"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 
     // The historical /sessions spelling keeps working through the shared table.
     let mut model = empty_model();
@@ -336,7 +336,7 @@ fn provider_command_opens_provider_setup_route() {
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
     assert_eq!(model.focus, Focus::Settings);
-    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Connected Accounts"));
+    assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 }
 
 #[test]

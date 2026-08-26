@@ -117,39 +117,44 @@ fn render_text(model: &Model, width: u16, height: u16) -> String {
 }
 
 #[test]
-fn connected_accounts_show_only_saved_profiles_at_responsive_sizes() {
+fn providers_list_connection_choices_at_responsive_sizes() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
     assert!(model.profile_center_open());
     assert_eq!(model.focus, Focus::Settings);
-    assert_eq!(model.profile_selection(), Some("personal-gemini"));
-
-    for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
-        let rendered = render_text(&model, width, height);
-        assert!(rendered.contains("Connected Accounts"));
-        assert!(rendered.contains("personal-gemini"));
-        assert!(rendered.contains("work-router"));
-        assert!(!rendered.contains("OpenRouter"));
-    }
     let wide = render_text(&model, 120, 40);
-    assert!(wide.contains("credential vault"));
-    assert!(wide.contains("connected"));
+    for provider in [
+        "Gemini",
+        "Google AI Studio API",
+        "Cursor",
+        "Codex",
+        "Claude Code",
+    ] {
+        assert!(wide.contains(provider), "missing {provider}");
+    }
+    for (width, height) in [(80, 24), (60, 18), (40, 12)] {
+        assert!(render_text(&model, width, height).contains("Providers"));
+    }
 }
 
 #[test]
-fn connected_accounts_start_a_blank_profile_editor_only_on_connect() {
+fn codex_provider_selection_opens_the_subscription_authentication_page() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-    let _ = update(&mut model, Message::Input(alt('n')));
-    for character in "second-gemini".chars() {
-        let _ = update(&mut model, Message::Input(key(Key::Char(character))));
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("Connect Codex subscription"));
+    assert!(rendered.contains("codex login"));
+
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "second-gemini" && profile.kind == ProviderKindLabel::Gemini
+            if profile.id == "codex" && profile.kind == ProviderKindLabel::CodexCli
     ));
 }
 
@@ -181,7 +186,7 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert_eq!(model.profile_selection(), Some("work-router"));
+    assert_eq!(model.profile_selection(), Some("personal-gemini"));
     let _ = update(&mut model, Message::Input(alt('k')));
     assert_eq!(
         hit_test(&model, 80, 24, 12, 19),
@@ -205,51 +210,12 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::SaveProfileCredential { profile_id, .. })]
-            if profile_id == "work-router"
+        [UiEffect::Dispatch(UiIntent::ReplaceProfileCredential { profile_id, .. })]
+            if profile_id == "personal-gemini"
     ));
     assert!(!format!("{effects:?}").contains(sentinel));
 }
 
-#[test]
-fn visible_profile_actions_converge_on_typed_intents_and_confirm_destruction() {
-    let mut model = model();
-    let _ = update(&mut model, Message::Input(ctrl('g')));
-
-    assert!(matches!(
-        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-    assert!(matches!(
-        update(&mut model, Message::Input(alt('t'))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::TestProfile { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-    assert!(matches!(
-        update(&mut model, Message::Input(alt('m'))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::SetProfileDefaultModel { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-
-    let _ = update(&mut model, Message::Input(alt('x')));
-    assert!(update(&mut model, Message::Input(key(Key::Char('n')))).is_empty());
-    let _ = update(&mut model, Message::Input(alt('x')));
-    assert!(matches!(
-        update(&mut model, Message::Input(key(Key::Char('y')))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::DisconnectProfile { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-
-    let _ = update(&mut model, Message::Input(key(Key::Delete)));
-    assert!(update(&mut model, Message::Input(key(Key::Char('n')))).is_empty());
-    let _ = update(&mut model, Message::Input(key(Key::Delete)));
-    assert!(matches!(
-        update(&mut model, Message::Input(key(Key::Char('y')))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::DeleteProfile { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-}
 #[test]
 fn models_picker_can_save_the_selected_model_as_profile_default() {
     let mut model = model();

@@ -245,7 +245,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
         ('1', "Conversation"),
         ('2', "Sessions"),
-        ('3', "Connected Accounts"),
+        ('3', "Providers"),
         ('4', "Settings & Provenance"),
         ('5', "Help"),
     ];
@@ -391,7 +391,7 @@ fn providers_returns_to_settings_navigation_before_leaving_the_route() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    assert!(render_text(&model, 80, 24).contains("No accounts connected"));
+    assert!(render_text(&model, 80, 24).contains("Gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
     let _ = update(&mut model, Message::Input(key(Key::Right)));
@@ -569,7 +569,7 @@ fn mouse_profile_actions_share_keyboard_intents() {
     let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
 
     assert!(effects.is_empty());
-    assert!(render_text(&model, 120, 40).contains("Create provider profile"));
+    assert!(render_text(&model, 120, 40).contains("Connect Gemini"));
 }
 #[test]
 fn mouse_session_action_bar_exposes_each_visible_action() {

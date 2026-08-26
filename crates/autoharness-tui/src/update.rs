@@ -9,11 +9,11 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus,
-    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PendingKind,
-    ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
-    ProfilesProjection, ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route,
-    SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsPreference, UiEffect,
-    UiFailure, UiIntent, UiNotice,
+    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PROVIDER_CHOICES,
+    PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
+    ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
+    ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT, SessionProjection,
+    SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -1846,19 +1846,49 @@ fn close_profile_center(model: &mut Model) {
 }
 
 fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
+    let choice = PROVIDER_CHOICES
+        .get(model.profile_center.choice_selected)
+        .copied()
+        .unwrap_or(ProviderChoice::Gemini);
+    match choice {
+        ProviderChoice::Gemini | ProviderChoice::GoogleAiStudio => {
+            open_provider_setup(model, ProviderKindLabel::Gemini, "");
+        }
+        ProviderChoice::Codex => {
+            open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
+        }
+        ProviderChoice::OpenAiCompatible => {
+            open_provider_setup(model, ProviderKindLabel::Router, "");
+        }
+        ProviderChoice::Cursor => {
+            model.notice = Some(Notice::Info(
+                "Cursor authentication is documented through 'agent login', but its AutoHarness CLI bridge is not installed"
+                    .to_owned(),
+            ));
+        }
+        ProviderChoice::ClaudeCode => {
+            model.notice = Some(Notice::Info(
+                "Claude Code authentication is documented through 'claude auth login', but its AutoHarness CLI bridge is not installed"
+                    .to_owned(),
+            ));
+        }
+    }
+    model.dirty = true;
+    Vec::new()
+}
+
+fn open_provider_setup(model: &mut Model, kind: ProviderKindLabel, id: &str) {
     model.profile_center.editor = Some(ProfileEditorState {
         mode: ProfileEditorMode::Create,
         source_id: None,
         field: 0,
-        id: String::new(),
-        kind: ProviderKindLabel::Gemini,
+        id: id.to_owned(),
+        kind,
         base_url: String::new(),
         project: String::new(),
         auth_header: String::new(),
     });
     model.notice = None;
-    model.dirty = true;
-    Vec::new()
 }
 
 fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1940,17 +1970,24 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         Input { key: Key::Up, .. } => {
-            move_profile_selection(model, -1);
+            model.profile_center.choice_selected = model
+                .profile_center
+                .choice_selected
+                .checked_sub(1)
+                .unwrap_or(PROVIDER_CHOICES.len().saturating_sub(1));
+            model.dirty = true;
             Vec::new()
         }
         Input { key: Key::Down, .. } => {
-            move_profile_selection(model, 1);
+            model.profile_center.choice_selected =
+                (model.profile_center.choice_selected + 1) % PROVIDER_CHOICES.len();
+            model.dirty = true;
             Vec::new()
         }
         Input {
             key: Key::Enter, ..
-        } => activate_selected_profile(model),
-        Input {
+        }
+        | Input {
             key: Key::Char('n' | 'N'),
             alt: true,
             ..
@@ -2495,13 +2532,6 @@ fn submit_profile_credential(model: &mut Model) -> Vec<UiEffect> {
     vec![UiEffect::Dispatch(intent)]
 }
 
-fn activate_selected_profile(model: &mut Model) -> Vec<UiEffect> {
-    let Some(profile_id) = model.profile_selection().map(str::to_owned) else {
-        return Vec::new();
-    };
-    activate_profile(model, profile_id)
-}
-
 fn activate_profile(model: &mut Model, profile_id: String) -> Vec<UiEffect> {
     let request_id = model.allocate_request();
     model
@@ -2615,29 +2645,6 @@ fn dispatch_delete_profile(model: &mut Model, profile_id: String) -> Vec<UiEffec
         request_id,
         profile_id,
     })]
-}
-
-fn move_profile_selection(model: &mut Model, direction: isize) {
-    let visible: Vec<String> = model
-        .filtered_profiles()
-        .map(|profile| profile.id.clone())
-        .collect();
-    if visible.is_empty() {
-        model.profile_center.selected = None;
-        model.dirty = true;
-        return;
-    }
-    let current = model
-        .profile_center
-        .selected
-        .as_ref()
-        .and_then(|selected| visible.iter().position(|profile| profile == selected))
-        .unwrap_or(0);
-    let next = current
-        .saturating_add_signed(direction)
-        .min(visible.len().saturating_sub(1));
-    model.profile_center.selected = visible.get(next).cloned();
-    model.dirty = true;
 }
 
 fn apply_sessions(model: &mut Model, sessions: Arc<SessionsProjection>) {
@@ -3332,6 +3339,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     }
                     PendingKind::UpsertProfile(profile) => {
                         model.profile_center.selected = Some(profile.id);
+                        model.profile_center.editor = None;
                         model.notice = Some(Notice::Info("Provider profile saved".to_owned()));
                     }
                     PendingKind::DuplicateProfile { destination, .. } => {
