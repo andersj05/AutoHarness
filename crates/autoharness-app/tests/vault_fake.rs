@@ -69,3 +69,15 @@ fn debug_output_never_contains_secret_material() {
     assert!(!rendered.contains(SECRET));
     assert!(!rendered.contains("AIzaSy"));
 }
+
+#[test]
+fn opaque_oauth_payloads_can_exceed_the_manual_api_key_bound() {
+    let vault = FakeVault::new();
+    let payload = "x".repeat(8 * 1024);
+    let reference = vault
+        .save("autoharness/profile/codex", &payload)
+        .expect("save opaque OAuth payload");
+    let loaded = vault.load(&reference).expect("load opaque OAuth payload");
+    assert_eq!(loaded.len(), payload.len());
+    assert_eq!(&*loaded, &payload);
+}
