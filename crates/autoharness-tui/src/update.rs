@@ -9,9 +9,9 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus,
-    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PROVIDER_CHOICES,
-    PendingKind, ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode,
-    ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
+    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, ProfileCenterFocus,
+    PROVIDER_CHOICES, PendingKind, ProfileCredentialAction, ProfileCredentialEditor,
+    ProfileEditorMode, ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
     ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT, SessionProjection,
     SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
@@ -592,8 +592,11 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 open_user_profile(model);
                 return Vec::new();
             }
-            Input { key: Key::Esc, .. } => {
-                navigate_to_route(model, Route::Chat);
+            Input {
+                key: Key::Esc | Key::Up, ..
+            } => {
+                model.settings_workspace.nav_focus = true;
+                model.dirty = true;
                 return Vec::new();
             }
             _ => {}
@@ -639,16 +642,7 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
-        Input {
-            key: Key::Tab,
-            shift,
-            ..
-        } => {
-            move_settings_nav(model, if shift { -1 } else { 1 });
-            model.settings_workspace.nav_focus = true;
-            model.dirty = true;
-            Vec::new()
-        }
+        Input { key: Key::Tab, .. } => Vec::new(),
         Input {
             key: Key::Enter, ..
         } if model.settings_workspace.nav_focus => {
@@ -1939,17 +1933,21 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Input { key: Key::Esc, .. } => {
                 model.profile_center.auth_page = None;
+                model.profile_center.auth_selected = 0;
                 model.dirty = true;
                 Vec::new()
             }
-            Input {
-                key: Key::Enter, ..
-            } => {
-                model.notice = Some(Notice::Info(
-                    "Opening the official Codex browser sign-in...".to_owned(),
-                ));
+            Input { key: Key::Up, .. } => {
+                model.profile_center.auth_selected =
+                    model.profile_center.auth_selected.saturating_sub(1);
                 model.dirty = true;
-                vec![UiEffect::LaunchCodexLogin]
+                Vec::new()
+            }
+            Input { key: Key::Down, .. } => {
+                model.profile_center.auth_selected =
+                    (model.profile_center.auth_selected + 1) % 2;
+                model.dirty = true;
+                Vec::new()
             }
             Input {
                 key: Key::Char('s' | 'S'),
@@ -1957,6 +1955,21 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 alt: false,
                 ..
             } => {
+                model.profile_center.auth_page = None;
+                open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
+                model.dirty = true;
+                Vec::new()
+            }
+            Input { key: Key::Enter, .. }
+                if model.profile_center.auth_selected == 0 =>
+            {
+                model.notice = Some(Notice::Info(
+                    "Opening the official Codex browser sign-in...".to_owned(),
+                ));
+                model.dirty = true;
+                vec![UiEffect::LaunchCodexLogin]
+            }
+            Input { key: Key::Enter, .. } => {
                 model.profile_center.auth_page = None;
                 open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
                 model.dirty = true;
@@ -2027,29 +2040,36 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             close_profile_center(model);
             Vec::new()
         }
-        Input { key: Key::Tab, .. } => {
-            close_profile_center(model);
+        Input { key: Key::Up, .. }
+            if model.profile_center.focus == ProfileCenterFocus::ProviderChoices =>
+        {
+            move_provider_choice(model, -1);
+            Vec::new()
+        }
+        Input { key: Key::Down, .. }
+            if model.profile_center.focus == ProfileCenterFocus::ProviderChoices =>
+        {
+            move_provider_choice(model, 1);
             Vec::new()
         }
         Input { key: Key::Up, .. } => {
-            model.profile_center.choice_selected = model
-                .profile_center
-                .choice_selected
-                .checked_sub(1)
-                .unwrap_or(PROVIDER_CHOICES.len().saturating_sub(1));
-            model.dirty = true;
+            move_connected_profile(model, -1);
             Vec::new()
         }
         Input { key: Key::Down, .. } => {
-            model.profile_center.choice_selected =
-                (model.profile_center.choice_selected + 1) % PROVIDER_CHOICES.len();
-            model.dirty = true;
+            move_connected_profile(model, 1);
             Vec::new()
         }
         Input {
             key: Key::Enter, ..
+        } if model.profile_center.focus == ProfileCenterFocus::ProviderChoices => {
+            create_profile_editor(model)
         }
-        | Input {
+        Input { key: Key::Enter, .. } => {
+            let profile_id = model.profile_selection().map(str::to_owned);
+            profile_id.map_or_else(Vec::new, |profile_id| activate_profile(model, profile_id))
+        }
+        Input {
             key: Key::Char('n' | 'N'),
             alt: true,
             ..
@@ -2126,6 +2146,60 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     }
 }
 
+fn move_provider_choice(model: &mut Model, direction: isize) {
+    let last = PROVIDER_CHOICES.len().saturating_sub(1);
+    if direction < 0 && model.profile_center.choice_selected == 0 {
+        if model.route() == Route::Settings {
+            model.settings_workspace.nav_focus = true;
+            model.dirty = true;
+            return;
+        }
+        model.profile_center.choice_selected = last;
+    } else if direction > 0 && model.profile_center.choice_selected == last {
+        if model.filtered_profiles().next().is_some() {
+            model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
+            model.sync_profile_selection();
+            model.dirty = true;
+            return;
+        }
+        model.profile_center.choice_selected = 0;
+    } else {
+        model.profile_center.choice_selected = model
+            .profile_center
+            .choice_selected
+            .saturating_add_signed(direction)
+            .min(last);
+    }
+    model.dirty = true;
+}
+
+fn move_connected_profile(model: &mut Model, direction: isize) {
+    let profile_ids = model
+        .filtered_profiles()
+        .map(|profile| profile.id.clone())
+        .collect::<Vec<_>>();
+    if profile_ids.is_empty() {
+        model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+        model.dirty = true;
+        return;
+    }
+    let current = model
+        .profile_center
+        .selected
+        .as_ref()
+        .and_then(|selected| profile_ids.iter().position(|id| id == selected))
+        .unwrap_or_default();
+    if direction < 0 && current == 0 {
+        model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+        model.dirty = true;
+        return;
+    }
+    let next = (isize::try_from(current).unwrap_or(0) + direction)
+        .rem_euclid(isize::try_from(profile_ids.len()).unwrap_or(1));
+    model.profile_center.selected = profile_ids.get(usize::try_from(next).unwrap_or(0)).cloned();
+    model.dirty = true;
+}
+
 fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
     let Some(profile) = model.selected_profile().cloned() else {
         model.notice = Some(Notice::Info("Create a profile first".to_owned()));
@@ -2164,18 +2238,33 @@ fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
             model.should_quit = true;
             vec![UiEffect::Quit]
         }
-        Input {
-            key: Key::Esc | Key::Tab,
-            ..
-        } => {
+        Input { key: Key::Esc, .. } => {
             model.settings_workspace.nav_focus = true;
             model.dirty = true;
             Vec::new()
         }
-        Input { key: Key::Up, .. } => {
-            move_agent_selection(model, -1);
-            Vec::new()
-        }
+        Input { key: Key::Tab, .. } => Vec::new(),
+        Input { key: Key::Up, .. } => match model.agent_defaults.step {
+            AgentDefaultStep::Provider if model.agent_defaults.profile_selected == 0 => {
+                model.settings_workspace.nav_focus = true;
+                model.dirty = true;
+                Vec::new()
+            }
+            AgentDefaultStep::Model if model.agent_defaults.model_selected == 0 => {
+                model.agent_defaults.step = AgentDefaultStep::Provider;
+                model.dirty = true;
+                Vec::new()
+            }
+            AgentDefaultStep::Thinking => {
+                model.agent_defaults.step = AgentDefaultStep::Model;
+                model.dirty = true;
+                Vec::new()
+            }
+            _ => {
+                move_agent_selection(model, -1);
+                Vec::new()
+            }
+        },
         Input { key: Key::Down, .. } => {
             move_agent_selection(model, 1);
             Vec::new()
@@ -2288,33 +2377,15 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
         Input {
             key: Key::Enter, ..
         } => submit_profile_editor(model),
-        Input {
-            key: Key::Tab,
-            shift,
-            ..
-        } => {
-            let editor = model
-                .profile_center
-                .editor
-                .as_mut()
-                .expect("profile editor is open");
-            let count = if editor.mode == ProfileEditorMode::Duplicate {
-                1
-            } else {
-                editor.field_count()
-            };
-            let mut field = if shift {
-                editor.field.checked_sub(1).unwrap_or(count - 1)
-            } else {
-                (editor.field + 1) % count
-            };
-            if editor.mode == ProfileEditorMode::Edit && field == 0 {
-                field = if shift { count - 1 } else { 1 };
-            }
-            editor.field = field;
-            model.dirty = true;
+        Input { key: Key::Up, .. } => {
+            move_profile_editor_field(model, -1);
             Vec::new()
         }
+        Input { key: Key::Down, .. } => {
+            move_profile_editor_field(model, 1);
+            Vec::new()
+        }
+        Input { key: Key::Tab, .. } => Vec::new(),
         Input {
             key: Key::Left | Key::Right,
             ..
@@ -2370,6 +2441,27 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
         }
         _ => Vec::new(),
     }
+}
+
+fn move_profile_editor_field(model: &mut Model, direction: isize) {
+    let Some(editor) = model.profile_center.editor.as_mut() else {
+        return;
+    };
+    let first = usize::from(editor.mode == ProfileEditorMode::Edit);
+    let count = if editor.mode == ProfileEditorMode::Duplicate {
+        1
+    } else {
+        editor.field_count()
+    };
+    let selectable = count.saturating_sub(first);
+    if selectable <= 1 {
+        return;
+    }
+    let current = editor.field.saturating_sub(first);
+    let next = (isize::try_from(current).unwrap_or(0) + direction)
+        .rem_euclid(isize::try_from(selectable).unwrap_or(1));
+    editor.field = first.saturating_add(usize::try_from(next).unwrap_or(0));
+    model.dirty = true;
 }
 
 fn profile_editor_field(editor: &mut ProfileEditorState) -> Option<&mut String> {

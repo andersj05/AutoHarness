@@ -1322,11 +1322,23 @@ impl ProviderChoice {
     }
 }
 
+/// Which list owns arrow-key focus in the Providers workspace.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ProfileCenterFocus {
+    /// Add or configure a provider connection.
+    #[default]
+    ProviderChoices,
+    /// Inspect or manage an existing provider profile.
+    ConnectedProfiles,
+}
+
 /// Provider-choice, authentication-page, and account-editor state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
+    pub focus: ProfileCenterFocus,
     pub choice_selected: usize,
     pub auth_page: Option<ProviderChoice>,
+    pub auth_selected: usize,
     pub open_credential_after_save: Option<String>,
     pub query: String,
     pub selected: Option<String>,
