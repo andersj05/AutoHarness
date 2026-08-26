@@ -259,7 +259,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                 "{expected} missing at {width}x{height}"
             );
             if key == '4' && width >= 60 {
-                for section in ["Settings", "Providers", "Profile", "Agents"] {
+                for section in ["Settings", "Providers", "Profile", "Models"] {
                     assert!(
                         rendered.contains(section),
                         "settings nav {section} missing at {width}x{height}"
@@ -411,7 +411,7 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let rendered = render_text(&model, 80, 24);
-    for section in ["Settings", "Providers", "Profile", "Agents"] {
+    for section in ["Settings", "Providers", "Profile", "Models"] {
         assert!(rendered.contains(section), "missing settings nav {section}");
     }
 

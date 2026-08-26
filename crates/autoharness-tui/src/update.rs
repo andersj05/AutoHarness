@@ -8,8 +8,8 @@ use autoharness_settings::{
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry,
-    Focus, LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind,
+    AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry, Focus,
+    LocalPreferenceChange, Message, Model, ModelDefaultStep, MouseAction, Notice, OverlayKind,
     PROVIDER_CHOICES, PendingKind, ProfileCenterFocus, ProfileCredentialAction,
     ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
     ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route,
@@ -592,7 +592,7 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         return handle_profile_input(model, input);
     }
     if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 3 {
-        return handle_agent_defaults_input(model, input);
+        return handle_model_defaults_input(model, input);
     }
     if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 2 {
         match input {
@@ -1106,6 +1106,7 @@ fn maybe_slash_command(model: &mut Model, input: &Input) -> Option<Vec<UiEffect>
 fn canonical_command_id(id: &str) -> &str {
     match id {
         "profiles" => "provider",
+        "agents" => "models",
         "user-profile" => "user",
         "new-session" => "new",
         "refresh-models" => "refresh",
@@ -1121,6 +1122,8 @@ fn open_settings_tab(model: &mut Model, tab: usize) {
     model.settings_workspace.nav_focus = false;
     if model.settings_workspace.nav_selected == 1 {
         model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+    } else if model.settings_workspace.nav_selected == 3 {
+        sync_model_default_selection(model);
     }
     model.dirty = true;
 }
@@ -1156,7 +1159,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_settings_tab(model, 1);
             Vec::new()
         }
-        "agents" => {
+        "models" => {
             open_settings_tab(model, 3);
             Vec::new()
         }
@@ -1165,7 +1168,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             open_user_profile(model);
             Vec::new()
         }
-        "models" => {
+        "session-model" => {
             open_picker(model);
             Vec::new()
         }
@@ -1771,6 +1774,7 @@ fn handle_browser_rename_input(model: &mut Model, input: Input) -> Vec<UiEffect>
 
 fn apply_profiles(model: &mut Model, profiles: Arc<ProfilesProjection>) {
     model.apply_profiles(profiles);
+    sync_model_default_selection(model);
 }
 
 fn close_active_overlay_state(model: &mut Model) {
@@ -2252,7 +2256,7 @@ fn open_profile_editor(model: &mut Model, mode: ProfileEditorMode) {
     model.notice = None;
     model.dirty = true;
 }
-fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+fn handle_model_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     match input {
         Input {
             key: Key::Char('c' | 'C'),
@@ -2268,19 +2272,14 @@ fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
             Vec::new()
         }
         Input { key: Key::Tab, .. } => Vec::new(),
-        Input { key: Key::Up, .. } => match model.agent_defaults.step {
-            AgentDefaultStep::Provider if model.agent_defaults.profile_selected == 0 => {
+        Input { key: Key::Up, .. } => match model.model_defaults.step {
+            ModelDefaultStep::Model if model.model_defaults.model_selected == 0 => {
                 model.settings_workspace.nav_focus = true;
                 model.dirty = true;
                 Vec::new()
             }
-            AgentDefaultStep::Model if model.agent_defaults.model_selected == 0 => {
-                model.agent_defaults.step = AgentDefaultStep::Provider;
-                model.dirty = true;
-                Vec::new()
-            }
-            AgentDefaultStep::Thinking => {
-                model.agent_defaults.step = AgentDefaultStep::Model;
+            ModelDefaultStep::Thinking => {
+                model.model_defaults.step = ModelDefaultStep::Model;
                 model.dirty = true;
                 Vec::new()
             }
@@ -2295,29 +2294,27 @@ fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
         }
         Input {
             key: Key::Enter, ..
-        } => advance_agent_defaults(model),
+        } => advance_model_defaults(model),
         _ => Vec::new(),
     }
 }
 
 fn move_agent_selection(model: &mut Model, direction: isize) {
-    let count = match model.agent_defaults.step {
-        AgentDefaultStep::Provider => model.profiles().profiles.len(),
-        AgentDefaultStep::Model => model
+    let count = match model.model_defaults.step {
+        ModelDefaultStep::Model => model
             .catalog
             .models()
             .iter()
             .filter(|summary| summary.selectable)
             .count(),
-        AgentDefaultStep::Thinking => AGENT_THINKING_LEVELS.len(),
+        ModelDefaultStep::Thinking => MODEL_THINKING_LEVELS.len(),
     };
     if count == 0 {
         return;
     }
-    let selected = match model.agent_defaults.step {
-        AgentDefaultStep::Provider => &mut model.agent_defaults.profile_selected,
-        AgentDefaultStep::Model => &mut model.agent_defaults.model_selected,
-        AgentDefaultStep::Thinking => &mut model.agent_defaults.thinking_selected,
+    let selected = match model.model_defaults.step {
+        ModelDefaultStep::Model => &mut model.model_defaults.model_selected,
+        ModelDefaultStep::Thinking => &mut model.model_defaults.thinking_selected,
     };
     *selected = selected
         .saturating_add_signed(direction)
@@ -2325,54 +2322,39 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
     model.dirty = true;
 }
 
-fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
-    match model.agent_defaults.step {
-        AgentDefaultStep::Provider => {
-            let Some(profile_id) = model
-                .profiles()
-                .profiles
-                .get(model.agent_defaults.profile_selected)
-                .map(|profile| profile.id.clone())
-            else {
-                return Vec::new();
-            };
-            model.agent_defaults.profile_id = Some(profile_id.clone());
-            model.agent_defaults.model_selected = 0;
-            model.agent_defaults.step = AgentDefaultStep::Model;
-            activate_profile(model, profile_id)
-        }
-        AgentDefaultStep::Model => {
+fn advance_model_defaults(model: &mut Model) -> Vec<UiEffect> {
+    match model.model_defaults.step {
+        ModelDefaultStep::Model => {
             let Some(summary) = model
                 .catalog
                 .models()
                 .iter()
                 .filter(|summary| summary.selectable)
-                .nth(model.agent_defaults.model_selected)
+                .nth(model.model_defaults.model_selected)
             else {
                 return Vec::new();
             };
-            model.agent_defaults.model = Some(summary.model.clone());
-            model.agent_defaults.thinking_selected = 0;
-            model.agent_defaults.step = if model_supports_thinking(summary) {
-                AgentDefaultStep::Thinking
+            model.model_defaults.model = Some(summary.model.clone());
+            model.model_defaults.step = if model_supports_thinking(summary) {
+                ModelDefaultStep::Thinking
             } else {
-                return persist_agent_default(model);
+                return persist_model_default(model);
             };
             model.dirty = true;
             Vec::new()
         }
-        AgentDefaultStep::Thinking => persist_agent_default(model),
+        ModelDefaultStep::Thinking => persist_model_default(model),
     }
 }
 
 fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
     summary
         .detail
-        .split(',')
-        .any(|detail| detail.trim() == "thinking")
+        .split(['|', ','])
+        .any(|detail| detail.trim().eq_ignore_ascii_case("thinking"))
 }
 
-const AGENT_THINKING_LEVELS: [&str; 7] = [
+const MODEL_THINKING_LEVELS: [&str; 7] = [
     "provider default",
     "none",
     "low",
@@ -2382,11 +2364,43 @@ const AGENT_THINKING_LEVELS: [&str; 7] = [
     "max",
 ];
 
-fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
-    let Some(profile_id) = model.agent_defaults.profile_id.clone() else {
+fn sync_model_default_selection(model: &mut Model) {
+    let default_model = model.profiles().user.default_model.as_deref();
+    let selectable = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .collect::<Vec<_>>();
+    let selected = default_model
+        .and_then(|model_id| {
+            selectable
+                .iter()
+                .position(|summary| summary.model.model_id().as_str() == model_id)
+        })
+        .unwrap_or(0)
+        .min(selectable.len().saturating_sub(1));
+    model.model_defaults.model_selected = selected;
+    model.model_defaults.model = selectable
+        .get(selected)
+        .map(|summary| summary.model.clone());
+    model.model_defaults.thinking_selected = MODEL_THINKING_LEVELS
+        .iter()
+        .position(|effort| effort.eq_ignore_ascii_case(model.profiles().user.default_mode.as_str()))
+        .unwrap_or(0);
+}
+
+fn persist_model_default(model: &mut Model) -> Vec<UiEffect> {
+    let Some(profile_id) = model
+        .profiles()
+        .profiles
+        .iter()
+        .find(|profile| profile.active)
+        .map(|profile| profile.id.clone())
+    else {
         return Vec::new();
     };
-    let Some(selected_model) = model.agent_defaults.model.clone() else {
+    let Some(selected_model) = model.model_defaults.model.clone() else {
         return Vec::new();
     };
     let request_id = model.allocate_request();
@@ -2397,15 +2411,15 @@ fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
             model: selected_model.clone(),
         },
     );
-    model.notice = Some(Notice::Info("Saving agent default...".to_owned()));
-    model.agent_defaults.step = AgentDefaultStep::Provider;
+    model.notice = Some(Notice::Info("Saving default model...".to_owned()));
+    model.model_defaults.step = ModelDefaultStep::Model;
     model.dirty = true;
     vec![UiEffect::Dispatch(UiIntent::SetProfileDefault {
         request_id,
         profile_id,
         model: selected_model,
-        reasoning_effort: AGENT_THINKING_LEVELS
-            .get(model.agent_defaults.thinking_selected)
+        reasoning_effort: MODEL_THINKING_LEVELS
+            .get(model.model_defaults.thinking_selected)
             .filter(|effort| **effort != "provider default")
             .map(|effort| (*effort).to_owned()),
     })]
@@ -3516,6 +3530,7 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.catalog = catalog;
     model.sync_catalog_retry_deadline();
     normalize_picker_selection(model);
+    sync_model_default_selection(model);
     if model.route() == Route::Chat
         && model.overlay().is_none()
         && !selected_model_available(model)

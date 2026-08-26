@@ -11,10 +11,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
+    AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelDefaultStep, ModelSummary,
     MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
-    ProviderProfileProjection, RetryPolicy, Route, SettingsPreference, TranscriptItem,
+    RetryPolicy, Route, SettingsPreference, TranscriptItem,
 };
 use crate::text::display_safe;
 
@@ -380,7 +380,7 @@ fn navigation_keys(model: &Model) -> &'static str {
     }
 }
 
-const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Agents"];
+const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Models"];
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -1474,7 +1474,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     match model.settings_workspace.nav_selected {
         1 => render_profile_center(frame, body, model),
         2 => render_settings_profile(frame, body, model),
-        3 => render_agent_defaults(frame, body, model),
+        3 => render_model_defaults(frame, body, model),
         _ => {}
     }
     if model.settings_workspace.nav_selected != 0 {
@@ -2423,7 +2423,7 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
     }
 }
 
-fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -2441,11 +2441,11 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         frame,
         rows[0],
         model,
-        "Agents",
-        "Choose the provider, model, and thinking defaults for every new session.",
+        "Models",
+        "Choose the model and thinking mode used by every new session.",
     );
     let inner = rows[1];
-    let step = model.agent_defaults.step;
+    let step = model.model_defaults.step;
     let step_chip = |label, candidate| {
         Span::styled(
             format!(" {label} "),
@@ -2458,51 +2458,39 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     };
     let mut lines = vec![
         Line::from(vec![
-            step_chip("1  PROVIDER", AgentDefaultStep::Provider),
+            step_chip("1  MODEL", ModelDefaultStep::Model),
             Span::raw("  "),
-            step_chip("2  MODEL", AgentDefaultStep::Model),
-            Span::raw("  "),
-            step_chip("3  THINKING", AgentDefaultStep::Thinking),
+            step_chip("2  THINKING", ModelDefaultStep::Thinking),
         ]),
         Line::from(""),
     ];
     match step {
-        AgentDefaultStep::Provider => {
-            lines.push(Line::styled(
-                "Choose the connected provider account",
-                visual_style(model, VisualRole::User),
-            ));
-            for (index, profile) in model.profiles().profiles.iter().enumerate() {
-                let selected = index == model.agent_defaults.profile_selected;
-                let prefix = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(
-                    format!(
-                        "{prefix} {}  {}",
+        ModelDefaultStep::Model => {
+            let active_profile = model
+                .profiles()
+                .profiles
+                .iter()
+                .find(|profile| profile.active);
+            if let Some(profile) = active_profile {
+                lines.push(Line::from(vec![
+                    Span::styled("Active profile  ", visual_style(model, VisualRole::Muted)),
+                    Span::styled(
                         display_safe(&profile.id),
-                        provider_connection_label(profile)
+                        visual_style(model, VisualRole::User),
                     ),
-                    style,
-                ));
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Current default ", visual_style(model, VisualRole::Muted)),
+                    Span::raw(display_safe(
+                        profile.default_model.as_deref().unwrap_or("Not set"),
+                    )),
+                    Span::styled("  Thinking  ", visual_style(model, VisualRole::Muted)),
+                    Span::raw(display_safe(&profile.default_mode)),
+                ]));
+                lines.push(Line::from(""));
             }
-            if model.profiles().profiles.is_empty() {
-                lines.push(Line::styled(
-                    "No connected accounts. Add one from Providers first.",
-                    visual_style(model, VisualRole::Muted),
-                ));
-            }
-        }
-        AgentDefaultStep::Model => {
             lines.push(Line::styled(
-                "Choose a compatible model",
+                "Select the default model",
                 visual_style(model, VisualRole::User),
             ));
             let mut selectable_count = 0;
@@ -2514,12 +2502,15 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 .enumerate()
             {
                 selectable_count += 1;
-                let selected = index == model.agent_defaults.model_selected;
+                let selected = index == model.model_defaults.model_selected;
                 let prefix = if selected {
                     selection_marker(model)
                 } else {
                     " "
                 };
+                let is_default = active_profile
+                    .and_then(|profile| profile.default_model.as_deref())
+                    == Some(summary.model.model_id().as_str());
                 let style = if selected {
                     visual_style(model, VisualRole::Selected)
                 } else {
@@ -2527,8 +2518,9 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 };
                 lines.push(Line::styled(
                     format!(
-                        "{prefix} {}  {}",
+                        "{prefix} {}{}  {}",
                         display_safe(&summary.display_name),
+                        if is_default { "  DEFAULT" } else { "" },
                         display_safe(&summary.detail)
                     ),
                     style,
@@ -2536,12 +2528,16 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             }
             if selectable_count == 0 {
                 lines.push(Line::styled(
-                    "Waiting for the selected provider's compatible model catalog.",
+                    if active_profile.is_some() {
+                        "Waiting for the active provider's compatible model catalog."
+                    } else {
+                        "Connect and activate a provider from the Providers tab first."
+                    },
                     visual_style(model, VisualRole::Muted),
                 ));
             }
         }
-        AgentDefaultStep::Thinking => {
+        ModelDefaultStep::Thinking => {
             lines.push(Line::styled(
                 "Thinking mode",
                 visual_style(model, VisualRole::User),
@@ -2558,7 +2554,7 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .iter()
             .enumerate()
             {
-                let selected = index == model.agent_defaults.thinking_selected;
+                let selected = index == model.model_defaults.thinking_selected;
                 let marker = if selected {
                     selection_marker(model)
                 } else {
@@ -2572,7 +2568,7 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 lines.push(Line::styled(format!("{marker} {effort}"), style));
             }
             lines.push(Line::styled(
-                "The chosen effort is saved with this provider default.",
+                "Enter saves this model and thinking mode as the new-session default.",
                 visual_style(model, VisualRole::Muted),
             ));
         }
@@ -2580,10 +2576,8 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     if help_height > 0 {
         frame.render_widget(
-            Paragraph::new(
-                "↑/↓ choose  Enter continue/save  Up return  Left/Right pages  Esc Settings",
-            )
-            .style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new("↑/↓ select  Enter continue/save  Esc Settings")
+                .style(visual_style(model, VisualRole::Muted)),
             rows[2],
         );
     }
@@ -2630,14 +2624,6 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .wrap(Wrap { trim: false }),
         area,
     );
-}
-
-fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static str {
-    match profile.kind {
-        ProviderKindLabel::Gemini => "Google AI Studio",
-        ProviderKindLabel::Router => "OpenAI-compatible",
-        ProviderKindLabel::CodexCli => "Codex subscription",
-    }
 }
 
 fn detail_line(model: &Model, label: &'static str, value: &str) -> Line<'static> {

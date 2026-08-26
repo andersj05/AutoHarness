@@ -1376,25 +1376,21 @@ pub(crate) struct ProfileCenterState {
     pub confirming_delete: Option<String>,
 }
 
-/// Step in the keyboard-first default-agent selection sequence.
+/// Step in the keyboard-first default-model selection sequence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum AgentDefaultStep {
-    /// Select a connected provider account.
-    #[default]
-    Provider,
+pub(crate) enum ModelDefaultStep {
     /// Select one compatible model from the active provider catalog.
+    #[default]
     Model,
-    /// Confirm the only currently portable thinking choice.
+    /// Select the provider-native thinking effort saved with the model.
     Thinking,
 }
 
-/// Local state for selecting the default agent provider, model, and thinking mode.
+/// Local state for selecting the active profile's default model and thinking mode.
 #[derive(Debug, Default)]
-pub(crate) struct AgentDefaultsState {
-    pub step: AgentDefaultStep,
-    pub profile_selected: usize,
+pub(crate) struct ModelDefaultsState {
+    pub step: ModelDefaultStep,
     pub model_selected: usize,
-    pub profile_id: Option<String>,
     pub model: Option<ModelRef>,
     pub thinking_selected: usize,
 }
@@ -1680,9 +1676,9 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: None,
     },
     CommandEntry {
-        id: "agents",
-        label: "Agents settings",
-        description: "Open the Agents tab in Settings",
+        id: "models",
+        label: "Default model",
+        description: "Choose the model and thinking mode for new sessions",
         key_hint: None,
     },
     CommandEntry {
@@ -1698,9 +1694,9 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Ctrl+N"),
     },
     CommandEntry {
-        id: "models",
-        label: "Models",
-        description: "Choose a model or save it as the active provider default",
+        id: "session-model",
+        label: "Session model",
+        description: "Choose the model used by the current session",
         key_hint: Some("Ctrl+P"),
     },
     CommandEntry {
@@ -2136,8 +2132,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
-    /// Keyboard-first connected-provider default agent selection state.
-    pub(crate) agent_defaults: AgentDefaultsState,
+    /// Keyboard-first active-profile model-default selection state.
+    pub(crate) model_defaults: ModelDefaultsState,
     /// Local user-profile dialog interaction state.
     pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
@@ -2251,7 +2247,7 @@ impl Model {
             startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
-            agent_defaults: AgentDefaultsState::default(),
+            model_defaults: ModelDefaultsState::default(),
             drafts: SessionDrafts::default(),
             user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),

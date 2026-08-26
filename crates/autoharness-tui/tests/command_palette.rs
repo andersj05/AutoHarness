@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, Notice, Route, SessionProjection,
-    SessionsProjection, UiEffect, UiIntent, update,
+    CatalogProjection, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
+    ModelSummary, Notice, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
+    ProviderKindLabel, ProviderProfileProjection, Route, SessionProjection, SessionsProjection,
+    UiEffect, UiIntent, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -17,7 +19,7 @@ fn catalog_ready() -> Arc<CatalogProjection> {
                 ModelId::new("models/gemini-2.5-pro").expect("model id"),
             ),
             display_name: "Gemini 2.5 Pro".to_owned(),
-            detail: String::new(),
+            detail: "text | thinking".to_owned(),
             selectable: true,
         }],
         stale: false,
@@ -47,6 +49,31 @@ fn empty_model() -> Model {
         Arc::new(SessionsProjection::default()),
         catalog_ready(),
     )
+}
+
+fn apply_active_profile(model: &mut Model) {
+    model.apply_profiles(Arc::new(ProfilesProjection {
+        user: LocalUserProfileProjection {
+            default_profile: Some("personal".to_owned()),
+            default_model: Some("models/gemini-2.5-pro".to_owned()),
+            default_mode: "high".to_owned(),
+            ..LocalUserProfileProjection::default()
+        },
+        profiles: vec![ProviderProfileProjection {
+            id: "personal".to_owned(),
+            kind: ProviderKindLabel::Gemini,
+            active: true,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+            credential_state: ProfileCredentialStateLabel::Stored,
+            credential_source: CredentialSourceLabel::CredentialVault,
+            connection: ProfileConnectionState::Ready,
+            default_model: Some("models/gemini-2.5-pro".to_owned()),
+            default_mode: "high".to_owned(),
+        }],
+        pending_recovery: 0,
+    }));
 }
 
 fn key_input(key: Key) -> Input {
@@ -119,10 +146,10 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
         "/sessions",
         "/profile",
         "/provider",
-        "/agents",
+        "/models",
         "/user",
         "/new",
-        "/models",
+        "/session-model",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
     }
@@ -162,7 +189,7 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("/profile  Profile settings"));
-    assert!(rendered.contains("/agents  Agents settings"));
+    assert!(rendered.contains("/models  Default model"));
     assert_eq!(rendered.matches("/profile").count(), 1);
     assert!(!rendered.contains("/profiles"));
 
@@ -397,15 +424,43 @@ fn profile_slash_command_matches_palette_route() {
 }
 
 #[test]
-fn agents_command_opens_the_integrated_settings_tab() {
+fn models_command_opens_the_integrated_default_model_tab() {
     let mut model = empty_model();
-    type_text(&mut model, "/agents");
+    type_text(&mut model, "/models");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("Agents"));
-    assert!(rendered.contains("1  PROVIDER"));
-    assert!(rendered.contains("2  MODEL"));
+    assert!(rendered.contains("Models"));
+    assert!(rendered.contains("1  MODEL"));
+    assert!(rendered.contains("2  THINKING"));
+}
+
+#[test]
+fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
+    let mut model = empty_model();
+    apply_active_profile(&mut model);
+    type_text(&mut model, "/models");
+    let _ = update(&mut model, Message::Input(enter()));
+
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Gemini 2.5 Pro  DEFAULT"));
+    assert!(rendered.contains("Thinking  high"));
+
+    assert!(update(&mut model, Message::Input(enter())).is_empty());
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Thinking mode"));
+    let effects = update(&mut model, Message::Input(enter()));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault {
+            profile_id,
+            model: selected,
+            reasoning_effort: Some(effort),
+            ..
+        })] if profile_id == "personal"
+            && selected == &pro_model()
+            && effort == "high"
+    ));
 }
 
 #[test]
