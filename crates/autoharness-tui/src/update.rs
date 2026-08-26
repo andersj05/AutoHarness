@@ -9,8 +9,8 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus,
-    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, ProfileCenterFocus,
-    PROVIDER_CHOICES, PendingKind, ProfileCredentialAction, ProfileCredentialEditor,
+    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PROVIDER_CHOICES,
+    PendingKind, ProfileCenterFocus, ProfileCredentialAction, ProfileCredentialEditor,
     ProfileEditorMode, ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
     ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT, SessionProjection,
     SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
@@ -602,7 +602,8 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 return Vec::new();
             }
             Input {
-                key: Key::Esc | Key::Up, ..
+                key: Key::Esc | Key::Up,
+                ..
             } => {
                 model.settings_workspace.nav_focus = true;
                 model.dirty = true;
@@ -1956,8 +1957,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 Vec::new()
             }
             Input { key: Key::Down, .. } => {
-                model.profile_center.auth_selected =
-                    (model.profile_center.auth_selected + 1) % 2;
+                model.profile_center.auth_selected = (model.profile_center.auth_selected + 1) % 2;
                 model.dirty = true;
                 Vec::new()
             }
@@ -1972,16 +1972,18 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 model.dirty = true;
                 Vec::new()
             }
-            Input { key: Key::Enter, .. }
-                if model.profile_center.auth_selected == 0 =>
-            {
+            Input {
+                key: Key::Enter, ..
+            } if model.profile_center.auth_selected == 0 => {
                 model.notice = Some(Notice::Info(
                     "Opening the official Codex browser sign-in...".to_owned(),
                 ));
                 model.dirty = true;
                 vec![UiEffect::LaunchCodexLogin]
             }
-            Input { key: Key::Enter, .. } => {
+            Input {
+                key: Key::Enter, ..
+            } => {
                 model.profile_center.auth_page = None;
                 open_provider_setup(model, ProviderKindLabel::CodexCli, "codex");
                 model.dirty = true;
@@ -2077,7 +2079,9 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         } if model.profile_center.focus == ProfileCenterFocus::ProviderChoices => {
             create_profile_editor(model)
         }
-        Input { key: Key::Enter, .. } => {
+        Input {
+            key: Key::Enter, ..
+        } => {
             let profile_id = model.profile_selection().map(str::to_owned);
             profile_id.map_or_else(Vec::new, |profile_id| activate_profile(model, profile_id))
         }

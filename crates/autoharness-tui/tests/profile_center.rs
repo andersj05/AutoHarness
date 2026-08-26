@@ -312,8 +312,8 @@ fn compact_profile_clicks_follow_rendered_content_rows() {
         Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
     );
     assert!(
-        (0..24).any(|row| hit_test(&model, 80, 24, 34, row)
-            == Some(MouseAction::ProfileDefaultModel))
+        (0..24)
+            .any(|row| hit_test(&model, 80, 24, 34, row) == Some(MouseAction::ProfileDefaultModel))
     );
     assert_eq!(hit_test(&model, 80, 24, 34, 19), None);
 }

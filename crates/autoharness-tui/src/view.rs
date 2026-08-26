@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
-    MouseAction, Notice, OverlayKind, ProfileCenterFocus, PROVIDER_CHOICES, PendingKind,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
     ProviderProfileProjection, RetryPolicy, Route, SettingsPreference, TranscriptItem,
 };
@@ -565,9 +565,7 @@ pub fn hit_test(
         {
             Some(MouseAction::OpenUserProfile)
         }
-        Route::Profiles
-            if provider_choice_at_row(model, content, column, row).is_some() =>
-        {
+        Route::Profiles if provider_choice_at_row(model, content, column, row).is_some() => {
             provider_choice_at_row(model, content, column, row)
         }
         Route::Profiles
@@ -774,12 +772,7 @@ fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
     Some((first, first.saturating_add(1)))
 }
 
-fn provider_choice_at_row(
-    model: &Model,
-    area: Rect,
-    column: u16,
-    row: u16,
-) -> Option<MouseAction> {
+fn provider_choice_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
     if model.profile_center.focus != ProfileCenterFocus::ProviderChoices {
         return None;
     }
@@ -2156,7 +2149,11 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(
             model,
             "Status",
-            if profile.active { "active" } else { "available" },
+            if profile.active {
+                "active"
+            } else {
+                "available"
+            },
         ),
         detail_line(model, "Connection", profile.connection.label()),
         detail_line(model, "Credential", profile.credential_state.as_str()),
