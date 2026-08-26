@@ -1051,6 +1051,86 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
 }
 
 #[test]
+fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
+    let mut model = Model::new(
+        session(14, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    for (theme, expected) in [
+        ("midnight", Color::Rgb(147, 197, 253)),
+        ("ocean", Color::Rgb(56, 189, 248)),
+        ("forest", Color::Rgb(134, 239, 172)),
+        ("rose", Color::Rgb(251, 113, 133)),
+    ] {
+        apply_visual_preferences(
+            &mut model,
+            VisualPreferences {
+                color_mode: "color",
+                theme,
+                glyph_mode: "unicode",
+                reduced_motion: false,
+                density: "comfortable",
+                layout: "responsive",
+                timestamp: "relative",
+            },
+        );
+        assert_eq!(
+            render_model(&model, 120, 40)
+                .buffer()
+                .cell((29, 1))
+                .expect("theme anchor")
+                .fg,
+            expected,
+            "theme {theme} must keep its own user accent"
+        );
+    }
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "soft",
+            theme: "ocean",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let soft = render_model(&model, 120, 40);
+    assert!(
+        soft.buffer()
+            .cell((29, 1))
+            .expect("soft theme anchor")
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "vivid",
+            theme: "ocean",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let vivid = render_model(&model, 120, 40);
+    assert!(
+        vivid
+            .buffer()
+            .cell((29, 1))
+            .expect("vivid theme anchor")
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+}
+
+#[test]
 fn prompt_bar_shows_safe_runtime_metadata() {
     let mut model = Model::new(
         session(13, Vec::new()),

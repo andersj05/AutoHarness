@@ -383,7 +383,22 @@ fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("←/→ page"));
+    assert!(rendered.contains("←/→ option"));
+}
+
+#[test]
+fn editable_settings_show_adjacent_values_as_a_scroll_wheel() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    for _ in 0..7 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("Theme preset"));
+    assert!(rendered.contains("‹ rose  [ system ]  light ›"));
+    assert!(rendered.contains("←/→ option"));
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {

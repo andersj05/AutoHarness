@@ -73,10 +73,11 @@ fn presentation(model: &Model) -> Presentation {
 }
 
 fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
-    let (background, header, selected, user, assistant, error, tool, warning, field) =
-        if theme == ThemePreset::Aurora {
-            (
+    let (background, normal, header, selected, user, assistant, error, tool, warning, field) =
+        match theme {
+            ThemePreset::Aurora => (
                 Color::Rgb(4, 15, 30),
+                Color::Rgb(224, 242, 254),
                 Color::Rgb(45, 212, 191),
                 Color::Rgb(129, 140, 248),
                 Color::Rgb(56, 189, 248),
@@ -85,10 +86,10 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
                 Color::Rgb(167, 139, 250),
                 Color::Rgb(250, 204, 21),
                 Color::Rgb(15, 35, 60),
-            )
-        } else {
-            (
+            ),
+            ThemePreset::Ember => (
                 Color::Rgb(26, 10, 10),
+                Color::Rgb(255, 241, 232),
                 Color::Rgb(251, 146, 60),
                 Color::Rgb(244, 63, 94),
                 Color::Rgb(253, 186, 116),
@@ -97,10 +98,61 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
                 Color::Rgb(232, 121, 249),
                 Color::Rgb(251, 146, 60),
                 Color::Rgb(62, 24, 20),
-            )
+            ),
+            ThemePreset::Midnight => (
+                Color::Rgb(3, 7, 18),
+                Color::Rgb(226, 232, 240),
+                Color::Rgb(96, 165, 250),
+                Color::Rgb(99, 102, 241),
+                Color::Rgb(147, 197, 253),
+                Color::Rgb(129, 140, 248),
+                Color::Rgb(248, 113, 113),
+                Color::Rgb(192, 132, 252),
+                Color::Rgb(250, 204, 21),
+                Color::Rgb(17, 24, 39),
+            ),
+            ThemePreset::Ocean => (
+                Color::Rgb(2, 20, 32),
+                Color::Rgb(224, 247, 250),
+                Color::Rgb(34, 211, 238),
+                Color::Rgb(14, 165, 233),
+                Color::Rgb(56, 189, 248),
+                Color::Rgb(45, 212, 191),
+                Color::Rgb(251, 113, 133),
+                Color::Rgb(103, 232, 249),
+                Color::Rgb(253, 224, 71),
+                Color::Rgb(8, 47, 73),
+            ),
+            ThemePreset::Forest => (
+                Color::Rgb(7, 20, 13),
+                Color::Rgb(236, 253, 245),
+                Color::Rgb(74, 222, 128),
+                Color::Rgb(34, 197, 94),
+                Color::Rgb(134, 239, 172),
+                Color::Rgb(45, 212, 191),
+                Color::Rgb(251, 113, 133),
+                Color::Rgb(163, 230, 53),
+                Color::Rgb(251, 191, 36),
+                Color::Rgb(20, 48, 31),
+            ),
+            ThemePreset::Rose => (
+                Color::Rgb(29, 8, 20),
+                Color::Rgb(255, 241, 246),
+                Color::Rgb(244, 114, 182),
+                Color::Rgb(236, 72, 153),
+                Color::Rgb(251, 113, 133),
+                Color::Rgb(232, 121, 249),
+                Color::Rgb(251, 113, 133),
+                Color::Rgb(216, 180, 254),
+                Color::Rgb(253, 186, 116),
+                Color::Rgb(66, 20, 45),
+            ),
+            ThemePreset::System | ThemePreset::Light | ThemePreset::Dark => {
+                unreachable!("base themes use dedicated palettes")
+            }
         };
     match role {
-        VisualRole::Normal => Style::new().fg(Color::Rgb(255, 241, 232)).bg(background),
+        VisualRole::Normal => Style::new().fg(normal).bg(background),
         VisualRole::Header => Style::new()
             .fg(Color::Rgb(8, 12, 24))
             .bg(header)
@@ -131,109 +183,125 @@ fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
 fn visual_style(model: &Model, role: VisualRole) -> Style {
     let presentation = presentation(model);
     let style = match presentation.color_mode {
-        ColorMode::Color => match presentation.theme {
-            ThemePreset::System => match role {
-                VisualRole::Normal => Style::new()
-                    .fg(Color::Rgb(226, 232, 240))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Header => Style::new()
-                    .fg(Color::Rgb(5, 10, 20))
-                    .bg(Color::Rgb(34, 211, 238))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Selected => Style::new()
-                    .fg(Color::Rgb(8, 12, 24))
-                    .bg(Color::Rgb(167, 139, 250))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Muted | VisualRole::Border => Style::new()
-                    .fg(Color::Rgb(100, 116, 139))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::User => Style::new()
-                    .fg(Color::Rgb(96, 165, 250))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Assistant => Style::new()
-                    .fg(Color::Rgb(45, 212, 191))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Error => Style::new()
-                    .fg(Color::Rgb(251, 113, 133))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Tool => Style::new()
-                    .fg(Color::Rgb(192, 132, 252))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Warning => Style::new()
-                    .fg(Color::Rgb(251, 191, 36))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Field => Style::new()
-                    .fg(Color::Rgb(226, 232, 240))
-                    .bg(Color::Rgb(30, 41, 59)),
-            },
-            ThemePreset::Light => match role {
-                VisualRole::Normal => Style::new().fg(Color::Black).bg(Color::White),
-                VisualRole::Header | VisualRole::Selected => Style::new()
-                    .fg(Color::White)
-                    .bg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Muted | VisualRole::Border => {
-                    Style::new().fg(Color::DarkGray).bg(Color::White)
+        ColorMode::Color | ColorMode::Soft | ColorMode::Vivid => {
+            let style = match presentation.theme {
+                ThemePreset::System => match role {
+                    VisualRole::Normal => Style::new()
+                        .fg(Color::Rgb(226, 232, 240))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Header => Style::new()
+                        .fg(Color::Rgb(5, 10, 20))
+                        .bg(Color::Rgb(34, 211, 238))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Selected => Style::new()
+                        .fg(Color::Rgb(8, 12, 24))
+                        .bg(Color::Rgb(167, 139, 250))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Muted | VisualRole::Border => Style::new()
+                        .fg(Color::Rgb(100, 116, 139))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::User => Style::new()
+                        .fg(Color::Rgb(96, 165, 250))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Assistant => Style::new()
+                        .fg(Color::Rgb(45, 212, 191))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Error => Style::new()
+                        .fg(Color::Rgb(251, 113, 133))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Tool => Style::new()
+                        .fg(Color::Rgb(192, 132, 252))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Warning => Style::new()
+                        .fg(Color::Rgb(251, 191, 36))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Field => Style::new()
+                        .fg(Color::Rgb(226, 232, 240))
+                        .bg(Color::Rgb(30, 41, 59)),
+                },
+                ThemePreset::Light => match role {
+                    VisualRole::Normal => Style::new().fg(Color::Black).bg(Color::White),
+                    VisualRole::Header | VisualRole::Selected => Style::new()
+                        .fg(Color::White)
+                        .bg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Muted | VisualRole::Border => {
+                        Style::new().fg(Color::DarkGray).bg(Color::White)
+                    }
+                    VisualRole::User => Style::new()
+                        .fg(Color::Blue)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Assistant => Style::new()
+                        .fg(Color::Cyan)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Error => Style::new()
+                        .fg(Color::Red)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Tool | VisualRole::Warning => {
+                        Style::new().fg(Color::Yellow).bg(Color::White)
+                    }
+                    VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
+                },
+                ThemePreset::Dark => match role {
+                    VisualRole::Normal => Style::new()
+                        .fg(Color::Rgb(226, 232, 240))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Header => Style::new()
+                        .fg(Color::Rgb(5, 10, 20))
+                        .bg(Color::Rgb(34, 211, 238))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Selected => Style::new()
+                        .fg(Color::Rgb(8, 12, 24))
+                        .bg(Color::Rgb(167, 139, 250))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Muted | VisualRole::Border => Style::new()
+                        .fg(Color::Rgb(100, 116, 139))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::User => Style::new()
+                        .fg(Color::Rgb(96, 165, 250))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Assistant => Style::new()
+                        .fg(Color::Rgb(45, 212, 191))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Error => Style::new()
+                        .fg(Color::Rgb(251, 113, 133))
+                        .bg(Color::Rgb(8, 12, 24))
+                        .add_modifier(Modifier::BOLD),
+                    VisualRole::Tool => Style::new()
+                        .fg(Color::Rgb(192, 132, 252))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Warning => Style::new()
+                        .fg(Color::Rgb(251, 191, 36))
+                        .bg(Color::Rgb(8, 12, 24)),
+                    VisualRole::Field => Style::new()
+                        .fg(Color::Rgb(226, 232, 240))
+                        .bg(Color::Rgb(30, 41, 59)),
+                },
+                ThemePreset::Aurora
+                | ThemePreset::Ember
+                | ThemePreset::Midnight
+                | ThemePreset::Ocean
+                | ThemePreset::Forest
+                | ThemePreset::Rose => extra_theme_style(presentation.theme, role),
+            };
+            match presentation.color_mode {
+                ColorMode::Soft if !matches!(role, VisualRole::Header | VisualRole::Selected) => {
+                    style.add_modifier(Modifier::DIM)
                 }
-                VisualRole::User => Style::new()
-                    .fg(Color::Blue)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Assistant => Style::new()
-                    .fg(Color::Cyan)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Error => Style::new()
-                    .fg(Color::Red)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Tool | VisualRole::Warning => {
-                    Style::new().fg(Color::Yellow).bg(Color::White)
+                ColorMode::Vivid if !matches!(role, VisualRole::Muted | VisualRole::Border) => {
+                    style.add_modifier(Modifier::BOLD)
                 }
-                VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
-            },
-            ThemePreset::Dark => match role {
-                VisualRole::Normal => Style::new()
-                    .fg(Color::Rgb(226, 232, 240))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Header => Style::new()
-                    .fg(Color::Rgb(5, 10, 20))
-                    .bg(Color::Rgb(34, 211, 238))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Selected => Style::new()
-                    .fg(Color::Rgb(8, 12, 24))
-                    .bg(Color::Rgb(167, 139, 250))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Muted | VisualRole::Border => Style::new()
-                    .fg(Color::Rgb(100, 116, 139))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::User => Style::new()
-                    .fg(Color::Rgb(96, 165, 250))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Assistant => Style::new()
-                    .fg(Color::Rgb(45, 212, 191))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Error => Style::new()
-                    .fg(Color::Rgb(251, 113, 133))
-                    .bg(Color::Rgb(8, 12, 24))
-                    .add_modifier(Modifier::BOLD),
-                VisualRole::Tool => Style::new()
-                    .fg(Color::Rgb(192, 132, 252))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Warning => Style::new()
-                    .fg(Color::Rgb(251, 191, 36))
-                    .bg(Color::Rgb(8, 12, 24)),
-                VisualRole::Field => Style::new()
-                    .fg(Color::Rgb(226, 232, 240))
-                    .bg(Color::Rgb(30, 41, 59)),
-            },
-            ThemePreset::Aurora | ThemePreset::Ember => extra_theme_style(presentation.theme, role),
-        },
+                _ => style,
+            }
+        }
         ColorMode::NoColor => match role {
             VisualRole::Header | VisualRole::Selected | VisualRole::Field => {
                 Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
@@ -1493,12 +1561,14 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         content,
     );
     if help_height > 0 {
+        let controls = if model.settings_workspace.nav_focus {
+            "←/→ page  Down open  Esc Chat"
+        } else {
+            "↑/↓ setting  ←/→ option  Enter edit  R inherit  D reset  Up return"
+        };
         frame.render_widget(
-            Paragraph::new(format!(
-                "{} ←/→ page  ↑/↓ choose  Enter edit  R inherit  D reset  Esc Chat",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new(format!("{} {controls}", navigation_keys(model)))
+                .style(visual_style(model, VisualRole::Muted)),
             page_rows[2],
         );
     }
@@ -1732,6 +1802,11 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
     };
     let selected = !model.settings_workspace.nav_focus
         && SettingsPreference::at(model.settings_workspace.selected) == preference;
+    let value = if selected {
+        settings_preference_wheel(model, preference).unwrap_or(value)
+    } else {
+        value
+    };
     let marker = if selected {
         selection_marker(model)
     } else {
@@ -1751,6 +1826,95 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
         format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
         style,
     )
+}
+
+fn wheel_value<T: Copy + PartialEq>(
+    current: T,
+    values: &[T],
+    label: fn(T) -> &'static str,
+) -> String {
+    let index = values
+        .iter()
+        .position(|candidate| *candidate == current)
+        .unwrap_or_default();
+    let previous = values[index.checked_sub(1).unwrap_or(values.len() - 1)];
+    let next = values[(index + 1) % values.len()];
+    format!(
+        "‹ {}  [ {} ]  {} ›",
+        label(previous),
+        label(current),
+        label(next)
+    )
+}
+
+fn settings_preference_wheel(model: &Model, preference: SettingsPreference) -> Option<String> {
+    let preferences = model.settings().local_profile.preferences();
+    match preference {
+        SettingsPreference::ThemePreset => Some(wheel_value(
+            *preferences.theme_preset().value(),
+            &[
+                ThemePreset::System,
+                ThemePreset::Light,
+                ThemePreset::Dark,
+                ThemePreset::Aurora,
+                ThemePreset::Ember,
+                ThemePreset::Midnight,
+                ThemePreset::Ocean,
+                ThemePreset::Forest,
+                ThemePreset::Rose,
+            ],
+            theme_preset_label,
+        )),
+        SettingsPreference::ColorMode => Some(wheel_value(
+            *preferences.color_mode().value(),
+            &[
+                ColorMode::Color,
+                ColorMode::Soft,
+                ColorMode::Vivid,
+                ColorMode::NoColor,
+                ColorMode::HighContrast,
+            ],
+            color_mode_label,
+        )),
+        SettingsPreference::GlyphMode => Some(wheel_value(
+            *preferences.glyph_mode().value(),
+            &[GlyphMode::Unicode, GlyphMode::Ascii],
+            glyph_mode_label,
+        )),
+        SettingsPreference::ReducedMotion => Some(wheel_value(
+            *preferences.reduced_motion().value(),
+            &[false, true],
+            bool_label,
+        )),
+        SettingsPreference::Density => Some(wheel_value(
+            *preferences.density().value(),
+            &[Density::Comfortable, Density::Compact],
+            density_label,
+        )),
+        SettingsPreference::Layout => Some(wheel_value(
+            *preferences.layout().value(),
+            &[PreferenceLayout::Responsive, PreferenceLayout::SingleColumn],
+            layout_label,
+        )),
+        SettingsPreference::TerminalTimestampStyle => Some(wheel_value(
+            *preferences.terminal_timestamp_style().value(),
+            &[
+                TerminalTimestampStyle::Relative,
+                TerminalTimestampStyle::Absolute,
+                TerminalTimestampStyle::Hidden,
+            ],
+            timestamp_style_label,
+        )),
+        SettingsPreference::ComposerSubmitBehavior => Some(wheel_value(
+            *preferences.composer_submit_behavior().value(),
+            &[
+                ComposerSubmitBehavior::ControlS,
+                ComposerSubmitBehavior::Enter,
+            ],
+            composer_submit_label,
+        )),
+        _ => None,
+    }
 }
 
 fn settings_preference_label(preference: SettingsPreference) -> &'static str {
@@ -1802,12 +1966,18 @@ fn theme_preset_label(value: ThemePreset) -> &'static str {
         ThemePreset::Dark => "dark",
         ThemePreset::Aurora => "aurora",
         ThemePreset::Ember => "ember",
+        ThemePreset::Midnight => "midnight",
+        ThemePreset::Ocean => "ocean",
+        ThemePreset::Forest => "forest",
+        ThemePreset::Rose => "rose",
     }
 }
 
 fn color_mode_label(value: ColorMode) -> &'static str {
     match value {
         ColorMode::Color => "color",
+        ColorMode::Soft => "soft",
+        ColorMode::Vivid => "vivid",
         ColorMode::NoColor => "no color",
         ColorMode::HighContrast => "high contrast",
     }
