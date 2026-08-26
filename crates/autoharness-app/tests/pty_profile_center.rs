@@ -19,15 +19,8 @@ const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 #[cfg(windows)]
 #[test]
 #[ignore = "runs in the Windows terminal PTY CI gate"]
-fn unavailable_saved_codex_provider_keeps_recovery_ui_open() {
-    let mut environment = ScenarioEnvironment::prepare();
-    let unavailable_codex = environment.data_dir().join("codex.exe");
-    std::fs::create_dir(&unavailable_codex).expect("unlaunchable Codex path");
-    environment.insert(
-        "AUTOHARNESS_CODEX_EXECUTABLE",
-        unavailable_codex.as_os_str(),
-    );
-
+fn saved_codex_profile_without_login_keeps_recovery_ui_open() {
+    let environment = ScenarioEnvironment::prepare();
     let store = ProfileStore::open(&environment.profiles_document()).expect("profile store");
     let manager = ProfileManager::new(store, Arc::new(FakeVault::new()));
     let profile_id = ProfileId::new("codex-subscription").expect("profile ID");
@@ -42,9 +35,9 @@ fn unavailable_saved_codex_provider_keeps_recovery_ui_open() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("CONNECTION ERROR") && text.contains("provider")
+            text.contains("OFFLINE") && text.contains("credential")
         },
-        "a Codex probe failure should render a recoverable app state",
+        "a Codex profile without login should render a recoverable app state",
     );
 
     terminal.send_bytes(&CTRL_G);
@@ -56,7 +49,7 @@ fn unavailable_saved_codex_provider_keeps_recovery_ui_open() {
                 && text.contains("Codex")
                 && text.contains("Claude Code")
         },
-        "provider recovery should remain reachable after a Codex probe failure",
+        "provider recovery should remain reachable without a Codex login",
     );
 
     terminal.send_bytes(&ctrl_c());
@@ -71,13 +64,7 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
     let mut environment = environment;
     #[cfg(windows)]
     {
-        let fake_codex = environment.data_dir().join("codex.cmd");
-        std::fs::write(
-            &fake_codex,
-            "@echo off\r\nif \"%~2\"==\"status\" exit /b 1\r\nif \"%~1\"==\"login\" (\r\n  type nul > \"%AUTOHARNESS_DATA_DIR%\\codex-login-launched\"\r\n  echo https://auth.openai.com/oauth/authorize?state=pty-fixture\r\n  ping 127.0.0.1 -n 3 > nul\r\n)\r\n",
-        )
-        .expect("write fake Codex CLI");
-        environment.insert("AUTOHARNESS_CODEX_EXECUTABLE", fake_codex.as_os_str());
+        environment.insert("AUTOHARNESS_BROWSER_EXECUTABLE", "where.exe");
     }
     let mut terminal = PtySession::start(&environment, 30, 100);
 
@@ -114,14 +101,10 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
             |screen| screen.contents().contains("Browser opened"),
             "Codex login should be dispatched from the real terminal",
         );
-        let marker = environment.data_dir().join("codex-login-launched");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(
-            marker.exists(),
-            "the Codex login subprocess should receive 'login'"
+        terminal.send_bytes(&[0x1b]);
+        terminal.wait_for(
+            |screen| !screen.contents().contains("Sign in to Codex"),
+            "Escape should cancel the pending browser sign-in",
         );
     }
 

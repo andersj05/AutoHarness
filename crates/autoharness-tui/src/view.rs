@@ -2079,7 +2079,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let subtitle = if compact {
         "Add or manage provider connections."
     } else {
-        "Add a provider on the left. Review saved connections on the right."
+        "Choose a provider on the left. Manage connected providers on the right."
     };
     render_settings_page_header(frame, rows[0], model, "Providers", subtitle);
     let (list_area, detail_area) = profile_list_detail_areas(rows[1], model);
@@ -2256,8 +2256,19 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         })
         .collect::<Vec<_>>();
     lines.push(Line::from(""));
+    let credential_stored = matches!(
+        profile.credential_state,
+        crate::model::ProfileCredentialStateLabel::Stored
+    );
     let (sign_in, managed_by) = if profile.kind == ProviderKindLabel::CodexCli {
-        ("ChatGPT browser login", "AutoHarness + OS vault")
+        (
+            "ChatGPT browser",
+            if credential_stored {
+                "operating-system vault"
+            } else {
+                "not connected"
+            },
+        )
     } else {
         (
             "API key",
@@ -2274,10 +2285,16 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(
             model,
             "Status",
-            if profile.active { "active" } else { "saved" },
+            if profile.active && credential_stored {
+                "active"
+            } else if profile.active {
+                "selected - sign-in required"
+            } else {
+                "saved"
+            },
         ),
         detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Authentication", sign_in),
+        detail_line(model, "Sign-in", sign_in),
         detail_line(model, "Credential", managed_by),
         detail_line(
             model,

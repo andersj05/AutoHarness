@@ -1,5 +1,5 @@
 use std::fmt::{self, Debug, Formatter};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use autoharness_domain::RetryAdvice;
@@ -359,8 +359,25 @@ async fn write_callback_response(stream: &mut TcpStream, success: bool) {
 }
 
 fn open_browser(url: &str) -> std::io::Result<()> {
+    if let Some(program) =
+        std::env::var_os("AUTOHARNESS_BROWSER_EXECUTABLE").filter(|program| !program.is_empty())
+    {
+        return Command::new(program)
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ());
+    }
     let (program, arguments) = browser_command(url);
-    Command::new(program).args(arguments).spawn().map(|_| ())
+    Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 #[cfg(target_os = "windows")]
