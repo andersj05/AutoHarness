@@ -3,7 +3,7 @@
 **Status:** Current settings, credential, and local-preference contract through Phase 3.8.
 
 This document describes how AutoHarness resolves settings, stores provider profiles and local preferences, and handles credentials.
-The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault, [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution, and [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md) for cross-system mutation recovery.
+The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault, [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution, [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md) for cross-system mutation recovery, and [ADR-0015](../adr/0015-use-native-codex-subscription-adapter.md) for native Codex subscription authentication.
 
 ## Layered settings resolution
 
@@ -57,7 +57,7 @@ A profile is a named record containing:
 - Non-secret connection fields such as the router base URL, project identity, authentication header name, and relative endpoint paths.
 - An optional default model identifier.
 - An optional provider-native default reasoning effort.
-- An optional opaque credential reference for API-key providers.
+- An optional opaque credential reference for providers with persisted credentials.
 
 Profile names are validated, bounded values (`ProfileId`), as are references (`CredentialReference`).
 References never contain credential material; they only name a vault entry such as `autoharness/profile/<profile>`.
@@ -67,17 +67,16 @@ References never contain credential material; they only name a vault entry such 
 At launch the application resolves exactly one effective credential source:
 
 1. **Environment:** `GEMINI_API_KEY` or `AUTOHARNESS_ROUTER_API_KEY` wins outright for managed API-key launches.
-2. **Credential vault:** the active API-key profile's reference is resolved through the operating-system vault.
+2. **Credential vault:** the active profile's reference is resolved through the operating-system vault.
 3. **Session-only:** nothing persisted applies; the user may paste a key per session under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
 
-The `codex_cli` provider is different.
-It uses only the user's authenticated official Codex CLI session and never reads, stores, or accepts Codex subscription tokens.
-The Providers wizard checks the official CLI session, launches `codex login` directly when authentication is needed, and saves and checks the non-secret profile automatically after sign-in.
-If the CLI readiness probe is temporarily unavailable during startup, AutoHarness keeps the terminal open with provider recovery still reachable.
+The `codex_cli` identifier is retained for settings compatibility, but the provider no longer requires an installed Codex CLI.
+The Providers wizard starts a native PKCE browser flow, receives the bounded loopback callback, stores one opaque OAuth payload in the operating-system vault, and activates the resulting Codex profile automatically.
+The adapter refreshes expiring credentials into the same vault entry and keeps token material in zeroizing process memory.
 
 A missing or locked vault entry degrades to session-only operation rather than blocking offline use.
 AutoHarness never creates its own encrypted fallback store.
-The effective source is displayed in safe terms in both the `Ctrl+,` provenance overlay and the Connected Accounts workspace.
+The effective source is displayed in safe terms in both the `Ctrl+,` provenance overlay and the Connected Providers workspace.
 
 ## Credential-vault port
 
@@ -86,7 +85,8 @@ The effective source is displayed in safe terms in both the `Ctrl+,` provenance 
 - `KeyringVault`: Windows Credential Manager, macOS Keychain, and Linux Secret Service through the `keyring` crate, namespaced under the service name `AutoHarness`.
 - `FakeVault`: an in-process implementation for tests.
 
-Secrets are validated (non-empty, bounded at 4096 bytes, visible ASCII) before storage and returned in zeroizing strings.
+Secrets are validated (non-empty, bounded at 32768 bytes, visible ASCII) before storage and returned in zeroizing strings.
+The operating-system adapter stores oversized opaque payloads as generation-scoped bounded chunks behind one manifest entry so Windows Credential Manager limits do not leak into the provider contract.
 Vault errors never include secret material.
 
 ## Profile management boundary
@@ -99,9 +99,9 @@ It lists Gemini, Google AI Studio API, Cursor, Codex, Claude Code, and OpenAI-co
 Gemini opens the named API-key setup form.
 Google AI Studio API creates its non-secret Gemini profile and then opens the existing masked credential dialog, storing the pasted key only through the operating-system vault rather than a plaintext `.env` file.
 Codex opens a dedicated browser-login wizard with one sign-in action.
-AutoHarness first checks `codex login status`, connects immediately when a valid ChatGPT session already exists, or otherwise runs the official `codex login` process directly and keeps it alive for the browser callback.
-Successful authentication stores only a non-secret profile before the provider rechecks the CLI session under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
-The login process can be cancelled from the TUI and safe failure copy directs the user to the same official command without claiming that a browser opened when launch failed.
+Pressing Enter opens the default browser directly without requiring a `codex` executable.
+Successful authentication stores the opaque token payload in the operating-system vault, writes only the profile's opaque reference to settings, activates the profile, and loads the native Codex catalog under [ADR-0015](../adr/0015-use-native-codex-subscription-adapter.md).
+The login can be cancelled from the TUI, stale callback results are ignored, and safe failure copy never claims that a browser opened when launch failed.
 Cursor and Claude Code choices name their official CLI login commands but remain unavailable until equivalent repository-owned process adapters exist, rather than claiming a saved or invokable account.
 The Agents workspace selects a connected provider, then a compatible model, then a validated reasoning effort when the catalog positively advertises thinking support.
 The selected model and effort are persisted together, and a newly created session durably selects that model before its first session projection is published.

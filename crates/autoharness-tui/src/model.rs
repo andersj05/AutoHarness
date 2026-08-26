@@ -1346,7 +1346,7 @@ pub(crate) enum ProfileCenterFocus {
     ConnectedProfiles,
 }
 
-/// Observable state of the official Codex CLI authentication handoff.
+/// Observable state of the native Codex browser authentication handoff.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum CodexLoginState {
     /// No login process is running.
@@ -1779,7 +1779,7 @@ pub enum ProviderKindLabel {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
-    /// User-owned official Codex CLI subscription session.
+    /// User-owned Codex subscription session.
     CodexCli,
 }
 
