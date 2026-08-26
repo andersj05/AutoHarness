@@ -1745,10 +1745,9 @@ impl Coordinator {
             .codex_login
             .as_ref()
             .is_some_and(|(active_request, _)| *active_request == request_id)
+            && let Some((_, cancellation)) = self.codex_login.take()
         {
-            if let Some((_, cancellation)) = self.codex_login.take() {
-                cancellation.cancel();
-            }
+            cancellation.cancel();
         }
         self.commit(request_id).await
     }
