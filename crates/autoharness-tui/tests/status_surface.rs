@@ -81,8 +81,9 @@ fn buffer_text(backend: &TestBackend) -> String {
 fn chat_surface_uses_compact_transparent_composer_metadata() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("model:Gemini 2.5 Pro"));
     assert!(rendered.contains("think:"));
-    assert!(rendered.contains("path:/workspace"));
+    assert!(rendered.contains("path:."));
     assert!(rendered.contains("Profile"));
     assert!(rendered.contains("Settings"));
     assert!(!rendered.contains("AutoHarness  |"));
@@ -95,7 +96,7 @@ fn chat_surface_omits_provider_status_chrome() {
     let rendered = buffer_text(&render_model(&model, 120, 40));
     assert!(!rendered.contains("gemini (default)"));
     assert!(!rendered.contains("session only"));
-    assert!(rendered.contains("path:/workspace"));
+    assert!(rendered.contains("path:."));
 }
 
 #[test]
@@ -158,8 +159,9 @@ fn narrow_chat_keeps_prompt_metadata_without_status_header() {
     let model = empty_model(SettingsProjection::default());
 
     let rendered = buffer_text(&render_model(&model, 40, 12));
+    assert!(rendered.contains("model:Gemini"));
     assert!(rendered.contains("think:"));
-    assert!(rendered.contains("path:/"));
+    assert!(!rendered.contains("path:"));
     assert!(!rendered.contains("AutoHarness  |"));
 
     let tiny = buffer_text(&render_model(&model, 24, 7));

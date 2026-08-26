@@ -1182,8 +1182,8 @@ fn prompt_bar_shows_safe_runtime_metadata() {
         ..SettingsProjection::default()
     }));
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("think:standard"));
-    assert!(rendered.contains("path:/autoharness"));
-    assert!(!rendered.contains("git:feat/prompt-bar"));
-    assert!(!rendered.contains("model:"));
+    assert!(rendered.contains("model:Gemini 2.5 Pro"));
+    assert!(rendered.contains("think:deliber"));
+    assert!(rendered.contains(r"path:C:\work\autoh"));
+    assert!(rendered.contains("git:feat/prompt-b"));
 }

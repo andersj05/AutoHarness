@@ -1714,9 +1714,13 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
         ),
         SettingsPreference::Mode => (
             "Thinking",
-            thinking_label(model).to_owned(),
-            "model",
-            "capability advertised by the selected model",
+            if model.profiles().user.default_mode.is_empty() {
+                "provider default".to_owned()
+            } else {
+                model.profiles().user.default_mode.clone()
+            },
+            "profile",
+            "new-session thinking default",
         ),
         SettingsPreference::Approvals => (
             "Approvals",
@@ -2934,47 +2938,69 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 
-fn thinking_label(model: &Model) -> &'static str {
+fn selected_model_name(model: &Model) -> String {
     let Some(selected) = model.session.selected_model.as_ref() else {
-        return "unknown";
+        return "not selected".to_owned();
     };
     model
         .catalog
         .models()
         .iter()
         .find(|summary| &summary.model == selected)
-        .map(|summary| {
-            if summary
-                .detail
-                .split('|')
-                .any(|part| part.trim() == "thinking")
-            {
-                "supported"
-            } else {
-                "standard"
-            }
-        })
-        .unwrap_or("unknown")
+        .map_or_else(
+            || selected.model_id().as_str().to_owned(),
+            |summary| summary.display_name.clone(),
+        )
 }
 
-fn workspace_path_label(workspace: &str) -> String {
-    format!("/{}", workspace_label(workspace))
-}
-
-fn prompt_metadata_line(model: &Model) -> Line<'static> {
-    let user = &model.profiles().user;
-    Line::from(vec![
-        Span::styled(" think:", chat_visual_style(model, VisualRole::Muted)),
-        Span::styled(
-            thinking_label(model),
-            chat_visual_style(model, VisualRole::Assistant),
-        ),
-        Span::styled("  path:", chat_visual_style(model, VisualRole::Muted)),
-        Span::styled(
-            workspace_path_label(&user.workspace),
-            chat_visual_style(model, VisualRole::User),
-        ),
-    ])
+fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut push_chip = |label: &'static str, value: String, role: VisualRole| {
+        if !spans.is_empty() {
+            spans.push(Span::styled(
+                "  ",
+                chat_visual_style(model, VisualRole::Muted),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("{label}:"),
+            chat_visual_style(model, VisualRole::Muted),
+        ));
+        spans.push(Span::styled(value, chat_visual_style(model, role)));
+    };
+    let model_width = if width >= 64 { 16 } else { 14 };
+    push_chip(
+        "model",
+        single_line_label(&selected_model_name(model), model_width),
+        VisualRole::Assistant,
+    );
+    if width >= 34 {
+        let mode = model.profiles().user.default_mode.trim();
+        let mode = if mode.is_empty() || mode.eq_ignore_ascii_case("provider default") {
+            "default"
+        } else {
+            mode
+        };
+        push_chip(
+            "think",
+            single_line_label(mode, if width >= 64 { 8 } else { 10 }),
+            VisualRole::User,
+        );
+    }
+    if width >= 64 {
+        let workspace = model.profiles().user.workspace.trim();
+        push_chip(
+            "path",
+            single_line_label(if workspace.is_empty() { "." } else { workspace }, 14),
+            VisualRole::Normal,
+        );
+    }
+    if width >= 84
+        && let Some(branch) = model.settings().git_branch.as_deref()
+    {
+        push_chip("git", single_line_label(branch, 14), VisualRole::Normal);
+    }
+    Line::from(spans)
 }
 
 fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2996,7 +3022,7 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     let metadata = Rect::new(inner.x, inner.y, inner.width, 1);
     frame.render_widget(
-        Paragraph::new(prompt_metadata_line(model))
+        Paragraph::new(prompt_metadata_line(model, inner.width))
             .style(chat_visual_style(model, VisualRole::Normal)),
         metadata,
     );

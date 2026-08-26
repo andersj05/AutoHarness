@@ -6,7 +6,7 @@
 │rate_limited | Ctrl+R retry | Ctrl+N  │
 │new | ref attempt-2                   │
 ╭──────────────────────────────────────╮
-│ think:standard  path:/workspace      │
+│model:Gemini 2.5 Pro  think:default   │
 │❯ Keep the checklist concise.         │
 ╰──────────────────────────────────────╯
  Profile  |  Settings
