@@ -29,6 +29,7 @@ const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_CLIENT_ORIGINATOR: &str = "codex_cli_rs";
 const CODEX_PROTOCOL_VERSION: &str = "0.150.0";
 const CODEX_USER_AGENT: &str = "codex_cli_rs/0.150.0";
+const RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
@@ -231,17 +232,36 @@ impl Chat for CodexProvider {
 #[derive(Serialize)]
 struct CodexRequest<'a> {
     model: &'a str,
-    input: [CodexInput<'a>; 1],
+    input: [CodexInputItem<'a>; 3],
     instructions: &'static str,
     stream: bool,
     store: bool,
     include: [&'static str; 1],
+    tool_choice: &'static str,
+    parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<CodexReasoning<'a>>,
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
+enum CodexInputItem<'a> {
+    AdditionalTools(CodexAdditionalTools),
+    Message(CodexInput<'a>),
+}
+
+#[derive(Serialize)]
+struct CodexAdditionalTools {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    role: &'static str,
+    tools: [Value; 0],
+}
+
+#[derive(Serialize)]
 struct CodexInput<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
     role: &'static str,
     content: [CodexContent<'a>; 1],
 }
@@ -256,6 +276,7 @@ struct CodexContent<'a> {
 #[derive(Serialize)]
 struct CodexReasoning<'a> {
     effort: &'a str,
+    context: &'static str,
 }
 
 #[derive(Serialize)]
@@ -283,21 +304,42 @@ fn request_body(
         });
     }
     let transcript = serde_json::to_string(&messages).map_err(|_| internal_error())?;
-    let input = [CodexInput {
-        role: "user",
-        content: [CodexContent {
-            kind: "input_text",
-            text: &transcript,
-        }],
-    }];
+    let input = [
+        CodexInputItem::AdditionalTools(CodexAdditionalTools {
+            kind: "additional_tools",
+            role: "developer",
+            tools: [],
+        }),
+        CodexInputItem::Message(CodexInput {
+            kind: "message",
+            role: "developer",
+            content: [CodexContent {
+                kind: "input_text",
+                text: TRANSCRIPT_INSTRUCTION,
+            }],
+        }),
+        CodexInputItem::Message(CodexInput {
+            kind: "message",
+            role: "user",
+            content: [CodexContent {
+                kind: "input_text",
+                text: &transcript,
+            }],
+        }),
+    ];
     serde_json::to_vec(&CodexRequest {
         model,
         input,
-        instructions: TRANSCRIPT_INSTRUCTION,
+        instructions: "",
         stream: true,
         store: false,
         include: ["reasoning.encrypted_content"],
-        reasoning: reasoning_effort.map(|effort| CodexReasoning { effort }),
+        tool_choice: "auto",
+        parallel_tool_calls: false,
+        reasoning: reasoning_effort.map(|effort| CodexReasoning {
+            effort,
+            context: "all_turns",
+        }),
     })
     .map_err(|_| internal_error())
 }
@@ -314,6 +356,7 @@ fn codex_request_headers() -> HeaderMap {
     );
     headers.insert("version", HeaderValue::from_static(CODEX_PROTOCOL_VERSION));
     headers.insert(USER_AGENT, HeaderValue::from_static(CODEX_USER_AGENT));
+    headers.insert(RESPONSES_LITE_HEADER, HeaderValue::from_static("true"));
     headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers
@@ -608,14 +651,13 @@ fn classify_stream_error(value: &Value) -> ProviderError {
 }
 
 fn is_event_stream(headers: &HeaderMap) -> bool {
-    headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
+    headers.get(CONTENT_TYPE).is_none_or(|value| {
+        value.to_str().ok().is_some_and(|value| {
             value.split(';').next().is_some_and(|media_type| {
                 media_type.trim().eq_ignore_ascii_case("text/event-stream")
             })
         })
+    })
 }
 
 fn classify_transport_error(error: reqwest::Error) -> ProviderError {
@@ -674,8 +716,17 @@ mod tests {
         assert_eq!(value["stream"], true);
         assert_eq!(value["store"], false);
         assert_eq!(value["reasoning"]["effort"], "high");
+        assert_eq!(value["reasoning"]["context"], "all_turns");
         assert!(value["reasoning"].get("summary").is_none());
-        assert_eq!(value["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(value["instructions"], "");
+        assert_eq!(value["tool_choice"], "auto");
+        assert_eq!(value["parallel_tool_calls"], false);
+        assert_eq!(value["input"][0]["type"], "additional_tools");
+        assert_eq!(value["input"][0]["role"], "developer");
+        assert_eq!(value["input"][0]["tools"], serde_json::json!([]));
+        assert_eq!(value["input"][1]["role"], "developer");
+        assert_eq!(value["input"][2]["role"], "user");
+        assert_eq!(value["input"][2]["content"][0]["type"], "input_text");
         assert!(!String::from_utf8(body).expect("UTF-8").contains("Bearer"));
     }
 
@@ -698,6 +749,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("codex_cli_rs/0.150.0")
         );
+        assert_eq!(
+            headers
+                .get(RESPONSES_LITE_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
     }
 
     #[test]
@@ -719,6 +776,22 @@ mod tests {
                 reason: CompletionReason::Stop
             }
         );
+    }
+
+    #[test]
+    fn stream_content_type_allows_the_codex_backend_to_omit_the_header() {
+        assert!(is_event_stream(&HeaderMap::new()));
+
+        let mut event_stream = HeaderMap::new();
+        event_stream.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream; charset=utf-8"),
+        );
+        assert!(is_event_stream(&event_stream));
+
+        let mut json = HeaderMap::new();
+        json.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(!is_event_stream(&json));
     }
 
     #[test]
