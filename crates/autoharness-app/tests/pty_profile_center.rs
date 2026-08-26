@@ -74,7 +74,7 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
         let fake_codex = environment.data_dir().join("codex.cmd");
         std::fs::write(
             &fake_codex,
-            "@echo off\r\nif \"%~1\"==\"login\" type nul > \"%AUTOHARNESS_DATA_DIR%\\codex-login-launched\"\r\n",
+            "@echo off\r\nif \"%~2\"==\"status\" exit /b 1\r\nif \"%~1\"==\"login\" (\r\n  type nul > \"%AUTOHARNESS_DATA_DIR%\\codex-login-launched\"\r\n  echo https://auth.openai.com/oauth/authorize?state=pty-fixture\r\n  ping 127.0.0.1 -n 3 > nul\r\n)\r\n",
         )
         .expect("write fake Codex CLI");
         environment.insert("AUTOHARNESS_CODEX_EXECUTABLE", fake_codex.as_os_str());
@@ -102,7 +102,7 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Sign in to Codex") && text.contains("Open browser sign-in")
+            text.contains("Sign in to Codex") && text.contains("Sign in with ChatGPT")
         },
         "Codex should open its subscription authentication page",
     );
@@ -111,7 +111,7 @@ fn providers_open_the_official_codex_subscription_authentication_page() {
     {
         terminal.send_bytes(b"\r");
         terminal.wait_for(
-            |screen| screen.contents().contains("Browser sign-in started"),
+            |screen| screen.contents().contains("Browser opened"),
             "Codex login should be dispatched from the real terminal",
         );
         let marker = environment.data_dir().join("codex-login-launched");

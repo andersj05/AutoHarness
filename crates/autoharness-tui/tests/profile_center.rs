@@ -148,24 +148,55 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("Sign in to Codex"));
-    assert!(rendered.contains("Open browser sign-in"));
+    assert!(rendered.contains("Sign in with ChatGPT"));
+    assert!(rendered.contains("official Codex CLI"));
+    assert!((0..40).any(|row| {
+        (0..120).any(|column| {
+            matches!(
+                hit_test(&model, 120, 40, column, row),
+                Some(MouseAction::CodexLogin)
+            )
+        })
+    }));
 
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::LaunchCodexLogin]
     ));
     assert!(
-        render_text(&model, 120, 40).contains("Browser sign-in started"),
-        "the authentication popup should keep launch feedback visible"
+        render_text(&model, 120, 40).contains("Starting secure sign-in"),
+        "the authentication popup should show launch progress"
     );
-    let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::CodexLoginBrowserOpened);
+    assert!(render_text(&model, 120, 40).contains("Browser opened"));
+    let effects = update(&mut model, Message::CodexLoginCompleted);
     assert!(matches!(
         effects.as_slice(),
         [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
             if profile.id == "codex" && profile.kind == ProviderKindLabel::CodexCli
+    ));
+}
+
+#[test]
+fn codex_sign_in_can_be_cancelled_or_retried_after_failure() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Esc))).as_slice(),
+        [UiEffect::CancelCodexLogin]
+    ));
+
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::CodexLoginFailed);
+    assert!(render_text(&model, 120, 40).contains("Try sign-in again"));
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
+        [UiEffect::LaunchCodexLogin]
     ));
 }
 

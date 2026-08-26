@@ -872,6 +872,8 @@ pub enum UiEffect {
     Dispatch(UiIntent),
     /// Start the official Codex CLI browser-login flow without handling credentials.
     LaunchCodexLogin,
+    /// Stop an in-progress Codex CLI browser-login flow.
+    CancelCodexLogin,
     /// Copy exact text to the system clipboard through OSC 52.
     CopyTranscript(String),
     /// Exit the terminal client.
@@ -1079,6 +1081,8 @@ pub enum MouseAction {
     ProfileDelete,
     /// Select a provider setup choice.
     SelectProviderChoice(usize),
+    /// Start or retry the visible Codex browser sign-in action.
+    CodexLogin,
     /// Select a connected provider profile.
     SelectProfile(String),
     UserProfileSave,
@@ -1124,6 +1128,14 @@ pub enum Message {
     SettingsChanged(Arc<SettingsProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
+    /// The official Codex authentication URL was opened in the default browser.
+    CodexLoginBrowserOpened,
+    /// The Codex CLI already had a valid ChatGPT sign-in.
+    CodexLoginAlreadyAuthenticated,
+    /// The official Codex browser callback completed successfully.
+    CodexLoginCompleted,
+    /// The Codex login process or browser handoff failed safely.
+    CodexLoginFailed,
     /// Deterministic monotonic time update.
     Tick(UiInstant),
     /// Terminal resize notification.
@@ -1159,6 +1171,12 @@ impl Debug for Message {
                 .field(settings)
                 .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
+            Self::CodexLoginBrowserOpened => formatter.write_str("CodexLoginBrowserOpened"),
+            Self::CodexLoginAlreadyAuthenticated => {
+                formatter.write_str("CodexLoginAlreadyAuthenticated")
+            }
+            Self::CodexLoginCompleted => formatter.write_str("CodexLoginCompleted"),
+            Self::CodexLoginFailed => formatter.write_str("CodexLoginFailed"),
             Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
             Self::Resize => formatter.write_str("Resize"),
             Self::ShutdownRequested => formatter.write_str("ShutdownRequested"),
@@ -1335,13 +1353,27 @@ pub(crate) enum ProfileCenterFocus {
     ConnectedProfiles,
 }
 
+/// Observable state of the official Codex CLI authentication handoff.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum CodexLoginState {
+    /// No login process is running.
+    #[default]
+    Idle,
+    /// AutoHarness is checking the existing CLI session or starting login.
+    Starting,
+    /// The official authentication page was opened in the default browser.
+    BrowserOpened,
+    /// The last launch failed and may be retried.
+    Failed,
+}
+
 /// Provider-choice, authentication-page, and account-editor state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
     pub focus: ProfileCenterFocus,
     pub choice_selected: usize,
     pub auth_page: Option<ProviderChoice>,
-    pub auth_selected: usize,
+    pub codex_login: CodexLoginState,
     pub open_credential_after_save: Option<String>,
     pub query: String,
     pub selected: Option<String>,

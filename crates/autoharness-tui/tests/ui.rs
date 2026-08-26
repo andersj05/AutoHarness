@@ -309,7 +309,10 @@ fn submission_keeps_draft_until_commit_and_rejection_keeps_it_editable() {
         .first()
         .and_then(|effect| match effect {
             UiEffect::Dispatch(intent) => Some(intent.request_id()),
-            UiEffect::LaunchCodexLogin | UiEffect::CopyTranscript(_) | UiEffect::Quit => None,
+            UiEffect::LaunchCodexLogin
+            | UiEffect::CancelCodexLogin
+            | UiEffect::CopyTranscript(_)
+            | UiEffect::Quit => None,
         })
         .expect("second request ID");
     let _ = update(

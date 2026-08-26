@@ -1,6 +1,10 @@
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::fmt::{self, Display, Formatter};
+use std::io::{BufRead as _, BufReader};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 use autoharness_domain::ErrorClass;
@@ -23,6 +27,81 @@ use crate::{update, view};
 pub const INTENT_CAPACITY: usize = 32;
 /// Maximum queued application notices before their producer is backpressured.
 pub const APP_NOTICE_CAPACITY: usize = 128;
+const CODEX_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const CODEX_AUTH_URL_PREFIX: &str = "https://auth.openai.com/";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CodexLoginEventKind {
+    BrowserOpened,
+    AlreadyAuthenticated,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CodexLoginEvent {
+    generation: u64,
+    kind: CodexLoginEventKind,
+}
+
+struct CodexLoginController {
+    events: mpsc::UnboundedSender<CodexLoginEvent>,
+    cancellation: Option<CancellationToken>,
+    generation: u64,
+}
+
+impl CodexLoginController {
+    fn new(events: mpsc::UnboundedSender<CodexLoginEvent>) -> Self {
+        Self {
+            events,
+            cancellation: None,
+            generation: 0,
+        }
+    }
+
+    fn launch(&mut self, executable: OsString) -> std::io::Result<()> {
+        self.cancel();
+        let generation = self.generation;
+        let cancellation = CancellationToken::new();
+        self.cancellation = Some(cancellation.clone());
+        let events = self.events.clone();
+        std::thread::Builder::new()
+            .name("autoharness-codex-login".to_owned())
+            .spawn(move || run_codex_login(executable, cancellation, events, generation))
+            .map(|_| ())
+    }
+
+    fn cancel(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.cancel();
+        }
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn accepts(&self, event: CodexLoginEvent) -> bool {
+        event.generation == self.generation
+    }
+
+    fn settle(&mut self, event: CodexLoginEvent) {
+        if self.accepts(event)
+            && matches!(
+                event.kind,
+                CodexLoginEventKind::AlreadyAuthenticated
+                    | CodexLoginEventKind::Completed
+                    | CodexLoginEventKind::Failed
+            )
+        {
+            self.cancellation = None;
+        }
+    }
+}
+
+impl Drop for CodexLoginController {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
 
 /// Channel endpoints owned by the terminal runner.
 pub struct UiPorts {
@@ -165,6 +244,8 @@ where
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let started = Instant::now();
+    let (codex_login_tx, mut codex_login_rx) = mpsc::unbounded_channel();
+    let mut codex_login = CodexLoginController::new(codex_login_tx);
 
     draw(terminal, &mut model)?;
     #[cfg(feature = "benchmark-instrumentation")]
@@ -191,7 +272,7 @@ where
                     size.height,
                 )
                 .map_or_else(Vec::new, |message| update(&mut model, message));
-                if dispatch_effects(&mut model, effects, &intents) {
+                if dispatch_effects(&mut model, effects, &intents, &mut codex_login) {
                     return Ok(ExitReason::UserQuit);
                 }
             }
@@ -223,6 +304,26 @@ where
             notice = notices.recv() => {
                 let notice = notice.ok_or(RunnerError::ApplicationDisconnected("notice"))?;
                 let _ = update(&mut model, Message::Notice(notice));
+            }
+            login_event = codex_login_rx.recv() => {
+                let Some(login_event) = login_event else {
+                    continue;
+                };
+                if codex_login.accepts(login_event) {
+                    codex_login.settle(login_event);
+                    let message = match login_event.kind {
+                        CodexLoginEventKind::BrowserOpened => Message::CodexLoginBrowserOpened,
+                        CodexLoginEventKind::AlreadyAuthenticated => {
+                            Message::CodexLoginAlreadyAuthenticated
+                        }
+                        CodexLoginEventKind::Completed => Message::CodexLoginCompleted,
+                        CodexLoginEventKind::Failed => Message::CodexLoginFailed,
+                    };
+                    let effects = update(&mut model, message);
+                    if dispatch_effects(&mut model, effects, &intents, &mut codex_login) {
+                        return Ok(ExitReason::UserQuit);
+                    }
+                }
             }
             _ = ticks.tick() => {
                 let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -260,6 +361,7 @@ fn dispatch_effects(
     model: &mut Model,
     effects: Vec<UiEffect>,
     intents: &mpsc::Sender<UiIntent>,
+    codex_login: &mut CodexLoginController,
 ) -> bool {
     for effect in effects {
         match effect {
@@ -267,21 +369,11 @@ fn dispatch_effects(
             UiEffect::LaunchCodexLogin => {
                 let executable = std::env::var_os("AUTOHARNESS_CODEX_EXECUTABLE")
                     .unwrap_or_else(|| std::ffi::OsString::from("codex"));
-                if launch_codex_login(&executable).is_err() {
-                    let request_id = model.allocate_request();
-                    let _ = update(
-                        model,
-                        Message::Notice(UiNotice::IntentRejected {
-                            request_id,
-                            failure: UiFailure::new(
-                                ErrorClass::Unavailable,
-                                "Codex login could not be launched; verify that the Codex CLI is installed",
-                                RetryPolicy::Now,
-                            ),
-                        }),
-                    );
+                if codex_login.launch(executable).is_err() {
+                    let _ = update(model, Message::CodexLoginFailed);
                 }
             }
+            UiEffect::CancelCodexLogin => codex_login.cancel(),
             UiEffect::CopyTranscript(text) => {
                 // OSC 52 copy; failure is non-fatal because terminals may
                 // simply not advertise clipboard support.
@@ -319,41 +411,226 @@ fn dispatch_effects(
     false
 }
 
-#[cfg(windows)]
-fn launch_codex_login(executable: &std::ffi::OsStr) -> std::io::Result<()> {
-    codex_login_command(executable).spawn().map(|_| ())
+fn run_codex_login(
+    executable: OsString,
+    cancellation: CancellationToken,
+    events: mpsc::UnboundedSender<CodexLoginEvent>,
+    generation: u64,
+) {
+    match codex_login_status(&executable, &cancellation) {
+        Ok(true) => {
+            send_codex_login_event(
+                &events,
+                &cancellation,
+                generation,
+                CodexLoginEventKind::AlreadyAuthenticated,
+            );
+            return;
+        }
+        Ok(false) => {}
+        Err(_) => {
+            send_codex_login_event(
+                &events,
+                &cancellation,
+                generation,
+                CodexLoginEventKind::Failed,
+            );
+            return;
+        }
+    }
+
+    let mut command = codex_login_command(&executable);
+    let Ok(mut child) = command.spawn() else {
+        send_codex_login_event(
+            &events,
+            &cancellation,
+            generation,
+            CodexLoginEventKind::Failed,
+        );
+        return;
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        send_codex_login_event(
+            &events,
+            &cancellation,
+            generation,
+            CodexLoginEventKind::Failed,
+        );
+        return;
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        send_codex_login_event(
+            &events,
+            &cancellation,
+            generation,
+            CodexLoginEventKind::Failed,
+        );
+        return;
+    };
+
+    let (output_tx, output_rx) = std_mpsc::channel();
+    drain_codex_login_output(stdout, output_tx.clone());
+    drain_codex_login_output(stderr, output_tx);
+    let deadline = Instant::now() + CODEX_LOGIN_TIMEOUT;
+    let mut streams_open = 2_u8;
+    let mut browser_reported = false;
+    let mut exit_status = None;
+
+    loop {
+        if cancellation.is_cancelled() {
+            terminate_child(&mut child);
+            return;
+        }
+        if Instant::now() >= deadline {
+            terminate_child(&mut child);
+            send_codex_login_event(
+                &events,
+                &cancellation,
+                generation,
+                CodexLoginEventKind::Failed,
+            );
+            return;
+        }
+
+        match output_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(Some(line)) if !browser_reported && contains_codex_auth_url(&line) => {
+                browser_reported = true;
+                send_codex_login_event(
+                    &events,
+                    &cancellation,
+                    generation,
+                    CodexLoginEventKind::BrowserOpened,
+                );
+            }
+            Ok(Some(_)) | Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(None) => streams_open = streams_open.saturating_sub(1),
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => streams_open = 0,
+        }
+
+        if exit_status.is_none() {
+            match child.try_wait() {
+                Ok(status) => exit_status = status,
+                Err(_) => {
+                    terminate_child(&mut child);
+                    send_codex_login_event(
+                        &events,
+                        &cancellation,
+                        generation,
+                        CodexLoginEventKind::Failed,
+                    );
+                    return;
+                }
+            }
+        }
+        if let Some(status) = exit_status
+            && streams_open == 0
+        {
+            send_codex_login_event(
+                &events,
+                &cancellation,
+                generation,
+                if status.success() {
+                    CodexLoginEventKind::Completed
+                } else {
+                    CodexLoginEventKind::Failed
+                },
+            );
+            return;
+        }
+    }
 }
 
-#[cfg(windows)]
-fn codex_login_command(executable: &std::ffi::OsStr) -> std::process::Command {
-    let mut command = std::process::Command::new("powershell.exe");
-    command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Start-Process -FilePath $env:AUTOHARNESS_CODEX_LOGIN_EXECUTABLE -ArgumentList 'login'",
-        ])
-        // Values after PowerShell's `-Command` are appended to the command
-        // text, not exposed through `$args`. Passing the validated executable
-        // through this process-local environment entry avoids that parser trap
-        // and keeps paths out of the script itself.
-        .env("AUTOHARNESS_CODEX_LOGIN_EXECUTABLE", executable)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    command
+fn codex_login_status(
+    executable: &OsStr,
+    cancellation: &CancellationToken,
+) -> std::io::Result<bool> {
+    let mut child = std::process::Command::new(executable)
+        .args(["login", "status"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    wait_for_child(&mut child, cancellation, CODEX_STATUS_TIMEOUT).map(|status| status.success())
 }
 
-#[cfg(not(windows))]
-fn launch_codex_login(executable: &std::ffi::OsStr) -> std::io::Result<()> {
-    std::process::Command::new(executable)
+fn codex_login_command(executable: &OsStr) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    command
         .arg("login")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn wait_for_child(
+    child: &mut Child,
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> std::io::Result<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancellation.is_cancelled() {
+            terminate_child(child);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Codex login was cancelled",
+            ));
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            terminate_child(child);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Codex login status timed out",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn drain_codex_login_output(
+    output: impl std::io::Read + Send + 'static,
+    sender: std_mpsc::Sender<Option<String>>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("autoharness-codex-login-output".to_owned())
+        .spawn(move || {
+            for line in BufReader::new(output).lines().map_while(Result::ok) {
+                if sender.send(Some(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = sender.send(None);
+        });
+}
+
+fn contains_codex_auth_url(line: &str) -> bool {
+    line.split_ascii_whitespace().any(|word| {
+        word.starts_with(CODEX_AUTH_URL_PREFIX)
+            && word.len() <= 16 * 1024
+            && word.chars().all(|character| character.is_ascii_graphic())
+    })
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn send_codex_login_event(
+    events: &mpsc::UnboundedSender<CodexLoginEvent>,
+    cancellation: &CancellationToken,
+    generation: u64,
+    kind: CodexLoginEventKind,
+) {
+    if !cancellation.is_cancelled() {
+        let _ = events.send(CodexLoginEvent { generation, kind });
+    }
 }
 
 fn draw<B>(terminal: &mut Terminal<B>, model: &mut Model) -> Result<(), RunnerError>
@@ -425,6 +702,11 @@ mod tests {
         )
     }
 
+    fn login_controller() -> CodexLoginController {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        CodexLoginController::new(sender)
+    }
+
     #[test]
     fn full_intent_mailbox_becomes_an_explicit_rejection() {
         let mut model = model_with_draft();
@@ -436,7 +718,12 @@ mod tests {
             })
             .expect("fill mailbox");
 
-        assert!(!dispatch_effects(&mut model, effects, &sender));
+        assert!(!dispatch_effects(
+            &mut model,
+            effects,
+            &sender,
+            &mut login_controller(),
+        ));
 
         assert!(model.pending().is_empty());
         assert_eq!(model.composer.text(), "draft survives");
@@ -462,7 +749,12 @@ mod tests {
         let (sender, receiver) = mpsc::channel(1);
         drop(receiver);
 
-        assert!(!dispatch_effects(&mut model, effects, &sender));
+        assert!(!dispatch_effects(
+            &mut model,
+            effects,
+            &sender,
+            &mut login_controller(),
+        ));
         assert!(matches!(
             &model.notice,
             Some(Notice::Failure(UiFailure {
@@ -515,9 +807,8 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
-    fn codex_login_executable_is_passed_outside_powershell_command_text() {
+    fn codex_login_runs_the_validated_executable_directly() {
         let executable = std::ffi::OsStr::new(r"C:\Program Files\Codex\codex.exe");
         let command = codex_login_command(executable);
         let args = command
@@ -525,11 +816,18 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        assert_eq!(args.len(), 4);
-        assert!(args[3].contains("$env:AUTOHARNESS_CODEX_LOGIN_EXECUTABLE"));
-        assert!(!args.iter().any(|arg| arg.contains("Program Files")));
-        assert!(command.get_envs().any(|(name, value)| {
-            name == "AUTOHARNESS_CODEX_LOGIN_EXECUTABLE" && value == Some(executable)
-        }));
+        assert_eq!(command.get_program(), executable);
+        assert_eq!(args, ["login"]);
+    }
+
+    #[test]
+    fn codex_auth_url_detection_is_strict_and_bounded() {
+        assert!(contains_codex_auth_url(
+            "https://auth.openai.com/oauth/authorize?state=opaque"
+        ));
+        assert!(!contains_codex_auth_url(
+            "https://example.test/oauth/authorize?state=opaque"
+        ));
+        assert!(!contains_codex_auth_url("not a URL"));
     }
 }

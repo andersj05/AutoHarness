@@ -8,12 +8,13 @@ use autoharness_settings::{
 use ratatui_textarea::{Input, Key};
 
 use crate::model::{
-    AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CommandEntry, Focus,
-    LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind, PROVIDER_CHOICES,
-    PendingKind, ProfileCenterFocus, ProfileCredentialAction, ProfileCredentialEditor,
-    ProfileEditorMode, ProfileEditorState, ProfilesProjection, ProviderChoice, ProviderKindLabel,
-    ProviderProfileDraft, RetryPolicy, Route, SETTINGS_NAV_COUNT, SessionProjection,
-    SessionsProjection, SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
+    AgentDefaultStep, AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry,
+    Focus, LocalPreferenceChange, Message, Model, MouseAction, Notice, OverlayKind,
+    PROVIDER_CHOICES, PendingKind, ProfileCenterFocus, ProfileCredentialAction,
+    ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
+    ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route,
+    SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsPreference, UiEffect,
+    UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -51,6 +52,37 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::Notice(notice) => {
             apply_notice(model, notice);
+            Vec::new()
+        }
+        Message::CodexLoginBrowserOpened => {
+            model.profile_center.codex_login = CodexLoginState::BrowserOpened;
+            model.notice = Some(Notice::Info(
+                "Browser opened. Finish signing in there; AutoHarness will connect automatically."
+                    .to_owned(),
+            ));
+            model.dirty = true;
+            Vec::new()
+        }
+        Message::CodexLoginAlreadyAuthenticated => {
+            model.notice = Some(Notice::Info(
+                "Existing Codex sign-in found. Connecting...".to_owned(),
+            ));
+            save_codex_connection(model)
+        }
+        Message::CodexLoginCompleted => {
+            model.notice = Some(Notice::Info(
+                "Codex sign-in complete. Connecting...".to_owned(),
+            ));
+            save_codex_connection(model)
+        }
+        Message::CodexLoginFailed => {
+            model.profile_center.codex_login = CodexLoginState::Failed;
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Unavailable,
+                "Codex sign-in could not open the browser. Try again or run 'codex login' in another terminal.",
+                RetryPolicy::Now,
+            )));
+            model.dirty = true;
             Vec::new()
         }
         Message::Tick(now) => {
@@ -173,6 +205,7 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+        MouseAction::CodexLogin => begin_codex_login(model),
         MouseAction::SelectProfile(profile_id) => {
             if model
                 .profiles()
@@ -1865,6 +1898,7 @@ fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
         ProviderChoice::GoogleAiStudio => return begin_google_ai_studio_setup(model),
         ProviderChoice::Codex => {
             model.profile_center.auth_page = Some(ProviderChoice::Codex);
+            model.profile_center.codex_login = CodexLoginState::Idle;
             model.notice = None;
         }
         ProviderChoice::OpenAiCompatible => {
@@ -1885,6 +1919,23 @@ fn create_profile_editor(model: &mut Model) -> Vec<UiEffect> {
     }
     model.dirty = true;
     Vec::new()
+}
+
+fn begin_codex_login(model: &mut Model) -> Vec<UiEffect> {
+    if model.profile_center.auth_page != Some(ProviderChoice::Codex)
+        || matches!(
+            model.profile_center.codex_login,
+            CodexLoginState::Starting | CodexLoginState::BrowserOpened
+        )
+    {
+        return Vec::new();
+    }
+    model.profile_center.codex_login = CodexLoginState::Starting;
+    model.notice = Some(Notice::Info(
+        "Checking Codex sign-in and preparing the browser...".to_owned(),
+    ));
+    model.dirty = true;
+    vec![UiEffect::LaunchCodexLogin]
 }
 
 fn begin_google_ai_studio_setup(model: &mut Model) -> Vec<UiEffect> {
@@ -1933,7 +1984,7 @@ fn save_codex_connection(model: &mut Model) -> Vec<UiEffect> {
         .pending
         .insert(request_id, PendingKind::UpsertProfile(profile.clone()));
     model.profile_center.auth_page = None;
-    model.profile_center.auth_selected = 0;
+    model.profile_center.codex_login = CodexLoginState::Idle;
     model.notice = Some(Notice::Info(
         "Saving and checking the Codex connection...".to_owned(),
     ));
@@ -2002,41 +2053,29 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 vec![UiEffect::Quit]
             }
             Input { key: Key::Esc, .. } => {
+                let was_running = matches!(
+                    model.profile_center.codex_login,
+                    CodexLoginState::Starting | CodexLoginState::BrowserOpened
+                );
                 model.profile_center.auth_page = None;
-                model.profile_center.auth_selected = 0;
+                model.profile_center.codex_login = CodexLoginState::Idle;
+                model.notice = None;
                 model.dirty = true;
-                Vec::new()
-            }
-            Input { key: Key::Up, .. } => {
-                model.profile_center.auth_selected =
-                    model.profile_center.auth_selected.saturating_sub(1);
-                model.dirty = true;
-                Vec::new()
-            }
-            Input { key: Key::Down, .. } => {
-                model.profile_center.auth_selected = (model.profile_center.auth_selected + 1) % 2;
-                model.dirty = true;
-                Vec::new()
-            }
-            Input {
-                key: Key::Char('s' | 'S'),
-                ctrl: false,
-                alt: false,
-                ..
-            } => save_codex_connection(model),
-            Input {
-                key: Key::Enter, ..
-            } if model.profile_center.auth_selected == 0 => {
-                model.notice = Some(Notice::Info(
-                    "Browser sign-in started. Complete it there, then choose Save connection."
-                        .to_owned(),
-                ));
-                model.dirty = true;
-                vec![UiEffect::LaunchCodexLogin]
+                if was_running {
+                    vec![UiEffect::CancelCodexLogin]
+                } else {
+                    Vec::new()
+                }
             }
             Input {
                 key: Key::Enter, ..
-            } => save_codex_connection(model),
+            } if !matches!(
+                model.profile_center.codex_login,
+                CodexLoginState::Starting | CodexLoginState::BrowserOpened
+            ) =>
+            {
+                begin_codex_login(model)
+            }
             _ => Vec::new(),
         };
     }
@@ -2639,7 +2678,7 @@ fn open_profile_credential(model: &mut Model) {
     };
     if profile.kind == ProviderKindLabel::CodexCli {
         model.profile_center.auth_page = Some(ProviderChoice::Codex);
-        model.profile_center.auth_selected = 0;
+        model.profile_center.codex_login = CodexLoginState::Idle;
         model.notice = None;
         model.dirty = true;
         return;

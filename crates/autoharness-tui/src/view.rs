@@ -537,6 +537,12 @@ pub fn hit_test(
             MouseAction::PermissionDeny,
         );
     }
+    if model.profile_center.auth_page == Some(crate::model::ProviderChoice::Codex) {
+        let popup = popup_rect(area);
+        let action_row = popup.y.saturating_add(3);
+        return (row == action_row && column > popup.x && column < popup.right())
+            .then_some(MouseAction::CodexLogin);
+    }
     let layout = shell_layout(area, model);
     if let Some(sidebar) = layout.sidebar {
         if column < sidebar.right() {
@@ -2322,33 +2328,35 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let login_marker = if model.profile_center.auth_selected == 0 {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let save_marker = if model.profile_center.auth_selected == 1 {
-        selection_marker(model)
-    } else {
-        " "
+    let (action, status) = match model.profile_center.codex_login {
+        crate::model::CodexLoginState::Idle => (
+            format!("{} Sign in with ChatGPT", selection_marker(model)),
+            "The browser will open for secure sign-in.",
+        ),
+        crate::model::CodexLoginState::Starting => (
+            format!("{} Starting secure sign-in...", spinner(model)),
+            "Checking the installed Codex CLI.",
+        ),
+        crate::model::CodexLoginState::BrowserOpened => (
+            "Browser opened".to_owned(),
+            "Finish signing in there. AutoHarness will connect automatically.",
+        ),
+        crate::model::CodexLoginState::Failed => (
+            format!("{} Try sign-in again", selection_marker(model)),
+            "The previous browser handoff did not complete.",
+        ),
     };
     let mut lines = vec![
         Line::styled(
-            "Use your ChatGPT plan through the official Codex CLI.",
+            "Connect your ChatGPT subscription through the official Codex CLI.",
             visual_style(model, VisualRole::User),
         ),
         Line::from(""),
-        Line::styled(
-            format!("{login_marker} 1. Open browser sign-in"),
-            visual_style(model, VisualRole::Normal),
-        ),
-        Line::styled(
-            format!("{save_marker} 2. Save connection after sign-in"),
-            visual_style(model, VisualRole::Normal),
-        ),
+        Line::styled(action, visual_style(model, VisualRole::Selected)),
+        Line::styled(status, visual_style(model, VisualRole::Muted)),
         Line::from(""),
         Line::styled(
-            "↑/↓ choose  Enter continue  S save  Esc back",
+            "Enter sign in or retry  Esc cancel",
             visual_style(model, VisualRole::Muted),
         ),
     ];
@@ -2372,7 +2380,7 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
     lines.extend([
         Line::from(""),
         Line::styled(
-            "Sign-in and tokens stay with Codex. If needed, run 'codex login' manually.",
+            "AutoHarness never reads or stores your Codex credentials.",
             visual_style(model, VisualRole::Muted),
         ),
     ]);
