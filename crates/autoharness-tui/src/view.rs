@@ -1802,11 +1802,9 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
     };
     let selected = !model.settings_workspace.nav_focus
         && SettingsPreference::at(model.settings_workspace.selected) == preference;
-    let value = if selected {
-        settings_preference_wheel(model, preference).unwrap_or(value)
-    } else {
-        value
-    };
+    let wheel = selected
+        .then(|| settings_preference_wheel(model, preference))
+        .flatten();
     let marker = if selected {
         selection_marker(model)
     } else {
@@ -1822,10 +1820,11 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
     } else {
         visual_style(model, VisualRole::Normal)
     };
-    Line::styled(
-        format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
-        style,
-    )
+    let content = wheel.map_or_else(
+        || format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
+        |wheel| format!("{marker} {label:<14} {wheel}{suffix}"),
+    );
+    Line::styled(content, style)
 }
 
 fn wheel_value<T: Copy + PartialEq>(
@@ -1840,7 +1839,7 @@ fn wheel_value<T: Copy + PartialEq>(
     let previous = values[index.checked_sub(1).unwrap_or(values.len() - 1)];
     let next = values[(index + 1) % values.len()];
     format!(
-        "‹ {}  [ {} ]  {} ›",
+        "‹{}  [{}]  {}›",
         label(previous),
         label(current),
         label(next)

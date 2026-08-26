@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Providers and Settings navigation are consistent, Agents persists model and reasoning defaults for fresh sessions, and startup now uses a catalog-bound indicator capped at 400 ms before exposing the real model-loading state; formatting, strict Clippy, and the full workspace suite pass while full Phase 3.9 release evidence remains pending
+**Status:** Settings now exposes nine theme presets, five color treatments, and adjacent-value option carousels; command search ranks exact, prefix, fuzzy, and description matches while concise canonical commands retain compatibility aliases; formatting, strict Clippy, responsive theme tests, and the full workspace suite pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -57,6 +57,8 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 
 ## Recently completed
 
+- On 2026-08-26, Settings gained Midnight, Ocean, Forest, and Rose themes plus Soft and Vivid color treatments, focused editable values render previous, current, and next options as a responsive carousel, and focus-specific help distinguishes page navigation from option changes.
+- On 2026-08-26, command filtering became deterministic relevance ranking with typo tolerance, the best result becomes selected after each query edit, and `/new`, `/connect`, `/refresh`, `/tools`, and `/user` replaced longer visible spellings while the old commands remain exact compatibility aliases.
 - On 2026-08-26, the fixed 1.8-second startup presentation was replaced by a two-line indicator capped at 400 ms that exits immediately when model discovery resolves, removes fake progress and phase copy, and hands longer work to the actual provider-model loading state.
 - On 2026-08-26, Providers became a stable catalog beside always-visible connected accounts, Left and Right explicitly switch sections, Up and Down stay within a section, provider statuses remain compact at narrow widths, and General, Providers, Profile, and Agents share one page hierarchy and navigation vocabulary.
 - On 2026-08-25, the Providers and Agents follow-up made Codex browser login launch in a separate visible Windows process, activated saved Codex profiles immediately, exposed the documented GPT-5.6 Codex model choices, persisted model and reasoning effort together in settings schema 4, and applied the selected model during fresh-session creation.

@@ -1131,6 +1131,38 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
 }
 
 #[test]
+fn every_theme_and_color_treatment_renders_across_responsive_sizes() {
+    let mut model = Model::new(
+        session(15, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    for theme in [
+        "system", "light", "dark", "aurora", "ember", "midnight", "ocean", "forest", "rose",
+    ] {
+        for color_mode in ["color", "soft", "vivid", "no_color", "high_contrast"] {
+            apply_visual_preferences(
+                &mut model,
+                VisualPreferences {
+                    color_mode,
+                    theme,
+                    glyph_mode: "unicode",
+                    reduced_motion: false,
+                    density: "comfortable",
+                    layout: "responsive",
+                    timestamp: "relative",
+                },
+            );
+            for (width, height) in [(120, 40), (80, 24), (40, 12)] {
+                let rendered = render_model(&model, width, height);
+                assert_eq!(rendered.buffer().area.width, width);
+                assert_eq!(rendered.buffer().area.height, height);
+            }
+        }
+    }
+}
+
+#[test]
 fn prompt_bar_shows_safe_runtime_metadata() {
     let mut model = Model::new(
         session(13, Vec::new()),

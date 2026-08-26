@@ -395,10 +395,16 @@ fn editable_settings_show_adjacent_values_as_a_scroll_wheel() {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
 
-    let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("Theme preset"));
-    assert!(rendered.contains("‹ rose  [ system ]  light ›"));
-    assert!(rendered.contains("←/→ option"));
+    for (width, height) in [(120, 40), (80, 24), (40, 12)] {
+        let rendered = render_text(&model, width, height);
+        assert!(rendered.contains("Theme preset"));
+        assert!(
+            rendered.contains("[system]"),
+            "missing wheel at {width}x{height}"
+        );
+        assert!(rendered.contains("←/→ option"));
+    }
+    assert!(render_text(&model, 120, 40).contains("‹rose  [system]  light›"));
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {
