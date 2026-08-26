@@ -165,6 +165,14 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             request_delete_profile(model);
             Vec::new()
         }
+        MouseAction::SelectProviderChoice(index) => {
+            if index < PROVIDER_CHOICES.len() {
+                model.profile_center.choice_selected = index;
+                model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
+                model.dirty = true;
+            }
+            Vec::new()
+        }
         MouseAction::SelectProfile(profile_id) => {
             if model
                 .profiles()
@@ -173,6 +181,7 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
                 .any(|profile| profile.id == profile_id)
             {
                 model.profile_center.selected = Some(profile_id);
+                model.profile_center.focus = ProfileCenterFocus::ConnectedProfiles;
                 model.dirty = true;
             }
             Vec::new()
@@ -2279,7 +2288,12 @@ fn handle_agent_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
 fn move_agent_selection(model: &mut Model, direction: isize) {
     let count = match model.agent_defaults.step {
         AgentDefaultStep::Provider => model.profiles().profiles.len(),
-        AgentDefaultStep::Model => model.catalog.models().len(),
+        AgentDefaultStep::Model => model
+            .catalog
+            .models()
+            .iter()
+            .filter(|summary| summary.selectable)
+            .count(),
         AgentDefaultStep::Thinking => return,
     };
     if count == 0 {
@@ -2316,8 +2330,9 @@ fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
             let Some(summary) = model
                 .catalog
                 .models()
-                .get(model.agent_defaults.model_selected)
+                .iter()
                 .filter(|summary| summary.selectable)
+                .nth(model.agent_defaults.model_selected)
             else {
                 return Vec::new();
             };

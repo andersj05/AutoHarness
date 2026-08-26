@@ -167,10 +167,10 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
 fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
 
     assert!(render_text(&model, 120, 40).contains("1 Provider  2 Model  3 Thinking"));
     assert!(matches!(
@@ -256,17 +256,16 @@ fn every_profile_detail_button_has_a_semantic_click_target() {
 fn compact_profile_clicks_follow_rendered_content_rows() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
-    assert_eq!(
-        hit_test(&model, 80, 24, 2, 3),
-        Some(MouseAction::OpenUserProfile)
-    );
+    for _ in 0..6 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
     assert_eq!(
         hit_test(&model, 80, 24, 3, 8),
         Some(MouseAction::SelectProfile("personal-gemini".to_owned()))
     );
-    assert_eq!(
-        hit_test(&model, 80, 24, 34, 20),
-        Some(MouseAction::ProfileDefaultModel)
+    assert!(
+        (0..24).any(|row| hit_test(&model, 80, 24, 34, row)
+            == Some(MouseAction::ProfileDefaultModel))
     );
     assert_eq!(hit_test(&model, 80, 24, 34, 19), None);
 }

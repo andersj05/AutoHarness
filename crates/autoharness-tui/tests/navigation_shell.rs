@@ -379,8 +379,8 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
         assert!(rendered.contains(section), "missing settings nav {section}");
     }
 
-    let _ = update(&mut model, Message::Input(key(Key::Tab)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(model.route(), Route::Settings);
     assert_eq!(model.focus, Focus::Settings);
 }
@@ -389,8 +389,8 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
 fn providers_returns_to_settings_navigation_before_leaving_the_route() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Tab)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Right)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert!(render_text(&model, 80, 24).contains("Gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Esc)));

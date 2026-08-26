@@ -1076,8 +1076,10 @@ pub enum MouseAction {
     ProfileDefaultModel,
     ProfileDisconnect,
     ProfileDelete,
+    /// Select a provider setup choice.
+    SelectProviderChoice(usize),
+    /// Select a connected provider profile.
     SelectProfile(String),
-    /// User-profile dialog actions.
     UserProfileSave,
     /// Session-browser action bar controls.
     SessionOpen,
