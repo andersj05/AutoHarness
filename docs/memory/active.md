@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Codex subscription login now launches the official CLI browser flow correctly on Windows, transient Codex readiness failures keep the terminal recovery UI open, and the Providers workspace presents a two-step sign-in flow with simplified saved-connection details; formatting, strict Clippy, the full workspace suite, and both Windows provider-login PTY regressions pass while full Phase 3.9 release evidence remains pending
+**Status:** Codex subscription login now runs the official CLI directly, opens a verified visible Chrome authentication tab when needed, reuses an existing ChatGPT session without redundant login, auto-saves after callback completion, supports cancellation and honest failure states, and keeps startup recovery reachable; formatting, strict Clippy, the full workspace suite, focused tests, and Windows PTY journeys pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -68,6 +68,8 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 - The corrected launcher is covered by a Windows command-construction unit test and a real PTY regression that drives the terminal through Codex selection and verifies a fake official CLI receives exactly the `login` argument.
 - Codex startup probing now follows the same recoverable composition path as API-key providers, so an unavailable CLI renders a connection error with Providers still reachable instead of terminating the process; a second Windows PTY regression covers that saved-profile restart path.
 - The browser-login popup keeps launch feedback visible, and the documented `ah` alias now has a distinct Cargo target root so both binary names build without the duplicate-source warning.
+- The follow-up replaces the detached PowerShell handoff with an observable, cancellable direct Codex child process, checks an existing CLI session first, automatically connects after successful authentication, and passed a real TUI-to-Chrome acceptance test that opened the visible OpenAI sign-in tab.
+- Provider actions now use clear button labels with matching mouse geometry, remain fully visible at 80 columns, and do not expose hidden actions from help text.
 - Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
 - On 2026-08-25, `feat/tui-professional-overhaul` corrected compact-shell mouse geometry from the rendered content rectangle, added exact profile click coverage, added a bounded reduced-motion-safe startup boot surface, exposed `/profile` beside `/settings`, refreshed the dark preset to a dark neon cockpit palette, and passed 66 focused TUI tests, 350 workspace tests, strict Clippy, formatting, and three ignored Windows PTY journeys.
 - On 2026-08-25, the follow-up TUI cutover made the initial boot surface visible on the first draw, stopped automatic credential dialogs, routed `/settings`, `/models`, `/sessions`, `/connect-api-key`, `/retry`, `/cancel`, `/search`, and `/toggle-tools` through the shared command table, removed the prompt footer, tightened prompt/transcript borders, applied the neon palette to the default System theme, and passed 385 workspace tests plus first-run and routed-shell Windows PTY journeys.

@@ -72,7 +72,7 @@ At launch the application resolves exactly one effective credential source:
 
 The `codex_cli` provider is different.
 It uses only the user's authenticated official Codex CLI session and never reads, stores, or accepts Codex subscription tokens.
-The Providers wizard launches the official `codex login` browser flow, then saves and checks the non-secret profile after sign-in.
+The Providers wizard checks the official CLI session, launches `codex login` directly when authentication is needed, and saves and checks the non-secret profile automatically after sign-in.
 If the CLI readiness probe is temporarily unavailable during startup, AutoHarness keeps the terminal open with provider recovery still reachable.
 
 A missing or locked vault entry degrades to session-only operation rather than blocking offline use.
@@ -98,9 +98,10 @@ The Providers workspace is available through `Ctrl+G`, `/provider`, or the Setti
 It lists Gemini, Google AI Studio API, Cursor, Codex, Claude Code, and OpenAI-compatible API choices.
 Gemini opens the named API-key setup form.
 Google AI Studio API creates its non-secret Gemini profile and then opens the existing masked credential dialog, storing the pasted key only through the operating-system vault rather than a plaintext `.env` file.
-Codex opens a dedicated two-step browser-login wizard.
-The first action invokes the official `codex login` command without collecting credentials.
-After browser sign-in, the second action stores only a non-secret profile before the provider rechecks `codex login status` under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
+Codex opens a dedicated browser-login wizard with one sign-in action.
+AutoHarness first checks `codex login status`, connects immediately when a valid ChatGPT session already exists, or otherwise runs the official `codex login` process directly and keeps it alive for the browser callback.
+Successful authentication stores only a non-secret profile before the provider rechecks the CLI session under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
+The login process can be cancelled from the TUI and safe failure copy directs the user to the same official command without claiming that a browser opened when launch failed.
 Cursor and Claude Code choices name their official CLI login commands but remain unavailable until equivalent repository-owned process adapters exist, rather than claiming a saved or invokable account.
 The Agents workspace selects a connected provider, then a compatible model, then a validated reasoning effort when the catalog positively advertises thinking support.
 The selected model and effort are persisted together, and a newly created session durably selects that model before its first session projection is published.
