@@ -1235,7 +1235,7 @@ fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Line::styled("DEFAULTS", visual_style(model, VisualRole::User)),
         detail_line(model, "Provider", default_profile),
         detail_line(model, "Model", default_model),
-        detail_line(model, "Mode", default_mode),
+        detail_line(model, "Thinking", default_mode),
         Line::from(""),
         Line::from(vec![
             Span::styled("[ Save ]", visual_style(model, VisualRole::Selected)),
@@ -2163,7 +2163,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             "Default model",
             profile.default_model.as_deref().unwrap_or("not set"),
         ),
-        detail_line(model, "Mode", &profile.default_mode),
+        detail_line(model, "Thinking", &profile.default_mode),
     ];
     if profile.kind == ProviderKindLabel::Router {
         lines.push(detail_line(model, "Base URL", &profile.base_url));
@@ -2274,11 +2274,24 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
     let step = model.agent_defaults.step;
+    let step_chip = |label, candidate| {
+        Span::styled(
+            format!(" {label} "),
+            if step == candidate {
+                visual_style(model, VisualRole::Selected)
+            } else {
+                visual_style(model, VisualRole::Muted)
+            },
+        )
+    };
     let mut lines = vec![
-        Line::styled(
-            "1 Provider  2 Model  3 Thinking",
-            visual_style(model, VisualRole::Muted),
-        ),
+        Line::from(vec![
+            step_chip("1  PROVIDER", AgentDefaultStep::Provider),
+            Span::raw("  "),
+            step_chip("2  MODEL", AgentDefaultStep::Model),
+            Span::raw("  "),
+            step_chip("3  THINKING", AgentDefaultStep::Thinking),
+        ]),
         Line::from(""),
     ];
     match step {
@@ -2361,12 +2374,33 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 "Thinking mode",
                 visual_style(model, VisualRole::User),
             ));
+            for (index, effort) in [
+                "Provider default",
+                "None",
+                "Low",
+                "Medium",
+                "High",
+                "Extra high",
+                "Maximum",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let selected = index == model.agent_defaults.thinking_selected;
+                let marker = if selected {
+                    selection_marker(model)
+                } else {
+                    " "
+                };
+                let style = if selected {
+                    visual_style(model, VisualRole::Selected)
+                } else {
+                    visual_style(model, VisualRole::Normal)
+                };
+                lines.push(Line::styled(format!("{marker} {effort}"), style));
+            }
             lines.push(Line::styled(
-                format!("{} Provider default", selection_marker(model)),
-                visual_style(model, VisualRole::Selected),
-            ));
-            lines.push(Line::styled(
-                "This model advertises thinking support. Its provider does not expose portable effort levels.",
+                "The chosen effort is saved with this provider default.",
                 visual_style(model, VisualRole::Muted),
             ));
         }
@@ -2405,7 +2439,7 @@ fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Span::raw(display_safe(default_profile)),
         Span::styled("  Model ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_model)),
-        Span::styled("  Mode ", visual_style(model, VisualRole::Muted)),
+        Span::styled("  Thinking ", visual_style(model, VisualRole::Muted)),
         Span::raw(display_safe(default_mode)),
     ]);
     let workspace = Line::from(vec![

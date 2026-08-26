@@ -931,6 +931,7 @@ pub enum UiIntent {
         request_id: RequestId,
         profile_id: String,
         model: ModelRef,
+        reasoning_effort: Option<String>,
     },
     /// Disconnects one stored profile credential.
     DisconnectProfile {
@@ -1370,6 +1371,7 @@ pub(crate) struct AgentDefaultsState {
     pub model_selected: usize,
     pub profile_id: Option<String>,
     pub model: Option<ModelRef>,
+    pub thinking_selected: usize,
 }
 /// Command-palette local state.
 #[derive(Debug, Default)]

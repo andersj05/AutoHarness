@@ -117,7 +117,7 @@
 - A real Windows terminal smoke selected the loopback router, durably completed one prompt, emitted one complete correlated marker chain, exited successfully, and restored the terminal.
 - PTY hardening now answers Windows cursor-position reports, prevents inactive rename and archive commands from replacing the active projection, deletes event-causation DAGs in reverse sequence, clears cancelled confirmation notices, and projects durable tool calls into structured transcript rows.
 - ADR-0013 is accepted: non-secret `uncommitted_save` and `delete` records make cross-system profile document and vault mutations deterministic and restart-safe.
-- Settings schema 2 adds optional profile default models and credential recovery state; schema-v1 documents remain readable and migrate on mutation.
+- Settings schema 4 adds optional profile default reasoning effort beside profile default models; schema-v1 through schema-v3 documents remain readable and migrate on mutation.
 - `ProfileManager` serializes create, edit, duplicate, activate, save, replace, disconnect, delete, default-model, and recovery operations while the TUI sees only typed intents and safe read models.
 - Distinct deterministic vault references scope credentials to exact profile identities, duplicated profiles start disconnected, and deletion of one profile leaves every other profile and key unchanged.
 - Runtime profile switching rebuilds the correct managed Gemini or router adapter, applies provider-matched environment precedence, refreshes the catalog, and reapplies a compatible saved default model.

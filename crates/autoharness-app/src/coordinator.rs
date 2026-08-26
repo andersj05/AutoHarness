@@ -369,8 +369,9 @@ impl Coordinator {
                 request_id,
                 profile_id,
                 model,
+                reasoning_effort,
             } => {
-                self.set_profile_default(request_id, profile_id, model)
+                self.set_profile_default(request_id, profile_id, model, reasoning_effort)
                     .await?;
             }
             UiIntent::DisconnectProfile {
@@ -623,6 +624,9 @@ impl Coordinator {
         let active_default_model = active_profile
             .and_then(|profile| profile.profile.default_model())
             .map(str::to_owned);
+        let active_default_effort = active_profile
+            .and_then(|profile| profile.profile.default_reasoning_effort())
+            .map(str::to_owned);
         let profiles = snapshot
             .profiles
             .iter()
@@ -658,7 +662,11 @@ impl Coordinator {
                         .cloned()
                         .unwrap_or_default(),
                     default_model: managed.profile.default_model().map(str::to_owned),
-                    default_mode: "safe agent".to_owned(),
+                    default_mode: managed
+                        .profile
+                        .default_reasoning_effort()
+                        .unwrap_or("provider default")
+                        .to_owned(),
                 }
             })
             .collect();
@@ -675,7 +683,8 @@ impl Coordinator {
                     workspace: runtime.workspace.clone(),
                     default_profile: active_id.clone(),
                     default_model: active_default_model,
-                    default_mode: "safe agent".to_owned(),
+                    default_mode: active_default_effort
+                        .unwrap_or_else(|| "provider default".to_owned()),
                 },
                 profiles,
                 pending_recovery: snapshot.pending_recovery,
@@ -741,16 +750,26 @@ impl Coordinator {
         };
         match manager.upsert(&id, &profile) {
             Ok(()) => {
-                if manager
-                    .snapshot()
-                    .ok()
-                    .and_then(|snapshot| {
-                        snapshot
-                            .profiles
-                            .into_iter()
-                            .find(|profile| profile.id == id)
-                    })
-                    .is_some_and(|profile| profile.active)
+                let activated_codex =
+                    profile.kind() == autoharness_settings::ProviderKind::CodexCli;
+                if activated_codex {
+                    if let Err(error) = manager.activate(Some(&id)) {
+                        self.reject(request_id, profile_failure(&error)).await?;
+                        return Ok(());
+                    }
+                    self.configure_active_profile(&id);
+                }
+                if !activated_codex
+                    && manager
+                        .snapshot()
+                        .ok()
+                        .and_then(|snapshot| {
+                            snapshot
+                                .profiles
+                                .into_iter()
+                                .find(|profile| profile.id == id)
+                        })
+                        .is_some_and(|profile| profile.active)
                 {
                     self.configure_active_profile(&id);
                 }
@@ -999,7 +1018,7 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
-        self.set_profile_default(request_id, profile_id, selected_model)
+        self.set_profile_default(request_id, profile_id, selected_model, None)
             .await
     }
 
@@ -1008,6 +1027,7 @@ impl Coordinator {
         request_id: RequestId,
         profile_id: String,
         selected_model: autoharness_domain::ModelRef,
+        reasoning_effort: Option<String>,
     ) -> Result<(), AppError> {
         let id = match ProfileId::new(profile_id) {
             Ok(id) => id,
@@ -1061,8 +1081,9 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
-        match manager.set_default_model(&id, Some(model_id)) {
+        match manager.set_agent_defaults(&id, model_id, reasoning_effort) {
             Ok(()) => {
+                self.configure_active_profile(&id);
                 self.publish_profiles();
                 self.commit(request_id).await?;
             }
@@ -1577,6 +1598,33 @@ impl Coordinator {
             Ok(reply) => {
                 self.session_id = session_id;
                 self.session = reply.session;
+                let default_model = self.profiles.as_ref().and_then(|runtime| {
+                    runtime.manager.snapshot().ok().and_then(|snapshot| {
+                        snapshot
+                            .profiles
+                            .into_iter()
+                            .find(|profile| profile.active)
+                            .and_then(|profile| profile.profile.default_model().map(str::to_owned))
+                    })
+                });
+                if let Some(default_model) = default_model
+                    && let Some(model) = self
+                        .catalog_models
+                        .iter()
+                        .find(|model| model.model_id.as_str() == default_model)
+                        .map(|model| {
+                            autoharness_domain::ModelRef::new(
+                                model.provider_id.clone(),
+                                model.model_id.clone(),
+                            )
+                        })
+                {
+                    self.execute(CommandPayload::SelectModel {
+                        session_id: self.session_id.clone(),
+                        model,
+                    })
+                    .await?;
+                }
                 self.ports
                     .sessions
                     .send_replace(Arc::new(projection::session(&self.session)));
@@ -4076,6 +4124,19 @@ mod tests {
                 .as_deref(),
             Some("models/gemini-fixture")
         );
+        let previous_session = ui.sessions.borrow().session_id.clone();
+        ui.intents
+            .send(UiIntent::CreateSession {
+                request_id: RequestId::new(102),
+            })
+            .await
+            .expect("create session with agent default");
+        expect_commit(&mut ui, RequestId::new(102)).await;
+        let created = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id != previous_session && projection.selected_model.is_some()
+        })
+        .await;
+        assert_eq!(created.selected_model.as_ref(), Some(&fixture_model()));
         ui.intents
             .send(UiIntent::TestProfile {
                 request_id: RequestId::new(6),

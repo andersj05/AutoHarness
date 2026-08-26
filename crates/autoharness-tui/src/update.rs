@@ -2303,7 +2303,7 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
             .iter()
             .filter(|summary| summary.selectable)
             .count(),
-        AgentDefaultStep::Thinking => return,
+        AgentDefaultStep::Thinking => AGENT_THINKING_LEVELS.len(),
     };
     if count == 0 {
         return;
@@ -2311,7 +2311,7 @@ fn move_agent_selection(model: &mut Model, direction: isize) {
     let selected = match model.agent_defaults.step {
         AgentDefaultStep::Provider => &mut model.agent_defaults.profile_selected,
         AgentDefaultStep::Model => &mut model.agent_defaults.model_selected,
-        AgentDefaultStep::Thinking => return,
+        AgentDefaultStep::Thinking => &mut model.agent_defaults.thinking_selected,
     };
     *selected = selected
         .saturating_add_signed(direction)
@@ -2346,6 +2346,7 @@ fn advance_agent_defaults(model: &mut Model) -> Vec<UiEffect> {
                 return Vec::new();
             };
             model.agent_defaults.model = Some(summary.model.clone());
+            model.agent_defaults.thinking_selected = 0;
             model.agent_defaults.step = if model_supports_thinking(summary) {
                 AgentDefaultStep::Thinking
             } else {
@@ -2364,6 +2365,16 @@ fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
         .split(',')
         .any(|detail| detail.trim() == "thinking")
 }
+
+const AGENT_THINKING_LEVELS: [&str; 7] = [
+    "provider default",
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+];
 
 fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
     let Some(profile_id) = model.agent_defaults.profile_id.clone() else {
@@ -2387,6 +2398,10 @@ fn persist_agent_default(model: &mut Model) -> Vec<UiEffect> {
         request_id,
         profile_id,
         model: selected_model,
+        reasoning_effort: AGENT_THINKING_LEVELS
+            .get(model.agent_defaults.thinking_selected)
+            .filter(|effort| **effort != "provider default")
+            .map(|effort| (*effort).to_owned()),
     })]
 }
 

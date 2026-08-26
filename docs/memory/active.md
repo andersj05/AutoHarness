@@ -4,7 +4,7 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** `feat/tui-navigation-audit` makes Settings, provider choices, connected profiles, Codex login actions, Agents, and profile editors arrow-key-first with continuous selection; 140 focused TUI tests, strict TUI Clippy, formatting, routed-shell Windows PTY, and Codex provider PTY smoke pass, while full Phase 3.9 release evidence remains pending
+**Status:** The provider and Agents follow-up launches Codex login visibly, activates a saved Codex profile, exposes explicit Codex model choices, persists model and reasoning defaults together, and applies the model before publishing each fresh session; focused tests, strict workspace Clippy, formatting, documentation links, and the real Windows provider PTY journey pass while full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
@@ -20,7 +20,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 - `autoharness-provider-gemini` implements paginated Google model discovery, stable Interactions v1 streaming, a narrow pre-stream Generate Content fallback, cancellation, retry classification, limits, environment or in-app credential admission, and credential redaction.
 - `autoharness-provider-openai` implements configurable OpenAI-compatible router discovery and streamed chat completions with a validated base URL, configurable sensitive authentication header, pagination, cumulative usage, cancellation, limits, and credential redaction.
 - `autoharness-store` and `autoharness-store-sqlite` provide an event-authoritative store, transactional projections, WAL-mode local durability, idempotent append, migration verification, projection rebuilding, and an integrity-checked provider-neutral model-catalog cache.
-- `autoharness-settings` resolves defaults, user file, workspace file, environment, and override layers in fixed precedence with per-key provenance; schema 2 adds optional profile default models and non-secret recovery records while schema-v1 documents migrate on mutation (ADR-0012).
+- `autoharness-settings` resolves defaults, user file, workspace file, environment, and override layers in fixed precedence with per-key provenance; schema 4 adds optional profile default reasoning effort beside default models while older documents migrate on mutation (ADR-0012).
 - The atomic application-owned `autoharness.profiles.json` document stores validated named profiles, non-secret connection fields, optional default models, opaque credential references, and bounded credential-recovery records.
 - `autoharness-app::vault` defines the credential-vault port with an operating-system implementation through the `keyring` crate and a fake implementation for tests; Windows Credential Manager save, load, replace, and delete passed the opt-in platform smoke.
 - Startup and runtime switching resolve one provider-matched credential source in precedence order: environment, then the active profile's vault entry, then session-only; locked or unavailable vaults preserve offline use without plaintext fallback.
@@ -57,6 +57,7 @@ Keep the routed TUI navigation contract consistent across Settings and provider 
 
 ## Recently completed
 
+- On 2026-08-25, the Providers and Agents follow-up made Codex browser login launch in a separate visible Windows process, activated saved Codex profiles immediately, exposed the documented GPT-5.6 Codex model choices, persisted model and reasoning effort together in settings schema 4, and applied the selected model during fresh-session creation.
 - On 2026-08-25, Codex opens a dedicated in-app browser-login wizard whose Enter action launches the official `codex login` command without credential handling, Google AI Studio API opens the masked OS-vault key dialog after non-secret profile creation, and General, Providers, Profile, and Agents now share the single outer Settings frame; focused TUI tests, strict Clippy, and the real Windows Codex-login PTY journey passed.
 - On 2026-08-25, `feat/tui-navigation-audit` removed Tab-driven page switching, made Settings and provider connection surfaces arrow-key-first, preserved connected-profile selection across provider navigation, rendered connected accounts beside safe details, added arrow-selected Codex login actions and profile-editor fields, and passed focused TUI tests, strict TUI Clippy, formatting, routed-shell PTY, and Codex provider PTY smoke.
 - Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.

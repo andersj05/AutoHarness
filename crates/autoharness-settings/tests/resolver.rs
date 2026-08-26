@@ -1,6 +1,7 @@
 use autoharness_settings::{
-    ColorMode, Density, GlyphMode, LayerKind, Layout, ProfileId, ProviderKind, SettingsBuilder,
-    SettingsDocument, SettingsError, Source, TerminalTimestampStyle, ThemePreset,
+    ColorMode, Density, GlyphMode, LayerKind, Layout, ProfileId, ProviderKind,
+    SETTINGS_SCHEMA_VERSION, SettingsBuilder, SettingsDocument, SettingsError, Source,
+    TerminalTimestampStyle, ThemePreset,
 };
 
 const USER_JSON: &str = r#"{
@@ -39,7 +40,7 @@ fn defaults_resolve_without_any_file() {
 }
 
 #[test]
-fn v2_document_migrates_to_v3_with_default_local_preferences() {
+fn v2_document_migrates_to_current_schema_with_default_local_preferences() {
     let document: SettingsDocument = serde_json::from_str(
         r#"{
             "schema_version": 2,
@@ -48,10 +49,10 @@ fn v2_document_migrates_to_v3_with_default_local_preferences() {
     )
     .expect("v2 document remains readable");
 
-    assert_eq!(document.schema_version(), 3);
+    assert_eq!(document.schema_version(), SETTINGS_SCHEMA_VERSION);
     assert!(document.local_profile().is_empty());
     let serialized = serde_json::to_value(document).expect("current document serializes");
-    assert_eq!(serialized["schema_version"], 3);
+    assert_eq!(serialized["schema_version"], SETTINGS_SCHEMA_VERSION);
 
     let resolved = user_layer(r#"{"schema_version": 2}"#)
         .resolve()

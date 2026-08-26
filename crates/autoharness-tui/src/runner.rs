@@ -267,12 +267,20 @@ fn dispatch_effects(
             UiEffect::LaunchCodexLogin => {
                 let executable = std::env::var_os("AUTOHARNESS_CODEX_EXECUTABLE")
                     .unwrap_or_else(|| std::ffi::OsString::from("codex"));
-                let _ = std::process::Command::new(executable)
-                    .arg("login")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
+                if launch_codex_login(&executable).is_err() {
+                    let request_id = model.allocate_request();
+                    let _ = update(
+                        model,
+                        Message::Notice(UiNotice::IntentRejected {
+                            request_id,
+                            failure: UiFailure::new(
+                                ErrorClass::Unavailable,
+                                "Codex login could not be launched; verify that the Codex CLI is installed",
+                                RetryPolicy::Now,
+                            ),
+                        }),
+                    );
+                }
             }
             UiEffect::CopyTranscript(text) => {
                 // OSC 52 copy; failure is non-fatal because terminals may
@@ -309,6 +317,34 @@ fn dispatch_effects(
         }
     }
     false
+}
+
+#[cfg(windows)]
+fn launch_codex_login(executable: &std::ffi::OsStr) -> std::io::Result<()> {
+    std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Process -FilePath $args[0] -ArgumentList 'login'",
+        ])
+        .arg(executable)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(windows))]
+fn launch_codex_login(executable: &std::ffi::OsStr) -> std::io::Result<()> {
+    std::process::Command::new(executable)
+        .arg("login")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 fn draw<B>(terminal: &mut Terminal<B>, model: &mut Model) -> Result<(), RunnerError>

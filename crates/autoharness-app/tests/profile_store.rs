@@ -107,7 +107,7 @@ fn malformed_existing_file_is_backed_up_and_replaced() {
     let store = ProfileStore::open(&path).expect("recover store");
 
     let document = store.read_document().expect("replacement document");
-    assert!(document.contains("\"schema_version\": 3"));
+    assert!(document.contains("\"schema_version\": 4"));
     let backup = dir.path().join("profiles.json.bad");
     assert_eq!(fs::read_to_string(backup).expect("backup"), "{corrupted");
 }
@@ -209,6 +209,27 @@ fn profile_default_model_persists_without_disturbing_credential_linkage() {
         Some("router-default-model")
     );
     assert_eq!(profile.credential_state, StoredCredentialState::Stored);
+}
+
+#[test]
+fn agent_defaults_persist_model_and_reasoning_together() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    let (_, _, manager, id) = manager(&path);
+
+    manager
+        .set_agent_defaults(&id, "gpt-5.6-terra".to_owned(), Some("high".to_owned()))
+        .expect("set agent defaults");
+
+    let profile = manager
+        .snapshot()
+        .expect("snapshot")
+        .profiles
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .expect("profile");
+    assert_eq!(profile.profile.default_model(), Some("gpt-5.6-terra"));
+    assert_eq!(profile.profile.default_reasoning_effort(), Some("high"));
 }
 
 #[test]

@@ -21,9 +21,9 @@ A future schema version fails closed with an explicit error.
 Workspace files may override only explicitly permitted appearance, accessibility, and terminal-presentation preferences.
 Workspace files may not override local display identity, provider, profiles, active profile, internal credential recovery state, approvals, retention, telemetry, sandbox policy, or credentials.
 
-The profile document carries schema version 3 and is written atomically through a temporary file plus rename.
-Schema-v1 and schema-v2 documents migrate on their next mutation.
-Schema 3 adds typed non-secret local preferences while retaining optional profile default models and credential recovery records.
+The profile document carries schema version 4 and is written atomically through a temporary file plus rename.
+Schema-v1, schema-v2, and schema-v3 documents migrate on their next mutation.
+Schema 3 added typed non-secret local preferences, and schema 4 adds an optional validated default reasoning effort beside each profile default model.
 An unparseable or invalid existing document is renamed to `autoharness.profiles.json.bad` and replaced with defaults so AutoHarness remains usable.
 Future schema documents remain intact and fail closed.
 
@@ -56,6 +56,7 @@ A profile is a named record containing:
 - The provider kind (`gemini`, `router`, or `codex_cli`).
 - Non-secret connection fields such as the router base URL, project identity, authentication header name, and relative endpoint paths.
 - An optional default model identifier.
+- An optional provider-native default reasoning effort.
 - An optional opaque credential reference for API-key providers.
 
 Profile names are validated, bounded values (`ProfileId`), as are references (`CredentialReference`).
@@ -99,8 +100,9 @@ Google AI Studio API creates its non-secret Gemini profile and then opens the ex
 Codex opens a dedicated browser-login wizard.
 Its Enter action invokes the official `codex login` command without collecting credentials, and its Save action stores only a non-secret profile before the provider rechecks `codex login status` under [ADR-0014](../adr/0014-use-codex-cli-subscription-boundary.md).
 Cursor and Claude Code choices name their official CLI login commands but remain unavailable until equivalent repository-owned process adapters exist, rather than claiming a saved or invokable account.
-The Agents workspace selects a connected provider, then a compatible model, then provider-default thinking when the catalog positively advertises thinking support.
-Providers that do not advertise portable thinking levels never receive an invented effort setting.
+The Agents workspace selects a connected provider, then a compatible model, then a validated reasoning effort when the catalog positively advertises thinking support.
+The selected model and effort are persisted together, and a newly created session durably selects that model before its first session projection is published.
+Provider-default effort remains available when the user does not want an override.
 Keyboard shortcuts, command-palette routing, and visible controls converge on the same typed intents.
 
 Each profile uses one deterministic vault reference derived from its validated profile identity.

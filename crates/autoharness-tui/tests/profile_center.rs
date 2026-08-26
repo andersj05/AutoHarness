@@ -179,7 +179,10 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     let _ = update(&mut model, Message::Input(key(Key::Right)));
     let _ = update(&mut model, Message::Input(key(Key::Down)));
 
-    assert!(render_text(&model, 120, 40).contains("1 Provider  2 Model  3 Thinking"));
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("1  PROVIDER"));
+    assert!(rendered.contains("2  MODEL"));
+    assert!(rendered.contains("3  THINKING"));
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
         [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
@@ -187,10 +190,13 @@ fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
     ));
     assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
     assert!(render_text(&model, 120, 40).contains("Thinking mode"));
+    for _ in 0..4 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, .. })]
-            if profile_id == "personal-gemini" && *model == model_ref()
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault { profile_id, model, reasoning_effort, .. })]
+            if profile_id == "personal-gemini" && *model == model_ref() && reasoning_effort.as_deref() == Some("high")
     ));
 }
 

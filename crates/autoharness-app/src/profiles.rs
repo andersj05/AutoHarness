@@ -549,6 +549,23 @@ impl ProfileManager {
         Ok(())
     }
 
+    /// Atomically sets a profile's default model and reasoning effort.
+    pub fn set_agent_defaults(
+        &self,
+        profile: &ProfileId,
+        model: String,
+        reasoning_effort: Option<String>,
+    ) -> Result<(), ProfileManagementError> {
+        let configured = self
+            .store
+            .profile(profile)?
+            .with_default_model(Some(model))
+            .and_then(|profile| profile.with_default_reasoning_effort(reasoning_effort))
+            .map_err(ProfileStoreError::Invalid)?;
+        self.store.upsert_profile(profile, &configured)?;
+        Ok(())
+    }
+
     /// Saves a first credential through the restart-safe three-step protocol.
     pub fn save_credential(
         &self,
