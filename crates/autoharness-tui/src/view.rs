@@ -2231,7 +2231,7 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
             ),
             Line::from(""),
             Line::styled(
-                "↑/↓ choose  Enter activate  Esc return to Providers",
+                "↑/↓ choose  Enter confirm  Esc return to Providers",
                 visual_style(model, VisualRole::Muted),
             ),
             Line::from(""),
