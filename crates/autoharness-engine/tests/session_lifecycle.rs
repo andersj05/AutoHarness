@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use autoharness_domain::{
     AttemptFailure, Causation, CommandEnvelope, CommandId, CommandPayload, CorrelationId,
-    DeliveryMode, ErrorCode, EventId, EventPayload, InputId, ModelId, ModelRef, PromptText,
-    ProviderId, PublicMessage, RetryAdvice, SessionId, SessionTitle,
+    DeliveryMode, EVENT_SCHEMA_V1, ErrorCode, EventId, EventPayload, InputId, ModelId, ModelRef,
+    PromptText, ProviderId, PublicMessage, RetryAdvice, SessionId, SessionTitle,
 };
 use autoharness_engine::{
     AttemptStatus, CommandRejection, EngineError, EventMetadataSource, GeneratedEventMetadata,
@@ -129,6 +129,109 @@ fn rename_updates_the_replayed_title_without_disturbing_other_state() {
     );
     assert!(!replay.is_archived());
     assert_eq!(engine.events().len(), 3);
+}
+
+#[test]
+fn first_prompt_admission_renames_before_preparing_the_attempt_and_replays() {
+    let mut engine = lifecycle_engine(&[create(), select()]);
+    let prompt =
+        PromptText::new("Draft the durable title\nIgnore this line").expect("valid prompt");
+    let admission = CommandPayload::AdmitPromptAndPrepareAttempt {
+        session_id: session_id(),
+        input_id: InputId::new("input-title").expect("valid input ID"),
+        prompt,
+        delivery_mode: DeliveryMode::NextTurn,
+        attempt_id: autoharness_domain::AttemptId::new("attempt-title").expect("valid attempt ID"),
+    };
+
+    let events = engine
+        .execute(&command("command-admit-title", admission.clone()))
+        .expect("first prompt admission succeeds");
+
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        events[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
+    assert!(matches!(
+        events[1].payload(),
+        EventPayload::SessionRenamed { title } if title.as_str() == "Draft the durable title"
+    ));
+    assert!(matches!(
+        events[2].payload(),
+        EventPayload::AttemptPrepared { .. }
+    ));
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence().get())
+            .collect::<Vec<_>>(),
+        vec![3, 4, 5]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.schema_version() == EVENT_SCHEMA_V1)
+    );
+    assert_eq!(
+        events[0].causation(),
+        &Causation::Command(command_id("command-admit-title"))
+    );
+    assert_eq!(
+        events[1].causation(),
+        &Causation::Event(events[0].event_id().clone())
+    );
+    assert_eq!(
+        events[2].causation(),
+        &Causation::Event(events[1].event_id().clone())
+    );
+
+    let duplicate = engine
+        .execute(&command("command-admit-title", admission))
+        .expect_err("command ID stays idempotent after the atomic batch");
+    assert!(matches!(
+        duplicate,
+        EngineError::CommandRejected(CommandRejection::DuplicateCommand { .. })
+    ));
+    assert_eq!(engine.events().len(), 5);
+
+    let replay = SessionAggregate::rehydrate(session_id(), engine.events())
+        .expect("title admission history replays cleanly");
+    assert_eq!(
+        replay.title().map(SessionTitle::as_str),
+        Some("Draft the durable title")
+    );
+}
+
+#[test]
+fn explicit_user_title_is_not_overwritten_by_first_prompt_admission() {
+    let mut engine = lifecycle_engine(&[create(), rename("Pinned by user")]);
+    let events = engine
+        .execute(&command(
+            "command-admit-after-rename",
+            CommandPayload::AdmitPrompt {
+                session_id: session_id(),
+                input_id: InputId::new("input-after-rename").expect("valid input ID"),
+                prompt: PromptText::new("Automatic title must not replace this")
+                    .expect("valid prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            },
+        ))
+        .expect("first prompt admission succeeds");
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
+    assert_eq!(
+        engine
+            .session(&session_id())
+            .expect("created session")
+            .title()
+            .map(SessionTitle::as_str),
+        Some("Pinned by user")
+    );
 }
 
 #[test]

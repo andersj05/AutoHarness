@@ -16,12 +16,21 @@ path = "src/lib.rs"
 name = "autoharness"
 path = "src/main.rs"
 
+
+[[bin]]
+name = "ah"
+path = "src/main.rs"
+
+[features]
+benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
+
 [dependencies]
 async-trait.workspace = true
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
 autoharness-provider.workspace = true
 autoharness-provider-gemini.workspace = true
+autoharness-provider-codex-cli.workspace = true
 autoharness-provider-openai.workspace = true
 autoharness-settings.workspace = true
 autoharness-store.workspace = true
@@ -44,8 +53,10 @@ zeroize.workspace = true
 [dev-dependencies]
 async-stream.workspace = true
 async-trait.workspace = true
+portable-pty = "0.9.0"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+vt100 = "0.15.2"
 zeroize.workspace = true
 
 [lints]

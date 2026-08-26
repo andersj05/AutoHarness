@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::preferences::LocalProfile;
+
 /// Supported settings schema version.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// Bounded profile-name value type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -125,6 +127,8 @@ pub enum ProviderKind {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
+    /// User-owned official Codex CLI subscription session.
+    CodexCli,
 }
 
 /// Non-secret connection fields for one named provider configuration.
@@ -143,10 +147,98 @@ pub struct ProviderProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) chat_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) credential: Option<CredentialDocument>,
 }
 
 impl ProviderProfile {
+    /// Creates a Gemini profile with no stored credential.
+    #[must_use]
+    pub const fn gemini() -> Self {
+        Self {
+            kind: ProviderKind::Gemini,
+            base_url: None,
+            project: None,
+            auth_header: None,
+            models_path: None,
+            chat_path: None,
+            default_model: None,
+            credential: None,
+        }
+    }
+
+    /// Creates a profile backed by the user's official Codex CLI session.
+    #[must_use]
+    pub const fn codex_cli() -> Self {
+        Self {
+            kind: ProviderKind::CodexCli,
+            base_url: None,
+            project: None,
+            auth_header: None,
+            models_path: None,
+            chat_path: None,
+            default_model: None,
+            credential: None,
+        }
+    }
+
+    /// Creates a router profile with validated non-secret connection fields.
+    pub fn router(
+        base_url: impl Into<String>,
+        project: Option<String>,
+        auth_header: Option<String>,
+    ) -> Result<Self, &'static str> {
+        let base_url = base_url.into();
+        if base_url.trim().is_empty() {
+            return Err("router base URL must not be empty");
+        }
+        if base_url.len() > 2_048 || base_url.chars().any(char::is_control) {
+            return Err("router base URL is invalid");
+        }
+        for value in project.iter().chain(auth_header.iter()) {
+            if value.len() > 256 || value.chars().any(char::is_control) {
+                return Err("router profile field is invalid");
+            }
+        }
+        Ok(Self {
+            kind: ProviderKind::Router,
+            base_url: Some(base_url),
+            project,
+            auth_header,
+            models_path: None,
+            chat_path: None,
+            default_model: None,
+            credential: None,
+        })
+    }
+
+    /// Returns a copy without credential linkage for safe duplication.
+    #[must_use]
+    pub fn without_credential(mut self) -> Self {
+        self.credential = None;
+        self
+    }
+    /// Replaces the optional default model identifier.
+    pub fn with_default_model(
+        mut self,
+        default_model: Option<String>,
+    ) -> Result<Self, &'static str> {
+        if let Some(model) = &default_model
+            && (model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control))
+        {
+            return Err("default model identifier is invalid");
+        }
+        self.default_model = default_model;
+        Ok(self)
+    }
+
+    /// Returns the configured default model identifier.
+    #[must_use]
+    pub fn default_model(&self) -> Option<&str> {
+        self.default_model.as_deref()
+    }
+
     /// Returns the provider adapter this profile selects.
     #[must_use]
     pub const fn kind(&self) -> ProviderKind {
@@ -194,13 +286,65 @@ impl ProviderProfile {
 
 /// Serialized credential linkage inside one profile.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialDocument {
     pub(crate) reference: CredentialReference,
 }
+/// Durable non-secret recovery action for a cross-system credential mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialRecoveryKind {
+    /// A vault save has not yet committed its profile-document link.
+    UncommittedSave,
+    /// A removed profile link still requires idempotent vault cleanup.
+    Delete,
+}
+
+/// Bounded recovery record containing identities but never credential material.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialRecoveryRecord {
+    profile: ProfileId,
+    reference: CredentialReference,
+    kind: CredentialRecoveryKind,
+}
+
+impl CredentialRecoveryRecord {
+    /// Creates one non-secret recovery record.
+    #[must_use]
+    pub const fn new(
+        profile: ProfileId,
+        reference: CredentialReference,
+        kind: CredentialRecoveryKind,
+    ) -> Self {
+        Self {
+            profile,
+            reference,
+            kind,
+        }
+    }
+
+    /// Returns the exact profile involved in the mutation.
+    #[must_use]
+    pub const fn profile(&self) -> &ProfileId {
+        &self.profile
+    }
+
+    /// Returns the deterministic opaque vault reference.
+    #[must_use]
+    pub const fn reference(&self) -> &CredentialReference {
+        &self.reference
+    }
+
+    /// Returns the recovery action kind.
+    #[must_use]
+    pub const fn kind(&self) -> CredentialRecoveryKind {
+        self.kind
+    }
+}
 
 /// Validated top-level settings document for one layer or merged output.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SettingsDocument {
     pub(crate) schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,4 +353,92 @@ pub struct SettingsDocument {
     pub(crate) profiles: BTreeMap<ProfileId, ProviderProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) active_profile: Option<ProfileId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) credential_recovery: Vec<CredentialRecoveryRecord>,
+    #[serde(default, skip_serializing_if = "LocalProfile::is_empty")]
+    pub(crate) local_profile: LocalProfile,
+}
+
+impl Default for SettingsDocument {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SettingsDocument {
+    /// Creates a current-version settings document with no layer overrides.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            provider: None,
+            profiles: BTreeMap::new(),
+            active_profile: None,
+            credential_recovery: Vec::new(),
+            local_profile: LocalProfile::new(),
+        }
+    }
+
+    /// Returns the current schema version written by this document.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Returns the persisted local profile layer.
+    #[must_use]
+    pub const fn local_profile(&self) -> &LocalProfile {
+        &self.local_profile
+    }
+
+    /// Replaces the persisted local profile layer.
+    pub fn set_local_profile(&mut self, local_profile: LocalProfile) {
+        self.local_profile = local_profile;
+    }
+
+    /// Returns this document with the supplied local profile layer.
+    #[must_use]
+    pub fn with_local_profile(mut self, local_profile: LocalProfile) -> Self {
+        self.set_local_profile(local_profile);
+        self
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsDocumentWire {
+    schema_version: u32,
+    #[serde(default)]
+    provider: Option<ProviderKind>,
+    #[serde(default)]
+    profiles: BTreeMap<ProfileId, ProviderProfile>,
+    #[serde(default)]
+    active_profile: Option<ProfileId>,
+    #[serde(default)]
+    credential_recovery: Vec<CredentialRecoveryRecord>,
+    #[serde(default)]
+    local_profile: LocalProfile,
+}
+
+impl<'de> Deserialize<'de> for SettingsDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = SettingsDocumentWire::deserialize(deserializer)?;
+        if !(1..=SETTINGS_SCHEMA_VERSION).contains(&wire.schema_version) {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported settings schema version {}",
+                wire.schema_version
+            )));
+        }
+        Ok(Self {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            provider: wire.provider,
+            profiles: wire.profiles,
+            active_profile: wire.active_profile,
+            credential_recovery: wire.credential_recovery,
+            local_profile: wire.local_profile,
+        })
+    }
 }

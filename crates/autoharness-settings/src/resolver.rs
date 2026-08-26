@@ -2,6 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::error::SettingsError;
+use crate::preferences::{
+    ColorMode, ComposerSubmitBehavior, Density, DisplayLabel, EffectiveLocalPreferences,
+    EffectiveLocalProfile, EffectiveValue, GlyphMode, Layout, LocalProfile, TerminalTimestampStyle,
+    ThemePreset,
+};
 use crate::profile::{
     ProfileId, ProviderKind, ProviderProfile, SETTINGS_SCHEMA_VERSION, SettingsDocument,
 };
@@ -35,14 +40,25 @@ impl LayerKind {
     }
 }
 
-/// Keys a workspace settings document may never override.
-const WORKSPACE_FORBIDDEN_KEYS: &[&str] = &["provider", "profiles", "active_profile"];
+#[derive(Debug, Default, Clone)]
+struct RawLocalProfile {
+    display_label: Option<(DisplayLabel, Source)>,
+    theme_preset: Option<(ThemePreset, Source)>,
+    color_mode: Option<(ColorMode, Source)>,
+    glyph_mode: Option<(GlyphMode, Source)>,
+    reduced_motion: Option<(bool, Source)>,
+    density: Option<(Density, Source)>,
+    layout: Option<(Layout, Source)>,
+    terminal_timestamp_style: Option<(TerminalTimestampStyle, Source)>,
+    composer_submit_behavior: Option<(ComposerSubmitBehavior, Source)>,
+}
 
 #[derive(Debug, Default, Clone)]
 struct RawLayer {
     provider: Option<(ProviderKind, Source)>,
     active_profile: Option<(String, Source)>,
     profiles: BTreeMap<ProfileId, (ProviderProfile, Source)>,
+    local_profile: RawLocalProfile,
 }
 
 /// Accumulates configuration layers and resolves them into typed settings.
@@ -86,28 +102,28 @@ impl SettingsBuilder {
     pub fn resolve(mut self) -> Result<ResolvedSettings, SettingsError> {
         let mut merged = RawLayer::default();
         let mut diagnostics = Vec::new();
+        let layers = std::mem::take(&mut self.layers);
 
-        for (kind, json) in std::mem::take(&mut self.layers) {
-            let document = match parse_layer(kind.label(), &json) {
-                Ok(document) => document,
-                Err(SettingsError::UnsupportedSchemaVersion { layer, found }) => {
-                    return Err(SettingsError::UnsupportedSchemaVersion { layer, found });
-                }
-                Err(error) => {
-                    diagnostics.push(error.to_string());
+        for expected_kind in [LayerKind::UserFile, LayerKind::WorkspaceFile] {
+            for (kind, json) in &layers {
+                if *kind != expected_kind {
                     continue;
                 }
-            };
-            if kind == LayerKind::WorkspaceFile {
-                for key in WORKSPACE_FORBIDDEN_KEYS {
-                    if document_has_key(&document, key) {
-                        return Err(SettingsError::DisallowedWorkspaceKey {
-                            key: (*key).to_owned(),
-                        });
+                let document = match parse_layer(*kind, json) {
+                    Ok(document) => document,
+                    Err(error @ SettingsError::UnsupportedSchemaVersion { .. }) => {
+                        return Err(error);
                     }
-                }
+                    Err(error @ SettingsError::DisallowedWorkspaceKey { .. }) => {
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        diagnostics.push(error.to_string());
+                        continue;
+                    }
+                };
+                merge_document(&mut merged, document, kind.source());
             }
-            merge_document(&mut merged, document, kind.source());
         }
 
         for (name, value) in self.environment {
@@ -131,18 +147,32 @@ impl SettingsBuilder {
             });
         }
 
+        let local_profile = effective_local_profile(&merged.local_profile);
         Ok(ResolvedSettings {
             inner: merged,
+            local_profile,
             diagnostics,
         })
     }
 }
 
 /// Fully resolved, validated, non-secret settings plus provenance.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ResolvedSettings {
     inner: RawLayer,
+    local_profile: EffectiveLocalProfile,
     diagnostics: Vec<String>,
+}
+
+impl Default for ResolvedSettings {
+    fn default() -> Self {
+        let inner = RawLayer::default();
+        Self {
+            local_profile: effective_local_profile(&inner.local_profile),
+            inner,
+            diagnostics: Vec::new(),
+        }
+    }
 }
 
 impl ResolvedSettings {
@@ -152,7 +182,13 @@ impl ResolvedSettings {
         self.inner.provider.as_ref().map(|(kind, _)| *kind)
     }
 
-    /// Returns provenance for keys that have an effective value.
+    /// Returns effective local identity and UI preferences with leaf provenance.
+    #[must_use]
+    pub const fn local_profile(&self) -> &EffectiveLocalProfile {
+        &self.local_profile
+    }
+
+    /// Returns provenance for every resolved setting leaf.
     #[must_use]
     pub fn provenance(&self) -> BTreeMap<String, Source> {
         let mut map = BTreeMap::new();
@@ -165,6 +201,44 @@ impl ResolvedSettings {
         for (id, (_, source)) in &self.inner.profiles {
             map.insert(format!("profiles.{id}"), *source);
         }
+        let local_profile = self.local_profile();
+        map.insert(
+            "local_profile.display_label".to_owned(),
+            local_profile.display_label().source(),
+        );
+        let preferences = local_profile.preferences();
+        map.insert(
+            "local_profile.preferences.theme_preset".to_owned(),
+            preferences.theme_preset().source(),
+        );
+        map.insert(
+            "local_profile.preferences.color_mode".to_owned(),
+            preferences.color_mode().source(),
+        );
+        map.insert(
+            "local_profile.preferences.glyph_mode".to_owned(),
+            preferences.glyph_mode().source(),
+        );
+        map.insert(
+            "local_profile.preferences.reduced_motion".to_owned(),
+            preferences.reduced_motion().source(),
+        );
+        map.insert(
+            "local_profile.preferences.density".to_owned(),
+            preferences.density().source(),
+        );
+        map.insert(
+            "local_profile.preferences.layout".to_owned(),
+            preferences.layout().source(),
+        );
+        map.insert(
+            "local_profile.preferences.terminal_timestamp_style".to_owned(),
+            preferences.terminal_timestamp_style().source(),
+        );
+        map.insert(
+            "local_profile.preferences.composer_submit_behavior".to_owned(),
+            preferences.composer_submit_behavior().source(),
+        );
         map
     }
 
@@ -213,29 +287,30 @@ impl fmt::Display for ResolvedSettings {
     }
 }
 
-fn parse_layer(label: &'static str, json: &str) -> Result<SettingsDocument, SettingsError> {
+fn parse_layer(kind: LayerKind, json: &str) -> Result<SettingsDocument, SettingsError> {
+    let layer = kind.label();
     if json.trim().is_empty() {
-        return Ok(SettingsDocument {
-            schema_version: SETTINGS_SCHEMA_VERSION,
-            ..SettingsDocument::default()
-        });
+        return Ok(SettingsDocument::default());
     }
     let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|_| SettingsError::MalformedLayer { layer: label })?;
-    if !value.is_object() && !value.is_null() {
-        return Err(SettingsError::MalformedLayer { layer: label });
+        serde_json::from_str(json).map_err(|_| SettingsError::MalformedLayer { layer })?;
+    if !value.is_object() {
+        return Err(SettingsError::MalformedLayer { layer });
     }
     let version = value
         .get("schema_version")
-        .and_then(|version| version.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(u64::from(SETTINGS_SCHEMA_VERSION));
     if version > u64::from(SETTINGS_SCHEMA_VERSION) {
         return Err(SettingsError::UnsupportedSchemaVersion {
-            layer: label,
-            found: version as u32,
+            layer,
+            found: u32::try_from(version).unwrap_or(u32::MAX),
         });
     }
-    serde_json::from_value(value).map_err(|_| SettingsError::MalformedLayer { layer: label })
+    if kind == LayerKind::WorkspaceFile {
+        validate_workspace_document(&value)?;
+    }
+    serde_json::from_value(value).map_err(|_| SettingsError::MalformedLayer { layer })
 }
 
 fn parse_provider_value(value: &str) -> Option<ProviderKind> {
@@ -246,12 +321,59 @@ fn parse_provider_value(value: &str) -> Option<ProviderKind> {
     }
 }
 
-fn document_has_key(document: &SettingsDocument, key: &str) -> bool {
-    match key {
-        "provider" => document.provider.is_some(),
-        "active_profile" => document.active_profile.is_some(),
-        "profiles" => !document.profiles.is_empty(),
-        _ => false,
+fn validate_workspace_document(value: &serde_json::Value) -> Result<(), SettingsError> {
+    let document = value
+        .as_object()
+        .expect("workspace documents are checked to be objects before validation");
+    for (key, value) in document {
+        match key.as_str() {
+            "schema_version" => {}
+            "local_profile" => validate_workspace_local_profile(value)?,
+            _ => return Err(disallowed_workspace_key(key)),
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_local_profile(value: &serde_json::Value) -> Result<(), SettingsError> {
+    let Some(profile) = value.as_object() else {
+        return Ok(());
+    };
+    for (key, value) in profile {
+        match key.as_str() {
+            "preferences" => validate_workspace_preferences(value)?,
+            _ => return Err(disallowed_workspace_key(&format!("local_profile.{key}"))),
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_preferences(value: &serde_json::Value) -> Result<(), SettingsError> {
+    let Some(preferences) = value.as_object() else {
+        return Ok(());
+    };
+    for key in preferences.keys() {
+        match key.as_str() {
+            "theme_preset"
+            | "color_mode"
+            | "glyph_mode"
+            | "reduced_motion"
+            | "density"
+            | "layout"
+            | "terminal_timestamp_style" => {}
+            _ => {
+                return Err(disallowed_workspace_key(&format!(
+                    "local_profile.preferences.{key}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn disallowed_workspace_key(key: &str) -> SettingsError {
+    SettingsError::DisallowedWorkspaceKey {
+        key: key.to_owned(),
     }
 }
 
@@ -264,5 +386,70 @@ fn merge_document(merged: &mut RawLayer, document: SettingsDocument, source: Sou
     }
     for (id, profile) in document.profiles {
         merged.profiles.insert(id, (profile, source));
+    }
+    merge_local_profile(&mut merged.local_profile, document.local_profile, source);
+}
+
+fn merge_local_profile(merged: &mut RawLocalProfile, profile: LocalProfile, source: Source) {
+    if let Some(label) = profile.display_label() {
+        merged.display_label = Some((label.clone(), source));
+    }
+    let preferences = profile.preferences();
+    if let Some(value) = preferences.theme_preset() {
+        merged.theme_preset = Some((value, source));
+    }
+    if let Some(value) = preferences.color_mode() {
+        merged.color_mode = Some((value, source));
+    }
+    if let Some(value) = preferences.glyph_mode() {
+        merged.glyph_mode = Some((value, source));
+    }
+    if let Some(value) = preferences.reduced_motion() {
+        merged.reduced_motion = Some((value, source));
+    }
+    if let Some(value) = preferences.density() {
+        merged.density = Some((value, source));
+    }
+    if let Some(value) = preferences.layout() {
+        merged.layout = Some((value, source));
+    }
+    if let Some(value) = preferences.terminal_timestamp_style() {
+        merged.terminal_timestamp_style = Some((value, source));
+    }
+    if let Some(value) = preferences.composer_submit_behavior() {
+        merged.composer_submit_behavior = Some((value, source));
+    }
+}
+
+fn effective_local_profile(raw: &RawLocalProfile) -> EffectiveLocalProfile {
+    let mut preferences = EffectiveLocalPreferences::default();
+    preferences.set_theme_preset(effective_leaf(&raw.theme_preset));
+    preferences.set_color_mode(effective_leaf(&raw.color_mode));
+    preferences.set_glyph_mode(effective_leaf(&raw.glyph_mode));
+    preferences.set_reduced_motion(effective_leaf(&raw.reduced_motion));
+    preferences.set_density(effective_leaf(&raw.density));
+    preferences.set_layout(effective_leaf(&raw.layout));
+    preferences.set_terminal_timestamp_style(effective_leaf(&raw.terminal_timestamp_style));
+    preferences.set_composer_submit_behavior(effective_leaf(&raw.composer_submit_behavior));
+    EffectiveLocalProfile::new(effective_optional_leaf(&raw.display_label), preferences)
+}
+
+fn effective_leaf<T>(value: &Option<(T, Source)>) -> EffectiveValue<T>
+where
+    T: Clone + Default,
+{
+    match value {
+        Some((value, source)) => EffectiveValue::new(value.clone(), *source),
+        None => EffectiveValue::new(T::default(), Source::Default),
+    }
+}
+
+fn effective_optional_leaf<T>(value: &Option<(T, Source)>) -> EffectiveValue<Option<T>>
+where
+    T: Clone,
+{
+    match value {
+        Some((value, source)) => EffectiveValue::new(Some(value.clone()), *source),
+        None => EffectiveValue::new(None, Source::Default),
     }
 }

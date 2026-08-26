@@ -15,15 +15,16 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoharness_app::credential::CredentialSourceName;
-use autoharness_app::profiles::ProfileStore;
-use autoharness_app::vault::KeyringVault;
-use autoharness_domain::ClassifiedError as _;
+use autoharness_app::profiles::{ProfileManager, ProfileStore};
+use autoharness_app::vault::{KeyringVault, VaultPort};
+use autoharness_domain::{ClassifiedError as _, RetryAdvice};
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
 };
+use autoharness_provider_codex_cli::{CodexCliProvider, CodexCliSettings};
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
-use autoharness_settings::{LayerKind, SettingsBuilder};
+use autoharness_settings::{LayerKind, ProviderKind, ProviderProfile, SettingsBuilder};
 use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
@@ -34,7 +35,10 @@ use autoharness_tui::{
 };
 use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, WriterLease};
-use coordinator::{Coordinator, ProviderFactory};
+use coordinator::{
+    Coordinator, EnvironmentCredentials, ProfileProviderFactory, ProfileRuntime, ProviderFactory,
+    RuntimeComposition,
+};
 use engine_actor::EngineActor;
 use error::AppError;
 use terminal::TerminalGuard;
@@ -60,21 +64,36 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), AppError> {
+    #[cfg(feature = "benchmark-instrumentation")]
+    autoharness_tui::benchmark::initialize();
     let paths = AppPaths::prepare()?;
     let _writer_lease = WriterLease::acquire(&paths.writer_lock())?;
     let _trace_guard = initialize_tracing(&paths)?;
     telemetry::app_started();
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
-    let resolved = resolve_launch(&paths);
-    let provider = configure_provider(Arc::clone(&cache), policy, &resolved)?;
+    let profile_store = ProfileStore::open(&paths.profiles()).map_err(|_| AppError::FileSystem)?;
+    let initial_local_profile = profile_store
+        .resolved_settings()
+        .map(|settings| settings.local_profile().clone())
+        .unwrap_or_default();
+    let vault: Arc<dyn VaultPort> = Arc::new(KeyringVault::new());
+    let resolved = resolve_launch(&profile_store, vault.as_ref());
+    let provider = configure_provider(Arc::clone(&cache), policy.clone(), &resolved).await?;
+    let profile_manager = Arc::new(ProfileManager::new(profile_store, vault));
+    let profile_runtime = ProfileRuntime::new(
+        profile_manager,
+        configure_profile_provider_factory(Arc::clone(&cache), policy),
+        environment_credentials(),
+        config::workspace_root()?.display().to_string(),
+    );
     let tool_runtime = configure_tool_runtime(&paths)?;
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
-    let initial_settings = Arc::new(settings_projection(&resolved));
+    let initial_settings = Arc::new(settings_projection(&resolved, initial_local_profile));
     let model = Model::new(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
@@ -93,12 +112,15 @@ async fn run() -> Result<(), AppError> {
         }
     };
 
-    let coordinator = Coordinator::with_provider_factory(
+    let coordinator = Coordinator::with_runtime(
         session_id,
         session,
         engine_actor.handle(),
-        provider.composition,
-        tool_runtime,
+        RuntimeComposition {
+            provider: provider.composition,
+            profiles: Some(profile_runtime),
+            tool_runtime,
+        },
         app_ports,
         shutdown.clone(),
     );
@@ -153,11 +175,10 @@ impl RouterProfileFields {
             .base_url
             .parse::<autoharness_provider_openai::RouterUrl>()
             .map_err(|_| AppError::Configuration)?;
-        let settings = RouterSettings::new(url, self.project.as_deref())
+        let mut settings = RouterSettings::new(url, self.project.as_deref())
             .map_err(|_| AppError::Configuration)?;
         if let Some(header) = &self.auth_header {
-            settings
-                .clone()
+            settings = settings
                 .with_authentication(header, "Bearer")
                 .map_err(|_| AppError::Configuration)?;
         }
@@ -165,19 +186,16 @@ impl RouterProfileFields {
     }
 }
 
-fn resolve_launch(paths: &AppPaths) -> LaunchResolution {
+fn resolve_launch(store: &ProfileStore, vault: &dyn VaultPort) -> LaunchResolution {
     // Layered resolution: user profile document plus live environment.
-    let document = ProfileStore::open(&paths.profiles())
-        .and_then(|store| store.read_document())
-        .unwrap_or_default();
+    let document = store.read_document().unwrap_or_default();
     let settings = SettingsBuilder::new()
         .with_layer(LayerKind::UserFile, document)
         .with_environment(env::vars())
         .resolve();
-    let vault = KeyringVault::new();
     match settings {
         Ok(settings) => {
-            let resolver = autoharness_app::ProfileCredentialResolver::new(&vault)
+            let resolver = autoharness_app::ProfileCredentialResolver::new(vault)
                 .with_environment(env::vars());
             match resolver.resolve(&settings) {
                 Ok(source) => LaunchResolution {
@@ -187,11 +205,11 @@ fn resolve_launch(paths: &AppPaths) -> LaunchResolution {
                     credential: source.into_credential(),
                     router: router_fields(&settings),
                 },
-                Err(_) => unavailable_launch(),
+                Err(_) => session_only_launch(&settings),
             }
         }
         // Malformed settings degrade to environment/session-only operation.
-        Err(_) => unavailable_launch(),
+        Err(_) => environment_launch(),
     }
 }
 
@@ -208,23 +226,65 @@ fn router_fields(settings: &autoharness_settings::ResolvedSettings) -> Option<Ro
     })
 }
 
-fn unavailable_launch() -> LaunchResolution {
+fn session_only_launch(settings: &autoharness_settings::ResolvedSettings) -> LaunchResolution {
+    let active_profile = settings.active_profile().map(str::to_owned);
+    let profile_kind = settings.active_profile().and_then(|profile| {
+        let id = autoharness_settings::ProfileId::new(profile).ok()?;
+        settings.profile(&id).map(|profile| profile.kind())
+    });
     LaunchResolution {
         source: CredentialSourceName::SessionOnly,
-        active_profile: None,
-        provider_kind: None,
+        active_profile,
+        provider_kind: profile_kind
+            .or(settings.provider())
+            .or(Some(autoharness_settings::ProviderKind::Gemini)),
         credential: Zeroizing::new(String::new()),
+        router: router_fields(settings),
+    }
+}
+
+fn environment_launch() -> LaunchResolution {
+    let provider_kind = config::provider_selection()
+        .ok()
+        .map(|selection| match selection {
+            config::ProviderSelection::Gemini => autoharness_settings::ProviderKind::Gemini,
+            config::ProviderSelection::Router => autoharness_settings::ProviderKind::Router,
+            config::ProviderSelection::CodexCli => autoharness_settings::ProviderKind::CodexCli,
+        });
+    let credential = provider_kind
+        .and_then(|kind| match kind {
+            autoharness_settings::ProviderKind::Gemini => env::var("GEMINI_API_KEY").ok(),
+            autoharness_settings::ProviderKind::Router => {
+                env::var("AUTOHARNESS_ROUTER_API_KEY").ok()
+            }
+            autoharness_settings::ProviderKind::CodexCli => None,
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_default();
+    LaunchResolution {
+        source: if credential.is_empty() {
+            CredentialSourceName::SessionOnly
+        } else {
+            CredentialSourceName::Environment
+        },
+        active_profile: None,
+        provider_kind,
+        credential: Zeroizing::new(credential),
         router: None,
     }
 }
 
-fn settings_projection(resolved: &LaunchResolution) -> SettingsProjection {
+fn settings_projection(
+    resolved: &LaunchResolution,
+    local_profile: autoharness_settings::EffectiveLocalProfile,
+) -> SettingsProjection {
     SettingsProjection {
         provider_status: ProviderStatusProjection {
             active_profile: resolved.active_profile.clone(),
             provider_kind: resolved.provider_kind.map(|kind| match kind {
                 autoharness_settings::ProviderKind::Gemini => ProviderKindLabel::Gemini,
                 autoharness_settings::ProviderKind::Router => ProviderKindLabel::Router,
+                autoharness_settings::ProviderKind::CodexCli => ProviderKindLabel::CodexCli,
             }),
             credential_source: match resolved.source {
                 CredentialSourceName::Environment => CredentialSourceLabel::Environment,
@@ -233,6 +293,8 @@ fn settings_projection(resolved: &LaunchResolution) -> SettingsProjection {
             },
             credential_connected: !resolved.credential.is_empty(),
         },
+        local_profile,
+        git_branch: None,
     }
 }
 
@@ -260,7 +322,7 @@ fn configure_tool_runtime(paths: &AppPaths) -> Result<Arc<ToolRuntime>, AppError
     .map_err(|_| AppError::Configuration)
 }
 
-fn configure_provider(
+async fn configure_provider(
     cache: Arc<dyn CatalogCache>,
     policy: ProviderPolicy,
     resolved: &LaunchResolution,
@@ -270,6 +332,7 @@ fn configure_provider(
         Some(kind) => Ok(match kind {
             autoharness_settings::ProviderKind::Gemini => config::ProviderSelection::Gemini,
             autoharness_settings::ProviderKind::Router => config::ProviderSelection::Router,
+            autoharness_settings::ProviderKind::CodexCli => config::ProviderSelection::CodexCli,
         }),
         None => config::provider_selection(),
     };
@@ -342,6 +405,28 @@ fn configure_provider(
                 };
                 (initial, factory)
             }
+            config::ProviderSelection::CodexCli => {
+                let factory_cache = Arc::clone(&cache);
+                let factory_policy = policy.clone();
+                let factory: ProviderFactory = Arc::new(move |_credential: ApiCredential| {
+                    let provider: Arc<dyn Provider> = Arc::new(CodexCliProvider::new_blocking(
+                        CodexCliSettings::from_env()?,
+                    )?);
+                    Ok(managed_provider(
+                        provider,
+                        Arc::clone(&factory_cache),
+                        factory_policy.clone(),
+                    ))
+                });
+                let provider: Arc<dyn Provider> =
+                    Arc::new(CodexCliProvider::from_env(CancellationToken::new()).await?);
+                let initial = Ok(managed_provider(
+                    provider,
+                    Arc::clone(&cache),
+                    policy.clone(),
+                ));
+                (initial, factory)
+            }
         };
 
     let (provider, catalog) = match initial {
@@ -370,6 +455,66 @@ fn configure_provider(
         },
         catalog,
     })
+}
+
+fn environment_credentials() -> EnvironmentCredentials {
+    EnvironmentCredentials {
+        gemini: env::var("GEMINI_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(Zeroizing::new),
+        router: env::var("AUTOHARNESS_ROUTER_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(Zeroizing::new),
+    }
+}
+
+fn configure_profile_provider_factory(
+    cache: Arc<dyn CatalogCache>,
+    policy: ProviderPolicy,
+) -> ProfileProviderFactory {
+    Arc::new(move |profile, credential| {
+        let provider: Arc<dyn Provider> = match profile.kind() {
+            ProviderKind::Gemini => {
+                let key = GeminiApiKey::new(credential.into_string())?;
+                Arc::new(GeminiProvider::new(key)?)
+            }
+            ProviderKind::Router => {
+                let settings = router_settings_for_profile(profile)?;
+                let credential = RouterCredential::new(credential.into_string())?;
+                Arc::new(OpenAiRouterProvider::new(settings, credential)?)
+            }
+            ProviderKind::CodexCli => Arc::new(CodexCliProvider::new_blocking(
+                CodexCliSettings::from_env()?,
+            )?),
+        };
+        Ok(managed_provider(
+            provider,
+            Arc::clone(&cache),
+            policy.clone(),
+        ))
+    })
+}
+
+fn router_settings_for_profile(profile: &ProviderProfile) -> Result<RouterSettings, ProviderError> {
+    let invalid = || ProviderError::new(ProviderErrorKind::InvalidRequest, RetryAdvice::Never);
+    let url = profile
+        .base_url()
+        .ok_or_else(invalid)?
+        .parse::<autoharness_provider_openai::RouterUrl>()
+        .map_err(|_| invalid())?;
+    let mut settings = RouterSettings::new(url, profile.project())?;
+    if let Some(header) = profile.auth_header() {
+        settings = settings.with_authentication(header, "Bearer")?;
+    }
+    if profile.models_path().is_some() || profile.chat_path().is_some() {
+        settings = settings.with_paths(
+            profile.models_path().unwrap_or("/v1/models"),
+            profile.chat_path().unwrap_or("/v1/chat/completions"),
+        )?;
+    }
+    Ok(settings)
 }
 
 fn managed_provider(

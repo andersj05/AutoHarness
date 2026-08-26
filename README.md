@@ -3,12 +3,12 @@
 AutoHarness is an open-source agent runtime designed to improve the infrastructure around current language models.
 Its long-term goal is to learn from durable execution traces and safely improve prompts, policies, routing, tools, memory, and code through reproducible evaluations and gated promotion.
 
-The Phase 3 safe-execution substrate is complete, and Phase 3.1 local protocol reliability and recovery are fixture-verified while live-provider exit evidence remains open.
-The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, but session browsing, persistent profiles, and in-app settings remain planned work.
+The Phase 3 safe-execution substrate and Phase 3.2 through Phase 3.7 terminal product slices are implemented locally.
+The Rust terminal application runs a durable, resumable tool loop through Google AI Studio Gemini or a configurable OpenAI-compatible model router, with a responsive route-based shell, offline sessions, named provider profiles, operating-system-vault credentials, explicit recovery states, and one deterministic modal owner.
 Versioned filesystem, direct-process, and HTTP tools use scoped deny, ask, or allow decisions, bounded output, content-addressed artifacts, immutable run budgets, and explicit interruption recovery.
 Shared provider policy applies timeouts, bounded pre-stream retries, concurrency, per-project rate limits, capability preflight, and a durable model-catalog cache with explicit refresh and stale fallback rules.
 Gemini function arguments are aggregated across streamed deltas, malformed model calls are durably denied and returned for bounded repair, and failed prompts are not replayed into unrelated later turns.
-The current reviewed provider-protocol evidence still does not claim a successful live Gemini or router verification.
+Reviewed live Gemini plain-chat and function-calling probes passed on 2026-08-22; reviewed configured-router release-candidate evidence remains open.
 
 ## Run the terminal application
 
@@ -18,6 +18,16 @@ Run the binary from the repository root:
 ```text
 cargo run --locked -p autoharness-app --bin autoharness
 ```
+
+For a globally available short command, install the `ah` launcher once:
+
+```text
+cargo install --locked --path crates/autoharness-app --bin ah
+ah
+```
+
+Cargo installs `ah.exe` into `%USERPROFILE%\.cargo\bin` on Windows.
+Ensure that directory is on `PATH`.
 
 Gemini remains the default provider.
 When no credential is available, AutoHarness opens a masked terminal overlay.
@@ -31,32 +41,54 @@ Do not put the key in a repository file or command-line argument.
 
 ### Provider profiles and the credential vault
 
-A named provider profile stores non-secret connection fields plus an opaque credential reference; the raw key lives only in the operating-system credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
-Saving a credential is explicit and opt in.
+A named provider profile stores validated non-secret connection fields, an optional default model, and an opaque credential reference.
+The raw key lives only in the operating-system credential vault (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
+Press `Ctrl+G` to open Profiles and Providers, where you can create, edit, duplicate, activate, test, disconnect, and delete Gemini and router profiles.
+Press `Alt+K` inside that surface to save or replace the selected profile's key, and press `Alt+M` to use the active session's selected model as that profile's default.
+Saving a credential is explicit and opt in, and duplicated profiles never share credential linkage.
 When an active profile has a stored credential, AutoHarness reconnects after restart without asking for the key again.
 If the vault is unavailable, AutoHarness stays usable offline and falls back to environment or session-only entry; it never creates its own plaintext store.
-Press `Ctrl+,` to open the settings overlay, which shows the effective provider and the safe credential source (`environment`, `credential vault`, or `session only`).
+Interrupted profile and credential mutations retain only bounded non-secret recovery records and are reconciled idempotently after restart.
+Press `Ctrl+,` to open the read-only settings provenance overlay, which shows the effective provider and safe credential source (`environment`, `credential vault`, or `session only`).
 
 To use an OpenAI-compatible router, set `AUTOHARNESS_PROVIDER=router`, a base URL ending in `/`, and the router credential.
 Router credentials require HTTPS except for loopback HTTP endpoints such as `http://127.0.0.1:PORT/`.
 The default relative endpoints are `v1/models` and `v1/chat/completions`.
 Routers mounted below a path such as `https://router.example/api/` retain that path when relative endpoints are resolved.
 
+### Unified terminal shell
+
+AutoHarness always has one primary route: Chat, Sessions, Profiles, Settings, or Help.
+Wide terminals show a persistent navigation rail with the local profile, active provider, credential source, model, attempt state, usage, and catalog health.
+Narrow terminals show compact route tabs and the same prioritized status without duplicating it inside every page.
+Use `Alt+1` through `Alt+5` to switch routes directly.
+The legacy `Ctrl+L`, `Ctrl+G`, `Ctrl+,`, and `F1` shortcuts still open Sessions, Profiles, Settings, and Help.
+Model selection, credential entry, command search, transcript search, permission decisions, and destructive confirmations share one modal slot and restore the exact prior route and focus when dismissed.
+
 ## Controls
 
 | Action | Key |
 | --- | --- |
+| Switch Chat, Sessions, Profiles, Settings, or Help | `Alt+1` through `Alt+5` |
+| Open the command palette over the current route | `Ctrl+/` |
 | Send the composed prompt | `Ctrl+S` or `Ctrl+Enter` |
 | Insert a newline | `Enter` |
 | Open the model picker | `Ctrl+P` |
 | Create a fresh durable session | `Ctrl+N` |
-| Open the session browser | `Ctrl+L` |
-| Search sessions | Type while the browser is open |
-| Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` while the browser is open |
-| Delete the highlighted session | `Ctrl+D` then `Y` to confirm while the browser is open |
+| Open Sessions | `Alt+2` or `Ctrl+L` |
+| Open Profiles and Providers | `Alt+3` or `Ctrl+G` |
+| Create or edit a provider profile | `Alt+N` or `Alt+E` inside Profiles and Providers |
+| Duplicate profile configuration without its key | `Alt+D` inside Profiles and Providers |
+| Save or replace the selected profile key | `Alt+K` inside Profiles and Providers |
+| Test the selected provider connection | `Alt+T` inside Profiles and Providers |
+| Use the selected model as the active profile default | `Alt+M` inside Profiles and Providers |
+| Disconnect or delete the selected profile | `Alt+X`, or `Delete`, then `Y` to confirm |
+| Search sessions | Type while Sessions is active |
+| Rename, archive, or unarchive the highlighted session | `Ctrl+R`, `Ctrl+A`, `Ctrl+U` in Sessions |
+| Delete the highlighted session | `Ctrl+D` then `Y` to confirm in Sessions |
 | Slash commands | `/sessions`, `/open <n>`, `/rename <title>`, `/archive`, `/unarchive`, `/delete` in the composer |
 | Open or replace the API key | `Ctrl+K` |
-| Toggle the settings overlay | `Ctrl+,` |
+| Open Settings and provenance | `Alt+4` or `Ctrl+,` |
 | Filter models | Type while the picker is open |
 | Choose a model | `Up` or `Down`, then `Enter` |
 | Close the model picker | `Esc` |
@@ -131,10 +163,12 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-The local Phase 3 validation passes formatting, strict Clippy, warning-denied rustdoc, doctests, and the full workspace test suite.
-The suite covers both production adapters, fragmented native function calls, durable permission and tool transitions, capability confinement, every run-budget dimension, bounded artifacts, permission UI behavior, interruption recovery, a composed allow-execute-continue-reopen path, SQLite replay, terminal restoration, and credential redaction.
-A one-byte-fragmented Gemini Interactions fixture covers streamed function arguments, and a composed SQLite-backed test proves an unknown tool name is force-denied, returned to the provider, repaired in the same bounded attempt, and replayed after restart.
-A Phase 3.1 PTY smoke run pressed `Ctrl+N` from the credential overlay, observed the durable new-session confirmation, exited through `Ctrl+C`, restored the terminal, and removed the isolated test data afterward.
+The local Phase 3.7 validation passes formatting, strict Clippy, the full workspace suite, and the serial Windows PTY matrix.
+The TUI suite covers typed routes, single-overlay ownership, permission preemption, exact focus restoration, hidden-confirmation clearing, draft and selection preservation, responsive rail and tab layouts, every primary route, explicit empty and recovery states, and fixed-size goldens.
+The real routed-shell PTY journey switches every route with portable Alt chords, restores Settings after a model-picker overlay, preserves a composer draft, creates and lists a second durable session, cancels a scoped deletion confirmation, resizes to 40x12, exits cleanly, and restores the terminal.
+The suite continues to cover both production adapters, fragmented native function calls, durable tool transitions, capability confinement, profile and credential mutation recovery, SQLite replay, terminal restoration, and credential redaction.
+The opt-in platform-vault smoke verifies save, load, replace, and delete without printing secret values; set `AUTOHARNESS_RUN_PLATFORM_VAULT_SMOKE=1` and run its ignored test on the target operating system.
+An instrumented release smoke ran the routed shell through the real PTY loopback latency runner and produced valid correlated startup, dispatch, and rendered-delta intervals without measuring network time.
 Opt-in ignored live probes are available in each provider crate and retain only structural event assertions.
 With the corresponding runtime credentials configured, run `cargo test --locked -p autoharness-provider-gemini --test live_compat -- --ignored` for Gemini and `cargo test --locked -p autoharness-provider-openai --test live_compat -- --ignored` for the configured router.
 A PTY smoke run without a Gemini credential rendered the complete 80-by-24 terminal interface, confined its SQLite, log, and lock files to an isolated absolute data directory, exited successfully through `Ctrl+C`, and restored the terminal.
@@ -144,15 +178,15 @@ The isolated SQLite, log, and lock files contained no router credential bytes, a
 
 ## Performance evidence
 
-The checked-in [Phase 1 benchmark environment](benchmarks/README.md) measures durable event append with synchronous projections, transcript-read throughput, and warm SQLite reopen with strict replay for representative session sizes.
-It also includes a PowerShell idle resident-memory sampler and a reference-machine record template.
+The checked-in [benchmark environment](benchmarks/README.md) measures durable event append with synchronous projections, transcript-read throughput, warm SQLite reopen with strict replay, and the three terminal harness latency boundaries required before Phase 4.
+It also includes a PowerShell idle resident-memory sampler, an opt-in instrumented PTY runner, and a reference-machine record template.
 
 ```text
 cargo run --release --locked --manifest-path benchmarks/Cargo.toml -- --output benchmarks/results/phase1-<machine>-<date>.json
 ```
 
-The benchmark report excludes network requests and records LLM latency separately as not measured.
-Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-render latency remain unmeasured until the application exposes the exact monotonic markers defined by the [instrumentation contract](benchmarks/instrumentation-contract.md).
+The terminal runner correlates first draw, input acceptance, provider dispatch, decoded provider chunks, and rendered revisions over a content-free loopback side channel defined by the [instrumentation contract](benchmarks/instrumentation-contract.md).
+Harness overhead and provider-network time remain separate, and unavailable network metrics are never represented as zero.
 
 ## Project documentation
 
@@ -161,6 +195,7 @@ Cold start to first draw, input-to-dispatch overhead, and provider-chunk-to-rend
 - [Persistent memory architecture](docs/architecture/PERSISTENT_MEMORY.md)
 - [Repository memory](docs/memory/README.md)
 - [Architecture decision records](docs/adr/README.md)
+- [Terminal release checklist](docs/release/TERMINAL_RELEASE_CHECKLIST.md)
 - [Reference-project research](docs/research/agent-memory-patterns.md)
 
 ## Guiding principles

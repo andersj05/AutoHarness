@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use autoharness_domain::ErrorClass;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind, MouseButton, MouseEventKind};
 use futures_util::StreamExt as _;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -14,8 +14,8 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    CatalogProjection, Message, Model, RetryPolicy, SessionProjection, SessionsProjection,
-    UiEffect, UiFailure, UiIntent, UiNotice,
+    CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
+    SessionsProjection, SettingsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::{update, view};
 
@@ -34,6 +34,10 @@ pub struct UiPorts {
     pub session_lists: watch::Receiver<Arc<SessionsProjection>>,
     /// Latest catalog projection, coalesced by `watch`.
     pub catalogs: watch::Receiver<Arc<CatalogProjection>>,
+    /// Latest local profile and provider-connection projection.
+    pub profiles: watch::Receiver<Arc<ProfilesProjection>>,
+    /// Latest resolved settings and provenance projection.
+    pub settings: watch::Receiver<Arc<SettingsProjection>>,
     /// Bounded commit and rejection notices.
     pub notices: mpsc::Receiver<UiNotice>,
 }
@@ -48,6 +52,10 @@ pub struct AppPorts {
     pub session_lists: watch::Sender<Arc<SessionsProjection>>,
     /// Catalog projection publisher.
     pub catalogs: watch::Sender<Arc<CatalogProjection>>,
+    /// Local profile and provider-connection publisher.
+    pub profiles: watch::Sender<Arc<ProfilesProjection>>,
+    /// Resolved settings and provenance publisher.
+    pub settings: watch::Sender<Arc<SettingsProjection>>,
     /// Bounded commit and rejection publisher.
     pub notices: mpsc::Sender<UiNotice>,
 }
@@ -63,6 +71,8 @@ pub fn bounded_ports(
     let (session_tx, session_rx) = watch::channel(session);
     let (session_list_tx, session_list_rx) = watch::channel(session_list);
     let (catalog_tx, catalog_rx) = watch::channel(catalog);
+    let (profile_tx, profile_rx) = watch::channel(Arc::new(ProfilesProjection::default()));
+    let (settings_tx, settings_rx) = watch::channel(Arc::new(SettingsProjection::default()));
     let (notice_tx, notice_rx) = mpsc::channel(APP_NOTICE_CAPACITY);
     (
         UiPorts {
@@ -70,6 +80,8 @@ pub fn bounded_ports(
             sessions: session_rx,
             session_lists: session_list_rx,
             catalogs: catalog_rx,
+            profiles: profile_rx,
+            settings: settings_rx,
             notices: notice_rx,
         },
         AppPorts {
@@ -77,6 +89,8 @@ pub fn bounded_ports(
             sessions: session_tx,
             session_lists: session_list_tx,
             catalogs: catalog_tx,
+            profiles: profile_tx,
+            settings: settings_tx,
             notices: notice_tx,
         },
     )
@@ -141,6 +155,8 @@ where
         mut sessions,
         mut session_lists,
         mut catalogs,
+        mut profiles,
+        mut settings,
         mut notices,
     } = ports;
     let mut events = EventStream::new();
@@ -151,6 +167,8 @@ where
     let started = Instant::now();
 
     draw(terminal, &mut model)?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    crate::benchmark::first_draw_completed();
 
     loop {
         tokio::select! {
@@ -163,8 +181,16 @@ where
                     return Ok(ExitReason::InputClosed);
                 };
                 let terminal_event = terminal_event.map_err(RunnerError::Input)?;
-                let effects = terminal_message(terminal_event)
-                    .map_or_else(Vec::new, |message| update(&mut model, message));
+                let size = terminal
+                    .size()
+                    .map_err(|error| RunnerError::Draw(error.to_string()))?;
+                let effects = terminal_message(
+                    terminal_event,
+                    &model,
+                    size.width,
+                    size.height,
+                )
+                .map_or_else(Vec::new, |message| update(&mut model, message));
                 if dispatch_effects(&mut model, effects, &intents) {
                     return Ok(ExitReason::UserQuit);
                 }
@@ -184,6 +210,16 @@ where
                 let catalog = Arc::clone(&catalogs.borrow_and_update());
                 let _ = update(&mut model, Message::CatalogChanged(catalog));
             }
+            result = profiles.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("profiles projection"))?;
+                let profiles = Arc::clone(&profiles.borrow_and_update());
+                let _ = update(&mut model, Message::ProfilesChanged(profiles));
+            }
+            result = settings.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("settings projection"))?;
+                let settings = Arc::clone(&settings.borrow_and_update());
+                let _ = update(&mut model, Message::SettingsChanged(settings));
+            }
             notice = notices.recv() => {
                 let notice = notice.ok_or(RunnerError::ApplicationDisconnected("notice"))?;
                 let _ = update(&mut model, Message::Notice(notice));
@@ -201,13 +237,21 @@ where
     }
 }
 
-fn terminal_message(event: Event) -> Option<Message> {
+fn terminal_message(
+    event: Event,
+    model: &crate::model::Model,
+    width: u16,
+    height: u16,
+) -> Option<Message> {
     match event {
         Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             Some(Message::Input(key.into()))
         }
         Event::Paste(text) => Some(Message::Paste(text)),
         Event::Resize(_, _) => Some(Message::Resize),
+        Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) => {
+            crate::view::hit_test(model, width, height, mouse.column, mouse.row).map(Message::Mouse)
+        }
         Event::FocusGained | Event::FocusLost | Event::Key(_) | Event::Mouse(_) => None,
     }
 }
@@ -220,16 +264,37 @@ fn dispatch_effects(
     for effect in effects {
         match effect {
             UiEffect::Quit => return true,
+            UiEffect::LaunchCodexLogin => {
+                let executable = std::env::var_os("AUTOHARNESS_CODEX_EXECUTABLE")
+                    .unwrap_or_else(|| std::ffi::OsString::from("codex"));
+                let _ = std::process::Command::new(executable)
+                    .arg("login")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+            UiEffect::CopyTranscript(text) => {
+                // OSC 52 copy; failure is non-fatal because terminals may
+                // simply not advertise clipboard support.
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+                );
+            }
             UiEffect::Dispatch(intent) => {
                 let request_id = intent.request_id();
+                #[cfg(feature = "benchmark-instrumentation")]
+                if matches!(&intent, UiIntent::SubmitPrompt { .. }) {
+                    crate::benchmark::input_accepted(request_id);
+                }
                 if let Err(error) = intents.try_send(intent) {
                     let (message, retry) = match error {
-                        TrySendError::Full(_) => (
-                            "Application is busy; the request was not queued",
-                            RetryPolicy::Now,
-                        ),
+                        TrySendError::Full(_) => {
+                            ("Application is busy; try again", RetryPolicy::Now)
+                        }
                         TrySendError::Closed(_) => {
-                            ("Application command channel is closed", RetryPolicy::Never)
+                            ("Application is no longer available", RetryPolicy::Never)
                         }
                     };
                     let _ = update(
@@ -254,6 +319,8 @@ where
     terminal
         .draw(|frame| view(frame, model))
         .map_err(|error| RunnerError::Draw(error.to_string()))?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    crate::benchmark::rendered_projection(&model.session.session_id, model.session.revision);
     model.dirty = false;
     Ok(())
 }
@@ -261,10 +328,11 @@ where
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{ModelId, ModelRef, ProviderId};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui_textarea::{Input, Key};
 
     use super::*;
-    use crate::model::{ModelSummary, Notice, PendingKind};
+    use crate::model::{ModelSummary, MouseAction, Notice, PendingKind};
 
     fn selected_model() -> ModelRef {
         ModelRef::new(
@@ -357,5 +425,48 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn left_mouse_down_becomes_a_semantic_click() {
+        let model = model_with_draft();
+        let profile_event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            terminal_message(profile_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::SettingsTab(2)))
+        ));
+        let settings_event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 14,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            terminal_message(settings_event, &model, 80, 24),
+            Some(Message::Mouse(MouseAction::SettingsTab(0)))
+        ));
+    }
+
+    #[test]
+    fn non_click_mouse_events_are_ignored() {
+        let model = model_with_draft();
+        for kind in [
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Moved,
+        ] {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 2,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(terminal_message(event, &model, 80, 24).is_none());
+        }
     }
 }

@@ -1,12 +1,12 @@
- AutoHarness | failed
-┌ Transcript ──────────────────────────┐
+╭ Conversation ────────────────────────╮
+│partial answer\u{1b}[0m.              │
+│Error: Capacity is temporarily        │
 │exhausted; no credentials were        │
 │exposed.                              │
 │rate_limited | Ctrl+R retry | Ctrl+N  │
 │new | ref attempt-2                   │
-└──────────────────────────────────────┘
-┌ Prompt ──────────────────────────────┐
-│Retry with a smaller scope.           │
-│Keep the checklist concise.           │
-└──────────────────────────────────────┘
- ^S send   ^P models   ^N new   ^R retry
+╭──────────────────────────────────────╮
+│ think:standard  path:/workspace      │
+│❯ Keep the checklist concise.         │
+╰──────────────────────────────────────╯
+ Profile  |  Settings

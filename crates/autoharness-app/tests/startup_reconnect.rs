@@ -1,31 +1,30 @@
 use std::sync::Arc;
 
-use autoharness_app::profiles::ProfileStore;
+use autoharness_app::profiles::{ProfileManager, ProfileStore};
 use autoharness_app::vault::FakeVault;
-use autoharness_settings::{LayerKind, SettingsBuilder};
+use autoharness_settings::{LayerKind, ProfileId, ProviderProfile, SettingsBuilder};
 
 #[test]
 fn startup_resolution_publishes_provider_status_from_profile() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let profiles_path = dir.path().join("autoharness.profiles.json");
-    let vault = FakeVault::new();
+    let vault = Arc::new(FakeVault::new());
 
     // Seed a profile with a stored credential as a returning user would have.
     let store = ProfileStore::open(&profiles_path).expect("open profile store");
-    store
-        .upsert_profile(
-            "home-router",
-            r#"{"kind": "router", "base_url": "https://router.example.test/base/", "project": "home"}"#,
-        )
-        .expect("upsert profile");
-    let reference = store
-        .link_credential(&vault, "home-router", "AIzaSy-returning-user-key")
+    let manager = ProfileManager::new(store, vault.clone());
+    let id = ProfileId::new("home-router").expect("id");
+    let profile = ProviderProfile::router(
+        "https://router.example.test/base/",
+        Some("home".to_owned()),
+        None,
+    )
+    .expect("router profile");
+    manager.upsert(&id, &profile).expect("upsert profile");
+    manager
+        .save_credential(&id, "AIzaSy-returning-user-key")
         .expect("linked");
-    store
-        .set_active_profile(Some(
-            &autoharness_settings::ProfileId::new("home-router").expect("id"),
-        ))
-        .expect("activated");
+    manager.activate(Some(&id)).expect("activated");
 
     // Compose startup exactly like main.rs does.
     let user_json = std::fs::read_to_string(&profiles_path).expect("read profiles document");
@@ -35,7 +34,7 @@ fn startup_resolution_publishes_provider_status_from_profile() {
         .expect("settings resolve");
 
     let environment: Vec<(String, String)> = Vec::new();
-    let source = autoharness_app::ProfileCredentialResolver::new(&vault)
+    let source = autoharness_app::ProfileCredentialResolver::new(vault.as_ref())
         .with_environment(environment)
         .resolve(&settings)
         .expect("credential resolves after restart");
@@ -61,6 +60,9 @@ fn startup_resolution_publishes_provider_status_from_profile() {
             autoharness_settings::ProviderKind::Router => {
                 autoharness_tui::ProviderKindLabel::Router
             }
+            autoharness_settings::ProviderKind::CodexCli => {
+                autoharness_tui::ProviderKindLabel::CodexCli
+            }
         }),
         credential_source: match source.source_name() {
             autoharness_app::CredentialSourceName::Environment => {
@@ -80,6 +82,5 @@ fn startup_resolution_publishes_provider_status_from_profile() {
     // The raw secret stays out of the on-disk profile document.
     let document = std::fs::read_to_string(&profiles_path).expect("profile file");
     assert!(!document.contains("AIzaSy-returning-user-key"));
-    let _ = Arc::new(());
-    let _ = &reference;
+    assert_eq!(manager.snapshot().expect("snapshot").profiles.len(), 1);
 }

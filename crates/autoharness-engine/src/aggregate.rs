@@ -400,11 +400,7 @@ impl SessionAggregate {
                         input_id: input_id.clone(),
                     });
                 }
-                EventPayload::InputAdmitted {
-                    input_id: input_id.clone(),
-                    prompt: prompt.clone(),
-                    delivery_mode: *delivery_mode,
-                }
+                return Ok(self.admit_prompt_events(input_id, prompt, *delivery_mode, 0));
             }
             CommandPayload::AdmitPromptAndPrepareAttempt {
                 input_id,
@@ -431,19 +427,14 @@ impl SessionAggregate {
                         session_id: self.session_id.clone(),
                     }
                 })?;
-                return Ok(vec![
-                    EventPayload::InputAdmitted {
-                        input_id: input_id.clone(),
-                        prompt: prompt.clone(),
-                        delivery_mode: *delivery_mode,
-                    },
-                    EventPayload::AttemptPrepared {
-                        attempt_id: attempt_id.clone(),
-                        input_id: input_id.clone(),
-                        model,
-                        retry_of: None,
-                    },
-                ]);
+                let mut events = self.admit_prompt_events(input_id, prompt, *delivery_mode, 1);
+                events.push(EventPayload::AttemptPrepared {
+                    attempt_id: attempt_id.clone(),
+                    input_id: input_id.clone(),
+                    model,
+                    retry_of: None,
+                });
+                return Ok(events);
             }
             CommandPayload::PrepareAttempt {
                 attempt_id,
@@ -787,6 +778,29 @@ impl SessionAggregate {
         };
 
         Ok(vec![payload])
+    }
+
+    fn admit_prompt_events(
+        &self,
+        input_id: &InputId,
+        prompt: &PromptText,
+        delivery_mode: DeliveryMode,
+        additional_capacity: usize,
+    ) -> Vec<EventPayload> {
+        let automatically_titles = self.admitted_inputs.is_empty() && self.title.is_none();
+        let event_capacity = if automatically_titles { 2 } else { 1 };
+        let mut events = Vec::with_capacity(event_capacity + additional_capacity);
+        events.push(EventPayload::InputAdmitted {
+            input_id: input_id.clone(),
+            prompt: prompt.clone(),
+            delivery_mode,
+        });
+        if automatically_titles {
+            events.push(EventPayload::SessionRenamed {
+                title: SessionTitle::derive_from_prompt(prompt),
+            });
+        }
+        events
     }
 
     /// Applies a complete event batch atomically after replay validation.

@@ -32,6 +32,12 @@
 
 **Benchmark command:**
 
+**Instrumented terminal executable:**
+
+**Terminal latency samples:**
+
+**Marker side channel:** Loopback UDP
+
 ## Measurement conditions
 
 **Power mode:**
@@ -43,6 +49,8 @@
 **AutoHarness idle-state definition:**
 
 **Operating-system cache treatment:** OS managed unless explicitly documented otherwise
+
+**Process-start side-channel treatment:** One loopback marker delivery is included and must remain labeled
 
 **Notes:**
 

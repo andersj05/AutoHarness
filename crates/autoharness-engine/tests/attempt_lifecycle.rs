@@ -312,7 +312,7 @@ fn create_selected_session(engine: &mut InMemoryEngine<CounterMetadata>) {
 }
 
 #[test]
-fn admission_and_first_attempt_prepare_commit_as_one_replayable_batch() {
+fn admission_title_and_first_attempt_prepare_commit_as_one_replayable_batch() {
     let mut engine = InMemoryEngine::new(CounterMetadata::new(1));
     execute(
         &mut engine,
@@ -343,9 +343,22 @@ fn admission_and_first_attempt_prepare_commit_as_one_replayable_batch() {
 
     let batch = engine.execute(&command).expect("atomic command succeeds");
 
-    assert_eq!(batch.len(), 2);
+    assert_eq!(batch.len(), 3);
+    assert!(matches!(
+        batch[0].payload(),
+        EventPayload::InputAdmitted { .. }
+    ));
+    assert!(matches!(
+        batch[1].payload(),
+        EventPayload::SessionRenamed { title } if title.as_str() == "atomic prompt"
+    ));
+    assert!(matches!(
+        batch[2].payload(),
+        EventPayload::AttemptPrepared { .. }
+    ));
     assert_eq!(batch[0].sequence().get(), 3);
     assert_eq!(batch[1].sequence().get(), 4);
+    assert_eq!(batch[2].sequence().get(), 5);
     assert_eq!(
         batch[0].causation(),
         &autoharness_domain::Causation::Command(command.command_id().clone())
@@ -353,6 +366,10 @@ fn admission_and_first_attempt_prepare_commit_as_one_replayable_batch() {
     assert_eq!(
         batch[1].causation(),
         &autoharness_domain::Causation::Event(batch[0].event_id().clone())
+    );
+    assert_eq!(
+        batch[2].causation(),
+        &autoharness_domain::Causation::Event(batch[1].event_id().clone())
     );
     let live = engine.session(&session_id()).expect("live session");
     assert_eq!(live.admitted_inputs()[0].promoted_by(), Some(&attempt));

@@ -110,3 +110,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Run tests
         run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
+      - name: Run terminal PTY scenarios
+        run: cargo test -p autoharness-app --tests --all-features --locked -- --ignored --test-threads=1

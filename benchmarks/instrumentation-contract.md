@@ -28,6 +28,14 @@ Cold startup additionally needs an external launcher that records a monotonic ti
 A normal tracing file is not a suitable side channel because log buffering and file polling would contaminate the interval.
 A real pseudo-terminal is required so the measurement exercises the actual terminal backend.
 
+## Phase 3.5 implementation status
+
+The `benchmark-instrumentation` feature implements `first_draw_completed`, `input_accepted`, `provider_dispatch_started`, `provider_chunk_received`, and `rendered_delta`.
+The markers use one process monotonic origin and a loopback UDP side channel carrying only numeric structural fields.
+The `terminal_latency` runner launches the real binary in a PTY, drives a loopback structural provider, and correlates the dispatch and render pairs.
+Its external process-start sample ends when the first-draw datagram is received and therefore includes one loopback delivery interval, which every report labels.
+`provider_request_started` and `provider_stream_completed` remain intentionally unavailable because the runner does not report loopback fixture latency as provider-network evidence.
+
 ## Formulas
 
 | Metric | Formula | Classification |

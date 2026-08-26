@@ -5,14 +5,20 @@
 //! Every effective value records which layer supplied it.
 
 mod error;
+mod preferences;
 mod profile;
 mod resolver;
 mod source;
 
 pub use error::SettingsError;
+pub use preferences::{
+    ColorMode, ComposerSubmitBehavior, Density, DisplayLabel, EffectiveLocalPreferences,
+    EffectiveLocalProfile, EffectiveValue, GlyphMode, Layout, LocalPreferences, LocalProfile,
+    MAX_DISPLAY_LABEL_CHARS, TerminalTimestampStyle, ThemePreset,
+};
 pub use profile::{
-    CredentialDocument, CredentialReference, ProfileId, ProviderKind, ProviderProfile,
-    SETTINGS_SCHEMA_VERSION, SettingsDocument,
+    CredentialDocument, CredentialRecoveryKind, CredentialRecoveryRecord, CredentialReference,
+    ProfileId, ProviderKind, ProviderProfile, SETTINGS_SCHEMA_VERSION, SettingsDocument,
 };
 pub use resolver::{LayerKind, ResolvedSettings, SettingsBuilder};
 pub use source::Source;

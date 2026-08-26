@@ -1,24 +1,24 @@
- AutoHarness  |  Gemini 2.5 Pro  |  failed
-┌ Transcript ──────────────────────────────────────────────────────────────────┐
+╭ Conversation ────────────────────────────────────────────────────────────────╮
+│YOU                                                                           │
+│Plan a café launch.                                                           │
 │Keep it practical.                                                            │
 │                                                                              │
-│assistant · complete                                                          │
+│AUTOHARNESS · complete                                                        │
 │Start with a two-week validation sprint:                                      │
 │1. Interview ten customers.                                                   │
 │2. Price three menu bundles.                                                  │
 │3. Measure repeat intent.                                                     │
 │18 input tokens · 41 output tokens                                            │
 │                                                                              │
-│you                                                                           │
+│YOU                                                                           │
 │What could go wrong?                                                          │
 │                                                                              │
-│assistant · retry · failed                                                    │
+│AUTOHARNESS · retry · failed                                                  │
 │The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                    │
 │Error: Capacity is temporarily exhausted; no credentials were exposed.        │
 │rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2                      │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌ Prompt ──────────────────────────────────────────────────────────────────────┐
-│Retry with a smaller scope.                                                   │
-│Keep the checklist concise.                                                   │
-└──────────────────────────────────────────────────────────────────────────────┘
- Ctrl+S send   Enter newline   Ctrl+P models   Ctrl+N new   Ctrl+R retry
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ think:standard  path:/workspace                                              │
+│❯ Keep the checklist concise.                                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Profile  |  Settings
