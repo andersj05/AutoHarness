@@ -246,41 +246,42 @@ A test asserts the measured width of every entry in all three modes.
 
 | Icon | Nerd Font | Unicode | ASCII |
 | --- | --- | --- | --- |
-| `Brand` | `nf-md-hexagon_multiple` | `◆` | `#` |
-| `RouteChat` | `nf-md-message_text` | `▣` | `c` |
-| `RouteSessions` | `nf-md-history` | `☰` | `s` |
-| `RouteProviders` | `nf-md-cloud_outline` | `⌘` | `p` |
-| `RouteSettings` | `nf-md-cog` | `⚙` | `*` |
-| `RouteModels` | `nf-md-cube_outline` | `◈` | `m` |
-| `RouteHelp` | `nf-md-help_circle_outline` | `?` | `?` |
-| `User` | `nf-md-account` | `☺` | `u` |
-| `Assistant` | `nf-md-robot_outline` | `◆` | `a` |
-| `Tool` | `nf-md-hammer_wrench` | `⚒` | `&` |
+| `Brand` | `nf-fa-cube` | `◆` | `#` |
+| `RouteChat` | `nf-fa-comment` | `▣` | `c` |
+| `RouteSessions` | `nf-fa-history` | `☰` | `s` |
+| `RouteProviders` | `nf-fa-cloud` | `⌘` | `p` |
+| `RouteSettings` | `nf-fa-cog` | `⚙` | `*` |
+| `RouteModels` | `nf-fa-cubes` | `◈` | `m` |
+| `RouteHelp` | `nf-fa-question_circle` | `?` | `?` |
+| `User` | `nf-fa-user` | `☺` | `u` |
+| `Assistant` | `nf-fa-magic` | `◆` | `a` |
+| `Tool` | `nf-fa-wrench` | `⚒` | `&` |
 | `Workspace` | `nf-oct-file_directory` | `▸` | `/` |
 | `GitBranch` | `nf-dev-git_branch` | `⑂` | `*` |
-| `Model` | `nf-md-chip` | `●` | `o` |
-| `Thinking` | `nf-md-brain` | `◐` | `@` |
-| `Context` | `nf-md-gauge` | `▰` | `=` |
-| `Tokens` | `nf-md-sigma` | `Σ` | `T` |
-| `Success` | `nf-md-check_circle` | `✔` | `+` |
-| `Warning` | `nf-md-alert` | `⚠` | `!` |
-| `Danger` | `nf-md-close_circle` | `✖` | `x` |
-| `Info` | `nf-md-information_outline` | `ⓘ` | `i` |
-| `Pending` | animated frame table | animated braille table | animated ASCII table |
-| `Connected` | `nf-md-lan_connect` | `●` | `*` |
-| `Disconnected` | `nf-md-lan_disconnect` | `○` | `-` |
-| `Locked` | `nf-md-lock` | `⚿` | `K` |
-| `Search` | `nf-md-magnify` | `⌕` | `/` |
-| `Collapsed` | `nf-md-chevron_right` | `▸` | `>` |
-| `Expanded` | `nf-md-chevron_down` | `▾` | `v` |
-| `SelectionCaret` | `nf-md-chevron_right` | `❯` | `>` |
-| `PromptCaret` | `nf-md-chevron_right` | `❯` | `>` |
-| `Archived` | `nf-md-archive_outline` | `▪` | `~` |
-| `Default` | `nf-md-star` | `★` | `!` |
-| `Reset` | `nf-md-restore` | `↺` | `^` |
-| `Inherited` | `nf-md-arrow_down_thin` | `↓` | `v` |
+| `Model` | `nf-fa-circle` | `●` | `o` |
+| `Thinking` | `nf-fa-lightbulb_o` | `◐` | `@` |
+| `Context` | `nf-fa-bars` | `▰` | `=` |
+| `Tokens` | `nf-fa-database` | `Σ` | `T` |
+| `Success` | `nf-fa-check_circle` | `✔` | `+` |
+| `Warning` | `nf-fa-warning` | `⚠` | `!` |
+| `Danger` | `nf-fa-times_circle` | `✖` | `x` |
+| `Info` | `nf-fa-info_circle` | `ⓘ` | `i` |
+| `Pending` | `nf-fa-circle_o_notch` | animated braille table | animated ASCII table |
+| `Connected` | `nf-fa-link` | `●` | `*` |
+| `Disconnected` | `nf-fa-chain_broken` | `○` | `-` |
+| `Locked` | `nf-fa-lock` | `⚿` | `K` |
+| `Search` | `nf-fa-search` | `⌕` | `/` |
+| `Collapsed` | `nf-fa-chevron_right` | `▸` | `>` |
+| `Expanded` | `nf-fa-chevron_down` | `▾` | `v` |
+| `SelectionCaret` | `nf-fa-chevron_right` | `❯` | `>` |
+| `PromptCaret` | `nf-fa-chevron_right` | `❯` | `>` |
+| `Archived` | `nf-fa-archive` | `▪` | `~` |
+| `Default` | `nf-fa-star` | `★` | `!` |
+| `Reset` | `nf-fa-undo` | `↺` | `^` |
+| `Inherited` | `nf-fa-arrow_down` | `↓` | `v` |
 
 Icon names reference the Nerd Font class names rather than raw codepoints so the table stays reviewable; the implementation resolves them to constants in `ui/icon.rs`.
+Nerd Font forms use only BMP private-use codepoints because supplementary-plane Material Design symbols render as replacement diamonds in otherwise compatible Windows terminal setups.
 
 ### Glyph verification row
 

@@ -213,52 +213,52 @@ struct Triple {
 fn triple(icon: Icon) -> Triple {
     match icon {
         Icon::Brand => Triple {
-            nerd: "󰛡 ",
+            nerd: " ",
             unicode: "◆",
             ascii: "#",
         },
         Icon::RouteChat => Triple {
-            nerd: "󰍩 ",
+            nerd: " ",
             unicode: "▣",
             ascii: "c",
         },
         Icon::RouteSessions => Triple {
-            nerd: "󰋚 ",
+            nerd: " ",
             unicode: "≡",
             ascii: "s",
         },
         Icon::RouteProviders => Triple {
-            nerd: "󰅣 ",
+            nerd: " ",
             unicode: "⌘",
             ascii: "p",
         },
         Icon::RouteSettings => Triple {
-            nerd: "󰒓 ",
+            nerd: " ",
             unicode: "⚙",
             ascii: "*",
         },
         Icon::RouteModels => Triple {
-            nerd: "󰆧 ",
+            nerd: " ",
             unicode: "◈",
             ascii: "m",
         },
         Icon::RouteHelp => Triple {
-            nerd: "󰘥 ",
+            nerd: " ",
             unicode: "?",
             ascii: "?",
         },
         Icon::User => Triple {
-            nerd: "󰀄 ",
+            nerd: " ",
             unicode: "☺",
             ascii: "u",
         },
         Icon::Assistant => Triple {
-            nerd: "󱙺 ",
+            nerd: " ",
             unicode: "◆",
             ascii: "a",
         },
         Icon::Tool => Triple {
-            nerd: "󱌣 ",
+            nerd: " ",
             unicode: "⚒",
             ascii: "&",
         },
@@ -273,107 +273,107 @@ fn triple(icon: Icon) -> Triple {
             ascii: "*",
         },
         Icon::Model => Triple {
-            nerd: "󰘚 ",
+            nerd: " ",
             unicode: "●",
             ascii: "o",
         },
         Icon::Thinking => Triple {
-            nerd: "󰧑 ",
+            nerd: " ",
             unicode: "◐",
             ascii: "@",
         },
         Icon::Context => Triple {
-            nerd: "󰊚 ",
+            nerd: " ",
             unicode: "▰",
             ascii: "=",
         },
         Icon::Tokens => Triple {
-            nerd: "󰒠 ",
+            nerd: " ",
             unicode: "Σ",
             ascii: "T",
         },
         Icon::Success => Triple {
-            nerd: "󰗠 ",
+            nerd: " ",
             unicode: "✔",
             ascii: "+",
         },
         Icon::Warning => Triple {
-            nerd: "󰀦 ",
+            nerd: " ",
             unicode: "⚠",
             ascii: "!",
         },
         Icon::Danger => Triple {
-            nerd: "󰅙 ",
+            nerd: " ",
             unicode: "✖",
             ascii: "x",
         },
         Icon::Info => Triple {
-            nerd: "󰋽 ",
+            nerd: " ",
             unicode: "ⓘ",
             ascii: "i",
         },
         Icon::Pending => Triple {
-            nerd: "⠋ ",
+            nerd: " ",
             unicode: "⠋",
             ascii: "|",
         },
         Icon::Connected => Triple {
-            nerd: "󰌘 ",
+            nerd: " ",
             unicode: "●",
             ascii: "*",
         },
         Icon::Disconnected => Triple {
-            nerd: "󰌙 ",
+            nerd: " ",
             unicode: "○",
             ascii: "-",
         },
         Icon::Locked => Triple {
-            nerd: "󰌾 ",
+            nerd: " ",
             unicode: "⚿",
             ascii: "K",
         },
         Icon::Search => Triple {
-            nerd: "󰍉 ",
+            nerd: " ",
             unicode: "⌕",
             ascii: "/",
         },
         Icon::Collapsed => Triple {
-            nerd: "󰅂 ",
+            nerd: " ",
             unicode: "▸",
             ascii: ">",
         },
         Icon::Expanded => Triple {
-            nerd: "󰅀 ",
+            nerd: " ",
             unicode: "▾",
             ascii: "v",
         },
         Icon::SelectionCaret => Triple {
-            nerd: "󰅂 ",
+            nerd: " ",
             unicode: "❯",
             ascii: ">",
         },
         Icon::PromptCaret => Triple {
-            nerd: "󰅂 ",
+            nerd: " ",
             unicode: "❯",
             ascii: ">",
         },
         Icon::Archived => Triple {
-            nerd: "󱈎 ",
+            nerd: " ",
             unicode: "▪",
             ascii: "~",
         },
         Icon::Default => Triple {
-            nerd: "󰓎 ",
+            nerd: " ",
             unicode: "★",
             ascii: "!",
         },
         Icon::Reset => Triple {
-            nerd: "󰦛 ",
+            nerd: " ",
             unicode: "↺",
             ascii: "^",
         },
         Icon::Inherited => Triple {
-            nerd: "󱦳 ",
+            nerd: " ",
             unicode: "↓",
             ascii: "v",
         },
@@ -421,6 +421,19 @@ mod tests {
             let width = UnicodeWidthStr::width(glyph);
             assert_eq!(width, 2, "{icon:?} {glyph:?} measured {width}");
             assert_eq!(icons.width(icon), 2);
+        }
+    }
+
+    #[test]
+    fn nerd_font_icons_stay_in_the_bmp_private_use_area() {
+        let icons = IconSet::resolve(GlyphMode::NerdFont);
+        for icon in Icon::ALL {
+            let glyph = icons.glyph(icon);
+            let codepoint = glyph.chars().next().expect("Nerd Font glyph") as u32;
+            assert!(
+                (0xE000..=0xF8FF).contains(&codepoint),
+                "{icon:?} uses supplementary or non-private codepoint U+{codepoint:04X}"
+            );
         }
     }
 
