@@ -1,6 +1,7 @@
 //! Typed terminal presentation layer.
 
 pub mod color;
+pub mod component;
 pub mod gradient;
 pub mod icon;
 pub mod metrics;

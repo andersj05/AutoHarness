@@ -8,7 +8,7 @@ mod runner;
 mod snapshot;
 mod text;
 mod time;
-mod ui;
+pub mod ui;
 mod update;
 mod view;
 

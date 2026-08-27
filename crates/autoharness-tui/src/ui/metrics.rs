@@ -50,6 +50,20 @@ pub const GUTTER_SM: u16 = 1;
 pub const PANEL_PAD_X: u16 = 1;
 /// Vertical panel padding when the panel has no title.
 pub const PANEL_PAD_Y: u16 = 0;
+/// Vertical panel padding when the panel has a title.
+pub const PANEL_PAD_Y_TITLED: u16 = 1;
+/// Host width below which a modal fills the frame.
+pub const MODAL_FULL_WIDTH: u16 = 48;
+/// Host height below which a modal fills the frame.
+pub const MODAL_FULL_HEIGHT: u16 = 12;
+/// Outer horizontal inset when a modal is centered.
+pub const MODAL_MARGIN_X: u16 = 2;
+/// Outer vertical inset when a modal is centered.
+pub const MODAL_MARGIN_Y: u16 = 1;
+/// Maximum modal width at medium frames and above.
+pub const MODAL_MAX_WIDTH: u16 = 72;
+/// Maximum modal height at medium frames and above.
+pub const MODAL_MAX_HEIGHT: u16 = 24;
 /// Allowed spacing scale.
 pub const SPACING: [u16; 4] = [0, 1, 2, 4];
 

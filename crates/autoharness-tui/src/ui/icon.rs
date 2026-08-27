@@ -443,13 +443,14 @@ mod tests {
             .join("ui");
         let allowed = [
             std::path::Path::new("icon.rs"),
+            std::path::Path::new("motion.rs"),
             std::path::Path::new("component"),
         ];
         let mut violations = Vec::new();
         visit_rust_files(&root, &root, &allowed, &mut violations);
         assert!(
             violations.is_empty(),
-            "box-drawing and symbol codepoints must live in ui/icon.rs and ui/component/:\n{}",
+            "box-drawing and symbol codepoints must live in ui/icon.rs, ui/motion.rs, and ui/component/:\n{}",
             violations.join("\n")
         );
     }
@@ -478,7 +479,7 @@ mod tests {
                 continue;
             }
             let relative = path.strip_prefix(root).expect("ui-relative path");
-            if allowed.iter().any(|allowed| relative == *allowed) {
+            if allowed.contains(&relative) {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read rust source");
