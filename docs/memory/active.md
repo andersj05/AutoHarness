@@ -4,16 +4,16 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Settings owns the active profile's model and thinking defaults, thinking-level navigation stays within its list until the first option, fresh sessions apply saved defaults without overwriting session-specific choices, the native Codex adapter completes an opt-in live `gpt-5.6-luna` request, and Chat now uses an open bottom-composer workspace with one sidebar divider, a borderless tail-following transcript, an accessible ASCII generation scanner, and a configurable prompt status bar with labeled circular thinking fill, context utilization, compact workspace and Git metadata, optional Nerd Font symbols, and theme-aware gradients while the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 3 are on `dev` after `feat/tui-gradient-icons`: wall-clock ticks, style-aware snapshots, Theme tokens, the three-stop gradient engine, the Nerd Font / Unicode / ASCII icon table, the motion gate, and the typed component catalog with tests and an ignored gallery, while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Implement Phase 3.10 step 2 (gradient and icon engines) without changing route semantics, overlay ownership, intents, or the settings schema.
+Implement Phase 3.10 step 4 (layout and hit-region unification) without changing route semantics, overlay ownership, intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
 
-Phase 3.10 steps 0 and 1 are implemented.
+Phase 3.10 steps 0 through 3 are implemented.
 The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Current repository state
@@ -65,6 +65,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-gradient-icons` added the three-stop Oklab gradient engine with normalized sampling and NoColor/HighContrast degradation, the Nerd Font / Unicode / ASCII icon table with a two-cell Nerd Font slot and glyph-check data, motion frame tables with a 100 ms floor and 30-second idle gate, and the step-3 component catalog under `ui/component/` with width-matrix tests, ButtonRow hit-region checks, KeyValueTable alignment, StatusBar priority dropping, and an ignored gallery harness; Chat still uses the previous surfaces, and no page is converted yet.
 - On 2026-08-27, `feat/tui-theme-foundation` added `crates/autoharness-tui/src/ui/` with linear RGB and Oklab color math, nine four-value seeds, semantic tokens with explicit background intent, ColorMode treatments, ColorDepth detection, contrast-floor enforcement, and VisualRole mapping through one resolved `Theme`.
 - On 2026-08-27, `feat/tui-redesign-prerequisites` published a wall-clock millisecond field beside the monotonic `UiInstant` on the same tick and converted the fixed-size goldens to a style-aware snapshot helper that records symbol, foreground, background, and modifiers.
 - On 2026-08-27, `feat/tui-redesign-plan` added the terminal interface audit, the terminal design system contract, the ten-step Phase 3.10 redesign plan, and proposed ADR-0016 for a typed presentation layer; the audit is backed by review-harness buffer captures plus source citations, and it establishes that the layout skeleton is sound while the layer between preferences and cells is missing.
@@ -135,7 +136,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Immediate next actions
 
-1. Continue Phase 3.10 on `feat/tui-gradient-icons` with the three-stop gradient engine, the Nerd Font / Unicode / ASCII icon table, and the motion gate.
+1. Continue Phase 3.10 on `feat/tui-layout-contract` with one layout pass, named rects, and a reverse-scan hit-region list.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -153,7 +154,8 @@ Configured router access, macOS and Linux platform vault environments, an approv
 
 ## Handoff note
 
-Phase 3.10 steps 0 and 1 are on `feat/tui-theme-foundation` and are ready to merge into `dev`.
+Phase 3.10 steps 0 through 3 are on `dev`.
+The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
 Relative session timestamps remain a step 7 surface change; the wall-clock field is present but Chat still shows the literal `updated` label.
-Do not skip the plan order: steps 5 through 8 depend on the layout contract from step 4 and on the component catalog frozen at the end of step 3.
+Do not skip the plan order: steps 5 through 8 depend on the layout contract from step 4.
