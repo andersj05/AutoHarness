@@ -181,7 +181,7 @@
 - Style-aware snapshots serialize cell symbol, foreground, background, and modifiers, and the fixed-size Chat goldens cover 120x50, 120x40, 80x24, 60x18, and 40x12.
 - Appearance resolves through `Theme` from four-value seeds, semantic tokens with explicit background intent, ColorMode treatments, ColorDepth detection, and contrast-floor enforcement; VisualRole call sites map to tokens, color literals are confined to `ui/color.rs` and `ui/palette.rs`, and System versus Dark surfaces differ.
 - Gradients are three-stop Oklab samples at a normalized position, with NoColor and HighContrast degradation, Basic16 snapped to three stops, and goldens updated for the lifted midpoint.
-- Every icon is a Nerd Font, Unicode, and ASCII triple; Unicode and ASCII measure one cell, Nerd Font occupies a reserved two-cell slot, and Settings glyph-check data is available from `IconSet`.
+- Every icon is a Nerd Font, Unicode, and ASCII triple; Unicode and ASCII measure one cell, Nerd Font occupies a reserved two-cell slot, BMP private-use codepoints avoid supplementary-plane replacement diamonds on Windows terminals, and Settings glyph-check data is available from `IconSet`.
 - Motion frame tables live in `ui/motion.rs`, honor a 100 ms repaint floor and a 30-second idle gate, and freeze under reduced motion.
 - The step-3 component catalog under `ui/component/` measures itself, paints from tokens and icons, returns hit regions, and is covered at 40, 60, 80, and 120 columns plus an ignored gallery.
 - Step 4 computes named shell rects once per frame, reverse-scans hit regions, confines width and height literals to `metrics.rs`, and covers every remaining `MouseAction` from a layout case.
