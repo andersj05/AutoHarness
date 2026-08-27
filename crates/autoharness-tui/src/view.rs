@@ -1279,16 +1279,15 @@ fn workspace_label(workspace: &str) -> String {
 }
 
 fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
+    let prompt_height = prompt_surface_height(area, model);
     let height = u16::try_from(model.palette_entries().len())
         .unwrap_or(u16::MAX)
         .min(8)
-        .min(
-            area.height
-                .saturating_sub(prompt_surface_height(area, model)),
-        );
+        .min(area.height.saturating_sub(prompt_height));
     Rect::new(
         area.x.saturating_add(2),
-        area.y.saturating_add(prompt_surface_height(area, model)),
+        area.bottom()
+            .saturating_sub(prompt_height.saturating_add(height)),
         area.width.saturating_sub(4),
         height,
     )
@@ -1299,7 +1298,7 @@ fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if list.width == 0 || list.height == 0 {
         return;
     }
-    frame.render_widget(Clear, list);
+    frame.render_widget(Clear, Rect::new(area.x, list.y, area.width, list.height));
     let entries = model.palette_entries();
     if entries.is_empty() {
         frame.render_widget(
@@ -3255,21 +3254,21 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(composer_height),
+            Constraint::Min(1),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
-            Constraint::Min(1),
+            Constraint::Length(composer_height),
         ])
         .split(area);
 
-    render_prompt_bar(frame, chunks[0], model);
+    render_transcript(frame, chunks[0], model);
     if notice_height > 0 {
         render_notice(frame, chunks[1], model);
     }
     if search_height > 0 {
         render_search_bar(frame, chunks[2], model);
     }
-    render_transcript(frame, chunks[3], model);
+    render_prompt_bar(frame, chunks[3], model);
 }
 
 /// Renders the one-row transcript search bar.
@@ -3286,18 +3285,18 @@ fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let composer_height = prompt_surface_height(area, model);
     let transcript_height = area.height.saturating_sub(composer_height);
-    let composer = Rect::new(area.x, area.y, area.width, composer_height);
-    let transcript = Rect::new(
+    let transcript = Rect::new(area.x, area.y, area.width, transcript_height);
+    let composer = Rect::new(
         area.x,
-        area.y.saturating_add(composer_height),
+        area.y.saturating_add(transcript_height),
         area.width,
-        transcript_height,
+        composer_height,
     );
-    if composer.height > 0 {
-        render_prompt_bar(frame, composer, model);
-    }
     if transcript.height > 0 {
         render_transcript(frame, transcript, model);
+    }
+    if composer.height > 0 {
+        render_prompt_bar(frame, composer, model);
     }
 }
 fn selected_model_label(model: &Model) -> String {
@@ -3514,9 +3513,9 @@ fn transcript_text(model: &Model) -> Text<'static> {
                     AttemptStatus::Streaming => {
                         let _ = write!(
                             heading,
-                            "{}{} streaming",
+                            "{}{} generating",
                             chrome_separator(model),
-                            spinner(model)
+                            generation_animation(model)
                         );
                     }
                     AttemptStatus::Cancelling => {
@@ -3989,6 +3988,31 @@ fn spinner(model: &Model) -> &'static str {
     }
     const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
     FRAMES[usize::try_from((model.now / 100) % 8).unwrap_or(0)]
+}
+
+fn generation_animation(model: &Model) -> &'static str {
+    if presentation(model).reduced_motion {
+        return "[--------]";
+    }
+    const FRAMES: [&str; 16] = [
+        "[>-------]",
+        "[=>------]",
+        "[==>-----]",
+        "[===>----]",
+        "[-===>---]",
+        "[--===>--]",
+        "[---===>-]",
+        "[----===>]",
+        "[----<===]",
+        "[---<===-]",
+        "[--<===--]",
+        "[-<===---]",
+        "[<===----]",
+        "[<==-----]",
+        "[<=------]",
+        "[<-------]",
+    ];
+    FRAMES[usize::try_from((model.now / 100) % 16).unwrap_or(0)]
 }
 
 fn retry_label(model: &Model, attempt_id: &crate::model::AttemptKey, retry: RetryPolicy) -> String {

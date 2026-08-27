@@ -1,12 +1,8 @@
- AutoHarness               │ Gemini 2.5 Pro  [auto]  .
- No sessions yet           │ ❯ Retry with a smaller scope.
-                           │   Keep the checklist concise.
-PROJECTS                   │ ──────────────────────────────────────────────────────────────────────────────────────────
- workspace                 │ YOU
-                           │ Plan a café launch.
+ AutoHarness               │ YOU
+ No sessions yet           │ Plan a café launch.
                            │ Keep it practical.
-                           │
-                           │ AUTOHARNESS · complete
+PROJECTS                   │
+ workspace                 │ AUTOHARNESS · complete
                            │ Start with a two-week validation sprint:
                            │ 1. Interview ten customers.
                            │ 2. Price three menu bundles.
@@ -37,4 +33,8 @@ PROJECTS                   │ ────────────────�
                            │
                            │
                            │
- Profile  |  Settings      │
+                           │
+                           │ Gemini 2.5 Pro  [auto]  .
+                           │ ❯ Retry with a smaller scope.
+                           │   Keep the checklist concise.
+ Profile  |  Settings      │ ──────────────────────────────────────────────────────────────────────────────────────────

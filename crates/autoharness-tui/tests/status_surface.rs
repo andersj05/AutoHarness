@@ -171,13 +171,44 @@ fn narrow_chat_keeps_prompt_metadata_without_status_header() {
 }
 
 #[test]
-fn prompt_precedes_the_scrollable_conversation() {
+fn prompt_follows_the_scrollable_conversation_and_stays_at_the_bottom() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 80, 24));
     let prompt = rendered.find("❯").expect("prompt marker");
     let conversation = rendered.find("GET STARTED").expect("conversation content");
-    assert!(prompt < conversation);
+    assert!(conversation < prompt);
+    assert!(
+        rendered
+            .lines()
+            .rev()
+            .take(3)
+            .any(|line| line.contains("❯"))
+    );
     assert!(!rendered.contains("Conversation"));
+}
+
+#[test]
+fn active_generation_uses_a_tick_driven_ascii_scanner() {
+    use autoharness_tui::{AttemptKey, AttemptStatus};
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-generating").expect("valid attempt"),
+        text: String::new(),
+        status: AttemptStatus::Streaming,
+        usage: None,
+        retry_of: None,
+    }];
+    let mut model = Model::new(
+        session(2, transcript),
+        Arc::new(SessionsProjection::default()),
+        catalog_ready(),
+    );
+
+    let first = buffer_text(&render_model(&model, 80, 24));
+    assert!(first.contains("[>-------] generating"));
+    let _ = update(&mut model, Message::Tick(700));
+    let later = buffer_text(&render_model(&model, 80, 24));
+    assert!(later.contains("[----===>] generating"));
+    assert_ne!(first, later);
 }
 
 #[test]

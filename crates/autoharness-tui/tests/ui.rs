@@ -861,6 +861,40 @@ fn apply_visual_preferences(model: &mut Model, preferences: VisualPreferences) {
 }
 
 #[test]
+fn reduced_motion_freezes_the_generation_scanner() {
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-reduced-motion").expect("attempt"),
+        text: String::new(),
+        status: AttemptStatus::Streaming,
+        usage: None,
+        retry_of: None,
+    }];
+    let mut model = Model::new(
+        session(2, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "system",
+            glyph_mode: "ascii",
+            reduced_motion: true,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+
+    let first = buffer_text(&render_model(&model, 80, 24));
+    let _ = update(&mut model, Message::Tick(700));
+    let later = buffer_text(&render_model(&model, 80, 24));
+    assert!(first.contains("[--------] generating"));
+    assert_eq!(first, later);
+}
+
+#[test]
 fn accessibility_visual_matrix_preserves_security_text_and_ascii_borders() {
     let sizes = [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)];
     let mut permission = (*session(9, Vec::new())).clone();
