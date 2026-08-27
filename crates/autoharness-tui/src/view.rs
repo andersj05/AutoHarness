@@ -21,6 +21,7 @@ use crate::ui::Token;
 use crate::ui::metrics::{
     COMPACT_CHAT_MIN_HEIGHT, COMPACT_CHAT_MIN_WIDTH, SIDEBAR_WIDTH, wide_shell,
 };
+use crate::ui::normalized_t;
 
 const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
     top_left: "+",
@@ -107,7 +108,7 @@ fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
 }
 
 fn gradient_style(model: &Model, index: u16, count: u16) -> Style {
-    model.theme().gradient_style(index, count)
+    model.theme().gradient_cell(index, count)
 }
 
 fn gradient_text(model: &Model, value: &str) -> Line<'static> {
@@ -2902,7 +2903,7 @@ fn push_thinking_piece(spans: &mut Vec<Span<'static>>, model: &Model, value: &st
                 full,
                 model
                     .theme()
-                    .gradient_emphasis_style(u16::try_from(index).unwrap_or(5), 6),
+                    .gradient_emphasis_style(normalized_t(u16::try_from(index).unwrap_or(5), 6)),
             )
         } else {
             (empty, chat_visual_style(model, VisualRole::Muted))

@@ -4,6 +4,7 @@ use autoharness_settings::{ColorMode, EffectiveLocalPreferences, ThemePreset};
 use ratatui::style::{Modifier, Style};
 
 use super::color::{ColorDepth, Rgb, clamp_contrast, quantize, reset_color};
+use super::gradient::{Gradient, gradient_style, normalized_t};
 use super::palette::{Ramp, Seed};
 use super::tokens::{BackgroundIntent, TEXT_ON_ACCENT_FLOOR, Token, TokenPaint, paints};
 
@@ -17,8 +18,7 @@ pub struct Theme {
     depth: ColorDepth,
     preset: ThemePreset,
     mode: ColorMode,
-    accent_a: Rgb,
-    accent_b: Rgb,
+    gradient: Gradient,
 }
 
 impl Theme {
@@ -45,8 +45,7 @@ impl Theme {
             depth,
             preset,
             mode,
-            accent_a: ramp.accent,
-            accent_b: ramp.accent_alt,
+            gradient: Gradient::from_accents(ramp.accent, ramp.accent_alt),
         }
     }
 
@@ -82,34 +81,28 @@ impl Theme {
         style
     }
 
-    /// Samples the theme gradient at a normalized position.
+    /// Returns the three-stop accent gradient for this theme.
     #[must_use]
-    pub fn gradient_style(&self, index: u16, count: u16) -> Style {
-        if matches!(self.mode, ColorMode::NoColor) {
-            return self.style(Token::BorderSubtle);
-        }
-        if matches!(self.mode, ColorMode::HighContrast) {
-            return self.style(Token::Accent);
-        }
-        let denominator = count.saturating_sub(1).max(1);
-        let amount = f32::from(index.min(denominator)) / f32::from(denominator);
-        let sample = self.accent_a.mix(self.accent_b, amount);
-        let fg = quantize(sample, self.depth);
-        let mut style = Style::new().fg(fg.color).bg(reset_color());
-        if fg.bold {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-        if self.mode == ColorMode::Vivid {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-        style
+    pub const fn gradient(&self) -> Gradient {
+        self.gradient
+    }
+
+    /// Samples the theme gradient at a normalized position in `0.0..=1.0`.
+    #[must_use]
+    pub fn gradient_style(&self, t: f32) -> Style {
+        gradient_style(self, t)
+    }
+
+    /// Samples a discrete cell using a normalized position derived from its index.
+    #[must_use]
+    pub fn gradient_cell(&self, index: u16, count: u16) -> Style {
+        self.gradient_style(normalized_t(index, count))
     }
 
     /// Samples the theme gradient and emphasizes the cell for meter fills.
     #[must_use]
-    pub fn gradient_emphasis_style(&self, index: u16, count: u16) -> Style {
-        self.gradient_style(index, count)
-            .add_modifier(Modifier::BOLD)
+    pub fn gradient_emphasis_style(&self, t: f32) -> Style {
+        self.gradient_style(t).add_modifier(Modifier::BOLD)
     }
 
     /// Detected color depth used during resolution.

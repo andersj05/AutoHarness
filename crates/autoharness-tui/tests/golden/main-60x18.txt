@@ -75,12 +75,12 @@
  Gemini 2.5 Pro │ auto ○○○○○○ │ ctx <0.1% │ .               
  | 0-0 fg=reset bg=reset
  | 1-14 fg=#67dbf1 bg=reset bold
- | 15-17 fg=#5ac6f1 bg=reset
+ | 15-17 fg=#62cef5 bg=reset
  | 18-22 fg=#86bbfc bg=reset bold
  | 23-28 fg=#656b75 bg=reset
- | 29-31 fg=#76b8f3 bg=reset
+ | 29-31 fg=#85c8fc bg=reset
  | 32-40 fg=#b5a2fc bg=reset
- | 41-43 fg=#8aaaf6 bg=reset
+ | 41-43 fg=#99b9fe bg=reset
  | 44-58 fg=#f2f9fc bg=reset
  | 59-59 fg=reset bg=reset
 @14
@@ -99,62 +99,62 @@
  ────────────────────────────────────────────────────────── 
  | 0-0 fg=reset bg=reset
  | 1-1 fg=#22d3ee bg=reset
- | 2-2 fg=#2bd2ee bg=reset
- | 3-3 fg=#32d1ef bg=reset
- | 4-4 fg=#38d0ef bg=reset
- | 5-5 fg=#3dceef bg=reset
- | 6-6 fg=#42cdef bg=reset
- | 7-7 fg=#46ccef bg=reset
- | 8-8 fg=#4acbf0 bg=reset
- | 9-9 fg=#4ecaf0 bg=reset
- | 10-10 fg=#52c9f0 bg=reset
- | 11-11 fg=#55c7f0 bg=reset
- | 12-12 fg=#58c6f1 bg=reset
- | 13-13 fg=#5bc5f1 bg=reset
- | 14-14 fg=#5ec4f1 bg=reset
- | 15-15 fg=#61c3f1 bg=reset
- | 16-16 fg=#64c1f2 bg=reset
- | 17-17 fg=#66c0f2 bg=reset
- | 18-18 fg=#69bff2 bg=reset
- | 19-19 fg=#6bbef2 bg=reset
- | 20-20 fg=#6ebdf3 bg=reset
- | 21-21 fg=#70bcf3 bg=reset
- | 22-22 fg=#72baf3 bg=reset
- | 23-23 fg=#74b9f3 bg=reset
- | 24-24 fg=#76b8f3 bg=reset
- | 25-25 fg=#78b7f4 bg=reset
- | 26-26 fg=#7ab5f4 bg=reset
- | 27-27 fg=#7cb4f4 bg=reset
- | 28-28 fg=#7eb3f4 bg=reset
- | 29-29 fg=#80b2f4 bg=reset
- | 30-30 fg=#82b0f5 bg=reset
- | 31-31 fg=#83aff5 bg=reset
- | 32-32 fg=#85aef5 bg=reset
- | 33-33 fg=#87adf5 bg=reset
- | 34-34 fg=#88abf6 bg=reset
- | 35-35 fg=#8aaaf6 bg=reset
- | 36-36 fg=#8ba9f6 bg=reset
- | 37-37 fg=#8da8f6 bg=reset
- | 38-38 fg=#8ea6f6 bg=reset
- | 39-39 fg=#90a5f7 bg=reset
- | 40-40 fg=#91a4f7 bg=reset
- | 41-41 fg=#93a2f7 bg=reset
- | 42-42 fg=#94a1f7 bg=reset
- | 43-43 fg=#95a0f7 bg=reset
- | 44-44 fg=#979ef7 bg=reset
- | 45-45 fg=#989df8 bg=reset
- | 46-46 fg=#999cf8 bg=reset
- | 47-47 fg=#9b9af8 bg=reset
- | 48-48 fg=#9c99f8 bg=reset
- | 49-49 fg=#9d98f8 bg=reset
- | 50-50 fg=#9e96f9 bg=reset
- | 51-51 fg=#9f95f9 bg=reset
- | 52-52 fg=#a094f9 bg=reset
- | 53-53 fg=#a292f9 bg=reset
- | 54-54 fg=#a391f9 bg=reset
- | 55-55 fg=#a48ff9 bg=reset
- | 56-56 fg=#a58efa bg=reset
- | 57-57 fg=#a68cfa bg=reset
+ | 2-2 fg=#2cd3ef bg=reset
+ | 3-3 fg=#34d2ef bg=reset
+ | 4-4 fg=#3bd2f0 bg=reset
+ | 5-5 fg=#41d1f0 bg=reset
+ | 6-6 fg=#47d1f1 bg=reset
+ | 7-7 fg=#4cd0f2 bg=reset
+ | 8-8 fg=#50d0f2 bg=reset
+ | 9-9 fg=#55cff3 bg=reset
+ | 10-10 fg=#59cff3 bg=reset
+ | 11-11 fg=#5dcef4 bg=reset
+ | 12-12 fg=#61cef5 bg=reset
+ | 13-13 fg=#64cdf5 bg=reset
+ | 14-14 fg=#68cdf6 bg=reset
+ | 15-15 fg=#6bccf6 bg=reset
+ | 16-16 fg=#6fccf7 bg=reset
+ | 17-17 fg=#72cbf8 bg=reset
+ | 18-18 fg=#75cbf8 bg=reset
+ | 19-19 fg=#78caf9 bg=reset
+ | 20-20 fg=#7bcaf9 bg=reset
+ | 21-21 fg=#7dc9fa bg=reset
+ | 22-22 fg=#80c9fb bg=reset
+ | 23-23 fg=#83c8fb bg=reset
+ | 24-24 fg=#86c7fc bg=reset
+ | 25-25 fg=#88c7fc bg=reset
+ | 26-26 fg=#8bc6fd bg=reset
+ | 27-27 fg=#8dc6fe bg=reset
+ | 28-28 fg=#90c5fe bg=reset
+ | 29-29 fg=#92c5ff bg=reset
+ | 30-30 fg=#94c3ff bg=reset
+ | 31-31 fg=#95c1ff bg=reset
+ | 32-32 fg=#96c0ff bg=reset
+ | 33-33 fg=#97beff bg=reset
+ | 34-34 fg=#98bcfe bg=reset
+ | 35-35 fg=#98bafe bg=reset
+ | 36-36 fg=#99b8fe bg=reset
+ | 37-37 fg=#9ab6fe bg=reset
+ | 38-38 fg=#9bb4fe bg=reset
+ | 39-39 fg=#9cb2fe bg=reset
+ | 40-40 fg=#9db0fd bg=reset
+ | 41-41 fg=#9daefd bg=reset
+ | 42-42 fg=#9eacfd bg=reset
+ | 43-43 fg=#9faafd bg=reset
+ | 44-44 fg=#9fa8fd bg=reset
+ | 45-45 fg=#a0a6fd bg=reset
+ | 46-46 fg=#a1a4fc bg=reset
+ | 47-47 fg=#a1a2fc bg=reset
+ | 48-48 fg=#a2a0fc bg=reset
+ | 49-49 fg=#a39efc bg=reset
+ | 50-50 fg=#a39cfc bg=reset
+ | 51-51 fg=#a49afb bg=reset
+ | 52-52 fg=#a498fb bg=reset
+ | 53-53 fg=#a596fb bg=reset
+ | 54-54 fg=#a593fb bg=reset
+ | 55-55 fg=#a691fb bg=reset
+ | 56-56 fg=#a68ffa bg=reset
+ | 57-57 fg=#a78dfa bg=reset
  | 58-58 fg=#a78bfa bg=reset
  | 59-59 fg=reset bg=reset
 @17
