@@ -95,6 +95,23 @@ fn chat_surface_uses_compact_transparent_composer_metadata() {
 }
 
 #[test]
+fn chat_rail_transcript_and_composer_preserve_terminal_background() {
+    let model = empty_model(SettingsProjection::default());
+    let rendered = render_model(&model, 120, 40);
+    for (column, row, surface) in [
+        (5, 30, "rail"),
+        (80, 20, "transcript"),
+        (110, 38, "composer"),
+    ] {
+        assert_eq!(
+            rendered.buffer()[(column, row)].bg,
+            ratatui::style::Color::Reset,
+            "{surface} must inherit the terminal background"
+        );
+    }
+}
+
+#[test]
 fn chat_surface_omits_provider_status_chrome() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 120, 40));

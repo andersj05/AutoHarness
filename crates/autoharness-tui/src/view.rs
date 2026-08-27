@@ -21,8 +21,8 @@ use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
     CREDENTIAL_COMPACT_WIDTH, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
-    SESSION_HELP_WIDE, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
-    SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
+    SESSION_HELP_WIDE, SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH,
+    SETTINGS_THEME_PREVIEW_CELLS, SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
 };
 use crate::ui::{Icon, Theme, Token, normalized_t};
 
@@ -670,7 +670,11 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             theme.style(Token::TextSecondary)
         };
         let icon = settings_category_icon(category);
-        let text = format!("{} {}", icons.glyph(icon), category.label());
+        let text = if area.width <= SETTINGS_CATEGORY_RAIL_XS {
+            icons.glyph(icon).to_owned()
+        } else {
+            format!("{} {}", icons.glyph(icon), category.label())
+        };
         crate::ui::component::paint::put(
             frame.buffer_mut(),
             area.x,

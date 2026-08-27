@@ -1460,7 +1460,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "settings" => {
-            open_settings_tab(model, 0);
+            navigate_to_route(model, Route::Settings);
             Vec::new()
         }
         "retry" => retry_attempt(model),

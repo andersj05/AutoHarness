@@ -252,6 +252,8 @@ pub const SETTINGS_BODY_INSET_Y_TOTAL: u16 = 3;
 pub const SETTINGS_BODY_INSET_X_TOTAL: u16 = 2;
 /// Settings category rail width below the medium breakpoint.
 pub const SETTINGS_CATEGORY_RAIL_COMPACT: u16 = 16;
+/// Icon-only Settings category rail width below 48 columns.
+pub const SETTINGS_CATEGORY_RAIL_XS: u16 = 3;
 /// Settings category rail width at the medium breakpoint and above.
 pub const SETTINGS_CATEGORY_RAIL_WIDE: u16 = 22;
 /// Settings footer height with context and active controls.

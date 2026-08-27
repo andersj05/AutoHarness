@@ -572,7 +572,11 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
     }
     let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
     assert!(model.settings_open());
-    let _ = update(&mut model, Message::Input(key_input(Key::Char('k'))));
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key_input(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key_input(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
     assert!(model.credential_open());
 
     let paste = Message::Paste(format!("{sentinel}\r\n"));

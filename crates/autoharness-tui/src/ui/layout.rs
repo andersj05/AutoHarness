@@ -18,10 +18,10 @@ use super::metrics::{
     PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
     SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
     SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE,
-    SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT,
-    STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE, USER_PROFILE_FULL_HEIGHT,
-    USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y, USER_PROFILE_MAX_HEIGHT, WidthBand,
-    sidebar_width_for, wide_shell, width_band,
+    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
+    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE,
+    USER_PROFILE_FULL_HEIGHT, USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y,
+    USER_PROFILE_MAX_HEIGHT, WidthBand, sidebar_width_for, wide_shell, width_band,
 };
 use crate::model::{
     CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileConnectionState,
@@ -317,13 +317,10 @@ fn fill_settings_regions(regions: &mut NamedRects) {
     );
     let footer_height = SETTINGS_FOOTER_ROWS.min(inner.height);
     let workspace_height = inner.height.saturating_sub(footer_height);
-    let rail_width = if matches!(
-        width_band(inner.width),
-        WidthBand::Md | WidthBand::Lg | WidthBand::Xl
-    ) {
-        SETTINGS_CATEGORY_RAIL_WIDE
-    } else {
-        SETTINGS_CATEGORY_RAIL_COMPACT
+    let rail_width = match width_band(inner.width) {
+        WidthBand::Xs => SETTINGS_CATEGORY_RAIL_XS,
+        WidthBand::Sm => SETTINGS_CATEGORY_RAIL_COMPACT,
+        WidthBand::Md | WidthBand::Lg | WidthBand::Xl => SETTINGS_CATEGORY_RAIL_WIDE,
     }
     .min(inner.width);
     regions.settings_nav = Some(Rect::new(inner.x, inner.y, rail_width, workspace_height));
