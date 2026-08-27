@@ -1204,7 +1204,7 @@ fn nerd_font_mode_adds_optional_icons_without_changing_the_ascii_fallback() {
     assert!(rendered.contains("  AutoHarness"));
     assert!(rendered.contains(" ~/Desktop/AutoHarness"));
     assert!(rendered.contains(" feat/tui-polish"));
-    assert!(rendered.contains(''));
+    assert!(rendered.contains('│'));
 }
 
 #[test]
@@ -1241,8 +1241,18 @@ fn every_theme_and_color_treatment_renders_across_responsive_sizes() {
 
 #[test]
 fn prompt_bar_shows_safe_runtime_metadata() {
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-metrics").expect("attempt"),
+        text: "answer".to_owned(),
+        status: AttemptStatus::Completed,
+        usage: Some(UsageView {
+            input_tokens: 249_000,
+            output_tokens: 1_000,
+        }),
+        retry_of: None,
+    }];
     let mut model = Model::new(
-        session(13, Vec::new()),
+        session(13, transcript),
         Arc::new(SessionsProjection::default()),
         ready_catalog(),
     );
@@ -1254,15 +1264,26 @@ fn prompt_bar_shows_safe_runtime_metadata() {
         },
         ..Default::default()
     }));
+    let settings = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{"schema_version":3,"local_profile":{"preferences":{"prompt_status_detail":"detailed"}}}"#,
+        )
+        .resolve()
+        .expect("prompt detail fixture");
     model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: settings.local_profile().clone(),
         git_branch: Some("feat/prompt-bar".to_owned()),
         ..SettingsProjection::default()
     }));
-    let rendered = buffer_text(&render_model(&model, 120, 40));
+    let rendered = buffer_text(&render_model(&model, 160, 40));
     assert!(rendered.contains("Gemini 2.5 Pro"));
-    assert!(rendered.contains("[####..]"));
+    assert!(rendered.contains("high ●●●●○○"));
+    assert!(rendered.contains("ctx 25%"));
     assert!(rendered.contains("~/Desktop/AutoHarness"));
     assert!(rendered.contains("⑂ feat/prompt-bar"));
+    assert!(rendered.contains("in 249.0k / out 1.0k"));
+    assert!(rendered.matches('│').count() >= 4);
     for prefix in ["model:", "mode:", "think:", "path:", "git:"] {
         assert!(!rendered.contains(prefix));
     }

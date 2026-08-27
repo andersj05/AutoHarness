@@ -14,7 +14,7 @@ use crate::model::{
     AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelDefaultStep, ModelSummary,
     MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
-    RetryPolicy, Route, SettingsPreference, TranscriptItem,
+    RetryPolicy, Route, SettingsPreference, TranscriptItem, UsageView,
 };
 use crate::text::display_safe;
 
@@ -3067,16 +3067,16 @@ fn selected_model_name(model: &Model) -> String {
         )
 }
 
-fn thinking_meter(value: &str) -> &'static str {
+fn thinking_level(value: &str) -> (&'static str, usize) {
     match value.trim().to_ascii_lowercase().as_str() {
-        "none" => "[......]",
-        "minimal" => "[#.....]",
-        "low" => "[##....]",
-        "medium" => "[###...]",
-        "high" => "[####..]",
-        "xhigh" => "[#####.]",
-        "max" => "[######]",
-        _ => "[auto]",
+        "none" => ("none", 0),
+        "minimal" => ("minimal", 1),
+        "low" => ("low", 2),
+        "medium" => ("medium", 3),
+        "high" => ("high", 4),
+        "xhigh" => ("xhigh", 5),
+        "max" => ("max", 6),
+        _ => ("auto", 0),
     }
 }
 
@@ -3105,16 +3105,18 @@ fn workspace_display_path(workspace: &str) -> String {
         } else {
             format!("~/{}", suffix.join("/"))
         }
+    } else if parts.len() > 3 {
+        format!("…/{}", parts[parts.len() - 3..].join("/"))
     } else {
         normalized
     }
 }
 
 fn metadata_separator(model: &Model) -> &'static str {
-    if presentation(model).nerd_font {
-        "  "
+    if presentation(model).ascii {
+        " | "
     } else {
-        "  "
+        " │ "
     }
 }
 
@@ -3141,34 +3143,175 @@ fn push_metadata_piece(
     model: &Model,
     value: String,
     role: VisualRole,
+    metric_index: u16,
 ) {
     if !spans.is_empty() {
         spans.push(Span::styled(
             metadata_separator(model),
-            chat_visual_style(model, VisualRole::Muted),
+            gradient_style(model, metric_index, 6),
         ));
     }
     spans.push(Span::styled(value, chat_visual_style(model, role)));
 }
 
+fn push_thinking_piece(spans: &mut Vec<Span<'static>>, model: &Model, value: &str, compact: bool) {
+    if !spans.is_empty() {
+        spans.push(Span::styled(
+            metadata_separator(model),
+            gradient_style(model, 1, 6),
+        ));
+    }
+    let (label, filled) = thinking_level(value);
+    spans.push(Span::styled(
+        if compact {
+            label.chars().next().unwrap_or('a').to_string()
+        } else {
+            format!("{label} ")
+        },
+        chat_visual_style(model, VisualRole::User),
+    ));
+    let (open, full, empty, close) = if presentation(model).ascii {
+        ("(", "o", ".", ")")
+    } else {
+        ("", "●", "○", "")
+    };
+    spans.push(Span::styled(
+        open.to_owned(),
+        chat_visual_style(model, VisualRole::Muted),
+    ));
+    for index in 0..6 {
+        let (glyph, style) = if index < filled {
+            (
+                full,
+                gradient_style(model, u16::try_from(index).unwrap_or(5), 6)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (empty, chat_visual_style(model, VisualRole::Muted))
+        };
+        spans.push(Span::styled(glyph.to_owned(), style));
+    }
+    spans.push(Span::styled(
+        close.to_owned(),
+        chat_visual_style(model, VisualRole::Muted),
+    ));
+}
+
+fn selected_context_window(model: &Model) -> Option<u64> {
+    let selected = model.session.selected_model.as_ref()?;
+    model
+        .catalog
+        .models()
+        .iter()
+        .find(|summary| &summary.model == selected)
+        .and_then(|summary| summary.context_window_tokens)
+}
+
+fn latest_turn_usage(model: &Model) -> Option<UsageView> {
+    model
+        .session
+        .transcript
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            TranscriptItem::Assistant { usage, .. } => *usage,
+            TranscriptItem::User { .. } | TranscriptItem::Tool(_) => None,
+        })
+}
+
+fn context_percentage(used: u64, limit: u64) -> String {
+    if limit == 0 || used == 0 {
+        return "0%".to_owned();
+    }
+    let tenths = u128::from(used)
+        .saturating_mul(1_000)
+        .checked_div(u128::from(limit))
+        .unwrap_or_default()
+        .min(1_000);
+    if tenths == 0 {
+        return "<0.1%".to_owned();
+    }
+    if tenths < 100 {
+        format!("{}.{:01}%", tenths / 10, tenths % 10)
+    } else {
+        format!("{}%", (tenths + 5) / 10)
+    }
+}
+
+fn context_metric(model: &Model, compact: bool) -> (String, VisualRole) {
+    let Some(limit) = selected_context_window(model) else {
+        return (
+            if compact { "--" } else { "ctx --" }.to_owned(),
+            VisualRole::Muted,
+        );
+    };
+    let used = latest_turn_usage(model)
+        .map(|usage| usage.input_tokens.saturating_add(usage.output_tokens))
+        .unwrap_or_default();
+    let percentage = context_percentage(used, limit);
+    let role = if u128::from(used).saturating_mul(100) >= u128::from(limit).saturating_mul(90) {
+        VisualRole::Error
+    } else if u128::from(used).saturating_mul(100) >= u128::from(limit).saturating_mul(70) {
+        VisualRole::Warning
+    } else {
+        VisualRole::Tool
+    };
+    (
+        if compact {
+            percentage
+        } else {
+            format!("ctx {percentage}")
+        },
+        role,
+    )
+}
+
+fn compact_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
 fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
     let mut spans = Vec::new();
-    let model_width = if width >= 64 { 22 } else { 14 };
+    let compact = width < 34;
+    let model_width = if width >= 64 {
+        22
+    } else if compact {
+        8
+    } else {
+        14
+    };
     push_metadata_piece(
         &mut spans,
         model,
         single_line_label(&selected_model_name(model), model_width),
         VisualRole::Assistant,
+        0,
     );
-    if width >= 24 {
-        push_metadata_piece(
+    if width >= 20 {
+        push_thinking_piece(
             &mut spans,
             model,
-            thinking_meter(&model.profiles().user.default_mode).to_owned(),
-            VisualRole::User,
+            &model.profiles().user.default_mode,
+            compact,
         );
     }
-    if width >= 48 {
+    if width >= 32 {
+        let (context, role) = context_metric(model, width < 42);
+        push_metadata_piece(&mut spans, model, context, role, 2);
+    }
+    let detail = *model
+        .settings()
+        .local_profile
+        .preferences()
+        .prompt_status_detail()
+        .value();
+    if detail != PromptStatusDetail::Essential && width >= 56 {
         push_metadata_piece(
             &mut spans,
             model,
@@ -3181,9 +3324,11 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
                 )
             ),
             VisualRole::Normal,
+            3,
         );
     }
-    if width >= 76
+    if detail != PromptStatusDetail::Essential
+        && width >= 76
         && let Some(branch) = model.settings().git_branch.as_deref()
     {
         push_metadata_piece(
@@ -3191,6 +3336,23 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
             model,
             format!("{}{}", branch_marker(model), single_line_label(branch, 18)),
             VisualRole::Tool,
+            4,
+        );
+    }
+    if detail == PromptStatusDetail::Detailed
+        && width >= 98
+        && let Some(usage) = latest_turn_usage(model)
+    {
+        push_metadata_piece(
+            &mut spans,
+            model,
+            format!(
+                "in {} / out {}",
+                compact_token_count(usage.input_tokens),
+                compact_token_count(usage.output_tokens)
+            ),
+            VisualRole::Muted,
+            5,
         );
     }
     Line::from(spans)

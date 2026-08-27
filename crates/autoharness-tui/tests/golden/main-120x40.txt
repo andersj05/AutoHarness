@@ -34,7 +34,7 @@ PROJECTS                   │
                            │
                            │
                            │
-                           │ Gemini 2.5 Pro  [auto]  .
+                           │ Gemini 2.5 Pro │ auto ○○○○○○ │ ctx <0.1% │ .
                            │ ❯ Retry with a smaller scope.
                            │   Keep the checklist concise.
  Profile  |  Settings      │ ──────────────────────────────────────────────────────────────────────────────────────────

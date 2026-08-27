@@ -5,7 +5,7 @@
  exposed.
  rate_limited | Ctrl+R retry | Ctrl+N
  new | ref attempt-2
- Gemini 2.5 Pro  [auto]
+ Gemini 2.5 Pro │ auto ○○○○○○ │ <0.1%
  ❯ Retry with a smaller scope.
    Keep the checklist concise.
  ──────────────────────────────────────
