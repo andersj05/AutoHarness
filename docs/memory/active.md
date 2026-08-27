@@ -4,16 +4,16 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 5 are on `dev` after `feat/tui-chat-workspace`: wall-clock ticks, style-aware snapshots, Theme tokens, the three-stop gradient engine, the Nerd Font / Unicode / ASCII icon table, the motion gate, the typed component catalog, one layout pass with named rects and reverse-scan hit testing, and a rebuilt Chat workspace, while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 5 are on `dev`, and step 6 is implemented and validated on `feat/tui-settings-workspace`: the typed presentation layer now covers Chat and a nine-category Settings workspace while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Implement Phase 3.10 step 6 (Settings workspace) without changing route semantics, overlay ownership, intents, or the settings schema.
+Review and merge Phase 3.10 step 6 from `feat/tui-settings-workspace`, then continue with step 7 (Sessions and Profiles) without changing route semantics, overlay ownership, intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
 
-Phase 3.10 steps 0 through 5 are implemented.
+Phase 3.10 steps 0 through 6 are implemented.
 The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Current repository state
@@ -35,9 +35,10 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 - The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
 - `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
 - Wide terminals show a persistent navigation rail separated by one vertical accent rule; the rail is 26 columns at `Lg` and 32 at `Xl`, and narrower terminals collapse it without introducing a compact Chat Profile|Settings footer.
-- Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `Hero`, `StatusBar`, and `SearchField`, keeps You / AutoHarness roles, places the gradient rule between the transcript and the prompt, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
+- Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `Hero`, `StatusBar`, and `SearchField`, keeps You / AutoHarness roles, places the gradient rule between the transcript and the prompt, preserves the terminal background through its rail, transcript, and composer, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
 - The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
-- Sessions, Profiles, Settings, and Help are primary routes with contextual action bars; settings shows safe runtime provenance and recovery without becoming the Phase 3.8 editor.
+- Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
+- Settings is a responsive two-pane workspace with nine categories, editable typed rows, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
@@ -65,6 +66,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-settings-workspace` implemented Phase 3.10 step 6 with a responsive nine-category rail, typed toggle, choice, text, action, and information rows, provenance chips, cross-category search, inline theme previews, complete glyph checks, shared shortcuts, populated Profile and About pages, and level-by-level focus behavior; Chat rail, transcript, and composer cells also preserve the terminal background, and formatting, strict workspace Clippy, the full locked workspace suite, focused visual review, and style-aware golden review pass.
 - On 2026-08-27, `feat/tui-chat-workspace` rebuilt Chat from the presentation catalog: `MessageBlock` transcript turns, `ToolCard` tool rows, `Callout` plus `ButtonRow` recovery, `Hero` empty and loading states, `StatusBar` composer metadata, a 26/32-column icon rail with recent sessions and workspace, and reviewed 80x24 snapshots for streaming, cancelling, failed, offline, loading, no-model, empty-catalog, and new-conversation.
 - On 2026-08-27, `feat/tui-layout-contract` added `Layout::compute` named rects, reverse-scan hit testing, metrics-only width and height literals, and wired composer, transcript, Settings, `ChatRetry`, and `ChatFreshSession` mouse actions without changing route semantics.
 - On 2026-08-27, `feat/tui-gradient-icons` added the three-stop Oklab gradient engine with normalized sampling and NoColor/HighContrast degradation, the Nerd Font / Unicode / ASCII icon table with a two-cell Nerd Font slot and glyph-check data, motion frame tables with a 100 ms floor and 30-second idle gate, and the step-3 component catalog under `ui/component/` with width-matrix tests, ButtonRow hit-region checks, KeyValueTable alignment, StatusBar priority dropping, and an ignored gallery harness.
@@ -138,7 +140,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Immediate next actions
 
-1. Continue Phase 3.10 on `feat/tui-settings-workspace` with the two-pane Settings category rail and `SettingRow` controls.
+1. Review and merge `feat/tui-settings-workspace`, then begin Phase 3.10 step 7 for Sessions and Profiles.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -156,8 +158,8 @@ Configured router access, macOS and Linux platform vault environments, an approv
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 5 are on `dev`.
+Phase 3.10 steps 0 through 5 are on `dev`, and step 6 is implemented and validated on `feat/tui-settings-workspace`.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
 Relative session timestamps remain a step 7 surface change; the wall-clock field is present but Chat still shows the literal `updated` label.
-Do not skip the plan order: steps 6 through 8 still depend on the layout contract and catalog from steps 3 and 4.
+Do not skip the plan order: steps 7 and 8 still depend on the layout contract and catalog from steps 3 and 4.
