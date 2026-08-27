@@ -451,6 +451,124 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         render_hero(buf, inner, model);
         return;
     }
+    if model.search_pinned_row.is_none() || !model.search_open() {
+        render_tail_window(buf, inner, model);
+        return;
+    }
+    render_pinned_window(buf, inner, model);
+}
+
+struct TailSlice {
+    index: usize,
+    item_height: u16,
+    skip_top: u16,
+    visible: u16,
+    y_offset: u16,
+}
+
+fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
+    let slices = tail_slices(inner, model);
+    if slices.is_empty() && !model.session.transcript.is_empty() {
+        render_transcript_start(buf, inner, model);
+        return;
+    }
+    for slice in slices.into_iter().rev() {
+        let y = inner.y.saturating_add(slice.y_offset);
+        blit_item(
+            buf,
+            Rect::new(inner.x, y, inner.width, slice.visible),
+            inner.width,
+            slice.item_height,
+            slice.skip_top,
+            |tmp, tmp_area| {
+                render_item(tmp, tmp_area, model, &model.session.transcript[slice.index]);
+            },
+        );
+    }
+}
+
+fn tail_slices(inner: Rect, model: &Model) -> Vec<TailSlice> {
+    let viewport = usize::from(inner.height);
+    let bottom = if model.transcript.follow_tail {
+        0
+    } else {
+        model.transcript.rows_from_bottom
+    };
+    let top = bottom.saturating_add(viewport);
+    let mut cursor = 0_usize;
+    let mut slices = Vec::with_capacity(viewport.min(model.session.transcript.len()));
+    for (index, item) in model.session.transcript.iter().enumerate().rev() {
+        let item_height = item_height(model, item, inner.width);
+        let height = usize::from(item_height);
+        let block = height.saturating_add(1);
+        let block_low = cursor;
+        let block_high = cursor.saturating_add(block);
+        let intersection_low = block_low.max(bottom);
+        let intersection_high = block_high.min(top);
+        if intersection_low < intersection_high {
+            let from_top = block.saturating_sub(intersection_high.saturating_sub(block_low));
+            let to_top = block.saturating_sub(intersection_low.saturating_sub(block_low));
+            let content_start = from_top.min(height);
+            let content_end = to_top.min(height);
+            if content_start < content_end {
+                slices.push(TailSlice {
+                    index,
+                    item_height,
+                    skip_top: u16::try_from(content_start).unwrap_or(u16::MAX),
+                    visible: u16::try_from(content_end.saturating_sub(content_start))
+                        .unwrap_or(u16::MAX),
+                    y_offset: u16::try_from(
+                        top.saturating_sub(intersection_high)
+                            .saturating_add(content_start.saturating_sub(from_top)),
+                    )
+                    .unwrap_or(u16::MAX),
+                });
+            }
+        }
+        cursor = block_high;
+        if cursor >= top {
+            break;
+        }
+    }
+
+    let top_shift = u16::try_from(top.saturating_sub(cursor)).unwrap_or(u16::MAX);
+    let content_shift = slices
+        .iter()
+        .map(|slice| slice.y_offset.saturating_sub(top_shift))
+        .min()
+        .unwrap_or(0);
+    for slice in &mut slices {
+        slice.y_offset = slice
+            .y_offset
+            .saturating_sub(top_shift)
+            .saturating_sub(content_shift);
+    }
+    slices
+}
+
+fn render_transcript_start(buf: &mut Buffer, inner: Rect, model: &Model) {
+    let mut y = inner.y;
+    for item in &model.session.transcript {
+        if y >= inner.bottom() {
+            break;
+        }
+        let height = item_height(model, item, inner.width);
+        let visible = height.min(inner.bottom().saturating_sub(y));
+        blit_item(
+            buf,
+            Rect::new(inner.x, y, inner.width, visible),
+            inner.width,
+            height,
+            0,
+            |tmp, tmp_area| {
+                render_item(tmp, tmp_area, model, item);
+            },
+        );
+        y = y.saturating_add(visible).saturating_add(ROW);
+    }
+}
+
+fn render_pinned_window(buf: &mut Buffer, inner: Rect, model: &Model) {
     let items = measured_items(model, inner.width);
     let total = items.iter().fold(0_u16, |acc, item| {
         acc.saturating_add(item.height).saturating_add(ROW)
@@ -740,6 +858,9 @@ fn recovery_buttons() -> [Button<MouseAction>; 2] {
 }
 
 fn recovery_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
+    if model.search_pinned_row.is_none() || !model.search_open() {
+        return tail_recovery_hits(area, model);
+    }
     let items = measured_items(model, area.width);
     let total = items.iter().fold(0_u16, |acc, item| {
         acc.saturating_add(item.height).saturating_add(ROW)
@@ -776,6 +897,34 @@ fn recovery_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
         }
         y = y.saturating_add(visible).saturating_add(ROW);
         consumed = consumed.saturating_add(block);
+    }
+    hits
+}
+
+fn tail_recovery_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
+    let buttons = recovery_buttons();
+    let theme = model.theme();
+    let mut hits = Vec::new();
+    for slice in tail_slices(area, model) {
+        if !matches!(
+            model.session.transcript.get(slice.index),
+            Some(TranscriptItem::Assistant {
+                status: AttemptStatus::Failed(_),
+                ..
+            })
+        ) {
+            continue;
+        }
+        let button_y = area
+            .y
+            .saturating_add(slice.y_offset)
+            .saturating_add(slice.visible.saturating_sub(ROW))
+            .min(area.bottom().saturating_sub(ROW));
+        hits.extend(button_row_hits(
+            theme,
+            &buttons,
+            Rect::new(area.x, button_y, area.width, ROW),
+        ));
     }
     hits
 }
