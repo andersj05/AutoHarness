@@ -514,6 +514,12 @@ impl PtySession {
         self.parser.screen().contents()
     }
 
+    /// Raw terminal bytes observed so far, including style escape sequences.
+    pub fn raw_output(&mut self) -> &[u8] {
+        self.pump();
+        &self.raw_output
+    }
+
     /// Resizes the terminal mid-run.
     pub fn resize(&mut self, rows: u16, columns: u16) {
         self.master
