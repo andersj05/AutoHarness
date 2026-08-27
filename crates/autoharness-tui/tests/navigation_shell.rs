@@ -658,7 +658,12 @@ fn mouse_session_action_bar_exposes_each_visible_action() {
 fn mouse_modal_rows_select_models_and_run_commands() {
     let mut picker = model();
     let _ = update(&mut picker, Message::Input(ctrl('p')));
-    let selection = hit_test(&picker, 80, 24, 12, 5);
+    let selection = (0..24).find_map(|row| {
+        (0..80).find_map(|column| {
+            hit_test(&picker, 80, 24, column, row)
+                .filter(|action| matches!(action, MouseAction::PickerSelect(_)))
+        })
+    });
     assert!(matches!(selection, Some(MouseAction::PickerSelect(_))));
     let effects = update(&mut picker, Message::Mouse(selection.expect("picker row")));
     assert!(matches!(
@@ -682,14 +687,11 @@ fn mouse_credential_dialog_controls_are_clickable() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('k')));
     assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
-    assert_eq!(
-        hit_test(&model, 80, 24, 10, 15),
-        Some(MouseAction::CredentialSubmit)
-    );
-    assert_eq!(
-        hit_test(&model, 80, 24, 60, 15),
-        Some(MouseAction::CredentialCancel)
-    );
+    for expected in [MouseAction::CredentialSubmit, MouseAction::CredentialCancel] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
     let _ = update(&mut model, Message::Mouse(MouseAction::CredentialCancel));
     assert!(model.overlay().is_none());
 }
@@ -726,6 +728,7 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::CredentialCancel => "CredentialCancel",
         MouseAction::ProfileCredentialSubmit => "ProfileCredentialSubmit",
         MouseAction::ProfileCredentialCancel => "ProfileCredentialCancel",
+        MouseAction::OverlayCancel => "OverlayCancel",
         MouseAction::PermissionAllow => "PermissionAllow",
         MouseAction::PermissionDeny => "PermissionDeny",
     }

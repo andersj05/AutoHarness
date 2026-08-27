@@ -104,8 +104,18 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             OverlayKind::Confirmation => {
                 matches!(action, MouseAction::Confirm | MouseAction::Cancel)
             }
-            OverlayKind::ModelPicker => matches!(action, MouseAction::PickerSelect(_)),
-            OverlayKind::CommandPalette => matches!(action, MouseAction::PaletteRun(_)),
+            OverlayKind::ModelPicker => {
+                matches!(
+                    action,
+                    MouseAction::PickerSelect(_) | MouseAction::OverlayCancel
+                )
+            }
+            OverlayKind::CommandPalette => {
+                matches!(
+                    action,
+                    MouseAction::PaletteRun(_) | MouseAction::OverlayCancel
+                )
+            }
             OverlayKind::SessionCredential => {
                 matches!(
                     action,
@@ -225,6 +235,11 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             model.profile_center.credential = None;
             let _ = model.close_overlay(OverlayKind::ProfileCredential);
             model.notice = None;
+            model.dirty = true;
+            Vec::new()
+        }
+        MouseAction::OverlayCancel => {
+            close_active_overlay_state(model);
             model.dirty = true;
             Vec::new()
         }

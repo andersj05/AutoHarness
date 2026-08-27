@@ -28,7 +28,7 @@ pub use key_value::{KeyValue, KeyValueTable};
 pub use list_view::{ListBadge, ListItem, ListView};
 pub use message_block::MessageBlock;
 pub use meter::{Meter, MeterThreshold};
-pub use modal::{Modal, size as modal_size};
+pub use modal::{Modal, ModalIntent, size as modal_size};
 pub use panel::Panel;
 pub use search_field::SearchField;
 pub use segmented::SegmentedControl;

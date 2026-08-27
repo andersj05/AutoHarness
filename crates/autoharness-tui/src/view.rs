@@ -17,8 +17,8 @@ use crate::text::display_safe;
 use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
 use crate::ui::component::{
     Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge,
-    ListItem as PresentationListItem, ListView, Panel, Provenance, SearchField, SegmentedControl,
-    SettingKind, SettingRow,
+    ListItem as PresentationListItem, ListView, Modal, ModalIntent, Panel, Provenance, SearchField,
+    SegmentedControl, SettingKind, SettingRow,
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
@@ -153,7 +153,8 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
         Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
-        Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
+        Some(OverlayKind::ProfileCredential) => render_profile_credential(frame, area, model),
+        Some(OverlayKind::TranscriptSearch) | None => {}
     }
 }
 
@@ -243,19 +244,19 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let confirmation = if let Some(session_id) = &model.browser.confirming_archive {
         Some((
-            " Archive session ",
+            "Archive session",
             format!("Archive session '{}'?", display_safe(session_id)),
             "The session remains durable and can be unarchived.",
         ))
     } else if let Some(session_id) = &model.browser.confirming_delete {
         Some((
-            " Delete session ",
+            "Delete session",
             format!("Permanently delete session '{}'?", display_safe(session_id)),
             "A complete provider-neutral archive is written before deletion.",
         ))
     } else if let Some(profile_id) = &model.profile_center.confirming_disconnect {
         Some((
-            " Disconnect credential ",
+            "Disconnect credential",
             format!(
                 "Disconnect the stored credential for '{}'?",
                 display_safe(profile_id)
@@ -269,7 +270,7 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .as_ref()
             .map(|profile_id| {
                 (
-                    " Delete provider profile ",
+                    "Delete provider profile",
                     format!(
                         "Delete profile '{}' and its stored credential?",
                         display_safe(profile_id)
@@ -282,13 +283,29 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     };
     let popup = confirmation_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(visual_style(model, VisualRole::Error));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Cancel",
+            Some("N/Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::Cancel,
+        ),
+        Button::new(
+            "Confirm",
+            Some("Y".to_owned()),
+            ButtonVariant::Danger,
+            MouseAction::Confirm,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        title,
+        Some(Icon::Danger),
+        &buttons,
+    )
+    .intent(ModalIntent::Danger)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -296,24 +313,34 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Line::styled(question, visual_style(model, VisualRole::User)),
         Line::from(""),
         Line::styled(consequence, visual_style(model, VisualRole::Warning)),
-        Line::from(""),
-        Line::styled(
-            "Y confirm  N or Esc cancel",
-            visual_style(model, VisualRole::Assistant),
-        ),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = user_profile_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" User profile ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Save",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::UserProfileSave,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::UserProfileCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "User profile",
+        Some(Icon::User),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -345,12 +372,6 @@ fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(model, "Provider", default_profile),
         detail_line(model, "Model", default_model),
         detail_line(model, "Thinking", default_mode),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("[ Save ]", visual_style(model, VisualRole::Selected)),
-            Span::raw("  "),
-            Span::styled("[ Cancel ]", visual_style(model, VisualRole::Field)),
-        ]),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -1386,8 +1407,6 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         render_codex_authentication(frame, area, model);
     } else if model.profile_center.editor.is_some() {
         render_profile_editor(frame, area, model);
-    } else if model.profile_center.credential.is_some() {
-        render_profile_credential(frame, area, model);
     }
 }
 
@@ -2258,20 +2277,34 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .as_ref()
         .expect("profile credential editor is open");
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
     let action = match editor.action {
         ProfileCredentialAction::Save => "Save",
         ProfileCredentialAction::Replace => "Replace",
     };
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(format!(
-            " {action} credential - {} ",
-            display_safe(&editor.profile_id)
-        ))
-        .border_style(visual_style(model, VisualRole::Warning));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let title = format!("{action} credential - {}", display_safe(&editor.profile_id));
+    let buttons = [
+        Button::new(
+            action,
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::ProfileCredentialSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::ProfileCredentialCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        &title,
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .intent(ModalIntent::Warning)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2284,21 +2317,13 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type API key"
     };
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!("{masked}\n\nStored only in the operating-system vault.",),
             visual_style(model, VisualRole::Warning),
         )))
         .wrap(Wrap { trim: false }),
-        content,
-    );
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new("[ Save ] Enter    [ Cancel ] Esc")
-            .style(visual_style(model, VisualRole::Assistant)),
-        actions,
+        inner,
     );
 }
 
@@ -2553,17 +2578,37 @@ fn render_session_detail(
 
 fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = credential_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Tool permission ")
-        .border_style(visual_style(model, VisualRole::Warning));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
     let Some(request) = model.session.permission_requests.first() else {
         return;
     };
     let pending = model.answering_permissions.contains(&request.tool_call_id);
+    let buttons = if pending {
+        Vec::new()
+    } else {
+        vec![
+            Button::new(
+                "Allow",
+                Some("Y".to_owned()),
+                ButtonVariant::Primary,
+                MouseAction::PermissionAllow,
+            ),
+            Button::new(
+                "Deny",
+                Some("N/Esc".to_owned()),
+                ButtonVariant::Danger,
+                MouseAction::PermissionDeny,
+            ),
+        ]
+    };
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Tool permission",
+        Some(Icon::Warning),
+        &buttons,
+    )
+    .intent(ModalIntent::Warning)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     let mut lines = vec![
         Line::styled(
             "A model requested an external capability.",
@@ -2582,7 +2627,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::styled("Resource: ", visual_style(model, VisualRole::Muted)),
             Span::raw(display_safe(&request.resource)),
         ]),
-        Line::from(""),
     ];
     lines.extend(request.details.iter().map(|detail| {
         Line::from(vec![
@@ -2593,24 +2637,24 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::raw(display_safe(&detail.value)),
         ])
     }));
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    lines.push(Line::from(""));
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .scroll((model.permission_scroll, 0)),
-        content,
+        inner,
     );
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    let action_text = if pending {
-        "Saving answer..."
-    } else {
-        "[ Allow ] Y    [ Deny ] N/Esc deny"
-    };
-    frame.render_widget(
-        Paragraph::new(action_text).style(visual_style(model, VisualRole::Warning)),
-        actions,
-    );
+    if pending && inner.height > 0 {
+        frame.render_widget(
+            Paragraph::new("Saving answer...").style(visual_style(model, VisualRole::Warning)),
+            Rect::new(
+                inner.x,
+                inner.bottom().saturating_sub(ROW),
+                inner.width,
+                ROW,
+            ),
+        );
+    }
 }
 
 /// Plain text of the whole transcript for clipboard copy.
@@ -2657,28 +2701,41 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Models ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let mut buttons = Vec::new();
+    if let Some(selection) = model.picker.selected.clone() {
+        buttons.push(Button::new(
+            "Select",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::PickerSelect(selection),
+        ));
+    }
+    buttons.push(Button::new(
+        "Close",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::OverlayCancel,
+    ));
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Models",
+        Some(Icon::RouteModels),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
     let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 4);
     let stale_height = u16::from(
         matches!(
             &*model.catalog,
             CatalogProjection::Ready { stale: true, .. }
         ) && inner.height >= 3,
     );
-    let list_height = inner
-        .height
-        .saturating_sub(search_height + stale_height + help_height);
+    let list_height = inner.height.saturating_sub(search_height + stale_height);
     let search = Rect::new(inner.x, inner.y, inner.width, search_height);
     let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
     let stale_area = Rect::new(
@@ -2687,17 +2744,15 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         inner.width,
         stale_height,
     );
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height + stale_height,
-        inner.width,
-        help_height,
-    );
-    frame.render_widget(
-        Paragraph::new(format!("Filter: {}", display_safe(&model.picker.query)))
-            .style(visual_style(model, VisualRole::Field)),
-        search,
-    );
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.picker.query,
+        model.picker.query.chars().count(),
+        Some(u32::try_from(filtered_models(model).len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), search);
 
     match &*model.catalog {
         CatalogProjection::CredentialRequired => {
@@ -2750,27 +2805,32 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             }
         }
     }
-    if help.height > 0 {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} choose  Enter select  D default  Esc close",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
-            help,
-        );
-    }
 }
 
 fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = credential_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Provider API key ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Connect",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::CredentialSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::CredentialCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Provider API key",
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2801,15 +2861,7 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ),
         ])
     };
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new("[ Connect ] Enter    [ Cancel ] Esc")
-            .style(visual_style(model, VisualRole::Assistant)),
-        actions,
-    );
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_picker_models(frame: &mut Frame<'_>, area: Rect, model: &Model) {

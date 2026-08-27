@@ -5,11 +5,12 @@ use ratatui::layout::Rect;
 use super::super::color::ColorDepth;
 use super::super::icon::{Icon, IconSet};
 use super::super::theme::Theme;
+use super::super::tokens::Token;
 use super::{
     Button, ButtonRow, ButtonVariant, Callout, Chip, ChipVariant, Hero, KeyValue, KeyValueTable,
-    ListItem, ListView, MessageBlock, Meter, MeterThreshold, Modal, Panel, Provenance, SearchField,
-    SegmentedControl, SettingKind, SettingRow, StatusBar, StatusSegment, ToolCard, modal_size,
-    paint, scrim,
+    ListItem, ListView, MessageBlock, Meter, MeterThreshold, Modal, ModalIntent, Panel, Provenance,
+    SearchField, SegmentedControl, SettingKind, SettingRow, StatusBar, StatusSegment, ToolCard,
+    modal_size, paint, scrim,
 };
 use crate::snapshot::style_snapshot;
 
@@ -366,6 +367,46 @@ fn modal_sizing_uses_one_clamp_table() {
     assert!(sized.width <= 72);
     assert!(sized.height <= 24);
     assert!(sized.x > 0);
+}
+
+#[test]
+fn modal_scrim_occludes_background_and_intent_selects_the_border_rule() {
+    let theme = theme();
+    let area = Rect::new(0, 0, 60, 20);
+    let mut buf = Buffer::empty(area);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            buf.cell_mut((x, y)).expect("host cell").set_symbol("X");
+        }
+    }
+    let buttons = [Button::new(
+        "Confirm",
+        Some("Y".to_owned()),
+        ButtonVariant::Danger,
+        (),
+    )];
+    let frame = modal_size(area, 40, 8);
+    let _ = Modal::new(
+        &theme,
+        theme.icons(),
+        "Danger",
+        Some(Icon::Danger),
+        &buttons,
+    )
+    .intent(ModalIntent::Danger)
+    .render(&mut buf, area, 40, 8);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let outside = x < frame.x || x >= frame.right() || y < frame.y || y >= frame.bottom();
+            if outside {
+                assert_eq!(buf.cell((x, y)).expect("scrim cell").symbol(), " ");
+            }
+        }
+    }
+    assert_eq!(
+        buf.cell((frame.x, frame.y)).expect("danger border").fg,
+        theme.style(Token::Danger).fg.expect("danger foreground")
+    );
 }
 
 #[test]

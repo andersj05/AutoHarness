@@ -1142,6 +1142,8 @@ pub enum MouseAction {
     CredentialCancel,
     ProfileCredentialSubmit,
     ProfileCredentialCancel,
+    /// Close a non-authority picker or palette modal.
+    OverlayCancel,
     PermissionAllow,
     PermissionDeny,
 }

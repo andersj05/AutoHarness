@@ -4,28 +4,25 @@ use autoharness_settings::{Density, Layout as PreferenceLayout};
 use ratatui::layout::{Constraint, Direction, Layout as Split, Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
-use super::component::{Button, ButtonRow, ButtonVariant};
+use super::component::{Button, ButtonRow, ButtonVariant, modal_size};
 use super::metrics::{
     CODEX_ACTION_ROW_OFFSET, CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT,
     COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT,
-    CONFIRMATION_FULL_HEIGHT, CONFIRMATION_FULL_WIDTH, CONFIRMATION_MARGIN_X,
-    CONFIRMATION_MARGIN_Y, CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH,
-    INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS, MODAL_MAX_WIDTH,
+    CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH, INLINE_PALETTE_INSET_X,
+    INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH,
     OVERLAY_LIST_TOP_CHROME, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
-    POPUP_HEIGHT_DENOMINATOR, POPUP_HEIGHT_NUMERATOR, POPUP_MIN_HEIGHT, POPUP_MIN_WIDTH,
-    POPUP_WIDTH_DENOMINATOR, POPUP_WIDTH_NUMERATOR, PROFILE_COMPACT_WIDTH, PROFILE_DETAIL_PERCENT,
-    PROFILE_DETAIL_PERCENT_STACKED, PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED,
-    PROFILE_TWO_PANE_MIN_WIDTH, PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM,
-    SESSION_HELP_WIDE, SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
+    PROFILE_COMPACT_WIDTH, PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED,
+    PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
+    PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
+    SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
     SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE,
     SETTINGS_CATEGORY_RAIL_XS, SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
-    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE,
-    USER_PROFILE_FULL_HEIGHT, USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y,
-    USER_PROFILE_MAX_HEIGHT, WidthBand, sidebar_width_for, wide_shell, width_band,
+    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_MAX_HEIGHT, WidthBand,
+    sidebar_width_for, wide_shell, width_band,
 };
 use crate::model::{
-    CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProviderChoice,
-    ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
+    CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileCredentialAction,
+    ProviderChoice, ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
 };
 
 /// Settings tab labels, in the same order as `SettingsTab` indices.
@@ -377,80 +374,31 @@ pub fn startup_rect(area: Rect) -> Rect {
 /// Confirmation dialog rectangle.
 #[must_use]
 pub fn confirmation_rect(area: Rect) -> Rect {
-    if area.width <= CONFIRMATION_FULL_WIDTH || area.height <= CONFIRMATION_FULL_HEIGHT {
-        return area;
-    }
-    let width = area
-        .width
-        .saturating_sub(CONFIRMATION_MARGIN_X)
-        .clamp(ROW, MODAL_MAX_WIDTH);
-    let height = area
-        .height
-        .saturating_sub(CONFIRMATION_MARGIN_Y)
-        .clamp(ROW, CONFIRMATION_MAX_HEIGHT);
-    center(area, width, height)
+    modal_size(area, MODAL_MAX_WIDTH, CONFIRMATION_MAX_HEIGHT)
 }
 
 /// Centered picker and command-palette rectangle.
 #[must_use]
 pub fn popup_rect(area: Rect) -> Rect {
-    if area.width < POPUP_MIN_WIDTH || area.height < POPUP_MIN_HEIGHT {
-        return area;
-    }
-    let width = area.width.saturating_mul(POPUP_WIDTH_NUMERATOR) / POPUP_WIDTH_DENOMINATOR;
-    let height = area.height.saturating_mul(POPUP_HEIGHT_NUMERATOR) / POPUP_HEIGHT_DENOMINATOR;
-    center(area, width.max(ROW), height.max(ROW))
+    modal_size(area, MODAL_MAX_WIDTH, MODAL_MAX_HEIGHT)
 }
 
 /// Codex sign-in dialog rectangle.
 #[must_use]
 pub fn codex_auth_rect(area: Rect) -> Rect {
-    if area.width <= CONFIRMATION_FULL_WIDTH || area.height <= CONFIRMATION_FULL_HEIGHT {
-        return area;
-    }
-    let width = area
-        .width
-        .saturating_sub(CONFIRMATION_MARGIN_X)
-        .min(MODAL_MAX_WIDTH);
-    let height = area
-        .height
-        .saturating_sub(CONFIRMATION_MARGIN_Y)
-        .min(CODEX_AUTH_MAX_HEIGHT);
-    center(area, width.max(ROW), height.max(ROW))
+    modal_size(area, MODAL_MAX_WIDTH, CODEX_AUTH_MAX_HEIGHT)
 }
 
 /// Credential and permission dialog rectangle.
 #[must_use]
 pub fn credential_rect(area: Rect) -> Rect {
-    if area.width <= CONFIRMATION_FULL_WIDTH || area.height <= CONFIRMATION_FULL_HEIGHT {
-        return area;
-    }
-    let width = area
-        .width
-        .saturating_sub(CONFIRMATION_MARGIN_X)
-        .min(CREDENTIAL_MAX_WIDTH);
-    let height = area
-        .height
-        .saturating_sub(CONFIRMATION_MARGIN_Y)
-        .min(CREDENTIAL_MAX_HEIGHT);
-    center(area, width.max(ROW), height.max(ROW))
+    modal_size(area, CREDENTIAL_MAX_WIDTH, CREDENTIAL_MAX_HEIGHT)
 }
 
 /// Local user-profile dialog rectangle.
 #[must_use]
 pub fn user_profile_rect(area: Rect) -> Rect {
-    if area.width <= USER_PROFILE_FULL_WIDTH || area.height <= USER_PROFILE_FULL_HEIGHT {
-        return area;
-    }
-    let width = area
-        .width
-        .saturating_sub(CONFIRMATION_MARGIN_X)
-        .min(MODAL_MAX_WIDTH);
-    let height = area
-        .height
-        .saturating_sub(USER_PROFILE_MARGIN_Y)
-        .min(USER_PROFILE_MAX_HEIGHT);
-    center(area, width.max(ROW), height.max(ROW))
+    modal_size(area, MODAL_MAX_WIDTH, USER_PROFILE_MAX_HEIGHT)
 }
 
 /// Inline Chat command palette rectangle.
@@ -835,76 +783,142 @@ fn push_overlay_hits(
 ) {
     match overlay {
         OverlayKind::UserProfile => {
-            let button_row = popup
-                .y
-                .saturating_add(USER_PROFILE_BUTTON_LINE)
-                .saturating_add(ROW);
-            if button_row < popup.bottom() {
-                let half = popup.width / TWO_ROWS;
-                hits.push((
-                    Rect::new(popup.x, button_row, half, ROW),
+            let buttons = [
+                Button::new(
+                    "Save",
+                    Some("Enter".to_owned()),
+                    ButtonVariant::Primary,
                     MouseAction::UserProfileSave,
-                ));
-                hits.push((
-                    Rect::new(
-                        popup.x.saturating_add(half),
-                        button_row,
-                        popup.width.saturating_sub(half),
-                        ROW,
-                    ),
+                ),
+                Button::new(
+                    "Cancel",
+                    Some("Esc".to_owned()),
+                    ButtonVariant::Secondary,
                     MouseAction::UserProfileCancel,
-                ));
-            }
+                ),
+            ];
+            push_modal_buttons(hits, popup, model, &buttons);
         }
         OverlayKind::Confirmation => {
-            push_split_buttons(hits, popup, MouseAction::Confirm, MouseAction::Cancel);
+            let buttons = [
+                Button::new(
+                    "Cancel",
+                    Some("N/Esc".to_owned()),
+                    ButtonVariant::Secondary,
+                    MouseAction::Cancel,
+                ),
+                Button::new(
+                    "Confirm",
+                    Some("Y".to_owned()),
+                    ButtonVariant::Danger,
+                    MouseAction::Confirm,
+                ),
+            ];
+            push_modal_buttons(hits, popup, model, &buttons);
         }
-        OverlayKind::ModelPicker => push_picker_hits(hits, popup, model),
+        OverlayKind::ModelPicker => {
+            push_picker_hits(hits, popup, model);
+            let mut buttons = Vec::new();
+            if let Some(selection) = model.picker.selected.clone() {
+                buttons.push(Button::new(
+                    "Select",
+                    Some("Enter".to_owned()),
+                    ButtonVariant::Primary,
+                    MouseAction::PickerSelect(selection),
+                ));
+            }
+            buttons.push(Button::new(
+                "Close",
+                Some("Esc".to_owned()),
+                ButtonVariant::Secondary,
+                MouseAction::OverlayCancel,
+            ));
+            push_modal_buttons(hits, popup, model, &buttons);
+        }
         OverlayKind::CommandPalette if model.route() == Route::Chat => {
             let content = shell_regions(area, model).content;
             push_inline_palette_hits(hits, content, model);
         }
         OverlayKind::CommandPalette => push_palette_hits(hits, popup, model),
-        OverlayKind::SessionCredential => push_split_buttons(
-            hits,
-            popup,
-            MouseAction::CredentialSubmit,
-            MouseAction::CredentialCancel,
-        ),
-        OverlayKind::ProfileCredential => push_split_buttons(
-            hits,
-            popup,
-            MouseAction::ProfileCredentialSubmit,
-            MouseAction::ProfileCredentialCancel,
-        ),
-        OverlayKind::Permission => push_split_buttons(
-            hits,
-            popup,
-            MouseAction::PermissionAllow,
-            MouseAction::PermissionDeny,
-        ),
+        OverlayKind::SessionCredential => {
+            let buttons = [
+                Button::new(
+                    "Connect",
+                    Some("Enter".to_owned()),
+                    ButtonVariant::Primary,
+                    MouseAction::CredentialSubmit,
+                ),
+                Button::new(
+                    "Cancel",
+                    Some("Esc".to_owned()),
+                    ButtonVariant::Secondary,
+                    MouseAction::CredentialCancel,
+                ),
+            ];
+            push_modal_buttons(hits, popup, model, &buttons);
+        }
+        OverlayKind::ProfileCredential => {
+            let action = model
+                .profile_center
+                .credential
+                .as_ref()
+                .map(|editor| match editor.action {
+                    ProfileCredentialAction::Save => "Save",
+                    ProfileCredentialAction::Replace => "Replace",
+                })
+                .unwrap_or("Save");
+            let buttons = [
+                Button::new(
+                    action,
+                    Some("Enter".to_owned()),
+                    ButtonVariant::Primary,
+                    MouseAction::ProfileCredentialSubmit,
+                ),
+                Button::new(
+                    "Cancel",
+                    Some("Esc".to_owned()),
+                    ButtonVariant::Secondary,
+                    MouseAction::ProfileCredentialCancel,
+                ),
+            ];
+            push_modal_buttons(hits, popup, model, &buttons);
+        }
+        OverlayKind::Permission => {
+            if model.answering_permissions.is_empty() {
+                let buttons = [
+                    Button::new(
+                        "Allow",
+                        Some("Y".to_owned()),
+                        ButtonVariant::Primary,
+                        MouseAction::PermissionAllow,
+                    ),
+                    Button::new(
+                        "Deny",
+                        Some("N/Esc".to_owned()),
+                        ButtonVariant::Danger,
+                        MouseAction::PermissionDeny,
+                    ),
+                ];
+                push_modal_buttons(hits, popup, model, &buttons);
+            }
+        }
         OverlayKind::TranscriptSearch => {}
     }
 }
 
-fn push_split_buttons(
+fn push_modal_buttons(
     hits: &mut Vec<(Rect, MouseAction)>,
     popup: Rect,
-    primary: MouseAction,
-    secondary: MouseAction,
+    model: &Model,
+    buttons: &[Button<MouseAction>],
 ) {
-    let action_row = popup.bottom().saturating_sub(TWO_ROWS);
-    let half = popup.width / TWO_ROWS;
-    hits.push((Rect::new(popup.x, action_row, half, ROW), primary));
-    hits.push((
-        Rect::new(
-            popup.x.saturating_add(half),
-            action_row,
-            popup.width.saturating_sub(half),
-            ROW,
-        ),
-        secondary,
-    ));
+    let footer = Rect::new(
+        popup.x.saturating_add(ROW),
+        popup.bottom().saturating_sub(TWO_ROWS),
+        popup.width.saturating_sub(TWO_ROWS),
+        ROW,
+    );
+    hits.extend(ButtonRow::new(model.theme(), buttons).regions(footer));
 }
 
 fn push_codex_login_hit(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
