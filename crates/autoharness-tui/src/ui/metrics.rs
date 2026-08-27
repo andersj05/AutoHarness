@@ -76,6 +76,10 @@ pub const SIDEBAR_SESSION_CHROME: u16 = SIDEBAR_BRAND_ROWS
 pub const STREAMING_WAVE_CELLS: u16 = 6;
 /// Minimum Hero block used by empty Chat states.
 pub const HERO_MIN_HEIGHT: u16 = 5;
+/// Visible "Search" prefix on the transcript search row.
+pub const SEARCH_LABEL_WIDTH: u16 = 7;
+/// Minimum remaining width before the search status label is painted.
+pub const SEARCH_STATUS_MIN_WIDTH: u16 = 12;
 /// Horizontal inset around a sidebar session label.
 pub const SIDEBAR_LABEL_INSET: u16 = 4;
 /// Page gutter at medium width and above.

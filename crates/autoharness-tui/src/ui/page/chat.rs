@@ -18,9 +18,10 @@ use crate::ui::component::{
 use crate::ui::icon::Icon;
 use crate::ui::layout::NamedRects;
 use crate::ui::metrics::{
-    HERO_MIN_HEIGHT, PROMPT_INSET_MIN_WIDTH, ROW, SIDEBAR_BRAND_ROWS, SIDEBAR_FOOTER_ROWS,
-    SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET, SIDEBAR_RECENT_HEADER, SIDEBAR_SESSION_CHROME,
-    SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS, TWO_ROWS,
+    HERO_MIN_HEIGHT, PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH,
+    SIDEBAR_BRAND_ROWS, SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET,
+    SIDEBAR_RECENT_HEADER, SIDEBAR_SESSION_CHROME, SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS,
+    TWO_ROWS,
 };
 use crate::ui::tokens::Token;
 use crate::ui::{Theme, normalized_t};
@@ -142,7 +143,7 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             theme.style(Token::TextPrimary)
         };
-        let label = paint::ellipsize(&display_safe(&entry.title), label_width);
+        let label = ellipsize_title(&display_safe(&entry.title), label_width);
         paint::put(
             buf,
             inner.x,
@@ -313,7 +314,9 @@ fn hero_copy(model: &Model) -> (&'static str, &'static [&'static str], &'static 
             &["Connect a provider key", "Choose a compatible model"],
             "/settings",
         ),
-        CatalogProjection::Loading => ("Connecting", &["Loading provider models"], "Please wait"),
+        CatalogProjection::Loading => {
+            ("Connecting", &["Loading provider models..."], "Please wait")
+        }
         CatalogProjection::Failed(_) => (
             "Connection error",
             &["Retry discovery", "Inspect provider settings"],
@@ -404,9 +407,10 @@ fn assistant_meta(
         AttemptStatus::Failed(_) => parts.push("failed".to_owned()),
     }
     if matches!(status, AttemptStatus::Streaming)
-        && (model.pending.values().any(|pending| {
-            matches!(pending, PendingKind::CancelAttempt(candidate) if candidate == attempt_id)
-        }) || model.cancelling.contains(attempt_id))
+        && (model.cancellation_requested(attempt_id)
+            || model.pending.values().any(|pending| {
+                matches!(pending, PendingKind::CancelAttempt(candidate) if candidate == attempt_id)
+            }))
     {
         parts.push("cancelling".to_owned());
     }
@@ -641,13 +645,16 @@ fn render_item(buf: &mut Buffer, area: Rect, model: &Model, item: &TranscriptIte
             if matches!(status, AttemptStatus::Streaming)
                 && icons.mode() != GlyphMode::Ascii
                 && model.motion().animating()
+                && !meta.contains("cancelling")
+                && !meta.contains("retrying")
             {
-                paint_streaming_wave(
-                    buf,
-                    area.right().saturating_sub(STREAMING_WAVE_CELLS),
-                    area.y,
-                    model,
+                let meta_w = u16::try_from(meta.chars().count()).unwrap_or(0);
+                let wave_x = area.right().saturating_sub(
+                    meta_w
+                        .saturating_add(STREAMING_WAVE_CELLS)
+                        .saturating_add(ROW),
                 );
+                paint_streaming_wave(buf, wave_x, area.y, model);
             }
             if let AttemptStatus::Failed(failure) = status {
                 let y = area.y.saturating_add(used);
@@ -1010,7 +1017,8 @@ fn latest_tokens(model: &Model) -> String {
                 usage: Some(usage), ..
             } => Some(format!(
                 "in {} / out {}",
-                usage.input_tokens, usage.output_tokens
+                compact_token_count(usage.input_tokens),
+                compact_token_count(usage.output_tokens)
             )),
             _ => None,
         })
@@ -1046,6 +1054,31 @@ fn workspace_display_path(workspace: &str) -> String {
         format!("…/{}", parts[parts.len() - 3..].join("/"))
     } else {
         normalized
+    }
+}
+
+fn ellipsize_title(value: &str, width: u16) -> String {
+    let width = usize::from(width);
+    if value.chars().count() <= width {
+        return value.to_owned();
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    let mut truncated = value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn compact_token_count(tokens: u64) -> String {
+    if tokens >= 1_000 {
+        let tenths = tokens.saturating_add(50) / 100;
+        format!("{}.{}k", tenths / 10, tenths % 10)
+    } else {
+        tokens.to_string()
     }
 }
 
@@ -1118,16 +1151,42 @@ fn render_search(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let theme = model.theme();
     let icons = theme.icons();
     let query = display_safe(&model.search.query);
+    let status = model.search_status_label();
+    paint::put(
+        buf,
+        area.x,
+        area.y,
+        SEARCH_LABEL_WIDTH,
+        "Search",
+        theme.style(Token::TextMuted),
+    );
+    let field = format!("/{query}");
     let matches = u32::try_from(model.search.matches.len()).ok();
+    let field_area = Rect::new(
+        area.x.saturating_add(SEARCH_LABEL_WIDTH),
+        area.y,
+        area.width.saturating_sub(SEARCH_LABEL_WIDTH),
+        area.height,
+    );
     crate::ui::component::SearchField::new(
         theme,
         icons,
-        &query,
-        query.chars().count(),
+        &field,
+        field.chars().count(),
         matches,
         true,
     )
-    .render(buf, area);
+    .render(buf, field_area);
+    if field_area.width > SEARCH_STATUS_MIN_WIDTH {
+        paint::put(
+            buf,
+            field_area.x.saturating_add(field_area.width / TWO_ROWS),
+            field_area.y,
+            field_area.width / TWO_ROWS,
+            &status,
+            theme.style(Token::TextMuted),
+        );
+    }
 }
 
 fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
