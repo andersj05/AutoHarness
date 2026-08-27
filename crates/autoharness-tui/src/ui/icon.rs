@@ -142,6 +142,43 @@ impl IconSet {
         }
     }
 
+    /// Ratatui border set resolved from the active glyph mode.
+    #[must_use]
+    pub const fn border_set(self) -> ratatui::symbols::border::Set<'static> {
+        let border = self.border();
+        ratatui::symbols::border::Set {
+            top_left: border.top_left,
+            top_right: border.top_right,
+            bottom_left: border.bottom_left,
+            bottom_right: border.bottom_right,
+            vertical_left: border.vertical,
+            vertical_right: border.vertical,
+            horizontal_top: border.horizontal,
+            horizontal_bottom: border.horizontal,
+        }
+    }
+
+    /// Compact selection mark for lists that reserve exactly one cell.
+    #[must_use]
+    pub const fn compact_selection_marker(self) -> &'static str {
+        if matches!(self.mode, GlyphMode::Ascii) {
+            ">"
+        } else {
+            "›"
+        }
+    }
+
+    /// Redacted secret placeholder appropriate for the active glyph mode.
+    #[must_use]
+    pub fn secret_mask(self, cells: usize) -> String {
+        let mark = if matches!(self.mode, GlyphMode::Ascii) {
+            "*"
+        } else {
+            "•"
+        };
+        mark.repeat(cells)
+    }
+
     /// Vertical structural rule.
     #[must_use]
     pub const fn vertical_rule(self) -> &'static str {
@@ -485,25 +522,26 @@ mod tests {
         assert_eq!(ascii.ellipsis(), "...");
         assert_eq!(ascii.vertical_navigation_hint(), "Up/Down");
         assert_eq!(ascii.horizontal_navigation_hint(), "Left/Right");
+        assert_eq!(ascii.compact_selection_marker(), ">");
+        assert_eq!(ascii.secret_mask(4), "****");
         assert_eq!(IconSet::resolve(GlyphMode::Unicode).ellipsis(), "…");
         assert_eq!(IconSet::resolve(GlyphMode::NerdFont).ellipsis(), "…");
+        assert_eq!(IconSet::resolve(GlyphMode::Unicode).secret_mask(4), "••••");
     }
 
     #[test]
     fn symbol_codepoints_live_only_in_icon_and_component_modules() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("ui");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let allowed = [
-            std::path::Path::new("icon.rs"),
-            std::path::Path::new("motion.rs"),
-            std::path::Path::new("component"),
+            std::path::Path::new("ui/icon.rs"),
+            std::path::Path::new("ui/motion.rs"),
+            std::path::Path::new("ui/component"),
         ];
         let mut violations = Vec::new();
         visit_rust_files(&root, &root, &allowed, &mut violations);
         assert!(
             violations.is_empty(),
-            "box-drawing and symbol codepoints must live in ui/icon.rs, ui/motion.rs, and ui/component/:\n{}",
+            "presentation symbol codepoints must live in ui/icon.rs, ui/motion.rs, and ui/component/:\n{}",
             violations.join("\n")
         );
     }
@@ -517,7 +555,7 @@ mod tests {
         if !dir.exists() {
             return;
         }
-        for entry in std::fs::read_dir(dir).expect("read ui sources") {
+        for entry in std::fs::read_dir(dir).expect("read TUI sources") {
             let entry = entry.expect("dir entry");
             let path = entry.path();
             if path.is_dir() {
@@ -568,8 +606,10 @@ mod tests {
         matches!(
             ch as u32,
             0x03A3
-                | 0x2193
-                | 0x21BA
+                | 0x2022
+                | 0x2026
+                | 0x2039..=0x203A
+                | 0x2190..=0x21FF
                 | 0x2315
                 | 0x2318
                 | 0x2442

@@ -31,17 +31,6 @@ use crate::ui::metrics::{
 };
 use crate::ui::{Icon, Theme, Token, normalized_t};
 
-const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
-    top_left: "+",
-    top_right: "+",
-    bottom_left: "+",
-    bottom_right: "+",
-    vertical_left: "|",
-    vertical_right: "|",
-    horizontal_top: "-",
-    horizontal_bottom: "-",
-};
-
 #[derive(Clone, Copy)]
 enum VisualRole {
     Normal,
@@ -92,20 +81,11 @@ fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
 }
 
 fn app_block(model: &Model) -> Block<'static> {
-    let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
-    if presentation(model).ascii {
-        block.border_set(ASCII_BORDER)
-    } else {
-        block
-    }
+    Block::default().border_set(model.theme().icons().border_set())
 }
 
 fn selection_marker(model: &Model) -> &'static str {
-    if presentation(model).ascii {
-        ">"
-    } else {
-        "›"
-    }
+    model.theme().icons().compact_selection_marker()
 }
 
 fn navigation_keys(model: &Model) -> &'static str {
@@ -2490,7 +2470,11 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             visual_style(model, VisualRole::Normal)
         };
-        let marker = if selected { ">" } else { " " };
+        let marker = if selected {
+            selection_marker(model)
+        } else {
+            " "
+        };
         lines.push(Line::styled(
             format!("{marker} {label:<12} {}", display_safe(value)),
             style,
@@ -2545,13 +2529,9 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
     let masked = if editor.has_value() {
-        if presentation(model).ascii {
-            "********"
-        } else {
-            "••••••••"
-        }
+        model.theme().icons().secret_mask(8)
     } else {
-        "paste or type API key"
+        "paste or type API key".to_owned()
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -3072,13 +3052,9 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 
     let mask = if model.credential.has_value() {
-        if presentation(model).ascii {
-            "************"
-        } else {
-            "••••••••••••"
-        }
+        model.theme().icons().secret_mask(12)
     } else {
-        "paste or type key"
+        "paste or type key".to_owned()
     };
     let compact = inner.height < PAGE_HEADER_TALL_MIN || inner.width < CREDENTIAL_COMPACT_WIDTH;
     let text = if compact {
