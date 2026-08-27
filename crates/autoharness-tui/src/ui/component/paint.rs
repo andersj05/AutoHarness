@@ -55,6 +55,16 @@ pub fn clear_surface(buf: &mut Buffer, area: Rect, theme: &Theme) {
     fill(buf, area, theme.style(Token::SurfaceBase), Some(' '));
 }
 
+/// Clears `area` while preserving the terminal's own background.
+pub fn clear_transparent(buf: &mut Buffer, area: Rect, theme: &Theme) {
+    fill(
+        buf,
+        area,
+        theme.style_transparent(Token::TextPrimary),
+        Some(' '),
+    );
+}
+
 /// Truncates `text` to `width` cells, adding an ASCII ellipsis when clipped.
 #[must_use]
 pub fn ellipsize(text: &str, width: u16) -> String {

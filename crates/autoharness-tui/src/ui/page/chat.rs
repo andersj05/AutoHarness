@@ -59,7 +59,7 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let buf = frame.buffer_mut();
     let theme = model.theme();
     let icons = theme.icons();
-    paint::clear_surface(buf, area, theme);
+    paint::clear_transparent(buf, area, theme);
     let divider = Rect::new(area.right().saturating_sub(ROW), area.y, ROW, area.height);
     for row in 0..divider.height {
         paint::put(
@@ -435,7 +435,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
     let buf = frame.buffer_mut();
     let theme = model.theme();
-    paint::clear_surface(buf, area, theme);
+    paint::clear_transparent(buf, area, theme);
     let inset = u16::from(area.width >= PROMPT_INSET_MIN_WIDTH);
     let inner = Rect::new(
         area.x.saturating_add(inset),
@@ -815,7 +815,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let buf = frame.buffer_mut();
     let theme = model.theme();
     let icons = theme.icons();
-    paint::clear_surface(buf, surface, theme);
+    paint::clear_transparent(buf, surface, theme);
     let rule = Rect::new(surface.x, surface.y, surface.width, ROW);
     for column in 0..rule.width {
         paint::put(
