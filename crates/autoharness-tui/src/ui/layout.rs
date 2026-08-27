@@ -6,8 +6,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::metrics::{
     CODEX_ACTION_ROW_OFFSET, CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT,
-    COMPACT_CHAT_MIN_WIDTH, COMPOSER_CARET_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT,
-    COMPOSER_MIN_HEIGHT, CONFIRMATION_FULL_HEIGHT, CONFIRMATION_FULL_WIDTH, CONFIRMATION_MARGIN_X,
+    COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT,
+    CONFIRMATION_FULL_HEIGHT, CONFIRMATION_FULL_WIDTH, CONFIRMATION_MARGIN_X,
     CONFIRMATION_MARGIN_Y, CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH,
     INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS, MODAL_MAX_WIDTH,
     OVERLAY_LIST_TOP_CHROME, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
@@ -17,10 +17,10 @@ use super::metrics::{
     PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
     PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
     SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
-    SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_NAV_COMPACT_WIDTH, SIDEBAR_SESSION_CHROME, SIDEBAR_WIDTH,
-    STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS,
-    USER_PROFILE_BUTTON_LINE, USER_PROFILE_FULL_HEIGHT, USER_PROFILE_FULL_WIDTH,
-    USER_PROFILE_MARGIN_Y, USER_PROFILE_MAX_HEIGHT, wide_shell,
+    SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_NAV_COMPACT_WIDTH, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
+    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE,
+    USER_PROFILE_FULL_HEIGHT, USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y,
+    USER_PROFILE_MAX_HEIGHT, sidebar_width_for, wide_shell,
 };
 use crate::model::{
     CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileConnectionState,
@@ -156,7 +156,10 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
     if wide {
         let columns = Split::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(ROW)])
+            .constraints([
+                Constraint::Length(sidebar_width_for(area.width)),
+                Constraint::Min(ROW),
+            ])
             .split(area);
         NamedRects {
             area,
@@ -173,7 +176,7 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
             overlay: None,
             startup: None,
         }
-    } else {
+    } else if shows_compact_footer(model) {
         let rows = Split::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(ROW)])
@@ -193,7 +196,29 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
             overlay: None,
             startup: None,
         }
+    } else {
+        NamedRects {
+            area,
+            sidebar: None,
+            content: area,
+            footer: Rect::default(),
+            transcript: None,
+            composer: None,
+            composer_metadata: None,
+            notice: None,
+            search: None,
+            settings_nav: None,
+            settings_body: None,
+            overlay: None,
+            startup: None,
+        }
     }
+}
+
+/// Compact Profile/Settings footer stays on Settings and Profiles only.
+#[must_use]
+pub fn shows_compact_footer(model: &Model) -> bool {
+    matches!(model.route(), Route::Settings | Route::Profiles)
 }
 
 fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
@@ -257,9 +282,12 @@ fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
                 .saturating_sub(inset.saturating_mul(TWO_ROWS)),
             composer.height,
         );
-        let inner_height = surface.height.saturating_sub(ROW);
-        regions.composer_metadata = Some(Rect::new(surface.x, surface.y, surface.width, ROW));
-        let _ = (inner_height, COMPOSER_CARET_WIDTH);
+        let metadata_y = if surface.height > ROW {
+            surface.y.saturating_add(ROW)
+        } else {
+            surface.y
+        };
+        regions.composer_metadata = Some(Rect::new(surface.x, metadata_y, surface.width, ROW));
     }
 }
 
@@ -462,34 +490,10 @@ fn center(host: Rect, width: u16, height: u16) -> Rect {
 
 fn push_shell_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, model: &Model) {
     if let Some(sidebar) = regions.sidebar {
-        let footer_row = sidebar.bottom().saturating_sub(ROW);
-        push_footer_hits(hits, Rect::new(sidebar.x, footer_row, sidebar.width, ROW));
-        let sessions_start = sidebar.y.saturating_add(ROW);
-        let session_count = model
-            .sessions
-            .sessions
-            .len()
-            .min(sidebar_session_limit(sidebar));
-        let sessions_end =
-            sessions_start.saturating_add(u16::try_from(session_count).unwrap_or(u16::MAX));
-        if sessions_end > sessions_start {
-            hits.push((
-                Rect::new(
-                    sidebar.x,
-                    sessions_start,
-                    sidebar.width,
-                    sessions_end.saturating_sub(sessions_start),
-                ),
-                MouseAction::Route(Route::Sessions),
-            ));
-        }
+        hits.extend(crate::ui::page::rail_hits(sidebar, model));
     } else if regions.footer.height > 0 {
         push_footer_hits(hits, regions.footer);
     }
-}
-
-fn sidebar_session_limit(area: Rect) -> usize {
-    usize::from(area.height.saturating_sub(SIDEBAR_SESSION_CHROME)).max(1)
 }
 
 fn push_footer_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
@@ -519,32 +523,11 @@ fn push_footer_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
 
 fn push_route_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, model: &Model) {
     match model.route() {
-        Route::Chat => push_chat_hits(hits, regions),
+        Route::Chat => hits.extend(crate::ui::page::chat_content_hits(regions, model)),
         Route::Settings => push_settings_hits(hits, regions, model),
         Route::Sessions => push_session_hits(hits, regions, model),
         Route::Profiles => push_profile_hits(hits, regions.content, model),
         Route::Help => {}
-    }
-}
-
-fn push_chat_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects) {
-    if let Some(transcript) = regions
-        .transcript
-        .filter(|rect| rect.width > 0 && rect.height > 0)
-    {
-        hits.push((transcript, MouseAction::FocusTranscript));
-    }
-    if let Some(composer) = regions
-        .composer
-        .filter(|rect| rect.width > 0 && rect.height > 0)
-    {
-        hits.push((composer, MouseAction::FocusComposer));
-    }
-    if let Some(metadata) = regions
-        .composer_metadata
-        .filter(|rect| rect.width > 0 && rect.height > 0)
-    {
-        hits.push((metadata, MouseAction::ChatModels));
     }
 }
 

@@ -159,6 +159,8 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             open_picker(model);
             Vec::new()
         }
+        MouseAction::ChatRetry => retry_attempt(model),
+        MouseAction::ChatFreshSession => create_session(model),
         MouseAction::SettingsRow(index) => {
             if model.route() == Route::Settings {
                 move_settings_selection_to(model, index);

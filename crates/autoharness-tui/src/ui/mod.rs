@@ -7,6 +7,7 @@ pub mod icon;
 pub mod layout;
 pub mod metrics;
 pub mod motion;
+pub mod page;
 pub mod palette;
 pub mod theme;
 pub mod tokens;

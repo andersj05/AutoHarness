@@ -43,7 +43,7 @@ pub const PAGE_HELP_COMFORTABLE: u16 = 4;
 pub const WIDE_SHELL_MIN_WIDTH: u16 = 100;
 /// Minimum height of the wide navigation rail shell.
 pub const WIDE_SHELL_MIN_HEIGHT: u16 = 16;
-/// Current sidebar column count until Chat rebuilds the rail.
+/// Legacy sidebar column count retained for call sites that have not switched.
 pub const SIDEBAR_WIDTH: u16 = 28;
 /// Compact Chat falls back below this width.
 pub const COMPACT_CHAT_MIN_WIDTH: u16 = 24;
@@ -53,8 +53,29 @@ pub const COMPACT_CHAT_MIN_HEIGHT: u16 = 7;
 pub const SIDEBAR_WIDTH_LG: u16 = 26;
 /// Sidebar width at the extra-large breakpoint.
 pub const SIDEBAR_WIDTH_XL: u16 = 32;
-/// Rows reserved above and below the sidebar session list.
-pub const SIDEBAR_SESSION_CHROME: u16 = 5;
+/// Brand row above the rail destinations.
+pub const SIDEBAR_BRAND_ROWS: u16 = 1;
+/// Primary route rows in the rebuilt rail.
+pub const SIDEBAR_NAV_COUNT: u16 = 5;
+/// Blank row between the rail and the recent-session group.
+pub const SIDEBAR_GROUP_GAP: u16 = 1;
+/// Group heading above recent sessions.
+pub const SIDEBAR_RECENT_HEADER: u16 = 1;
+/// Workspace heading plus the current project label.
+pub const SIDEBAR_WORKSPACE_ROWS: u16 = 2;
+/// Bottom action row in the rail.
+pub const SIDEBAR_FOOTER_ROWS: u16 = 1;
+/// Rows reserved around the sidebar session list.
+pub const SIDEBAR_SESSION_CHROME: u16 = SIDEBAR_BRAND_ROWS
+    + SIDEBAR_NAV_COUNT
+    + SIDEBAR_GROUP_GAP
+    + SIDEBAR_RECENT_HEADER
+    + SIDEBAR_WORKSPACE_ROWS
+    + SIDEBAR_FOOTER_ROWS;
+/// Cells in the Unicode streaming gradient wave.
+pub const STREAMING_WAVE_CELLS: u16 = 6;
+/// Minimum Hero block used by empty Chat states.
+pub const HERO_MIN_HEIGHT: u16 = 5;
 /// Horizontal inset around a sidebar session label.
 pub const SIDEBAR_LABEL_INSET: u16 = 4;
 /// Page gutter at medium width and above.
@@ -263,7 +284,7 @@ pub const fn gutter(width: u16) -> u16 {
     }
 }
 
-/// Returns the sidebar width for a later Chat rail rebuild.
+/// Returns the sidebar width for the current frame.
 #[must_use]
 pub const fn sidebar_width_for(width: u16) -> u16 {
     match width_band(width) {
@@ -325,6 +346,7 @@ mod tests {
         assert_eq!(SPACING, [0, 1, 2, 4]);
         assert_eq!(SIDEBAR_WIDTH_LG, 26);
         assert_eq!(SIDEBAR_WIDTH_XL, 32);
+        assert_eq!(crate::ui::metrics::SIDEBAR_SESSION_CHROME, 11);
         assert_eq!(GUTTER_MD, 2);
         assert_eq!(GUTTER_SM, 1);
         assert_eq!(PANEL_PAD_X, 1);

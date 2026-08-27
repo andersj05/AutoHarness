@@ -3,10 +3,10 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction, OverlayKind,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry,
-    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiClock, UiFailure,
-    UiIntent, hit_test, update, view,
+    AttemptKey, AttemptStatus, CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction,
+    OverlayKind, PermissionDetailView, PermissionRequestView, RetryPolicy, Route,
+    SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey,
+    TranscriptItem, UiClock, UiFailure, UiIntent, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -684,6 +684,8 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::FocusComposer => "FocusComposer",
         MouseAction::FocusTranscript => "FocusTranscript",
         MouseAction::ChatModels => "ChatModels",
+        MouseAction::ChatRetry => "ChatRetry",
+        MouseAction::ChatFreshSession => "ChatFreshSession",
         MouseAction::SettingsRow(_) => "SettingsRow",
         MouseAction::ProfileCredential => "ProfileCredential",
         MouseAction::ProfileTest => "ProfileTest",
@@ -818,6 +820,26 @@ fn every_mouse_action_variant_is_produced_by_layout() {
     let _ = update(&mut providers, Message::Input(ctrl('g')));
     collect_hit_variants(&providers, 120, 40, &mut produced);
 
+    let mut failed = model();
+    let mut failed_session = (*failed.session).clone();
+    failed_session.revision = 2;
+    failed_session.transcript.push(TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-fail").expect("attempt"),
+        text: String::new(),
+        status: AttemptStatus::Failed(UiFailure::new(
+            ErrorClass::Unavailable,
+            "provider unavailable",
+            RetryPolicy::Now,
+        )),
+        usage: None,
+        retry_of: None,
+    });
+    let _ = update(
+        &mut failed,
+        Message::SessionChanged(Arc::new(failed_session)),
+    );
+    collect_hit_variants(&failed, 80, 24, &mut produced);
+
     for expected in [
         "Route",
         "SettingsTab",
@@ -825,6 +847,8 @@ fn every_mouse_action_variant_is_produced_by_layout() {
         "FocusComposer",
         "FocusTranscript",
         "ChatModels",
+        "ChatRetry",
+        "ChatFreshSession",
         "SettingsRow",
         "UserProfileSave",
         "UserProfileCancel",

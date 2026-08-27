@@ -1105,6 +1105,10 @@ pub enum MouseAction {
     FocusTranscript,
     /// Open the model picker from the Chat status line.
     ChatModels,
+    /// Retry the failed Chat attempt from a callout button.
+    ChatRetry,
+    /// Create a fresh session from a Chat recovery callout.
+    ChatFreshSession,
     /// Select a General Settings preference row.
     SettingsRow(usize),
     /// Profile-center actions.
