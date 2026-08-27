@@ -344,6 +344,7 @@ mod tests {
                 model: selected,
                 display_name: "Test model".to_owned(),
                 detail: String::new(),
+                context_window_tokens: Some(32_000),
                 selectable: true,
             }],
             stale: false,

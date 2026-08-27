@@ -20,6 +20,7 @@ fn catalog_ready() -> Arc<CatalogProjection> {
             ),
             display_name: "Gemini 2.5 Pro".to_owned(),
             detail: "text | thinking".to_owned(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,

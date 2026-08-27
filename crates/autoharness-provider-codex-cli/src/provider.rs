@@ -574,8 +574,8 @@ fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, Provid
             model_id: ModelId::new(id).map_err(|_| internal_error())?,
             display_name: name.to_owned(),
             description: Some(description.to_owned()),
-            input_token_limit: None,
-            output_token_limit: None,
+            input_token_limit: Some(1_050_000),
+            output_token_limit: Some(128_000),
             capabilities: ModelCapabilities {
                 chat: CapabilitySupport::Supported,
                 streaming: CapabilitySupport::Supported,
@@ -792,6 +792,17 @@ mod tests {
         let mut json = HeaderMap::new();
         json.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         assert!(!is_event_stream(&json));
+    }
+
+    #[test]
+    fn gpt_5_6_catalog_exposes_documented_context_and_output_limits() {
+        let provider = ProviderId::new(crate::CODEX_PROVIDER_ID).expect("provider");
+        let models = codex_models(&provider).expect("static catalog");
+        assert_eq!(models.len(), 4);
+        assert!(models.iter().all(|model| {
+            model.input_token_limit == Some(1_050_000)
+                && model.output_token_limit == Some(128_000)
+        }));
     }
 
     #[test]

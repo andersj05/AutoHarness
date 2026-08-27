@@ -20,6 +20,7 @@ fn catalog_ready() -> Arc<CatalogProjection> {
             model: pro_model(),
             display_name: "Gemini 2.5 Pro".to_owned(),
             detail: String::new(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,

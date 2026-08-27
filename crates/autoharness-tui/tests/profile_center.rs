@@ -32,6 +32,7 @@ fn model() -> Model {
             model: model_ref(),
             display_name: "Gemini 2.5 Pro".to_owned(),
             detail: "thinking".to_owned(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,

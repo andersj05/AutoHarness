@@ -83,6 +83,8 @@ pub struct ModelSummary {
     pub display_name: String,
     /// Short provider-neutral capability summary.
     pub detail: String,
+    /// Maximum provider-advertised context window in tokens, when known.
+    pub context_window_tokens: Option<u64>,
     /// Whether this model can be selected for chat.
     pub selectable: bool,
 }

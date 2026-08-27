@@ -52,6 +52,7 @@ fn model() -> Model {
             model: model_ref(),
             display_name: "Gemini Shell".to_owned(),
             detail: String::new(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,
