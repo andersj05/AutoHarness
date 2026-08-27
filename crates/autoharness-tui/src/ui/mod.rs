@@ -4,6 +4,7 @@ pub mod color;
 pub mod component;
 pub mod gradient;
 pub mod icon;
+pub mod layout;
 pub mod metrics;
 pub mod motion;
 pub mod palette;

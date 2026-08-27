@@ -1099,13 +1099,14 @@ pub enum MouseAction {
     SettingsTab(usize),
     /// Open the local user-profile dialog.
     OpenUserProfile,
-    /// Chat footer actions.
-    ChatSend,
+    /// Focus the Chat composer by clicking it.
+    FocusComposer,
+    /// Click the Chat transcript to inspect it without tail-follow.
+    FocusTranscript,
+    /// Open the model picker from the Chat status line.
     ChatModels,
-    ChatNewSession,
-    ChatSessions,
-    ChatCredential,
-    ChatHelp,
+    /// Select a General Settings preference row.
+    SettingsRow(usize),
     /// Profile-center actions.
     ProfileCredential,
     ProfileTest,

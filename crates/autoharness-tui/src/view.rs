@@ -5,7 +5,7 @@ use autoharness_settings::{
     PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -18,8 +18,16 @@ use crate::model::{
 };
 use crate::text::display_safe;
 use crate::ui::Token;
+use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation, SETTINGS_NAV};
 use crate::ui::metrics::{
-    COMPACT_CHAT_MIN_HEIGHT, COMPACT_CHAT_MIN_WIDTH, SIDEBAR_WIDTH, wide_shell,
+    COMPACT_CHAT_MIN_HEIGHT, COMPACT_CHAT_MIN_WIDTH, CREDENTIAL_COMPACT_WIDTH,
+    PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PROFILE_COMPACT_WIDTH,
+    PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW, SESSION_HELP_WIDE,
+    SETTINGS_NAV_COMPACT_WIDTH, SIDEBAR_LABEL_INSET, SIDEBAR_SESSION_CHROME, STATUS_BRANCH_CHARS,
+    STATUS_BRANCH_MIN, STATUS_COMPACT_WIDTH, STATUS_CONTEXT_COMPACT, STATUS_CONTEXT_MIN,
+    STATUS_MODEL_CHARS_MID, STATUS_MODEL_CHARS_NARROW, STATUS_MODEL_CHARS_WIDE,
+    STATUS_MODEL_WIDE_MIN, STATUS_PATH_CHARS_NARROW, STATUS_PATH_CHARS_WIDE, STATUS_THINKING_MIN,
+    STATUS_TOKENS_MIN, STATUS_WORKSPACE_MIN, STATUS_WORKSPACE_WIDE, TWO_ROWS,
 };
 use crate::ui::normalized_t;
 
@@ -49,28 +57,8 @@ enum VisualRole {
     Field,
 }
 
-#[derive(Clone, Copy)]
-struct Presentation {
-    ascii: bool,
-    nerd_font: bool,
-    compact: bool,
-    single_column: bool,
-}
-
-#[derive(Clone, Copy)]
-struct ShellLayout {
-    sidebar: Option<Rect>,
-    content: Rect,
-    footer: Rect,
-}
 fn presentation(model: &Model) -> Presentation {
-    let preferences = model.settings().local_profile.preferences();
-    Presentation {
-        ascii: *preferences.glyph_mode().value() == GlyphMode::Ascii,
-        nerd_font: *preferences.glyph_mode().value() == GlyphMode::NerdFont,
-        compact: *preferences.density().value() == Density::Compact,
-        single_column: *preferences.layout().value() == PreferenceLayout::SingleColumn,
-    }
+    ui_layout::presentation(model)
 }
 
 fn visual_token(role: VisualRole) -> Token {
@@ -182,16 +170,15 @@ fn navigation_keys(model: &Model) -> &'static str {
     }
 }
 
-const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Models"];
-
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
+    let layout = UiLayout::compute(area, model);
     frame.render_widget(Clear, area);
-    let shell = render_shell(frame, area, model);
+    let shell = render_shell(frame, &layout.regions, model);
     let content = shell.content;
     if content.width > 0 && content.height > 0 {
         match model.route() {
@@ -235,14 +222,7 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
 
 fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
-    let width = area.width.clamp(28, 48);
-    let height = area.height.clamp(4, 5);
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = ui_layout::startup_rect(area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" AutoHarness ")
@@ -272,8 +252,7 @@ fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 /// Resolves a left-click coordinate against the currently visible controls.
 ///
-/// Hit testing is derived from the same responsive layout thresholds as the
-/// renderer and returns semantic actions for the deterministic update layer.
+/// Hit testing reverse-scans the paint-order regions produced by `Layout::compute`.
 pub fn hit_test(
     model: &Model,
     width: u16,
@@ -281,457 +260,20 @@ pub fn hit_test(
     column: u16,
     row: u16,
 ) -> Option<MouseAction> {
-    if model.startup_active() {
-        return None;
-    }
-    let area = Rect::new(0, 0, width, height);
-    if model.overlay() == Some(OverlayKind::UserProfile) {
-        let popup = user_profile_rect(area);
-        let button_row = popup.y.saturating_add(10);
-        if button_row < popup.bottom() && row == button_row {
-            return (column < popup.x + popup.width / 2)
-                .then_some(MouseAction::UserProfileSave)
-                .or(Some(MouseAction::UserProfileCancel));
-        }
-        return None;
-    }
-    if model.overlay() == Some(OverlayKind::Confirmation) {
-        let popup = confirmation_rect(area);
-        if row == popup.bottom().saturating_sub(2) {
-            return (column < popup.x + popup.width / 2)
-                .then_some(MouseAction::Confirm)
-                .or(Some(MouseAction::Cancel));
-        }
-        return None;
-    }
-    if model.overlay() == Some(OverlayKind::ModelPicker) {
-        return picker_mouse_target(area, model, row);
-    }
-    if model.overlay() == Some(OverlayKind::CommandPalette) {
-        if model.route() == Route::Chat {
-            let content = shell_layout(area, model).content;
-            return inline_palette_mouse_target(content, model, column, row);
-        }
-        return palette_mouse_target(area, model, row);
-    }
-    if model.overlay() == Some(OverlayKind::SessionCredential) {
-        return modal_button_target(
-            credential_rect(area),
-            row,
-            column,
-            MouseAction::CredentialSubmit,
-            MouseAction::CredentialCancel,
-        );
-    }
-    if model.overlay() == Some(OverlayKind::ProfileCredential) {
-        return modal_button_target(
-            popup_rect(area),
-            row,
-            column,
-            MouseAction::ProfileCredentialSubmit,
-            MouseAction::ProfileCredentialCancel,
-        );
-    }
-    if model.overlay() == Some(OverlayKind::Permission) {
-        return modal_button_target(
-            credential_rect(area),
-            row,
-            column,
-            MouseAction::PermissionAllow,
-            MouseAction::PermissionDeny,
-        );
-    }
-    if model.profile_center.auth_page == Some(crate::model::ProviderChoice::Codex) {
-        let popup = codex_auth_rect(area);
-        let action_row = popup.y.saturating_add(3);
-        return (row == action_row && column > popup.x && column < popup.right())
-            .then_some(MouseAction::CodexLogin);
-    }
-    let layout = shell_layout(area, model);
-    if let Some(sidebar) = layout.sidebar {
-        if column < sidebar.right() {
-            let footer_row = sidebar.bottom().saturating_sub(1);
-            if row == footer_row {
-                return shell_footer_action(column.saturating_sub(sidebar.x));
-            }
-            let sessions_start = sidebar.y.saturating_add(1);
-            let session_count = model
-                .sessions
-                .sessions
-                .len()
-                .min(sidebar_session_limit(sidebar));
-            let sessions_end =
-                sessions_start.saturating_add(u16::try_from(session_count).unwrap_or(u16::MAX));
-            if row >= sessions_start && row < sessions_end {
-                return Some(MouseAction::Route(Route::Sessions));
-            }
-            return None;
-        }
-    } else if row == layout.footer.y {
-        return shell_footer_action(column);
-    }
-    let content = layout.content;
-    if model.route() == Route::Settings && row == content.y.saturating_add(1) {
-        return settings_nav_action(content, column);
-    }
-    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 1 {
-        let profile_area = settings_body_area(content);
-        if profile_local_hit_row(profile_area, model)
-            .is_some_and(|local| local.contains(Position::new(column, row)))
-        {
-            return Some(MouseAction::OpenUserProfile);
-        }
-        if let Some(action) = provider_choice_at_row(model, profile_area, column, row) {
-            return Some(action);
-        }
-        if profile_detail_button_rows(model, profile_area).is_some_and(|(first, _)| row == first) {
-            return profile_detail_action_at_column(model, profile_area, column, false);
-        }
-        if profile_detail_button_rows(model, profile_area).is_some_and(|(_, second)| row == second)
-        {
-            return profile_detail_action_at_column(model, profile_area, column, true);
-        }
-        if row == profile_area.bottom().saturating_sub(2) {
-            return profile_action_at_column(column.saturating_sub(profile_area.x));
-        }
-        return profile_at_row(model, profile_area, column, row);
-    }
-    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 2 {
-        let profile_area = settings_body_area(content);
-        if profile_area.contains(Position::new(column, row)) {
-            return Some(MouseAction::OpenUserProfile);
-        }
-    }
-    match model.route() {
-        Route::Sessions if row == height.saturating_sub(2) => {
-            let relative_column = column.saturating_sub(content.x);
-            if relative_column < 18 {
-                Some(MouseAction::SessionOpen)
-            } else if relative_column < 38 {
-                Some(MouseAction::SessionRename)
-            } else if relative_column < 58 {
-                Some(MouseAction::SessionArchive)
-            } else {
-                Some(MouseAction::SessionDelete)
-            }
-        }
-        Route::Profiles
-            if profile_local_hit_row(content, model)
-                .is_some_and(|local| local.contains(Position::new(column, row))) =>
-        {
-            Some(MouseAction::OpenUserProfile)
-        }
-        Route::Profiles if provider_choice_at_row(model, content, column, row).is_some() => {
-            provider_choice_at_row(model, content, column, row)
-        }
-        Route::Profiles
-            if profile_detail_button_rows(model, content)
-                .is_some_and(|(first, _)| row == first) =>
-        {
-            profile_detail_action_at_column(model, content, column, false)
-        }
-        Route::Profiles
-            if profile_detail_button_rows(model, content)
-                .is_some_and(|(_, second)| row == second) =>
-        {
-            profile_detail_action_at_column(model, content, column, true)
-        }
-        Route::Profiles => profile_at_row(model, content, column, row),
-        _ => None,
-    }
+    UiLayout::compute(Rect::new(0, 0, width, height), model).hit_at(column, row)
 }
 
-fn profile_local_hit_row(area: Rect, model: &Model) -> Option<Rect> {
-    let _ = (area, model);
-    None
-}
-
-fn profile_center_content_area(model: &Model, area: Rect) -> Rect {
-    let inner = area;
-    let compact = presentation(model).compact || inner.width < 72;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let header_height = if inner.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(inner.height >= 4);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(notice_height),
-            Constraint::Length(help_height),
-        ])
-        .split(inner);
-    rows[1]
-}
-
-fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
-    let content = profile_center_content_area(model, area);
-    let (list_area, _) = profile_list_detail_areas(content, model);
-    Some(
-        Block::default()
-            .border_set(ratatui::symbols::border::ROUNDED)
-            .borders(Borders::ALL)
-            .inner(list_area),
-    )
-}
-
-fn profile_detail_area(model: &Model, area: Rect) -> Option<Rect> {
-    let content = profile_center_content_area(model, area);
-    profile_list_detail_areas(content, model).1
-}
-
-fn profile_detail_action_at_column(
+fn render_shell(
+    frame: &mut Frame<'_>,
+    regions: &ui_layout::NamedRects,
     model: &Model,
-    area: Rect,
-    column: u16,
-    secondary: bool,
-) -> Option<MouseAction> {
-    let detail = profile_detail_area(model, area)?;
-    let relative = column.saturating_sub(detail.x.saturating_add(1));
-    if secondary {
-        profile_secondary_action_at_column(relative)
-    } else {
-        profile_action_at_column(relative)
-    }
-}
-
-fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
-    let selected = model.selected_profile()?;
-    let detail = profile_detail_area(model, area)?;
-    let mut lines = u16::try_from(model.filtered_profiles().count())
-        .unwrap_or(u16::MAX)
-        .saturating_add(9);
-    if selected.kind == ProviderKindLabel::Router {
-        lines = lines.saturating_add(1);
-        if !selected.project.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-        if !selected.auth_header.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-    }
-    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
-        lines = lines.saturating_add(1);
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines = lines.saturating_add(1);
-    }
-    let first = detail
-        .y
-        .saturating_add(1)
-        .saturating_add(lines)
-        .saturating_add(1);
-    Some((first, first.saturating_add(1)))
-}
-
-fn provider_choice_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    let list = profile_list_inner_rect(model, area)?;
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let selected = model
-        .profile_center
-        .choice_selected
-        .min(PROVIDER_CHOICES.len().saturating_sub(1));
-    let index = usize::from(row.saturating_sub(list.y)).saturating_add(usize::from(
-        profile_list_scroll(selected, PROVIDER_CHOICES.len(), list.height),
-    ));
-    (index < PROVIDER_CHOICES.len()).then_some(MouseAction::SelectProviderChoice(index))
-}
-
-fn profile_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    let list = Block::default()
-        .border_set(ratatui::symbols::border::ROUNDED)
-        .borders(Borders::ALL)
-        .inner(profile_detail_area(model, area)?);
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let profiles = model.filtered_profiles().collect::<Vec<_>>();
-    let index = usize::from(row.saturating_sub(list.y));
-    profiles
-        .get(index)
-        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
-}
-
-fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
-    let popup = popup_rect(area);
-    let inner_height = popup.height.saturating_sub(2);
-    let stale_height = u16::from(
-        matches!(
-            &*model.catalog,
-            CatalogProjection::Ready { stale: true, .. }
-        ) && inner_height >= 3,
-    );
-    let help_height = u16::from(inner_height >= 4);
-    let list_height = inner_height.saturating_sub(1 + stale_height + help_height);
-    let list_start = popup.y.saturating_add(2);
-    if row < list_start || row >= list_start.saturating_add(list_height) {
-        return None;
-    }
-    let models = filtered_models(model);
-    let selected_index = model
-        .picker
-        .selected
-        .as_ref()
-        .and_then(|selected| models.iter().position(|summary| &summary.model == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list_height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(models.len().saturating_sub(visible));
-    models
-        .get(start + usize::from(row - list_start))
-        .map(|summary| MouseAction::PickerSelect(summary.model.clone()))
-}
-fn modal_button_target(
-    popup: Rect,
-    row: u16,
-    column: u16,
-    primary: MouseAction,
-    secondary: MouseAction,
-) -> Option<MouseAction> {
-    let action_row = popup.bottom().saturating_sub(2);
-    if row != action_row {
-        return None;
-    }
-    if column < popup.x + popup.width / 2 {
-        Some(primary)
-    } else {
-        Some(secondary)
-    }
-}
-
-fn inline_palette_mouse_target(
-    area: Rect,
-    model: &Model,
-    column: u16,
-    row: u16,
-) -> Option<MouseAction> {
-    let list = inline_palette_rect(area, model);
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let entries = model.palette_entries();
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list.height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    entries
-        .get(start + usize::from(row.saturating_sub(list.y)))
-        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
-}
-
-fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
-    let popup = popup_rect(area);
-    let inner_height = popup.height.saturating_sub(2);
-    let help_height = u16::from(inner_height >= 3);
-    let list_height = inner_height.saturating_sub(1 + help_height);
-    let list_start = popup.y.saturating_add(2);
-    if row < list_start || row >= list_start.saturating_add(list_height) {
-        return None;
-    }
-    let entries = model.palette_entries();
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list_height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    entries
-        .get(start + usize::from(row - list_start))
-        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
-}
-fn profile_action_at_column(column: u16) -> Option<MouseAction> {
-    match column {
-        0..=10 => Some(MouseAction::ProfileCredential),
-        12..=19 => Some(MouseAction::ProfileTest),
-        21..=29 => Some(MouseAction::ProfileDefaultModel),
-        _ => None,
-    }
-}
-
-fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
-    match column {
-        0..=13 => Some(MouseAction::ProfileDisconnect),
-        15..=24 => Some(MouseAction::ProfileDelete),
-        _ => None,
-    }
-}
-
-fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
-    let compact = area.width < 48;
-    let padding = if compact { 0 } else { 2 };
-    let gap = if compact { 1 } else { 2 };
-    let mut offset = area.x;
-    for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        let width = u16::try_from(label.len().saturating_add(padding)).unwrap_or(u16::MAX);
-        if column >= offset && column < offset.saturating_add(width) {
-            return Some(MouseAction::SettingsTab(index));
-        }
-        offset = offset.saturating_add(width).saturating_add(gap);
-    }
-    None
-}
-
-fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> ShellLayout {
-    let layout = shell_layout(area, model);
-    if let Some(sidebar) = layout.sidebar {
+) -> ui_layout::NamedRects {
+    if let Some(sidebar) = regions.sidebar {
         render_navigation_rail(frame, sidebar, model);
     } else {
-        render_shell_footer(frame, layout.footer, model);
+        render_shell_footer(frame, regions.footer, model);
     }
-    layout
-}
-
-fn shell_footer_action(column: u16) -> Option<MouseAction> {
-    if column < 10 {
-        Some(MouseAction::SettingsTab(2))
-    } else if column < 22 {
-        Some(MouseAction::SettingsTab(0))
-    } else {
-        None
-    }
-}
-
-fn shell_layout(area: Rect, model: &Model) -> ShellLayout {
-    let wide = wide_shell(area.width, area.height, presentation(model).single_column);
-    if wide {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
-            .split(area);
-        ShellLayout {
-            sidebar: Some(columns[0]),
-            content: columns[1],
-            footer: Rect::default(),
-        }
-    } else {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(area);
-        ShellLayout {
-            sidebar: None,
-            content: rows[0],
-            footer: rows[1],
-        }
-    }
+    *regions
 }
 
 fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -761,7 +303,7 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 fn sidebar_session_limit(area: Rect) -> usize {
-    usize::from(area.height.saturating_sub(5)).max(1)
+    usize::from(area.height.saturating_sub(SIDEBAR_SESSION_CHROME)).max(1)
 }
 
 fn single_line_label(value: &str, width: u16) -> String {
@@ -807,7 +349,7 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let content = sections[1];
     let mut lines = Vec::new();
     let session_limit = sidebar_session_limit(area);
-    let session_width = content.width.saturating_sub(4);
+    let session_width = content.width.saturating_sub(SIDEBAR_LABEL_INSET);
     for entry in model.sessions.sessions.iter().take(session_limit) {
         let marker = if entry.active || entry.session_id == model.session.session_id {
             selection_marker(model)
@@ -995,18 +537,7 @@ fn workspace_label(workspace: &str) -> String {
 }
 
 fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
-    let prompt_height = prompt_surface_height(area, model);
-    let height = u16::try_from(model.palette_entries().len())
-        .unwrap_or(u16::MAX)
-        .min(8)
-        .min(area.height.saturating_sub(prompt_height));
-    Rect::new(
-        area.x.saturating_add(2),
-        area.bottom()
-            .saturating_sub(prompt_height.saturating_add(height)),
-        area.width.saturating_sub(4),
-        height,
-    )
+    ui_layout::inline_palette_rect(area, model)
 }
 
 fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -1235,12 +766,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn settings_body_area(area: Rect) -> Rect {
-    Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(2),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(3),
-    )
+    ui_layout::settings_body_area(area)
 }
 
 /// Renders resolved runtime settings and safe provenance as a primary route.
@@ -1279,8 +805,12 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let header_height = if body.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(body.height >= 3);
+    let header_height = if body.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(body.height >= PAGE_HELP_MIN);
     let page_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1404,7 +934,7 @@ fn render_settings_page_header(
 }
 
 fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let compact = area.width < 48;
+    let compact = area.width < SETTINGS_NAV_COMPACT_WIDTH;
     let mut spans = Vec::new();
     for (index, label) in SETTINGS_NAV.iter().enumerate() {
         if index > 0 {
@@ -1432,8 +962,12 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let header_height = if area.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(area.height >= 3);
+    let header_height = if area.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(area.height >= PAGE_HELP_MIN);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1892,14 +1426,18 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let compact = presentation(model).compact || inner.width < 72;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
+    let compact = presentation(model).compact || inner.width < PROFILE_COMPACT_WIDTH;
+    let notice_height = if model.notice.is_some() && inner.height >= PAGE_HEADER_TALL_MIN {
+        if compact { ROW } else { TWO_ROWS }
     } else {
         0
     };
-    let header_height = if inner.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(inner.height >= 4);
+    let header_height = if inner.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(inner.height >= PAGE_HELP_COMFORTABLE);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1930,11 +1468,11 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
-        let help = if inner.width < 48 {
+        let help = if inner.width < PROFILE_HELP_NARROW {
             format!("↑/↓ choose  Enter open  Esc {return_to}")
-        } else if inner.width < 72 {
+        } else if inner.width < PROFILE_HELP_MEDIUM {
             format!("↑/↓ choose  ←/→ section  Enter open  Esc {return_to}")
-        } else if inner.width < 96 {
+        } else if inner.width < PROFILE_HELP_WIDE {
             format!("←/→ section  ↑/↓ choose  Enter open  Alt+K sign-in  Esc {return_to}")
         } else {
             format!(
@@ -1956,19 +1494,7 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn profile_list_detail_areas(area: Rect, model: &Model) -> (Rect, Option<Rect>) {
-    if !presentation(model).single_column && area.width >= 60 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
-            .split(area);
-        (columns[0], Some(columns[1]))
-    } else {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-            .split(area);
-        (rows[0], Some(rows[1]))
-    }
+    ui_layout::profile_list_detail_areas(area, model)
 }
 
 fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -2261,8 +1787,12 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let header_height = if area.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(area.height >= 3);
+    let header_height = if area.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(area.height >= PAGE_HELP_MIN);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2663,7 +2193,7 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if help.height > 0 && !model.browser.renaming {
         let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
             "[ Y Confirm ]  [ N Cancel ]"
-        } else if help.width >= 50 {
+        } else if help.width >= SESSION_HELP_WIDE {
             "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
             "[ Open ]  [ Rename ]  [ Delete ]  Esc"
@@ -2995,13 +2525,13 @@ fn compact_token_count(tokens: u64) -> String {
 
 fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
     let mut spans = Vec::new();
-    let compact = width < 34;
-    let model_width = if width >= 64 {
-        22
+    let compact = width < STATUS_COMPACT_WIDTH;
+    let model_width = if width >= STATUS_MODEL_WIDE_MIN {
+        STATUS_MODEL_CHARS_WIDE
     } else if compact {
-        8
+        STATUS_MODEL_CHARS_NARROW
     } else {
-        14
+        STATUS_MODEL_CHARS_MID
     };
     push_metadata_piece(
         &mut spans,
@@ -3010,7 +2540,7 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
         VisualRole::Assistant,
         0,
     );
-    if width >= 20 {
+    if width >= STATUS_THINKING_MIN {
         push_thinking_piece(
             &mut spans,
             model,
@@ -3018,8 +2548,8 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
             compact,
         );
     }
-    if width >= 32 {
-        let (context, role) = context_metric(model, width < 42);
+    if width >= STATUS_CONTEXT_MIN {
+        let (context, role) = context_metric(model, width < STATUS_CONTEXT_COMPACT);
         push_metadata_piece(&mut spans, model, context, role, 2);
     }
     let detail = *model
@@ -3028,7 +2558,7 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
         .preferences()
         .prompt_status_detail()
         .value();
-    if detail != PromptStatusDetail::Essential && width >= 56 {
+    if detail != PromptStatusDetail::Essential && width >= STATUS_WORKSPACE_MIN {
         push_metadata_piece(
             &mut spans,
             model,
@@ -3037,7 +2567,11 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
                 path_marker(model),
                 single_line_label(
                     &workspace_display_path(&model.profiles().user.workspace),
-                    if width >= 84 { 28 } else { 18 }
+                    if width >= STATUS_WORKSPACE_WIDE {
+                        STATUS_PATH_CHARS_WIDE
+                    } else {
+                        STATUS_PATH_CHARS_NARROW
+                    }
                 )
             ),
             VisualRole::Normal,
@@ -3045,19 +2579,23 @@ fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
         );
     }
     if detail != PromptStatusDetail::Essential
-        && width >= 76
+        && width >= STATUS_BRANCH_MIN
         && let Some(branch) = model.settings().git_branch.as_deref()
     {
         push_metadata_piece(
             &mut spans,
             model,
-            format!("{}{}", branch_marker(model), single_line_label(branch, 18)),
+            format!(
+                "{}{}",
+                branch_marker(model),
+                single_line_label(branch, STATUS_BRANCH_CHARS)
+            ),
             VisualRole::Tool,
             4,
         );
     }
     if detail == PromptStatusDetail::Detailed
-        && width >= 98
+        && width >= STATUS_TOKENS_MIN
         && let Some(usage) = latest_turn_usage(model)
     {
         push_metadata_piece(
@@ -3145,11 +2683,7 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn prompt_surface_height(area: Rect, model: &Model) -> u16 {
-    u16::try_from(model.composer.lines().len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2)
-        .clamp(3, if presentation(model).compact { 4 } else { 5 })
-        .min(area.height)
+    ui_layout::prompt_surface_height(area, model)
 }
 
 fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -3676,7 +3210,7 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         "paste or type key"
     };
-    let compact = inner.height < 8 || inner.width < 36;
+    let compact = inner.height < PAGE_HEADER_TALL_MIN || inner.width < CREDENTIAL_COMPACT_WIDTH;
     let text = if compact {
         Text::from(vec![
             Line::from("API key required"),
@@ -3766,17 +3300,7 @@ fn picker_item(summary: &ModelSummary, model: &Model) -> ListItem<'static> {
 }
 
 fn confirmation_rect(area: Rect) -> Rect {
-    if area.width <= 40 || area.height <= 12 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).clamp(1, 72);
-    let height = area.height.saturating_sub(2).clamp(1, 9);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
+    ui_layout::confirmation_rect(area)
 }
 
 fn filtered_models(model: &Model) -> Vec<&ModelSummary> {
@@ -3805,59 +3329,19 @@ fn filtered_models(model: &Model) -> Vec<&ModelSummary> {
 }
 
 fn popup_rect(area: Rect) -> Rect {
-    if area.width < 30 || area.height < 10 {
-        return area;
-    }
-    let width = area.width.saturating_mul(4) / 5;
-    let height = area.height.saturating_mul(3) / 4;
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::popup_rect(area)
 }
 
 fn codex_auth_rect(area: Rect) -> Rect {
-    if area.width <= 40 || area.height <= 12 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(72);
-    let height = area.height.saturating_sub(2).min(14);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::codex_auth_rect(area)
 }
 
 fn credential_rect(area: Rect) -> Rect {
-    if area.width <= 40 || area.height <= 12 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(68);
-    let height = area.height.saturating_sub(2).min(11);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::credential_rect(area)
 }
 
 fn user_profile_rect(area: Rect) -> Rect {
-    if area.width <= 44 || area.height <= 14 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(72);
-    let height = area.height.saturating_sub(4).min(16);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::user_profile_rect(area)
 }
 
 fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {

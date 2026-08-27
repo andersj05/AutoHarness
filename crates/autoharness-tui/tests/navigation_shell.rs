@@ -675,3 +675,176 @@ fn mouse_credential_dialog_controls_are_clickable() {
     let _ = update(&mut model, Message::Mouse(MouseAction::CredentialCancel));
     assert!(model.overlay().is_none());
 }
+
+fn variant_name(action: &MouseAction) -> &'static str {
+    match action {
+        MouseAction::Route(_) => "Route",
+        MouseAction::SettingsTab(_) => "SettingsTab",
+        MouseAction::OpenUserProfile => "OpenUserProfile",
+        MouseAction::FocusComposer => "FocusComposer",
+        MouseAction::FocusTranscript => "FocusTranscript",
+        MouseAction::ChatModels => "ChatModels",
+        MouseAction::SettingsRow(_) => "SettingsRow",
+        MouseAction::ProfileCredential => "ProfileCredential",
+        MouseAction::ProfileTest => "ProfileTest",
+        MouseAction::ProfileDefaultModel => "ProfileDefaultModel",
+        MouseAction::ProfileDisconnect => "ProfileDisconnect",
+        MouseAction::ProfileDelete => "ProfileDelete",
+        MouseAction::SelectProviderChoice(_) => "SelectProviderChoice",
+        MouseAction::CodexLogin => "CodexLogin",
+        MouseAction::SelectProfile(_) => "SelectProfile",
+        MouseAction::UserProfileSave => "UserProfileSave",
+        MouseAction::SessionOpen => "SessionOpen",
+        MouseAction::SessionRename => "SessionRename",
+        MouseAction::SessionArchive => "SessionArchive",
+        MouseAction::SessionDelete => "SessionDelete",
+        MouseAction::Confirm => "Confirm",
+        MouseAction::Cancel => "Cancel",
+        MouseAction::UserProfileCancel => "UserProfileCancel",
+        MouseAction::PickerSelect(_) => "PickerSelect",
+        MouseAction::PaletteRun(_) => "PaletteRun",
+        MouseAction::CredentialSubmit => "CredentialSubmit",
+        MouseAction::CredentialCancel => "CredentialCancel",
+        MouseAction::ProfileCredentialSubmit => "ProfileCredentialSubmit",
+        MouseAction::ProfileCredentialCancel => "ProfileCredentialCancel",
+        MouseAction::PermissionAllow => "PermissionAllow",
+        MouseAction::PermissionDeny => "PermissionDeny",
+    }
+}
+
+fn collect_hit_variants(
+    model: &Model,
+    width: u16,
+    height: u16,
+    into: &mut std::collections::HashSet<&'static str>,
+) {
+    for column in 0..width {
+        for row in 0..height {
+            if let Some(action) = hit_test(model, width, height, column, row) {
+                into.insert(variant_name(&action));
+            }
+        }
+    }
+}
+
+#[test]
+fn chat_composer_transcript_and_settings_rows_are_clickable() {
+    let mut model = model();
+    assert_eq!(
+        hit_test(&model, 120, 40, 40, 20),
+        Some(MouseAction::FocusTranscript)
+    );
+    assert!(
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                hit_test(&model, 120, 40, column, row) == Some(MouseAction::FocusComposer)
+            })
+        }),
+        "composer must be clickable"
+    );
+    assert!(
+        (0..120).any(|column| {
+            (0..40)
+                .any(|row| hit_test(&model, 120, 40, column, row) == Some(MouseAction::ChatModels))
+        }),
+        "status-line model segment must open the picker"
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::FocusComposer));
+    assert_eq!(model.focus, Focus::Composer);
+
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    assert!(
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                matches!(
+                    hit_test(&model, 120, 40, column, row),
+                    Some(MouseAction::SettingsRow(_))
+                )
+            })
+        }),
+        "General Settings rows must be clickable"
+    );
+}
+
+#[test]
+fn every_mouse_action_variant_is_produced_by_layout() {
+    let mut produced = std::collections::HashSet::new();
+    collect_hit_variants(&model(), 120, 40, &mut produced);
+    collect_hit_variants(&model(), 80, 24, &mut produced);
+    collect_hit_variants(&model(), 48, 18, &mut produced);
+
+    let mut settings = model();
+    let _ = update(&mut settings, Message::Input(ctrl('4')));
+    collect_hit_variants(&settings, 120, 40, &mut produced);
+    let _ = update(&mut settings, Message::Input(key(Key::Right)));
+    let _ = update(&mut settings, Message::Input(key(Key::Right)));
+    let _ = update(&mut settings, Message::Input(key(Key::Down)));
+    collect_hit_variants(&settings, 120, 40, &mut produced);
+    let _ = update(&mut settings, Message::Mouse(MouseAction::OpenUserProfile));
+    collect_hit_variants(&settings, 120, 40, &mut produced);
+
+    let mut sessions = model();
+    let _ = update(&mut sessions, Message::Input(ctrl('2')));
+    collect_hit_variants(&sessions, 80, 24, &mut produced);
+    let _ = update(&mut sessions, Message::Input(key(Key::Down)));
+    let _ = update(&mut sessions, Message::Input(ctrl('d')));
+    collect_hit_variants(&sessions, 80, 24, &mut produced);
+
+    let mut picker = model();
+    let _ = update(&mut picker, Message::Input(ctrl('p')));
+    collect_hit_variants(&picker, 80, 24, &mut produced);
+
+    let mut palette = model();
+    let _ = update(&mut palette, Message::Input(ctrl('/')));
+    collect_hit_variants(&palette, 80, 24, &mut produced);
+
+    let mut credential = model();
+    let _ = update(&mut credential, Message::Input(ctrl('k')));
+    collect_hit_variants(&credential, 80, 24, &mut produced);
+
+    let mut permission = model();
+    let mut session = (*permission.session.clone()).clone();
+    session.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("tool-call-1").expect("id"),
+        tool_name: "fs_read".to_owned(),
+        capability: "filesystem read".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: Vec::new(),
+    });
+    let _ = update(&mut permission, Message::SessionChanged(Arc::new(session)));
+    collect_hit_variants(&permission, 80, 24, &mut produced);
+
+    let mut providers = model();
+    let _ = update(&mut providers, Message::Input(ctrl('g')));
+    collect_hit_variants(&providers, 120, 40, &mut produced);
+
+    for expected in [
+        "Route",
+        "SettingsTab",
+        "OpenUserProfile",
+        "FocusComposer",
+        "FocusTranscript",
+        "ChatModels",
+        "SettingsRow",
+        "UserProfileSave",
+        "UserProfileCancel",
+        "SessionOpen",
+        "SessionRename",
+        "SessionArchive",
+        "SessionDelete",
+        "Confirm",
+        "Cancel",
+        "PickerSelect",
+        "PaletteRun",
+        "CredentialSubmit",
+        "CredentialCancel",
+        "PermissionAllow",
+        "PermissionDeny",
+        "SelectProviderChoice",
+    ] {
+        assert!(
+            produced.contains(expected),
+            "{expected} was not produced by layout; have {produced:?}"
+        );
+    }
+}

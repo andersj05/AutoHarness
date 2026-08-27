@@ -141,22 +141,28 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             open_user_profile(model);
             Vec::new()
         }
-        MouseAction::ChatSend => submit_prompt(model),
+        MouseAction::FocusComposer => {
+            if model.route() == Route::Chat && model.overlay().is_none() {
+                model.focus = Focus::Composer;
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        MouseAction::FocusTranscript => {
+            if model.route() == Route::Chat && model.overlay().is_none() {
+                model.transcript.follow_tail = false;
+                model.dirty = true;
+            }
+            Vec::new()
+        }
         MouseAction::ChatModels => {
             open_picker(model);
             Vec::new()
         }
-        MouseAction::ChatNewSession => create_session(model),
-        MouseAction::ChatSessions => {
-            navigate_to_route(model, Route::Sessions);
-            Vec::new()
-        }
-        MouseAction::ChatCredential => {
-            open_credential(model);
-            Vec::new()
-        }
-        MouseAction::ChatHelp => {
-            navigate_to_route(model, Route::Help);
+        MouseAction::SettingsRow(index) => {
+            if model.route() == Route::Settings {
+                move_settings_selection_to(model, index);
+            }
             Vec::new()
         }
         MouseAction::ProfileCredential => {
