@@ -6,7 +6,7 @@ use autoharness_provider::{
     CancellationToken, Chat, ChatContent, ChatMessage, ChatRequest, ChatRole, CompletionReason,
     ProviderStreamEvent,
 };
-use autoharness_provider_codex_cli::{CodexProvider, CodexSettings};
+use autoharness_provider_codex_cli::{CODEX_DEFAULT_MODEL_ID, CodexProvider, CodexSettings};
 use autoharness_settings::{
     CredentialReference, LayerKind, ProfileId, ProviderKind, SettingsBuilder,
 };
@@ -14,7 +14,7 @@ use futures_util::StreamExt as _;
 
 #[tokio::test]
 #[ignore = "opt-in live Codex subscription check; requires the user's configured profile"]
-async fn luna_high_completes_through_the_native_adapter() {
+async fn active_profile_default_completes_through_the_native_adapter() {
     if std::env::var("AUTOHARNESS_RUN_CODEX_LIVE").as_deref() != Ok("1") {
         return;
     }
@@ -46,17 +46,18 @@ async fn luna_high_completes_through_the_native_adapter() {
     let provider = CodexProvider::new(
         CodexSettings::new()
             .expect("Codex settings")
-            .with_reasoning_effort(Some("high"))
-            .expect("high reasoning"),
+            .with_reasoning_effort(profile.default_reasoning_effort())
+            .expect("saved profile reasoning effort"),
         &credential,
         None,
     )
     .expect("Codex provider");
     let request = ChatRequest::new(
-        ModelId::new("gpt-5.6-luna").expect("Luna model ID"),
+        ModelId::new(profile.default_model().unwrap_or(CODEX_DEFAULT_MODEL_ID))
+            .expect("saved profile model ID"),
         vec![ChatMessage::text(
             ChatRole::User,
-            ChatContent::new("Reply with exactly: luna-ok").expect("prompt"),
+            ChatContent::new("Reply with exactly: startup-default-ok").expect("prompt"),
         )],
     )
     .expect("chat request");
@@ -76,6 +77,9 @@ async fn luna_high_completes_through_the_native_adapter() {
         }
     }
 
-    assert!(completed, "Luna response did not complete normally");
-    assert_eq!(text.trim(), "luna-ok");
+    assert!(
+        completed,
+        "profile-default response did not complete normally"
+    );
+    assert_eq!(text.trim(), "startup-default-ok");
 }
