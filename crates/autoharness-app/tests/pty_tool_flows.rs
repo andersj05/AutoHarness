@@ -196,18 +196,13 @@ fn permission_deny_and_allow_both_settle_durably() {
     environment.remove("AUTOHARNESS_ROUTER_API_KEY");
     let mut replay = PtySession::start(&environment, 32, 110);
     replay.wait_for(
-        |screen| screen.contents().contains("Provider API key"),
-        "offline permission replay should offer dismissible credential recovery",
-    );
-    replay.send_bytes(b"\x1b");
-    replay.wait_for(
         |screen| {
             let text = screen.contents();
             text.contains("denied call handled")
                 && text.contains("allowed call handled")
                 && text.contains("TOOL · fs_write")
         },
-        "permission decisions and tool settlements should replay after dismissal",
+        "permission decisions and tool settlements should replay without a credential editor",
     );
     replay.send_bytes(&ctrl_c());
     assert_eq!(replay.wait_for_exit(), 0, "permission replay exits cleanly");
