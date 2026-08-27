@@ -18,13 +18,13 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
     // operation and still present the full interface.
     let mut session = PtySession::start(&environment, 24, 80);
 
-    // The first draw names the application and session-only credential source,
-    // then offers the documented ephemeral credential path.
+    // The first draw names the offline state and directs the user to the
+    // documented credential setup path.
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("session only")
+            text.contains("OFFLINE")
+                && text.contains("No provider credential is available.")
                 && text.contains("Provider API key")
                 && text.contains("Ask AutoHarness")
         },
