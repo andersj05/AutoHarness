@@ -9,15 +9,16 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     COMMANDS, CatalogProjection, MODEL_THINKING_LEVELS, Model, ModelDefaultStep, ModelSummary,
-    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus, ProfileConnectionState,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus,
     ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, Route, SettingsCategory,
     SettingsPreference,
 };
 use crate::text::display_safe;
 use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
 use crate::ui::component::{
-    Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge, ListItem as PresentationListItem,
-    ListView, Panel, Provenance, SearchField, SegmentedControl, SettingKind, SettingRow,
+    Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge,
+    ListItem as PresentationListItem, ListView, Panel, Provenance, SearchField, SegmentedControl,
+    SettingKind, SettingRow,
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
@@ -529,22 +530,93 @@ fn palette_item(
 /// The section matching the surface help was requested from is rendered
 /// first and highlighted, and content scrolls without clipping the frame.
 fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = area;
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Help ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    // The surface help was opened from leads; everything else follows in
-    // table order so context is never below the fold on small terminals.
-    // The always-true Global section never leads.
-    let origin = model.navigation.previous_route.focus();
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height - hint_height;
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let rows = generated_help_rows(model.navigation.previous_route.focus());
+    let label_width = rows
+        .iter()
+        .filter_map(|row| match row {
+            HelpRenderRow::Pair { key, .. } => Some(key.chars().count()),
+            HelpRenderRow::Header { .. } | HelpRenderRow::Gap => None,
+        })
+        .max()
+        .unwrap_or(0);
+    for (visual, row) in rows
+        .iter()
+        .skip(usize::from(model.help.scroll))
+        .take(usize::from(content.height))
+        .enumerate()
+    {
+        let y = content
+            .y
+            .saturating_add(u16::try_from(visual).unwrap_or(u16::MAX));
+        let line = Rect::new(content.x, y, content.width, ROW);
+        match row {
+            HelpRenderRow::Header { title, icon } => {
+                let heading = format!("{} {title}", model.theme().icons().glyph(*icon));
+                let used = crate::ui::component::paint::put(
+                    frame.buffer_mut(),
+                    line.x,
+                    line.y,
+                    line.width,
+                    &heading,
+                    model.theme().style(Token::Accent),
+                );
+                let rule = model.theme().icons().border().horizontal;
+                for x in line.x.saturating_add(used).saturating_add(1)..line.right() {
+                    crate::ui::component::paint::put(
+                        frame.buffer_mut(),
+                        x,
+                        line.y,
+                        ROW,
+                        rule,
+                        model.theme().style(Token::Divider),
+                    );
+                }
+            }
+            HelpRenderRow::Pair { key, description } => {
+                let padded = format!("{key:label_width$}");
+                let table = [KeyValue {
+                    label: &padded,
+                    value: description,
+                    chip: None,
+                }];
+                KeyValueTable::new(model.theme(), &table).render(frame.buffer_mut(), line);
+            }
+            HelpRenderRow::Gap => {}
+        }
+    }
+
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new(format!("{} scroll  Esc close", navigation_keys(model)))
+                .style(visual_style(model, VisualRole::Muted)),
+            hint,
+        );
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HelpRenderRow {
+    Header { title: &'static str, icon: Icon },
+    Pair { key: String, description: String },
+    Gap,
+}
+
+fn generated_help_rows(origin: crate::model::Focus) -> Vec<HelpRenderRow> {
     let mut ordered: Vec<&crate::model::HelpSection> = Vec::new();
     if let Some(first) = crate::model::HELP_SECTIONS
         .iter()
@@ -557,36 +629,57 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ordered.push(section);
         }
     }
-
-    let mut lines = Vec::new();
-    for (position, section) in ordered.iter().enumerate() {
-        let style = if position == 0 {
-            visual_style(model, VisualRole::Selected)
-        } else {
-            visual_style(model, VisualRole::Normal)
-        };
-        lines.push(Line::styled(section.title.to_owned(), style));
-        for (key, description) in section.rows {
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {key}"), visual_style(model, VisualRole::Muted)),
-                Span::raw(format!("  {description}")),
-            ]));
+    let command_hints = COMMANDS
+        .iter()
+        .filter_map(|command| command.key_hint)
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for (position, section) in ordered.into_iter().enumerate() {
+        rows.push(HelpRenderRow::Header {
+            title: section.title,
+            icon: help_section_icon(section.title),
+        });
+        rows.extend(
+            section
+                .rows
+                .iter()
+                .filter(|(key, _)| !command_hints.contains(key))
+                .map(|(key, description)| HelpRenderRow::Pair {
+                    key: (*key).to_owned(),
+                    description: (*description).to_owned(),
+                }),
+        );
+        rows.push(HelpRenderRow::Gap);
+        if position == 0 {
+            append_command_help_rows(&mut rows);
+            rows.push(HelpRenderRow::Gap);
         }
     }
+    rows
+}
 
-    let hint_height = u16::from(inner.height >= 2);
-    let content_height = inner.height - hint_height;
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph.scroll((model.help.scroll, 0)), content);
+fn append_command_help_rows(rows: &mut Vec<HelpRenderRow>) {
+    rows.push(HelpRenderRow::Header {
+        title: "Commands",
+        icon: Icon::PromptCaret,
+    });
+    rows.extend(COMMANDS.iter().filter_map(|command| {
+        command.key_hint.map(|key| HelpRenderRow::Pair {
+            key: key.to_owned(),
+            description: format!("/{}  {}", command.id, command.label),
+        })
+    }));
+}
 
-    if hint_height > 0 {
-        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
-        frame.render_widget(
-            Paragraph::new(format!("{} scroll  Esc close", navigation_keys(model)))
-                .style(visual_style(model, VisualRole::Muted)),
-            hint,
-        );
+fn help_section_icon(title: &str) -> Icon {
+    match title {
+        "Composer" => Icon::RouteChat,
+        "Browser" => Icon::RouteSessions,
+        "Profiles" => Icon::RouteProviders,
+        "Models" => Icon::RouteModels,
+        "Settings" => Icon::RouteSettings,
+        "Global" => Icon::Brand,
+        _ => Icon::RouteHelp,
     }
 }
 
@@ -1306,7 +1399,7 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ProviderChoices;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Add provider ")
+        .title(" Provider catalog ")
         .border_style(visual_style(
             model,
             if focused {
@@ -1325,38 +1418,83 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .profile_center
         .choice_selected
         .min(PROVIDER_CHOICES.len().saturating_sub(1));
-    let lines = PROVIDER_CHOICES
+    let scroll = profile_list_scroll(selected, PROVIDER_CHOICES.len(), inner.height);
+    for (index, choice) in PROVIDER_CHOICES
         .iter()
+        .copied()
         .enumerate()
-        .map(|(index, choice)| {
-            let selected = index == selected;
-            let style = if selected && focused {
-                visual_style(model, VisualRole::Selected)
-            } else {
-                visual_style(model, VisualRole::Normal)
-            };
-            let marker = if selected {
-                selection_marker(model)
-            } else {
-                " "
-            };
-            Line::styled(
-                format!(
-                    "{marker} {:<22} {}",
-                    choice.label(),
-                    provider_choice_status(model, *choice)
-                ),
-                style,
-            )
-        })
-        .collect::<Vec<_>>();
-    let scroll = profile_list_scroll(selected, lines.len(), inner.height);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        inner,
-    );
+        .skip(usize::from(scroll))
+    {
+        let y = inner
+            .y
+            .saturating_add(u16::try_from(index.saturating_sub(usize::from(scroll))).unwrap_or(0));
+        if y >= inner.bottom() {
+            break;
+        }
+        let row = Rect::new(inner.x, y, inner.width, ROW);
+        let selected_row = index == selected;
+        if selected_row && focused {
+            crate::ui::component::paint::fill(
+                frame.buffer_mut(),
+                row,
+                model.theme().style(Token::SurfaceSelected),
+                Some(' '),
+            );
+        }
+        let style = if selected_row && focused {
+            model.theme().style(Token::TextOnAccent)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        };
+        let marker = if selected_row {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let label = format!("{marker} {}", choice.label());
+        let label_width = crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            row.x,
+            row.y,
+            row.width,
+            &label,
+            style,
+        );
+        let (status, variant) = provider_choice_chip(model, choice);
+        let chip = Chip::new(model.theme(), status, variant);
+        let chip_width = chip.measure().min(row.width.saturating_sub(label_width));
+        let reason = provider_unavailable_reason(choice);
+        let reason_width = reason
+            .map(|reason| {
+                u16::try_from(reason.len())
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(1)
+            })
+            .unwrap_or(0)
+            .min(
+                row.width
+                    .saturating_sub(label_width)
+                    .saturating_sub(chip_width),
+            );
+        let chip_x = row
+            .right()
+            .saturating_sub(reason_width)
+            .saturating_sub(chip_width);
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(chip_x, row.y, chip_width, ROW),
+        );
+        if let Some(reason) = reason {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                chip_x.saturating_add(chip_width).saturating_add(1),
+                row.y,
+                reason_width.saturating_sub(1),
+                reason,
+                model.theme().style(Token::TextMuted),
+            );
+        }
+    }
 }
 
 fn profile_list_scroll(selected: usize, count: usize, visible: u16) -> u16 {
@@ -1372,7 +1510,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Connected providers ")
+        .title(" Saved connections ")
         .border_style(visual_style(
             model,
             if focused {
@@ -1396,31 +1534,66 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
         return;
     };
-    let mut lines = profiles
-        .iter()
-        .map(|candidate| {
-            let selected = candidate.id == profile.id;
-            let marker = if selected {
-                selection_marker(model)
+    let button_rows = provider_button_rows(inner);
+    let list_height = u16::try_from(profiles.len())
+        .unwrap_or(u16::MAX)
+        .min(button_rows.body.height);
+    for (index, candidate) in profiles.iter().enumerate() {
+        let y = button_rows
+            .body
+            .y
+            .saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
+        if y >= button_rows.body.bottom() {
+            break;
+        }
+        let selected = candidate.id == profile.id;
+        let row = Rect::new(button_rows.body.x, y, button_rows.body.width, ROW);
+        if selected && focused {
+            crate::ui::component::paint::fill(
+                frame.buffer_mut(),
+                row,
+                model.theme().style(Token::SurfaceSelected),
+                Some(' '),
+            );
+        }
+        let style = if selected && focused {
+            model.theme().style(Token::TextOnAccent)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        };
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            row.x,
+            row.y,
+            row.width,
+            &format!("{marker} {}", display_safe(&candidate.id)),
+            style,
+        );
+        let state = if candidate.active {
+            "active"
+        } else {
+            candidate.connection.label()
+        };
+        let chip = Chip::new(
+            model.theme(),
+            state,
+            if candidate.active {
+                ChipVariant::Success
             } else {
-                " "
-            };
-            let state = if candidate.active {
-                "active"
-            } else {
-                candidate.connection.label()
-            };
-            Line::styled(
-                format!("{marker} {:<20} {state}", display_safe(&candidate.id)),
-                if selected && focused {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.push(Line::from(""));
+                ChipVariant::Neutral
+            },
+        );
+        let width = chip.measure().min(row.width);
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(row.right().saturating_sub(width), row.y, width, ROW),
+        );
+    }
     let credential_stored = matches!(
         profile.credential_state,
         crate::model::ProfileCredentialStateLabel::Stored
@@ -1444,62 +1617,208 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             },
         )
     };
-    lines.extend([
-        detail_line(model, "Profile", &profile.id),
-        detail_line(model, "Provider", provider_display_name(profile.kind)),
-        detail_line(
-            model,
-            "Status",
-            if profile.active && credential_stored {
-                "active"
-            } else if profile.active {
-                "selected - sign-in required"
-            } else {
-                "saved"
-            },
-        ),
-        detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Sign-in", sign_in),
-        detail_line(model, "Credential", managed_by),
-        detail_line(
-            model,
-            "Default model",
-            profile
-                .default_model
-                .as_deref()
-                .unwrap_or("provider default"),
-        ),
-        detail_line(model, "Thinking", &profile.default_mode),
-    ]);
-    if profile.kind == ProviderKindLabel::Router {
-        lines.push(detail_line(model, "Base URL", &profile.base_url));
-        if !profile.project.is_empty() {
-            lines.push(detail_line(model, "Project", &profile.project));
-        }
-        if !profile.auth_header.is_empty() {
-            lines.push(detail_line(model, "Auth header", &profile.auth_header));
-        }
-    }
-    if let ProfileConnectionState::Failed(reason) = &profile.connection {
-        lines.push(detail_line(model, "Failure", reason));
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines.push(detail_line(model, "Recovery", "pending"));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        if profile.kind == ProviderKindLabel::CodexCli {
-            "[ Sign in ] [ Test ] [ Model ]"
-        } else {
-            "[ API key ] [ Test ] [ Model ]"
+    let status = if profile.active && credential_stored {
+        "active"
+    } else if profile.active {
+        "selected - sign-in required"
+    } else {
+        "saved"
+    };
+    let model_default = profile
+        .default_model
+        .as_deref()
+        .unwrap_or("provider default");
+    let identity = [
+        KeyValue {
+            label: "Profile",
+            value: &profile.id,
+            chip: profile.active.then_some("active"),
         },
-        visual_style(model, VisualRole::Assistant),
-    ));
-    lines.push(Line::styled(
-        "[ Disconnect ] [ Remove ]",
-        visual_style(model, VisualRole::Warning),
-    ));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        KeyValue {
+            label: "Provider",
+            value: provider_display_name(profile.kind),
+            chip: None,
+        },
+    ];
+    let connection = [
+        KeyValue {
+            label: "Status",
+            value: status,
+            chip: None,
+        },
+        KeyValue {
+            label: "Connection",
+            value: profile.connection.label(),
+            chip: None,
+        },
+    ];
+    let credential = [
+        KeyValue {
+            label: "Sign-in",
+            value: sign_in,
+            chip: None,
+        },
+        KeyValue {
+            label: "Credential",
+            value: managed_by,
+            chip: None,
+        },
+    ];
+    let defaults = [
+        KeyValue {
+            label: "Model",
+            value: model_default,
+            chip: None,
+        },
+        KeyValue {
+            label: "Thinking",
+            value: &profile.default_mode,
+            chip: None,
+        },
+    ];
+    let mut y = button_rows.body.y.saturating_add(list_height);
+    for (title, rows) in [
+        ("Identity", identity.as_slice()),
+        ("Connection", connection.as_slice()),
+        ("Credential", credential.as_slice()),
+        ("Defaults", defaults.as_slice()),
+    ] {
+        y = render_provider_section(frame, button_rows.body, y, model, title, rows);
+    }
+    if profile.kind == ProviderKindLabel::Router && y < button_rows.body.bottom() {
+        let router = [
+            KeyValue {
+                label: "Base URL",
+                value: &profile.base_url,
+                chip: None,
+            },
+            KeyValue {
+                label: "Project",
+                value: &profile.project,
+                chip: None,
+            },
+            KeyValue {
+                label: "Auth header",
+                value: &profile.auth_header,
+                chip: None,
+            },
+        ];
+        let _ = render_provider_section(frame, button_rows.body, y, model, "Router", &router);
+    }
+    let primary = provider_primary_buttons(model);
+    ButtonRow::new(model.theme(), &primary).render(frame.buffer_mut(), button_rows.primary);
+    let secondary = provider_secondary_buttons();
+    ButtonRow::new(model.theme(), &secondary).render(frame.buffer_mut(), button_rows.secondary);
+}
+
+#[derive(Clone, Copy)]
+struct ProviderButtonRows {
+    body: Rect,
+    primary: Rect,
+    secondary: Rect,
+}
+
+fn provider_button_rows(inner: Rect) -> ProviderButtonRows {
+    let secondary = Rect::new(
+        inner.x,
+        inner.bottom().saturating_sub(ROW),
+        inner.width,
+        ROW.min(inner.height),
+    );
+    let primary = Rect::new(
+        inner.x,
+        secondary.y.saturating_sub(ROW),
+        inner.width,
+        ROW.min(inner.height.saturating_sub(ROW)),
+    );
+    ProviderButtonRows {
+        body: Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(TWO_ROWS),
+        ),
+        primary,
+        secondary,
+    }
+}
+
+fn render_provider_section(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    y: u16,
+    model: &Model,
+    title: &str,
+    rows: &[KeyValue<'_>],
+) -> u16 {
+    if y >= area.bottom() {
+        return y;
+    }
+    crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        area.x,
+        y,
+        area.width,
+        title,
+        model.theme().style(Token::Accent),
+    );
+    let table_y = y.saturating_add(ROW);
+    let table = Rect::new(
+        area.x,
+        table_y,
+        area.width,
+        area.bottom().saturating_sub(table_y),
+    );
+    let used = KeyValueTable::new(model.theme(), rows).measure(table.width);
+    KeyValueTable::new(model.theme(), rows).render(frame.buffer_mut(), table);
+    table_y.saturating_add(used)
+}
+
+fn provider_primary_buttons(model: &Model) -> Vec<Button<MouseAction>> {
+    vec![
+        Button::new(
+            if model
+                .selected_profile()
+                .is_some_and(|profile| profile.kind == ProviderKindLabel::CodexCli)
+            {
+                "Sign in"
+            } else {
+                "API key"
+            },
+            None,
+            ButtonVariant::Primary,
+            MouseAction::ProfileCredential,
+        ),
+        Button::new(
+            "Test",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileTest,
+        ),
+        Button::new(
+            "Model",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDefaultModel,
+        ),
+    ]
+}
+
+fn provider_secondary_buttons() -> Vec<Button<MouseAction>> {
+    vec![
+        Button::new(
+            "Disconnect",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDisconnect,
+        ),
+        Button::new(
+            "Remove",
+            None,
+            ButtonVariant::Danger,
+            MouseAction::ProfileDelete,
+        ),
+    ]
 }
 
 fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -1564,8 +1883,11 @@ fn provider_display_name(kind: ProviderKindLabel) -> &'static str {
     }
 }
 
-fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {
-    match choice {
+fn provider_choice_chip(
+    model: &Model,
+    choice: crate::model::ProviderChoice,
+) -> (&'static str, ChipVariant) {
+    let label = match choice {
         crate::model::ProviderChoice::Gemini | crate::model::ProviderChoice::GoogleAiStudio => {
             "API key"
         }
@@ -1585,6 +1907,25 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
         crate::model::ProviderChoice::Cursor => "Unavailable",
         crate::model::ProviderChoice::ClaudeCode => "Unavailable",
         crate::model::ProviderChoice::OpenAiCompatible => "API key",
+    };
+    let variant = match choice {
+        crate::model::ProviderChoice::Cursor | crate::model::ProviderChoice::ClaudeCode => {
+            ChipVariant::Muted
+        }
+        crate::model::ProviderChoice::Codex if label == "Connected" => ChipVariant::Success,
+        _ => ChipVariant::Neutral,
+    };
+    (label, variant)
+}
+
+fn provider_unavailable_reason(choice: crate::model::ProviderChoice) -> Option<&'static str> {
+    match choice {
+        crate::model::ProviderChoice::Cursor => Some("adapter not available"),
+        crate::model::ProviderChoice::ClaudeCode => Some("adapter not available"),
+        crate::model::ProviderChoice::Gemini
+        | crate::model::ProviderChoice::GoogleAiStudio
+        | crate::model::ProviderChoice::Codex
+        | crate::model::ProviderChoice::OpenAiCompatible => None,
     }
 }
 
@@ -2584,4 +2925,23 @@ fn spinner(model: &Model) -> &'static str {
 fn retry_countdown(remaining_ms: u64) -> String {
     let seconds = remaining_ms.saturating_add(999) / 1_000;
     format!("{seconds}s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HelpRenderRow, generated_help_rows};
+    use crate::model::{COMMANDS, Focus};
+
+    #[test]
+    fn generated_help_lists_every_command_hint_exactly_once() {
+        let rows = generated_help_rows(Focus::Composer);
+        for command in COMMANDS.iter().filter(|command| command.key_hint.is_some()) {
+            let hint = command.key_hint.expect("filtered command hint");
+            let count = rows
+                .iter()
+                .filter(|row| matches!(row, HelpRenderRow::Pair { key, .. } if key == hint))
+                .count();
+            assert_eq!(count, 1, "command hint {hint} must appear exactly once");
+        }
+    }
 }

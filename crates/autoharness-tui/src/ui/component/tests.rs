@@ -76,6 +76,7 @@ fn every_component_renders_symbols_and_styles_at_reviewed_widths() {
             "cancel",
         ),
         Button::new("Delete", Some("Y".into()), ButtonVariant::Danger, "delete"),
+        Button::new("Sign in", None, ButtonVariant::Primary, "sign in"),
     ];
     for_widths(2, |buf, area| {
         let _ = ButtonRow::new(&theme, &buttons).render(buf, area);

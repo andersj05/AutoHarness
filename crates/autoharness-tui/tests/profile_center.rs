@@ -126,6 +126,8 @@ fn providers_list_connection_choices_at_responsive_sizes() {
     assert!(model.profile_center_open());
     assert_eq!(model.focus, Focus::Profiles);
     let wide = render_text(&model, 120, 40);
+    assert!(wide.contains("Provider catalog"));
+    assert!(wide.contains("Saved connections"));
     for provider in [
         "Gemini",
         "Google AI Studio API",
@@ -134,6 +136,14 @@ fn providers_list_connection_choices_at_responsive_sizes() {
         "Claude Code",
     ] {
         assert!(wide.contains(provider), "missing {provider}");
+    }
+    assert!(wide.contains("Unavailable"));
+    assert!(wide.contains("adapter not available"));
+    for section in ["Identity", "Connection", "Credential", "Defaults"] {
+        assert!(
+            wide.contains(section),
+            "missing provider detail section {section}"
+        );
     }
     for (width, height) in [(80, 24), (60, 18), (40, 12)] {
         assert!(render_text(&model, width, height).contains("Providers"));
@@ -261,7 +271,7 @@ fn provider_arrows_preserve_connected_profile_selection() {
     for _ in 0..6 {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
-    assert!(render_text(&model, 80, 24).contains("Connected providers"));
+    assert!(render_text(&model, 80, 24).contains("Saved connections"));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Right)));

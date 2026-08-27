@@ -89,6 +89,37 @@ impl<'a, A: Clone> ButtonRow<'a, A> {
 
     /// Renders right-aligned buttons and returns hit regions matching captions.
     pub fn render(&self, buf: &mut Buffer, area: Rect) -> Vec<(Rect, A)> {
+        if area.width == 0 || area.height == 0 || self.buttons.is_empty() {
+            return Vec::new();
+        }
+        let hits = self.regions(area);
+        for (index, (button, (rect, _))) in self.buttons.iter().zip(&hits).enumerate() {
+            if index > 0 && rect.x > area.x {
+                put(
+                    buf,
+                    rect.x.saturating_sub(1),
+                    rect.y,
+                    1,
+                    " ",
+                    self.theme.style(Token::TextMuted),
+                );
+            }
+            let caption = button.caption();
+            put(
+                buf,
+                rect.x,
+                rect.y,
+                rect.width,
+                &caption,
+                button_style(self.theme, button.variant),
+            );
+        }
+        hits
+    }
+
+    /// Returns the exact right-aligned caption rectangles without painting.
+    #[must_use]
+    pub fn regions(&self, area: Rect) -> Vec<(Rect, A)> {
         let mut hits = Vec::new();
         if area.width == 0 || area.height == 0 || self.buttons.is_empty() {
             return hits;
@@ -96,31 +127,13 @@ impl<'a, A: Clone> ButtonRow<'a, A> {
         let total = self.measure().min(area.width);
         let mut x = area.x.saturating_add(area.width.saturating_sub(total));
         for (index, button) in self.buttons.iter().enumerate() {
-            if index > 0 && x < area.right() {
-                x = x.saturating_add(put(
-                    buf,
-                    x,
-                    area.y,
-                    1,
-                    " ",
-                    self.theme.style(Token::TextMuted),
-                ));
+            if index > 0 {
+                x = x.saturating_add(1);
             }
-            let caption = button.caption();
-            let width = u16::try_from(caption.width())
-                .unwrap_or(u16::MAX)
-                .min(area.right().saturating_sub(x));
+            let width = button.width().min(area.right().saturating_sub(x));
             if width == 0 {
                 break;
             }
-            put(
-                buf,
-                x,
-                area.y,
-                width,
-                &caption,
-                button_style(self.theme, button.variant),
-            );
             hits.push((Rect::new(x, area.y, width, 1), button.action.clone()));
             x = x.saturating_add(width);
         }

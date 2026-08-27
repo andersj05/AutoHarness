@@ -4,6 +4,7 @@ use autoharness_settings::{Density, Layout as PreferenceLayout};
 use ratatui::layout::{Constraint, Direction, Layout as Split, Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
+use super::component::{Button, ButtonRow, ButtonVariant};
 use super::metrics::{
     CODEX_ACTION_ROW_OFFSET, CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT,
     COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT,
@@ -12,11 +13,10 @@ use super::metrics::{
     INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS, MODAL_MAX_WIDTH,
     OVERLAY_LIST_TOP_CHROME, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
     POPUP_HEIGHT_DENOMINATOR, POPUP_HEIGHT_NUMERATOR, POPUP_MIN_HEIGHT, POPUP_MIN_WIDTH,
-    POPUP_WIDTH_DENOMINATOR, POPUP_WIDTH_NUMERATOR, PROFILE_COMPACT_WIDTH,
-    PROFILE_DETAIL_CHROME_ROWS, PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED,
-    PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
-    PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
-    SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
+    POPUP_WIDTH_DENOMINATOR, POPUP_WIDTH_NUMERATOR, PROFILE_COMPACT_WIDTH, PROFILE_DETAIL_PERCENT,
+    PROFILE_DETAIL_PERCENT_STACKED, PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED,
+    PROFILE_TWO_PANE_MIN_WIDTH, PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM,
+    SESSION_HELP_WIDE, SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
     SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE,
     SETTINGS_CATEGORY_RAIL_XS, SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
     STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE,
@@ -24,8 +24,8 @@ use super::metrics::{
     USER_PROFILE_MAX_HEIGHT, WidthBand, sidebar_width_for, wide_shell, width_band,
 };
 use crate::model::{
-    CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileConnectionState,
-    ProviderChoice, ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
+    CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProviderChoice,
+    ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
 };
 
 /// Settings tab labels, in the same order as `SettingsTab` indices.
@@ -715,6 +715,7 @@ fn push_profile_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, model: &Mo
         push_profile_secondary_buttons(
             hits,
             Rect::new(detail_inner.x, second, detail_inner.width, ROW),
+            model,
         );
     }
 }
@@ -766,72 +767,63 @@ fn profile_list_scroll(selected: usize, count: usize, visible: u16) -> u16 {
 }
 
 fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
-    let selected = model.selected_profile()?;
+    model.selected_profile()?;
     let content = profile_center_content_area(model, area);
     let (_, Some(detail)) = profile_list_detail_areas(content, model) else {
         return None;
     };
-    let mut lines = u16::try_from(model.filtered_profiles().count())
-        .unwrap_or(u16::MAX)
-        .saturating_add(PROFILE_DETAIL_CHROME_ROWS);
-    if selected.kind == ProviderKindLabel::Router {
-        lines = lines.saturating_add(ROW);
-        if !selected.project.is_empty() {
-            lines = lines.saturating_add(ROW);
-        }
-        if !selected.auth_header.is_empty() {
-            lines = lines.saturating_add(ROW);
-        }
-    }
-    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
-        lines = lines.saturating_add(ROW);
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines = lines.saturating_add(ROW);
-    }
-    let first = detail
-        .y
-        .saturating_add(ROW)
-        .saturating_add(lines)
-        .saturating_add(ROW);
-    Some((first, first.saturating_add(ROW)))
+    let inner = bordered_inner(detail)?;
+    let second = inner.bottom().saturating_sub(ROW);
+    Some((second.saturating_sub(ROW), second))
 }
 
 fn push_profile_primary_buttons(hits: &mut Vec<(Rect, MouseAction)>, row: Rect, model: &Model) {
-    let text = if model
-        .selected_profile()
-        .is_some_and(|profile| profile.kind == ProviderKindLabel::CodexCli)
-    {
-        "[ Sign in ] [ Test ] [ Model ]"
-    } else {
-        "[ API key ] [ Test ] [ Model ]"
-    };
-    for (x, width, label) in bracket_spans(text) {
-        let action = match label.as_str() {
-            "[ Sign in ]" | "[ API key ]" => MouseAction::ProfileCredential,
-            "[ Test ]" => MouseAction::ProfileTest,
-            "[ Model ]" => MouseAction::ProfileDefaultModel,
-            _ => continue,
-        };
-        hits.push((
-            Rect::new(row.x.saturating_add(x), row.y, width, ROW),
-            action,
-        ));
-    }
+    let buttons = [
+        Button::new(
+            if model
+                .selected_profile()
+                .is_some_and(|profile| profile.kind == ProviderKindLabel::CodexCli)
+            {
+                "Sign in"
+            } else {
+                "API key"
+            },
+            None,
+            ButtonVariant::Primary,
+            MouseAction::ProfileCredential,
+        ),
+        Button::new(
+            "Test",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileTest,
+        ),
+        Button::new(
+            "Model",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDefaultModel,
+        ),
+    ];
+    hits.extend(ButtonRow::new(model.theme(), &buttons).regions(row));
 }
 
-fn push_profile_secondary_buttons(hits: &mut Vec<(Rect, MouseAction)>, row: Rect) {
-    for (x, width, label) in bracket_spans("[ Disconnect ] [ Remove ]") {
-        let action = match label.as_str() {
-            "[ Disconnect ]" => MouseAction::ProfileDisconnect,
-            "[ Remove ]" => MouseAction::ProfileDelete,
-            _ => continue,
-        };
-        hits.push((
-            Rect::new(row.x.saturating_add(x), row.y, width, ROW),
-            action,
-        ));
-    }
+fn push_profile_secondary_buttons(hits: &mut Vec<(Rect, MouseAction)>, row: Rect, model: &Model) {
+    let buttons = [
+        Button::new(
+            "Disconnect",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDisconnect,
+        ),
+        Button::new(
+            "Remove",
+            None,
+            ButtonVariant::Danger,
+            MouseAction::ProfileDelete,
+        ),
+    ];
+    hits.extend(ButtonRow::new(model.theme(), &buttons).regions(row));
 }
 
 fn push_overlay_hits(
