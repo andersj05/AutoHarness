@@ -223,6 +223,10 @@ fn plain_letters_extend_the_filter_instead_of_triggering_actions() {
     }
     let rename = update(&mut model, Message::Input(ctrl('r')));
     assert!(model.browser_renaming());
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("Rename session"));
+    assert!(rendered.contains("Enter save"));
+    assert!(rendered.contains("Esc cancel"));
     commit_all(&mut model, &rename);
 }
 
