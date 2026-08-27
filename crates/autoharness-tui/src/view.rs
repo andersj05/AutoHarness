@@ -2614,8 +2614,10 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
     }
 
-    if rows[2].height > 0 && !model.browser.renaming {
-        let hints = if rows[2].width >= SESSION_HELP_WIDE {
+    if rows[2].height > 0 {
+        let hints = if model.browser.renaming {
+            "Rename session  Enter save  Esc cancel"
+        } else if rows[2].width >= SESSION_HELP_WIDE {
             "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
             "[ Open ]  [ Rename ]  [ Delete ]  Esc"

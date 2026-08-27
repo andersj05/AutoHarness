@@ -37,7 +37,12 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
     );
     session.type_text("Offline seed");
     session.wait_for(
-        |screen| screen.contents().contains("Filter: Offline seed"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Offline seed")
+                && text.contains("Session details")
+                && text.contains("Messages")
+        },
         "session filter should select the seeded session",
     );
     session.send_bytes(b"\r");
@@ -59,7 +64,12 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
 
     session.send_bytes(&CTRL_R);
     session.wait_for(
-        |screen| screen.contents().contains("Rename: Offline seed"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Rename session")
+                && text.contains("Enter save")
+                && text.contains("Esc cancel")
+        },
         "Ctrl+R should open the selected session title editor",
     );
     session.type_text(" renamed");
@@ -73,26 +83,34 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Archive session") && text.contains("Y confirm")
+            text.contains("Archive session")
+                && text.contains("Cancel (N/Esc)")
+                && text.contains("Confirm (Y)")
         },
         "archiving should own the confirmation overlay before changing durable state",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| !screen.contents().contains("Y confirm"),
+        |screen| !screen.contents().contains("Confirm (Y)"),
         "N should cancel the archive confirmation",
     );
     session.send_bytes(&CTRL_A);
     session.send_bytes(b"y");
     session.wait_for(
-        |screen| screen.contents().contains("[archived]"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Offline seed renamed") && text.contains("archived")
+        },
         "Y should commit the armed archive",
     );
     session.send_bytes(&CTRL_Z);
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Offline seed renamed") && !text.contains("[archived]")
+            text.contains("Offline seed renamed")
+                && text.contains("State")
+                && text.contains("active")
+                && !text.contains("archived")
         },
         "Ctrl+Z should reverse the most recent lifecycle transition once",
     );
@@ -101,13 +119,15 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Delete session") && text.contains("Y confirm")
+            text.contains("Delete session")
+                && text.contains("Cancel (N/Esc)")
+                && text.contains("Confirm (Y)")
         },
         "deletion should own the confirmation overlay before export or removal",
     );
     session.send_bytes(b"n");
     session.wait_for(
-        |screen| !screen.contents().contains("Y confirm"),
+        |screen| !screen.contents().contains("Confirm (Y)"),
         "N should cancel the deletion confirmation",
     );
     session.send_bytes(&CTRL_D);

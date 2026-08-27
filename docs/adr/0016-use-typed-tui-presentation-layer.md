@@ -88,6 +88,7 @@ Option 4 was rejected because the product's visual identity, accessibility degra
 - [Terminal interface audit](../design/TUI_AUDIT.md), with buffer captures and source citations for every finding.
 - [Terminal design system](../design/TUI_DESIGN_SYSTEM.md), the target contract.
 - [Terminal interface redesign plan](../design/TUI_REDESIGN_PLAN.md), the ordered delivery steps and exit criteria.
+- [Step 10 validation](../release/TUI_REDESIGN_VALIDATION.md), with the completed local gates and the cross-platform and human-review gates that still block acceptance.
 - Rendered evidence from `crates/autoharness-tui/tests/visual_review.rs` and the four goldens under `crates/autoharness-tui/tests/golden/`.
 
 ## Related decisions

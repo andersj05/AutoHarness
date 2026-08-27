@@ -4,17 +4,17 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 8 are on `dev`, and step 9 is implemented and fully verified on `feat/tui-conformance`; the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 9 are on `dev`; step 10 local Windows implementation and validation pass on `feat/tui-redesign-validation`, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
 
 ## Current objective
 
-Promote the verified Phase 3.10 step 9 branch into `dev`, then begin step 10 final validation without changing route semantics, overlay ownership, durable intents, or the settings schema.
+Finish Phase 3.10 step 10 on one final candidate without changing route semantics, overlay ownership, durable intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
-Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
+Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until the same candidate passes Windows, macOS, and Linux PTY CI, three human terminal smokes, and the approved release checklist.
 
 Phase 3.10 steps 0 through 9 are implemented.
-Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
+The local Windows portion of step 10 is complete and recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
 
 ## Current repository state
 
@@ -50,7 +50,7 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
-- Eight real-PTY scenarios now include the routed shell journey alongside first run, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and confirmations, profile management, invalid-call repair, permission outcomes, and forced-shutdown recovery.
+- Eight real-PTY scenario binaries now contain twelve tests for first run, routed shell navigation, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, and Basic16 color output.
 - The instrumented release binary and three-sample real-PTY loopback runner produce valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render intervals outside network time; the result is local smoke evidence, not authoritative reference-machine evidence.
 - Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
 - Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
@@ -73,6 +73,7 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-redesign-validation` aligned every stale real-PTY assertion with the delivered presentation, added visible rename-mode guidance, and added cross-platform real-binary smokes for Nerd Font, Unicode, and Basic16 output; all twelve explicit Windows PTY tests, formatting, strict workspace Clippy, the full locked workspace suite, warning-denied rustdoc and doctests, documentation links, isolated benchmark gates, and the release render-cost report pass locally.
 - On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison; formatting, strict workspace Clippy, the full locked workspace suite, the matrix, the allocation gate, and documentation links pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 7 with grouped Sessions list and detail panes, durable message counts, deterministic relative ages, one-page model and thinking defaults, provider catalog and saved-connection detail tables, unavailable-provider reasons, exact measured button hits, and generated grouped Help content.
@@ -147,16 +148,16 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 - Added a local user-profile dialog with typed display-label persistence, command-palette and `Alt+U` access, visible Save/Cancel controls, and active provider/model summary.
 - Added semantic mouse actions, responsive hit testing for route tabs, chat/session/profile controls, confirmations, picker rows, palette rows, credential dialogs, permission controls, and the user-profile dialog.
 - Terminal lifecycle now enables mouse capture and restores it precisely on normal exit and partial setup failure; selected Windows PTY journeys pass, while panic-hook-specific and cross-platform restoration evidence remains open.
-- Final local verification now reports 118 focused TUI tests, 347 workspace tests across 46 suites, strict Clippy, formatting, onboarding PTY, routed-shell PTY, and profile-center PTY success.
+- Final local step-10 verification passes formatting, strict workspace Clippy, the complete locked workspace suite, warning-denied rustdoc and doctests, documentation links, isolated benchmark gates, the release render-cost report, and twelve explicit Windows PTY tests across eight scenario binaries.
 
 ## Immediate next actions
 
-1. Promote `feat/tui-conformance` into `dev`, then begin Phase 3.10 step 10 final validation and promotion.
-2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
-3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
-4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
-5. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
-6. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.
+1. Designate one final candidate and collect green Windows, macOS, and Linux CI links for that exact commit.
+2. Perform and record the Nerd Font, no-Nerd-Font, and sixteen-color human terminal smokes against the same candidate.
+3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
+4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
+5. Obtain independent release-checklist approval, then mark ADR-0016 Accepted.
+6. Promote the validated step-10 branch into `dev` and reconcile memory with the final evidence.
 
 ## Open questions
 
@@ -164,14 +165,14 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Blockers
 
-The local TUI implementation slice is complete, but the Phase 3.9 release evidence has not been executed on this branch.
-Configured router access, macOS and Linux platform vault environments, an approved reference machine, and operator-owned rollback inputs remain prerequisites.
+The local Windows step-10 slice is complete, but the same final candidate has not run through macOS and Linux CI or the three human terminal smokes.
+Configured router access, macOS and Linux platform vault environments, an approved reference machine, operator-owned rollback inputs, and an independent reviewer remain prerequisites for release approval.
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 8 are implemented, validated, and merged on `dev`.
-Step 9 is implemented and fully verified on `feat/tui-conformance` in ten scoped commits.
+Phase 3.10 steps 0 through 9 are implemented, validated, and merged on `dev`.
+Step 10 local Windows implementation and validation are complete on `feat/tui-redesign-validation`.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
-ADR-0016 stays Proposed until step 10.
+ADR-0016 stays Proposed until the cross-platform, human terminal, and release-approval gates pass on one candidate.
 Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
-Do not skip the plan order: step 10 must complete final validation and promotion before ADR-0016 can be accepted.
+Do not treat the automated glyph-emission tests as evidence that a particular terminal font draws the intended shapes.

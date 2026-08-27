@@ -39,6 +39,7 @@ This index routes humans and agents to the smallest authoritative document for a
 ## Release
 
 - [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
+- [TUI redesign validation](release/TUI_REDESIGN_VALIDATION.md): Phase 3.10 step 10 candidate evidence, local results, and outstanding promotion gates.
 
 ## Validation
 
