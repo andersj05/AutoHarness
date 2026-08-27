@@ -2278,7 +2278,7 @@ fn handle_model_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
                 model.dirty = true;
                 Vec::new()
             }
-            ModelDefaultStep::Thinking => {
+            ModelDefaultStep::Thinking if model.model_defaults.thinking_selected == 0 => {
                 model.model_defaults.step = ModelDefaultStep::Model;
                 model.dirty = true;
                 Vec::new()

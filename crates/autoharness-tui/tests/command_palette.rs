@@ -459,6 +459,31 @@ fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
 }
 
 #[test]
+fn thinking_mode_up_moves_between_levels_before_returning_to_models() {
+    let mut model = empty_model();
+    apply_active_profile(&mut model);
+    type_text(&mut model, "/models");
+    let _ = update(&mut model, Message::Input(enter()));
+
+    assert!(update(&mut model, Message::Input(enter())).is_empty());
+    assert!(buffer_text(&render_model(&model, 100, 30)).contains("Thinking mode"));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::Up)));
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Thinking mode"));
+    assert!(rendered.contains("› Medium"));
+
+    let effects = update(&mut model, Message::Input(enter()));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault {
+            reasoning_effort: Some(effort),
+            ..
+        })] if effort == "medium"
+    ));
+}
+
+#[test]
 fn unknown_slash_commands_are_rejected_without_losing_text() {
     let mut model = empty_model();
     type_text(&mut model, "/frobnicate");
