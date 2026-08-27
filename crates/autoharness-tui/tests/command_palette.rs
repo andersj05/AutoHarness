@@ -619,3 +619,27 @@ fn palette_renders_at_small_sizes_without_panicking() {
         assert_eq!(backend.buffer().area.height, height);
     }
 }
+
+#[test]
+fn inline_and_centered_palettes_paint_the_same_command_row() {
+    let mut inline = empty_model();
+    let _ = update(&mut inline, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut inline, "settings");
+    let inline = buffer_text(&render_model(&inline, 80, 24));
+
+    let mut centered = empty_model();
+    let _ = update(&mut centered, Message::Input(ctrl(Key::Char('2'))));
+    let _ = update(&mut centered, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut centered, "settings");
+    let centered = buffer_text(&render_model(&centered, 80, 24));
+
+    let command_row = |rendered: &str| {
+        rendered
+            .lines()
+            .find(|line| line.contains("/settings"))
+            .map(str::trim)
+            .expect("settings palette row")
+            .to_owned()
+    };
+    assert_eq!(command_row(&inline), command_row(&centered));
+}

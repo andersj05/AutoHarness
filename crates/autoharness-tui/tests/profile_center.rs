@@ -170,6 +170,11 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
             )
         })
     }));
+    assert!((0..40).any(|row| {
+        (0..120).any(|column| {
+            hit_test(&model, 120, 40, column, row) == Some(MouseAction::CodexLoginCancel)
+        })
+    }));
 
     let effects = update(&mut model, Message::Input(key(Key::Enter)));
     let request_id = match effects.as_slice() {
@@ -306,6 +311,16 @@ fn provider_editor_uses_arrows_instead_of_tab() {
     assert_eq!(render_text(&model, 80, 24), before);
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert!(render_text(&model, 80, 24).contains("> Provider"));
+    for expected in [
+        MouseAction::ProfileEditorSubmit,
+        MouseAction::ProfileEditorCancel,
+    ] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
+    let _ = update(&mut model, Message::Mouse(MouseAction::ProfileEditorCancel));
+    assert!(!render_text(&model, 80, 24).contains("Connect Gemini"));
 }
 #[test]
 fn credential_entry_is_masked_redacted_and_profile_scoped() {

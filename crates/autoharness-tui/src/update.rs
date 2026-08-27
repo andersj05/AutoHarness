@@ -201,6 +201,12 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             Vec::new()
         }
         MouseAction::CodexLogin => begin_codex_login(model),
+        MouseAction::CodexLoginCancel => cancel_codex_login(model),
+        MouseAction::ProfileEditorSubmit => submit_profile_editor(model),
+        MouseAction::ProfileEditorCancel => {
+            close_profile_editor(model);
+            Vec::new()
+        }
         MouseAction::SelectProfile(profile_id) => {
             if model
                 .profiles()
@@ -2267,20 +2273,7 @@ fn handle_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 model.should_quit = true;
                 vec![UiEffect::Quit]
             }
-            Input { key: Key::Esc, .. } => {
-                let login_request = model.pending.iter().find_map(|(request_id, pending)| {
-                    matches!(pending, PendingKind::CodexLogin).then_some(*request_id)
-                });
-                model.profile_center.auth_page = None;
-                model.profile_center.codex_login = CodexLoginState::Idle;
-                model.notice = None;
-                model.dirty = true;
-                login_request.map_or_else(Vec::new, |request_id| {
-                    vec![UiEffect::Dispatch(UiIntent::CancelCodexLogin {
-                        request_id,
-                    })]
-                })
-            }
+            Input { key: Key::Esc, .. } => cancel_codex_login(model),
             Input {
                 key: Key::Enter, ..
             } if !matches!(
@@ -2713,9 +2706,7 @@ fn persist_model_default(model: &mut Model) -> Vec<UiEffect> {
 fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     match input {
         Input { key: Key::Esc, .. } => {
-            model.profile_center.editor = None;
-            model.notice = None;
-            model.dirty = true;
+            close_profile_editor(model);
             Vec::new()
         }
         Input {
@@ -2785,6 +2776,27 @@ fn handle_profile_editor_input(model: &mut Model, input: Input) -> Vec<UiEffect>
         }
         _ => Vec::new(),
     }
+}
+
+fn close_profile_editor(model: &mut Model) {
+    model.profile_center.editor = None;
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn cancel_codex_login(model: &mut Model) -> Vec<UiEffect> {
+    let login_request = model.pending.iter().find_map(|(request_id, pending)| {
+        matches!(pending, PendingKind::CodexLogin).then_some(*request_id)
+    });
+    model.profile_center.auth_page = None;
+    model.profile_center.codex_login = CodexLoginState::Idle;
+    model.notice = None;
+    model.dirty = true;
+    login_request.map_or_else(Vec::new, |request_id| {
+        vec![UiEffect::Dispatch(UiIntent::CancelCodexLogin {
+            request_id,
+        })]
+    })
 }
 
 fn move_profile_editor_field(model: &mut Model, direction: isize) {

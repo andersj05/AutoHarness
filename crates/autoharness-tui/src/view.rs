@@ -2051,13 +2051,37 @@ fn provider_secondary_buttons() -> Vec<Button<MouseAction>> {
 
 fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = codex_auth_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Sign in to Codex ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let can_start = !matches!(
+        model.profile_center.codex_login,
+        crate::model::CodexLoginState::Starting | crate::model::CodexLoginState::BrowserOpened
+    );
+    let mut buttons = Vec::new();
+    if can_start {
+        buttons.push(Button::new(
+            if model.profile_center.codex_login == crate::model::CodexLoginState::Failed {
+                "Retry"
+            } else {
+                "Sign in"
+            },
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::CodexLogin,
+        ));
+    }
+    buttons.push(Button::new(
+        "Cancel",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::CodexLoginCancel,
+    ));
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Sign in to Codex",
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2079,7 +2103,7 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
             "Sign-in did not finish. Press Enter to retry.",
         ),
     };
-    let mut lines = vec![
+    let lines = vec![
         Line::styled(
             "Connect your Codex subscription in your default browser.",
             visual_style(model, VisualRole::User),
@@ -2089,17 +2113,10 @@ fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model)
         Line::styled(status, visual_style(model, VisualRole::Muted)),
         Line::from(""),
         Line::styled(
-            "Enter sign in or retry  Esc cancel",
-            visual_style(model, VisualRole::Muted),
-        ),
-    ];
-    lines.extend([
-        Line::from(""),
-        Line::styled(
             "Sign-in tokens are kept in your operating-system credential vault.",
             visual_style(model, VisualRole::Muted),
         ),
-    ]);
+    ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
@@ -2421,20 +2438,35 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .as_ref()
         .expect("profile editor is open");
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
     let title = match (editor.mode, editor.kind) {
-        (ProfileEditorMode::Create, ProviderKindLabel::CodexCli) => " Connect Codex subscription ",
-        (ProfileEditorMode::Create, ProviderKindLabel::Gemini) => " Connect Gemini ",
-        (ProfileEditorMode::Create, ProviderKindLabel::Router) => " Connect compatible API ",
-        (ProfileEditorMode::Edit, _) => " Edit provider profile ",
-        (ProfileEditorMode::Duplicate, _) => " Duplicate provider profile ",
+        (ProfileEditorMode::Create, ProviderKindLabel::CodexCli) => "Connect Codex subscription",
+        (ProfileEditorMode::Create, ProviderKindLabel::Gemini) => "Connect Gemini",
+        (ProfileEditorMode::Create, ProviderKindLabel::Router) => "Connect compatible API",
+        (ProfileEditorMode::Edit, _) => "Edit provider profile",
+        (ProfileEditorMode::Duplicate, _) => "Duplicate provider profile",
     };
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Save",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::ProfileEditorSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::ProfileEditorCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        title,
+        Some(Icon::RouteProviders),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2464,17 +2496,12 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             style,
         ));
     }
-    lines.push(Line::from(""));
     if editor.mode == ProfileEditorMode::Create && editor.kind == ProviderKindLabel::CodexCli {
+        lines.push(Line::from(""));
         lines.push(Line::styled(
             "Use the Codex provider card instead. AutoHarness opens browser sign-in directly.",
             visual_style(model, VisualRole::Muted),
         ));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "↑/↓ next field  Left/Right provider  Enter save  Esc cancel",
-            visual_style(model, VisualRole::Muted),
-        )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -3207,14 +3234,20 @@ mod tests {
     }
 
     #[test]
-    fn palette_highlights_direct_and_fuzzy_matching_characters() {
+    fn palette_highlights_exact_prefix_substring_and_fuzzy_matches() {
         let settings = COMMANDS
             .iter()
             .find(|command| command.id == "settings")
             .copied()
             .expect("settings command");
-        let direct = palette_highlights(settings, "ting");
-        assert_eq!(direct.identifier, vec![6, 7, 8, 9]);
+        let exact = palette_highlights(settings, "settings");
+        assert_eq!(exact.identifier, (3..11).collect::<Vec<_>>());
+
+        let prefix = palette_highlights(settings, "set");
+        assert_eq!(prefix.identifier, vec![3, 4, 5]);
+
+        let substring = palette_highlights(settings, "ting");
+        assert_eq!(substring.identifier, vec![6, 7, 8, 9]);
 
         let fuzzy = palette_highlights(settings, "setings");
         assert_eq!(fuzzy.identifier, vec![3, 4, 5, 7, 8, 9, 10]);

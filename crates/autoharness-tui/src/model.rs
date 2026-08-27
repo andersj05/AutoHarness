@@ -1121,6 +1121,11 @@ pub enum MouseAction {
     SelectProviderChoice(usize),
     /// Start or retry the visible Codex browser sign-in action.
     CodexLogin,
+    /// Cancel the visible Codex browser sign-in flow.
+    CodexLoginCancel,
+    /// Save or cancel the provider profile editor.
+    ProfileEditorSubmit,
+    ProfileEditorCancel,
     /// Select a connected provider profile.
     SelectProfile(String),
     UserProfileSave,

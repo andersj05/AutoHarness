@@ -6,25 +6,25 @@ use unicode_width::UnicodeWidthStr;
 
 use super::component::{Button, ButtonRow, ButtonVariant, modal_size};
 use super::metrics::{
-    CODEX_ACTION_ROW_OFFSET, CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT,
-    COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT,
-    CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH,
-    INLINE_PALETTE_CHROME_ROWS, INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL,
-    INLINE_PALETTE_MAX_ROWS, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN,
-    PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_MODAL_CHROME_ROWS, PALETTE_MODAL_LIST_TOP_CHROME,
-    PROFILE_COMPACT_WIDTH, PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED,
-    PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
-    PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
-    SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
-    SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE,
-    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
-    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_MAX_HEIGHT, WidthBand,
-    sidebar_width_for, wide_shell, width_band,
+    CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT, COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT,
+    COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT, CONFIRMATION_MAX_HEIGHT,
+    CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH, INLINE_PALETTE_CHROME_ROWS,
+    INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS,
+    MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
+    PALETTE_MODAL_CHROME_ROWS, PALETTE_MODAL_LIST_TOP_CHROME, PROFILE_COMPACT_WIDTH,
+    PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED, PROFILE_LIST_PERCENT,
+    PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH, PROMPT_INSET_MIN_WIDTH, ROW,
+    SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE, SETTINGS_BODY_INSET_X,
+    SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y, SETTINGS_BODY_INSET_Y_TOTAL,
+    SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE, SETTINGS_CATEGORY_RAIL_XS,
+    SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT,
+    STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_MAX_HEIGHT, WidthBand, sidebar_width_for, wide_shell,
+    width_band,
 };
 use crate::model::{
-    CatalogProjection, CommandEntry, Model, MouseAction, OverlayKind, PROVIDER_CHOICES,
-    ProfileCredentialAction, ProviderChoice, ProviderKindLabel, Route, SettingsCategory,
-    SettingsPreference,
+    CatalogProjection, CodexLoginState, CommandEntry, Model, MouseAction, OverlayKind,
+    PROVIDER_CHOICES, ProfileCredentialAction, ProviderChoice, ProviderKindLabel, Route,
+    SettingsCategory, SettingsPreference,
 };
 
 /// Settings tab labels, in the same order as `SettingsTab` indices.
@@ -136,7 +136,11 @@ impl Layout {
             return Frame { regions, hits };
         }
         if model.profile_center.auth_page == Some(ProviderChoice::Codex) {
-            push_codex_login_hit(&mut hits, area);
+            push_codex_login_hits(&mut hits, area, model);
+            return Frame { regions, hits };
+        }
+        if model.profile_center.editor.is_some() {
+            push_profile_editor_hits(&mut hits, area, model);
             return Frame { regions, hits };
         }
         push_shell_hits(&mut hits, &regions, model);
@@ -425,7 +429,9 @@ pub fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
         area.x.saturating_add(INLINE_PALETTE_INSET_X),
         area.bottom()
             .saturating_sub(prompt_height.saturating_add(height)),
-        area.width.saturating_sub(INLINE_PALETTE_INSET_X_TOTAL),
+        area.width
+            .saturating_sub(INLINE_PALETTE_INSET_X_TOTAL)
+            .min(MODAL_MAX_WIDTH),
         height,
     )
 }
@@ -1033,16 +1039,50 @@ fn push_modal_buttons(
     hits.extend(ButtonRow::new(model.theme(), buttons).regions(footer));
 }
 
-fn push_codex_login_hit(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
+fn push_codex_login_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, model: &Model) {
     let popup = codex_auth_rect(area);
-    let action_row = popup.y.saturating_add(CODEX_ACTION_ROW_OFFSET);
-    let width = popup.width.saturating_sub(TWO_ROWS);
-    if width > 0 {
-        hits.push((
-            Rect::new(popup.x.saturating_add(ROW), action_row, width, ROW),
+    let can_start = !matches!(
+        model.profile_center.codex_login,
+        CodexLoginState::Starting | CodexLoginState::BrowserOpened
+    );
+    let mut buttons = Vec::new();
+    if can_start {
+        buttons.push(Button::new(
+            if model.profile_center.codex_login == CodexLoginState::Failed {
+                "Retry"
+            } else {
+                "Sign in"
+            },
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
             MouseAction::CodexLogin,
         ));
     }
+    buttons.push(Button::new(
+        "Cancel",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::CodexLoginCancel,
+    ));
+    push_modal_buttons(hits, popup, model, &buttons);
+}
+
+fn push_profile_editor_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, model: &Model) {
+    let buttons = [
+        Button::new(
+            "Save",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::ProfileEditorSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::ProfileEditorCancel,
+        ),
+    ];
+    push_modal_buttons(hits, popup_rect(area), model, &buttons);
 }
 
 fn push_picker_hits(hits: &mut Vec<(Rect, MouseAction)>, popup: Rect, model: &Model) {
