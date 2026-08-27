@@ -2186,6 +2186,7 @@ pub struct Model {
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
+    pub(crate) last_activity_ms: UiInstant,
     pub(crate) wall_ms: i64,
     pub(crate) color_depth: ColorDepth,
     pub(crate) theme: Theme,
@@ -2200,12 +2201,28 @@ impl Model {
             && matches!(&*self.catalog, CatalogProjection::Loading)
     }
 
+    pub(crate) fn mark_activity(&mut self) {
+        self.last_activity_ms = self.now;
+    }
+
     pub(crate) fn advance_clock(&mut self, clock: UiClock) {
         self.now = clock.now;
         self.wall_ms = clock.wall_ms;
         if clock.now >= STARTUP_ANIMATION_MS {
             self.startup_complete = true;
         }
+    }
+
+    /// Motion sample for the current clock and accessibility flags.
+    #[must_use]
+    pub fn motion(&self) -> crate::ui::Motion {
+        let preferences = self.settings.local_profile.preferences();
+        crate::ui::Motion::new(
+            self.now,
+            self.last_activity_ms,
+            *preferences.reduced_motion().value(),
+            *preferences.glyph_mode().value(),
+        )
     }
 }
 
@@ -2296,6 +2313,7 @@ impl Model {
             catalog_retry_deadline: None,
             next_request_id: 1,
             now: 0,
+            last_activity_ms: 0,
             wall_ms: 0,
             color_depth: ColorDepth::TrueColor,
             theme: Theme::from_preset(ThemePreset::System, ColorMode::Color, ColorDepth::TrueColor),

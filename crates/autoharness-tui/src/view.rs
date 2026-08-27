@@ -53,7 +53,6 @@ enum VisualRole {
 struct Presentation {
     ascii: bool,
     nerd_font: bool,
-    reduced_motion: bool,
     compact: bool,
     single_column: bool,
 }
@@ -69,7 +68,6 @@ fn presentation(model: &Model) -> Presentation {
     Presentation {
         ascii: *preferences.glyph_mode().value() == GlyphMode::Ascii,
         nerd_font: *preferences.glyph_mode().value() == GlyphMode::NerdFont,
-        reduced_motion: *preferences.reduced_motion().value(),
         compact: *preferences.density().value() == Density::Compact,
         single_column: *preferences.layout().value() == PreferenceLayout::SingleColumn,
     }
@@ -3900,40 +3898,11 @@ fn set_palette_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn spinner(model: &Model) -> &'static str {
-    if presentation(model).reduced_motion {
-        return "-";
-    }
-    if presentation(model).ascii {
-        const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-        return FRAMES[usize::try_from((model.now / 100) % 4).unwrap_or(0)];
-    }
-    const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-    FRAMES[usize::try_from((model.now / 100) % 8).unwrap_or(0)]
+    model.motion().pending_glyph()
 }
 
 fn generation_animation(model: &Model) -> &'static str {
-    if presentation(model).reduced_motion {
-        return "[--------]";
-    }
-    const FRAMES: [&str; 16] = [
-        "[>-------]",
-        "[=>------]",
-        "[==>-----]",
-        "[===>----]",
-        "[-===>---]",
-        "[--===>--]",
-        "[---===>-]",
-        "[----===>]",
-        "[----<===]",
-        "[---<===-]",
-        "[--<===--]",
-        "[-<===---]",
-        "[<===----]",
-        "[<==-----]",
-        "[<=------]",
-        "[<-------]",
-    ];
-    FRAMES[usize::try_from((model.now / 100) % 16).unwrap_or(0)]
+    model.motion().generation_scanner()
 }
 
 fn retry_label(model: &Model, attempt_id: &crate::model::AttemptKey, retry: RetryPolicy) -> String {

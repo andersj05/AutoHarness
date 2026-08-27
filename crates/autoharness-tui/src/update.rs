@@ -23,9 +23,16 @@ const MAX_DISPLAY_LABEL_CHARS: usize = 64;
 #[must_use]
 pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
     match message {
-        Message::Input(input) => handle_input(model, input),
-        Message::Mouse(action) => handle_mouse(model, action),
+        Message::Input(input) => {
+            model.mark_activity();
+            handle_input(model, input)
+        }
+        Message::Mouse(action) => {
+            model.mark_activity();
+            handle_mouse(model, action)
+        }
         Message::Paste(text) => {
+            model.mark_activity();
             let text = zeroize::Zeroizing::new(text);
             handle_paste(model, &text);
             Vec::new()
@@ -77,6 +84,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             Vec::new()
         }
         Message::Resize => {
+            model.mark_activity();
             model.dirty = true;
             Vec::new()
         }
