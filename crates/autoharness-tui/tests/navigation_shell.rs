@@ -5,8 +5,8 @@ use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction, OverlayKind,
     PermissionDetailView, PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry,
-    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent,
-    hit_test, update, view,
+    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiClock, UiFailure,
+    UiIntent, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -316,14 +316,14 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     assert!(initial.contains("AutoHarness"));
     assert!(initial.contains("Loading provider models..."));
     assert!(!initial.contains('%'));
-    let _ = update(&mut model, Message::Tick(100));
+    let _ = update(&mut model, Message::Tick(UiClock::new(100, 0)));
     let first = render_text(&model, 80, 24);
-    let _ = update(&mut model, Message::Tick(200));
+    let _ = update(&mut model, Message::Tick(UiClock::new(200, 0)));
     let second = render_text(&model, 80, 24);
     assert!(first.contains("Starting"));
     assert_ne!(first, second);
 
-    let _ = update(&mut model, Message::Tick(400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
     assert!(settled.contains("CONNECTING"));

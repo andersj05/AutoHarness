@@ -1,18 +1,165 @@
- 1. Interview ten customers.
- 2. Price three menu bundles.
- 3. Measure repeat intent.
- 18 input tokens · 41 output tokens
-
- YOU
- What could go wrong?
-
- AUTOHARNESS · retry · failed
- The provider returned \u{1b}[31ma partial answer\u{1b}[0m.
- Error: Capacity is temporarily exhausted; no credentials
- were exposed.
- rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2
- Gemini 2.5 Pro │ auto ○○○○○○ │ ctx <0.1% │ .
- ❯ Retry with a smaller scope.
-   Keep the checklist concise.
- ──────────────────────────────────────────────────────────
- Profile  |  Settings
+# autoharness-tui style snapshot v1
+# 60x18
+@0
+ 1. Interview ten customers.                                
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@1
+ 2. Price three menu bundles.                               
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@2
+ 3. Measure repeat intent.                                  
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@3
+ 18 input tokens · 41 output tokens                         
+ | 0-0 fg=reset bg=reset
+ | 1-34 fg=#64748b bg=reset
+ | 35-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@4
+                                                            
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@5
+ YOU                                                        
+ | 0-0 fg=reset bg=reset
+ | 1-3 fg=#60a5fa bg=reset bold
+ | 4-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@6
+ What could go wrong?                                       
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@7
+                                                            
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@8
+ AUTOHARNESS · retry · failed                               
+ | 0-0 fg=reset bg=reset
+ | 1-28 fg=#fb7185 bg=reset bold
+ | 29-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@9
+ The provider returned \u{1b}[31ma partial answer\u{1b}[0m. 
+ | 0-0 fg=reset bg=reset
+ | 1-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@10
+ Error: Capacity is temporarily exhausted; no credentials   
+ | 0-0 fg=reset bg=reset
+ | 1-56 fg=#fb7185 bg=reset bold
+ | 57-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@11
+ were exposed.                                              
+ | 0-0 fg=reset bg=reset
+ | 1-13 fg=#fb7185 bg=reset bold
+ | 14-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@12
+ rate_limited | Ctrl+R retry | Ctrl+N new | ref attempt-2   
+ | 0-0 fg=reset bg=reset
+ | 1-56 fg=#64748b bg=reset
+ | 57-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@13
+ Gemini 2.5 Pro │ auto ○○○○○○ │ ctx <0.1% │ .               
+ | 0-0 fg=reset bg=reset
+ | 1-14 fg=#2dd4bf bg=reset bold
+ | 15-17 fg=#3cc4f0 bg=reset
+ | 18-22 fg=#60a5fa bg=reset bold
+ | 23-28 fg=#64748b bg=reset
+ | 29-31 fg=#57b6f2 bg=reset
+ | 32-40 fg=#c084fc bg=reset
+ | 41-43 fg=#71a7f5 bg=reset
+ | 44-58 fg=#e2e8f0 bg=reset
+ | 59-59 fg=reset bg=reset
+@14
+ ❯ Retry with a smaller scope.                              
+ | 0-0 fg=reset bg=reset
+ | 1-2 fg=#2dd4bf bg=reset bold
+ | 3-59 fg=reset bg=reset
+@15
+   Keep the checklist concise.                              
+ | 0-0 fg=reset bg=reset
+ | 1-2 fg=#2dd4bf bg=reset bold
+ | 3-29 fg=#e2e8f0 bg=reset
+ | 30-30 fg=#080c18 bg=#a78bfa bold
+ | 31-59 fg=reset bg=reset
+@16
+ ────────────────────────────────────────────────────────── 
+ | 0-0 fg=reset bg=reset
+ | 1-1 fg=#22d3ee bg=reset
+ | 2-2 fg=#24d1ee bg=reset
+ | 3-3 fg=#26d0ee bg=reset
+ | 4-4 fg=#29cfee bg=reset
+ | 5-5 fg=#2bcdee bg=reset
+ | 6-6 fg=#2dccef bg=reset
+ | 7-7 fg=#30cbef bg=reset
+ | 8-8 fg=#32caef bg=reset
+ | 9-9 fg=#34c8ef bg=reset
+ | 10-10 fg=#37c7ef bg=reset
+ | 11-11 fg=#39c6f0 bg=reset
+ | 12-12 fg=#3bc5f0 bg=reset
+ | 13-13 fg=#3ec3f0 bg=reset
+ | 14-14 fg=#40c2f0 bg=reset
+ | 15-15 fg=#42c1f0 bg=reset
+ | 16-16 fg=#45c0f1 bg=reset
+ | 17-17 fg=#47bef1 bg=reset
+ | 18-18 fg=#49bdf1 bg=reset
+ | 19-19 fg=#4cbcf1 bg=reset
+ | 20-20 fg=#4ebbf2 bg=reset
+ | 21-21 fg=#50b9f2 bg=reset
+ | 22-22 fg=#53b8f2 bg=reset
+ | 23-23 fg=#55b7f2 bg=reset
+ | 24-24 fg=#57b5f2 bg=reset
+ | 25-25 fg=#5ab4f3 bg=reset
+ | 26-26 fg=#5cb3f3 bg=reset
+ | 27-27 fg=#5eb2f3 bg=reset
+ | 28-28 fg=#61b0f3 bg=reset
+ | 29-29 fg=#63aff3 bg=reset
+ | 30-30 fg=#65aef4 bg=reset
+ | 31-31 fg=#68adf4 bg=reset
+ | 32-32 fg=#6aabf4 bg=reset
+ | 33-33 fg=#6caaf4 bg=reset
+ | 34-34 fg=#6fa9f4 bg=reset
+ | 35-35 fg=#71a8f5 bg=reset
+ | 36-36 fg=#73a6f5 bg=reset
+ | 37-37 fg=#76a5f5 bg=reset
+ | 38-38 fg=#78a4f5 bg=reset
+ | 39-39 fg=#7aa3f6 bg=reset
+ | 40-40 fg=#7da1f6 bg=reset
+ | 41-41 fg=#7fa0f6 bg=reset
+ | 42-42 fg=#819ff6 bg=reset
+ | 43-43 fg=#849df6 bg=reset
+ | 44-44 fg=#869cf7 bg=reset
+ | 45-45 fg=#889bf7 bg=reset
+ | 46-46 fg=#8b9af7 bg=reset
+ | 47-47 fg=#8d98f7 bg=reset
+ | 48-48 fg=#8f97f7 bg=reset
+ | 49-49 fg=#9296f8 bg=reset
+ | 50-50 fg=#9495f8 bg=reset
+ | 51-51 fg=#9693f8 bg=reset
+ | 52-52 fg=#9992f8 bg=reset
+ | 53-53 fg=#9b91f8 bg=reset
+ | 54-54 fg=#9d90f9 bg=reset
+ | 55-55 fg=#a08ef9 bg=reset
+ | 56-56 fg=#a28df9 bg=reset
+ | 57-57 fg=#a48cf9 bg=reset
+ | 58-58 fg=#a78bfa bg=reset
+ | 59-59 fg=reset bg=reset
+@17
+ Profile  |  Settings                                       
+ | 0-8 fg=#e2e8f0 bg=#080c18
+ | 9-11 fg=#64748b bg=#080c18
+ | 12-21 fg=#e2e8f0 bg=#080c18
+ | 22-59 fg=#e2e8f0 bg=reset

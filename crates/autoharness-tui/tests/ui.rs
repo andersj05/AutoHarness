@@ -6,7 +6,8 @@ use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, MouseAction,
     Notice, PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
     SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, TranscriptItem,
-    UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, hit_test, update, view,
+    UiClock, UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, hit_test,
+    style_snapshot, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -257,7 +258,7 @@ fn snapshot_model() -> Model {
         &mut model,
         Message::Paste("Retry with a smaller scope.\nKeep the checklist concise.".to_owned()),
     );
-    let _ = update(&mut model, Message::Tick(1_400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(1_400, 0)));
     model
 }
 
@@ -372,7 +373,7 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
     );
     assert!(model.cancellation_requested(&attempt));
     assert!(update(&mut model, Message::Input(key_input(Key::Esc))).is_empty());
-    let _ = update(&mut model, Message::Tick(10_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(10_000, 0)));
 
     let failed = TranscriptItem::Assistant {
         attempt_id: attempt.clone(),
@@ -389,12 +390,12 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
         &mut model,
         Message::SessionChanged(session(4, vec![failed.clone()])),
     );
-    let _ = update(&mut model, Message::Tick(14_999));
+    let _ = update(&mut model, Message::Tick(UiClock::new(14_999, 0)));
     assert!(
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty(),
         "retry must wait for the projected deadline"
     );
-    let _ = update(&mut model, Message::Tick(15_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(15_000, 0)));
     let retry = update(&mut model, Message::Input(ctrl(Key::Char('r'))));
     let retry_request = match retry.as_slice() {
         [
@@ -478,9 +479,9 @@ fn catalog_refresh_respects_provider_retry_delay() {
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty(),
         "refresh must wait for Retry-After"
     );
-    let _ = update(&mut model, Message::Tick(4_999));
+    let _ = update(&mut model, Message::Tick(UiClock::new(4_999, 0)));
     assert!(update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty());
-    let _ = update(&mut model, Message::Tick(5_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(5_000, 0)));
 
     assert!(matches!(
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).as_slice(),
@@ -565,7 +566,7 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
         Arc::new(CatalogProjection::CredentialRequired),
     );
     assert!(!model.credential_open());
-    let _ = update(&mut model, Message::Tick(2_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(2_000, 0)));
     for character in "/settings".chars() {
         let _ = update(&mut model, Message::Input(key_input(Key::Char(character))));
     }
@@ -767,6 +768,19 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
 }
 
 #[test]
+fn tick_stores_wall_clock_beside_monotonic_time() {
+    let mut model = empty_model();
+    assert_eq!(model.now(), 0);
+    assert_eq!(model.wall_ms(), 0);
+    let _ = update(
+        &mut model,
+        Message::Tick(UiClock::new(1_400, 1_700_000_000_123)),
+    );
+    assert_eq!(model.now(), 1_400);
+    assert_eq!(model.wall_ms(), 1_700_000_000_123);
+}
+
+#[test]
 fn fixed_size_views_match_reviewed_golden_buffers() {
     let model = snapshot_model();
     let cases = [
@@ -799,7 +813,7 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
 
     for (width, height, path, expected) in cases {
         let backend = render_model(&model, width, height);
-        let actual = buffer_text(&backend);
+        let actual = style_snapshot(backend.buffer());
         if update_goldens {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests")
@@ -892,7 +906,7 @@ fn reduced_motion_freezes_the_generation_scanner() {
     );
 
     let first = buffer_text(&render_model(&model, 80, 24));
-    let _ = update(&mut model, Message::Tick(700));
+    let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
     let later = buffer_text(&render_model(&model, 80, 24));
     assert!(first.contains("[--------] generating"));
     assert_eq!(first, later);

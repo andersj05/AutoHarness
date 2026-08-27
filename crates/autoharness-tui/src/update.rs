@@ -54,9 +54,9 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             apply_notice(model, notice);
             Vec::new()
         }
-        Message::Tick(now) => {
+        Message::Tick(clock) => {
             let was_startup_active = model.startup_active();
-            model.advance_startup(now);
+            model.advance_clock(clock);
             if was_startup_active || model.startup_active() {
                 model.dirty = true;
             }

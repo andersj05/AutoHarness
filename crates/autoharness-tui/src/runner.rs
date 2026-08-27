@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use autoharness_domain::ErrorClass;
 use crossterm::event::{Event, EventStream, KeyEventKind, MouseButton, MouseEventKind};
@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model::{
     CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
-    SessionsProjection, SettingsProjection, UiEffect, UiFailure, UiIntent, UiNotice,
+    SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::{update, view};
 
@@ -225,7 +225,12 @@ where
             }
             _ = ticks.tick() => {
                 let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                let _ = update(&mut model, Message::Tick(elapsed));
+                let wall_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .and_then(|elapsed_wall| i64::try_from(elapsed_wall.as_millis()).ok())
+                    .unwrap_or(0);
+                let _ = update(&mut model, Message::Tick(UiClock::new(elapsed, wall_ms)));
             }
             _ = frames.tick() => {
                 if model.dirty {

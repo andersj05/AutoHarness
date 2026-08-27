@@ -5,7 +5,9 @@ pub mod benchmark;
 
 mod model;
 mod runner;
+mod snapshot;
 mod text;
+mod time;
 mod update;
 mod view;
 
@@ -17,13 +19,15 @@ pub use model::{
     ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
     ProviderProfileProjection, ProviderStatusProjection, RequestId, RetryPolicy, Route,
     SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey,
-    ToolRowView, TranscriptItem, TranscriptState, UiEffect, UiFailure, UiIntent, UiNotice,
+    ToolRowView, TranscriptItem, TranscriptState, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
     UsageView,
 };
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,
     bounded_ports, run,
 };
+pub use snapshot::style_snapshot;
 pub use text::display_safe;
+pub use time::{AgeBucket, RelativeAge, age_bucket, format_relative_age, relative_age};
 pub use update::update;
 pub use view::{hit_test, view};

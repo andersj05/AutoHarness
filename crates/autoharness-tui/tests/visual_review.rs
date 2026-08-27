@@ -8,7 +8,7 @@ use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary,
     PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
     SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
-    TranscriptItem, UiFailure, UiNotice, UsageView, update, view,
+    TranscriptItem, UiClock, UiFailure, UiNotice, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -102,7 +102,7 @@ fn snapshot_model() -> Model {
         &mut model,
         Message::Paste("Retry with smaller scope.".to_owned()),
     );
-    let _ = update(&mut model, Message::Tick(1_400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(1_400, 0)));
     model
 }
 

@@ -396,6 +396,23 @@ impl SessionProjection {
 /// Monotonic milliseconds supplied by the runner or a deterministic test.
 pub type UiInstant = u64;
 
+/// One clock sample published by the runner or a deterministic test.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiClock {
+    /// Monotonic milliseconds since the runner started, used for animation and deadlines.
+    pub now: UiInstant,
+    /// Unix epoch milliseconds, used for relative session timestamps.
+    pub wall_ms: i64,
+}
+
+impl UiClock {
+    /// Creates a clock sample from monotonic and wall-clock milliseconds.
+    #[must_use]
+    pub const fn new(now: UiInstant, wall_ms: i64) -> Self {
+        Self { now, wall_ms }
+    }
+}
+
 /// Current keyboard focus.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Focus {
@@ -1139,8 +1156,8 @@ pub enum Message {
     SettingsChanged(Arc<SettingsProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
-    /// Deterministic monotonic time update.
-    Tick(UiInstant),
+    /// Clock sample with monotonic time for animation and wall time for display.
+    Tick(UiClock),
     /// Terminal resize notification.
     Resize,
     /// Process-level shutdown request.
@@ -1174,7 +1191,7 @@ impl Debug for Message {
                 .field(settings)
                 .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
-            Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
+            Self::Tick(clock) => formatter.debug_tuple("Tick").field(clock).finish(),
             Self::Resize => formatter.write_str("Resize"),
             Self::ShutdownRequested => formatter.write_str("ShutdownRequested"),
         }
@@ -2164,6 +2181,7 @@ pub struct Model {
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
+    pub(crate) wall_ms: i64,
 }
 
 const STARTUP_ANIMATION_MS: UiInstant = 400;
@@ -2175,9 +2193,10 @@ impl Model {
             && matches!(&*self.catalog, CatalogProjection::Loading)
     }
 
-    pub(crate) fn advance_startup(&mut self, now: UiInstant) {
-        self.now = now;
-        if now >= STARTUP_ANIMATION_MS {
+    pub(crate) fn advance_clock(&mut self, clock: UiClock) {
+        self.now = clock.now;
+        self.wall_ms = clock.wall_ms;
+        if clock.now >= STARTUP_ANIMATION_MS {
             self.startup_complete = true;
         }
     }
@@ -2270,6 +2289,7 @@ impl Model {
             catalog_retry_deadline: None,
             next_request_id: 1,
             now: 0,
+            wall_ms: 0,
         };
         model.sync_retry_deadline();
         model.sync_catalog_retry_deadline();
@@ -2677,6 +2697,12 @@ impl Model {
     #[must_use]
     pub const fn now(&self) -> UiInstant {
         self.now
+    }
+
+    /// Returns the current Unix-epoch wall-clock milliseconds.
+    #[must_use]
+    pub const fn wall_ms(&self) -> i64 {
+        self.wall_ms
     }
 
     /// Returns whether the failed catalog may be refreshed under its retry policy.

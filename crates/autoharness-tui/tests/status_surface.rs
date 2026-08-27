@@ -4,7 +4,7 @@ use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Message, Model, ModelSummary, ProviderKindLabel,
     ProviderStatusProjection, RetryPolicy, SessionProjection, SessionsProjection,
-    SettingsProjection, TranscriptItem, UiFailure, update,
+    SettingsProjection, TranscriptItem, UiClock, UiFailure, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -207,7 +207,7 @@ fn active_generation_uses_a_tick_driven_ascii_scanner() {
 
     let first = buffer_text(&render_model(&model, 80, 24));
     assert!(first.contains("[>-------] generating"));
-    let _ = update(&mut model, Message::Tick(700));
+    let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
     let later = buffer_text(&render_model(&model, 80, 24));
     assert!(later.contains("[----===>] generating"));
     assert_ne!(first, later);
