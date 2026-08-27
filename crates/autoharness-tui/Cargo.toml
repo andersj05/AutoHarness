@@ -23,5 +23,8 @@ tokio-util = { version = "0.7.19", features = ["rt"] }
 unicode-width = "0.2"
 zeroize.workspace = true
 
+[dev-dependencies]
+allocation-counter = "0.8.1"
+
 [lints]
 workspace = true
