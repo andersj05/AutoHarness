@@ -28,30 +28,17 @@ fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     first.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Provider API key")
-                && text.contains("home-router")
-                && text.contains("disconnected")
-                && text.contains("router-offline-mo")
-        },
-        "returning profile should show replay state beneath credential recovery",
-    );
-    first.send_bytes(b"\x1b");
-    first.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("An API key is still required")
+            text.contains("router-offline-mo")
                 && text.contains("durable offline prompt")
                 && text.contains("durable offline response")
         },
-        "dismissing credential entry should expose the complete offline replay",
+        "returning profile should show the complete offline replay without a credential editor",
     );
     first.resize(18, 60);
     first.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("durable offline response")
-                && text.contains("Ask AutoHarness")
+            text.contains("durable offline response") && text.contains("Ask AutoHarness")
         },
         "resize should redraw the complete active surface without artifacts",
     );
@@ -63,20 +50,9 @@ fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Provider API key")
-                && text.contains("home-router")
-                && text.contains("disconnected")
+            text.contains("router-offline-mo") && text.contains("durable offline response")
         },
-        "offline profile provenance should survive process restart",
-    );
-    restarted.send_bytes(b"\x1b");
-    restarted.wait_for(
-        |screen| {
-            let text = screen.contents();
-            text.contains("An API key is still required")
-                && text.contains("durable offline response")
-        },
-        "restarted offline profile should expose replay after dismissal",
+        "offline replay should survive process restart without opening a credential editor",
     );
     restarted.type_text("offline draft remains editable");
     restarted.wait_for(

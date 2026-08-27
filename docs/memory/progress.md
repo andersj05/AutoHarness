@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-08-26
+**Last reviewed:** 2026-08-27
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -162,6 +162,8 @@
 - On 2026-08-25, `feat/tui-navigation-audit` removes Tab-driven Settings and provider page switching, uses Down to enter selected Settings content, keeps Up/Down provider and connected-profile selection continuous, adds arrow-selected Codex login actions and profile-editor fields, filters Agents to selectable models, and renders the selected provider account beside safe actions and details.
 - On 2026-08-26, `feat/fix-provider-login` replaces the external Codex CLI dependency with an application-owned PKCE browser flow, operating-system-vault OAuth persistence, refresh support, and a direct bounded Codex Responses adapter under ADR-0015.
 - On 2026-08-26, the Codex adapter sends the current client identity, protocol version, and Responses Lite request shape required by GPT-5.6 models; an opt-in live probe using the stored AutoHarness Codex profile completed `gpt-5.6-luna` with `high` reasoning and exact-response validation.
+- On 2026-08-27, persisted `codex/default` selections resolve to the live-verified `gpt-5.6-luna` fallback, preserving legacy session compatibility without routing an initial request through the unverified Terra model.
+- On 2026-08-27, startup constructs the Codex provider with the active profile's persisted reasoning effort, matching runtime profile rebuilds; an opt-in live request passed with the currently saved profile default configuration.
 - The Codex wizard presents one browser sign-in action, automatically creates or updates and activates the profile after the callback, and the Connected Providers pane distinguishes authentication method, credential location, selected-but-disconnected state, connection state, model, and thinking defaults.
 - A saved Codex profile without a stored login remains an offline recoverable state instead of aborting startup, and ignored Windows PTY regressions verify both that restart path and native browser handoff plus cancellation.
 - Browser-launch feedback remains visible inside the Codex wizard, and distinct Cargo target roots preserve both `autoharness` and `ah` without the duplicate-source warning.

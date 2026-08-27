@@ -160,6 +160,8 @@ pub(crate) struct LaunchResolution {
     pub active_profile: Option<String>,
     /// Provider kind selected by the active profile.
     pub provider_kind: Option<autoharness_settings::ProviderKind>,
+    /// Provider-native reasoning effort selected by the active profile.
+    pub active_profile_reasoning_effort: Option<String>,
     /// Credential bytes when one resolved; empty for session-only launches.
     pub credential: Zeroizing<String>,
     /// Non-secret router connection fields from the active profile.
@@ -204,13 +206,23 @@ fn resolve_launch(store: &ProfileStore, vault: &dyn VaultPort) -> LaunchResoluti
             let resolver = autoharness_app::ProfileCredentialResolver::new(vault)
                 .with_environment(env::vars());
             match resolver.resolve(&settings) {
-                Ok(source) => LaunchResolution {
-                    source: source.source_name(),
-                    active_profile: source.profile_id().map(str::to_owned),
-                    provider_kind: source.provider_kind(),
-                    credential: source.into_credential(),
-                    router: router_fields(&settings),
-                },
+                Ok(source) => {
+                    let active_profile = source.profile_id().map(str::to_owned);
+                    let active_profile_reasoning_effort = active_profile
+                        .as_deref()
+                        .and_then(|id| ProfileId::new(id).ok())
+                        .and_then(|id| settings.profile(&id))
+                        .and_then(ProviderProfile::default_reasoning_effort)
+                        .map(str::to_owned);
+                    LaunchResolution {
+                        source: source.source_name(),
+                        active_profile,
+                        provider_kind: source.provider_kind(),
+                        active_profile_reasoning_effort,
+                        credential: source.into_credential(),
+                        router: router_fields(&settings),
+                    }
+                }
                 Err(_) => session_only_launch(&settings),
             }
         }
@@ -244,6 +256,12 @@ fn session_only_launch(settings: &autoharness_settings::ResolvedSettings) -> Lau
         provider_kind: profile_kind
             .or(settings.provider())
             .or(Some(autoharness_settings::ProviderKind::Gemini)),
+        active_profile_reasoning_effort: settings
+            .active_profile()
+            .and_then(|id| ProfileId::new(id).ok())
+            .and_then(|id| settings.profile(&id))
+            .and_then(ProviderProfile::default_reasoning_effort)
+            .map(str::to_owned),
         credential: Zeroizing::new(String::new()),
         router: router_fields(settings),
     }
@@ -275,6 +293,7 @@ fn environment_launch() -> LaunchResolution {
         },
         active_profile: None,
         provider_kind,
+        active_profile_reasoning_effort: None,
         credential: Zeroizing::new(credential),
         router: None,
     }
@@ -439,11 +458,15 @@ async fn configure_provider(
                         .as_deref()
                         .and_then(|id| ProfileId::new(id).ok())
                         .map(|id| codex_persistence(Arc::clone(&profile_manager), id));
-                    CodexProvider::new(CodexSettings::new()?, &resolved.credential, persistence)
-                        .map(|provider| {
-                            let provider: Arc<dyn Provider> = Arc::new(provider);
-                            managed_provider(provider, Arc::clone(&cache), policy.clone())
-                        })
+                    CodexProvider::new(
+                        codex_settings_for_launch(resolved)?,
+                        &resolved.credential,
+                        persistence,
+                    )
+                    .map(|provider| {
+                        let provider: Arc<dyn Provider> = Arc::new(provider);
+                        managed_provider(provider, Arc::clone(&cache), policy.clone())
+                    })
                 };
                 (initial, factory)
             }
@@ -531,6 +554,10 @@ fn codex_persistence(
     })
 }
 
+fn codex_settings_for_launch(resolved: &LaunchResolution) -> Result<CodexSettings, ProviderError> {
+    CodexSettings::new()?.with_reasoning_effort(resolved.active_profile_reasoning_effort.as_deref())
+}
+
 fn router_settings_for_profile(profile: &ProviderProfile) -> Result<RouterSettings, ProviderError> {
     let invalid = || ProviderError::new(ProviderErrorKind::InvalidRequest, RetryAdvice::Never);
     let url = profile
@@ -587,4 +614,25 @@ fn spawn_signal_handler(shutdown: CancellationToken) -> tokio::task::JoinHandle<
             () = shutdown.cancelled() => {}
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_codex_settings_preserve_the_active_profile_reasoning_effort() {
+        let resolved = LaunchResolution {
+            source: CredentialSourceName::CredentialVault,
+            active_profile: Some("codex-connected".to_owned()),
+            provider_kind: Some(ProviderKind::CodexCli),
+            active_profile_reasoning_effort: Some("high".to_owned()),
+            credential: Zeroizing::new("test-credential".to_owned()),
+            router: None,
+        };
+
+        let settings = codex_settings_for_launch(&resolved).expect("valid Codex settings");
+
+        assert_eq!(settings.reasoning_effort(), Some("high"));
+    }
 }
