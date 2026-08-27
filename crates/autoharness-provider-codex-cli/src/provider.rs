@@ -800,8 +800,7 @@ mod tests {
         let models = codex_models(&provider).expect("static catalog");
         assert_eq!(models.len(), 4);
         assert!(models.iter().all(|model| {
-            model.input_token_limit == Some(1_050_000)
-                && model.output_token_limit == Some(128_000)
+            model.input_token_limit == Some(1_050_000) && model.output_token_limit == Some(128_000)
         }));
     }
 
