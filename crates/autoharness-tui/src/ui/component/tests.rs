@@ -435,4 +435,9 @@ fn whole_word_ellipsis_never_leaks_a_partial_word() {
     assert_eq!(paint::ellipsize_words("alpha beta gamma", 9), "alpha...");
     assert_eq!(paint::ellipsize_words("extraordinary", 8), "...");
     assert_eq!(paint::ellipsize_words("alpha beta", 20), "alpha beta");
+    assert_eq!(
+        paint::ellipsize_words_with("alpha beta gamma", 8, "…"),
+        "alpha…"
+    );
+    assert_eq!(paint::ellipsize_words_with("extraordinary", 1, "…"), "…");
 }

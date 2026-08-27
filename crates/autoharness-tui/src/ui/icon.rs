@@ -171,6 +171,36 @@ impl IconSet {
             " · "
         }
     }
+
+    /// Truncation marker appropriate for the active glyph mode.
+    #[must_use]
+    pub const fn ellipsis(self) -> &'static str {
+        if matches!(self.mode, GlyphMode::Ascii) {
+            "..."
+        } else {
+            "…"
+        }
+    }
+
+    /// Vertical navigation hint appropriate for the active glyph mode.
+    #[must_use]
+    pub const fn vertical_navigation_hint(self) -> &'static str {
+        if matches!(self.mode, GlyphMode::Ascii) {
+            "Up/Down"
+        } else {
+            "↑/↓"
+        }
+    }
+
+    /// Horizontal navigation hint appropriate for the active glyph mode.
+    #[must_use]
+    pub const fn horizontal_navigation_hint(self) -> &'static str {
+        if matches!(self.mode, GlyphMode::Ascii) {
+            "Left/Right"
+        } else {
+            "←/→"
+        }
+    }
 }
 
 /// Box-drawing characters for a panel frame.
@@ -447,6 +477,16 @@ mod tests {
                 "{icon:?} missing from {line}"
             );
         }
+    }
+
+    #[test]
+    fn ascii_ellipsis_stays_ascii() {
+        let ascii = IconSet::resolve(GlyphMode::Ascii);
+        assert_eq!(ascii.ellipsis(), "...");
+        assert_eq!(ascii.vertical_navigation_hint(), "Up/Down");
+        assert_eq!(ascii.horizontal_navigation_hint(), "Left/Right");
+        assert_eq!(IconSet::resolve(GlyphMode::Unicode).ellipsis(), "…");
+        assert_eq!(IconSet::resolve(GlyphMode::NerdFont).ellipsis(), "…");
     }
 
     #[test]

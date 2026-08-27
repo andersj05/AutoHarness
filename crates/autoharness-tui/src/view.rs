@@ -109,11 +109,7 @@ fn selection_marker(model: &Model) -> &'static str {
 }
 
 fn navigation_keys(model: &Model) -> &'static str {
-    if presentation(model).ascii {
-        "Up/Down"
-    } else {
-        "↑/↓"
-    }
+    model.theme().icons().vertical_navigation_hint()
 }
 
 /// Renders the complete terminal client from local state only.
@@ -1596,15 +1592,19 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
+        let vertical = model.theme().icons().vertical_navigation_hint();
+        let horizontal = model.theme().icons().horizontal_navigation_hint();
         let help = if inner.width < PROFILE_HELP_NARROW {
-            format!("↑/↓ choose  Enter open  Esc {return_to}")
+            format!("{vertical} choose  Enter open  Esc {return_to}")
         } else if inner.width < PROFILE_HELP_MEDIUM {
-            format!("↑/↓ choose  ←/→ section  Enter open  Esc {return_to}")
+            format!("{vertical} choose  {horizontal} section  Enter open  Esc {return_to}")
         } else if inner.width < PROFILE_HELP_WIDE {
-            format!("←/→ section  ↑/↓ choose  Enter open  Alt+K sign-in  Esc {return_to}")
+            format!(
+                "{horizontal} section  {vertical} choose  Enter open  Alt+K sign-in  Esc {return_to}"
+            )
         } else {
             format!(
-                "←/→ section  ↑/↓ choose  Enter open  Alt+K sign-in  Alt+T test  Del remove  Esc {return_to}"
+                "{horizontal} section  {vertical} choose  Enter open  Alt+K sign-in  Alt+T test  Del remove  Esc {return_to}"
             )
         };
         frame.render_widget(

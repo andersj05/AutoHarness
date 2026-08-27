@@ -98,16 +98,34 @@ pub fn ellipsize(text: &str, width: u16) -> String {
 /// fit. Palette labels must never imply a partial command or key name.
 #[must_use]
 pub fn ellipsize_words(text: &str, width: u16) -> String {
+    ellipsize_words_with(text, width, "...")
+}
+
+/// Truncates at a whole-word boundary with the caller's glyph-mode ellipsis.
+#[must_use]
+pub fn ellipsize_words_with(text: &str, width: u16, ellipsis: &str) -> String {
     if width == 0 {
         return String::new();
     }
     if u16::try_from(text.width()).unwrap_or(u16::MAX) <= width {
         return text.to_owned();
     }
-    if width <= 3 {
-        return ".".repeat(usize::from(width));
+    let ellipsis_width = ellipsis.width();
+    if usize::from(width) <= ellipsis_width {
+        return ellipsis
+            .chars()
+            .scan(0_usize, |used, character| {
+                let next = used.saturating_add(character.width().unwrap_or(0));
+                if next > usize::from(width) {
+                    None
+                } else {
+                    *used = next;
+                    Some(character)
+                }
+            })
+            .collect();
     }
-    let budget = usize::from(width.saturating_sub(3));
+    let budget = usize::from(width).saturating_sub(ellipsis_width);
     let mut out = String::new();
     let mut used = 0_usize;
     for word in text.split_whitespace() {
@@ -123,7 +141,7 @@ pub fn ellipsize_words(text: &str, width: u16) -> String {
         out.push_str(word);
         used = used.saturating_add(word_width);
     }
-    out.push_str("...");
+    out.push_str(ellipsis);
     out
 }
 

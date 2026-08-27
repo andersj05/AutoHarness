@@ -8,7 +8,7 @@ use super::super::icon::{Icon, IconSet};
 use super::super::metrics::{PANEL_PAD_X, PANEL_PAD_Y, PANEL_PAD_Y_TITLED};
 use super::super::theme::Theme;
 use super::super::tokens::Token;
-use super::paint::{clear_surface, put};
+use super::paint::{clear_surface, ellipsize_words_with, put};
 
 /// Framed panel.
 pub struct Panel<'a> {
@@ -83,12 +83,14 @@ impl<'a> Panel<'a> {
                 ));
                 x = x.saturating_add(put(buf, x, y, 1, " ", self.theme.style(Token::TextPrimary)));
             }
+            let width = area.right().saturating_sub(x.saturating_add(1));
+            let title = ellipsize_words_with(title, width, self.icons.ellipsis());
             put(
                 buf,
                 x,
                 y,
-                area.right().saturating_sub(x.saturating_add(1)),
-                title,
+                width,
+                &title,
                 self.theme.style(Token::TextPrimary),
             );
             y = y.saturating_add(1);
@@ -96,12 +98,14 @@ impl<'a> Panel<'a> {
         if let Some(subtitle) = self.subtitle
             && y < area.bottom().saturating_sub(1)
         {
+            let width = area.width.saturating_sub(2);
+            let subtitle = ellipsize_words_with(subtitle, width, self.icons.ellipsis());
             put(
                 buf,
                 area.x.saturating_add(1),
                 y,
-                area.width.saturating_sub(2),
-                subtitle,
+                width,
+                &subtitle,
                 self.theme.style(Token::TextMuted),
             );
             y = y.saturating_add(1);
@@ -109,12 +113,14 @@ impl<'a> Panel<'a> {
         if let Some(footer) = self.footer
             && area.height > 2
         {
+            let width = area.width.saturating_sub(2);
+            let footer = ellipsize_words_with(footer, width, self.icons.ellipsis());
             put(
                 buf,
                 area.x.saturating_add(1),
                 area.bottom().saturating_sub(2),
-                area.width.saturating_sub(2),
-                footer,
+                width,
+                &footer,
                 self.theme.style(Token::TextMuted),
             );
         }

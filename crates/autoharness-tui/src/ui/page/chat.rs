@@ -143,7 +143,8 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             theme.style(Token::TextPrimary)
         };
-        let label = ellipsize_title(&display_safe(&entry.title), label_width);
+        let label =
+            paint::ellipsize_words_with(&display_safe(&entry.title), label_width, icons.ellipsis());
         paint::put(
             buf,
             inner.x,
@@ -884,7 +885,7 @@ fn render_status(buf: &mut Buffer, area: Rect, model: &Model) {
     let path = if workspace.is_empty() || workspace == "." {
         String::new()
     } else {
-        workspace_display_path(workspace)
+        workspace_display_path(workspace, icons.ellipsis())
     };
     let context = context_label(model);
     let tokens = latest_tokens(model);
@@ -1025,7 +1026,7 @@ fn latest_tokens(model: &Model) -> String {
         .unwrap_or_default()
 }
 
-fn workspace_display_path(workspace: &str) -> String {
+fn workspace_display_path(workspace: &str, ellipsis: &str) -> String {
     let normalized = display_safe(workspace.trim()).replace('\\', "/");
     if normalized.is_empty() || normalized == "." {
         return String::new();
@@ -1051,26 +1052,10 @@ fn workspace_display_path(workspace: &str) -> String {
             format!("~/{}", suffix.join("/"))
         }
     } else if parts.len() > 3 {
-        format!("…/{}", parts[parts.len() - 3..].join("/"))
+        format!("{ellipsis}/{}", parts[parts.len() - 3..].join("/"))
     } else {
         normalized
     }
-}
-
-fn ellipsize_title(value: &str, width: u16) -> String {
-    let width = usize::from(width);
-    if value.chars().count() <= width {
-        return value.to_owned();
-    }
-    if width <= 1 {
-        return "…".chars().take(width).collect();
-    }
-    let mut truncated = value
-        .chars()
-        .take(width.saturating_sub(1))
-        .collect::<String>();
-    truncated.push('…');
-    truncated
 }
 
 fn compact_token_count(tokens: u64) -> String {
