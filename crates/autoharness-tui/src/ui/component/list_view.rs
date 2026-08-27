@@ -7,13 +7,21 @@ use unicode_width::UnicodeWidthStr;
 use super::super::icon::{Icon, IconSet};
 use super::super::theme::Theme;
 use super::super::tokens::Token;
+use super::chip::{Chip, ChipVariant};
 use super::paint::{ellipsize, fill, put, right_align};
+
+/// One semantic badge rendered beside a list label.
+pub struct ListBadge<'a> {
+    pub label: &'a str,
+    pub variant: ChipVariant,
+}
 
 /// One list row.
 pub struct ListItem<'a, A> {
     pub label: &'a str,
     pub metadata: Option<&'a str>,
     pub group: Option<&'a str>,
+    pub badges: &'a [ListBadge<'a>],
     pub action: A,
 }
 
@@ -64,7 +72,13 @@ impl<'a, A: Clone> ListView<'a, A> {
         }
         let mut y = area.y;
         let mut last_group = None;
-        for (index, item) in self.items.iter().enumerate() {
+        let visible = usize::from(area.height);
+        let start = self
+            .selected
+            .saturating_add(1)
+            .saturating_sub(visible)
+            .min(self.items.len().saturating_sub(visible));
+        for (index, item) in self.items.iter().enumerate().skip(start) {
             if y >= area.bottom() {
                 break;
             }
@@ -114,11 +128,33 @@ impl<'a, A: Clone> ListView<'a, A> {
                 .metadata
                 .map(|meta| u16::try_from(meta.width()).unwrap_or(0))
                 .unwrap_or(0);
+            let badge_w = item.badges.iter().fold(0_u16, |width, badge| {
+                let chip = Chip::new(self.theme, badge.label, badge.variant);
+                width
+                    .saturating_add(u16::from(width > 0))
+                    .saturating_add(chip.measure())
+            });
             let label_w = area
                 .right()
                 .saturating_sub(x)
-                .saturating_sub(meta_w.saturating_add(1));
-            put(buf, x, y, label_w, &ellipsize(item.label, label_w), style);
+                .saturating_sub(meta_w.saturating_add(u16::from(meta_w > 0)))
+                .saturating_sub(badge_w.saturating_add(u16::from(badge_w > 0)));
+            let label = ellipsize(item.label, label_w);
+            let label_used = put(buf, x, y, label_w, &label, style);
+            let mut badge_x = x
+                .saturating_add(label_used)
+                .saturating_add(u16::from(badge_w > 0));
+            for badge in item.badges {
+                if badge_x >= area.right().saturating_sub(meta_w) {
+                    break;
+                }
+                let chip = Chip::new(self.theme, badge.label, badge.variant);
+                let width = chip
+                    .measure()
+                    .min(area.right().saturating_sub(meta_w).saturating_sub(badge_x));
+                badge_x = badge_x.saturating_add(chip.render(buf, Rect::new(badge_x, y, width, 1)));
+                badge_x = badge_x.saturating_add(1);
+            }
             if let Some(meta) = item.metadata {
                 put(
                     buf,

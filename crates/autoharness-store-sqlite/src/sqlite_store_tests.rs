@@ -291,6 +291,7 @@ fn append_round_trips_events_inputs_sessions_and_transcript_exactly() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].session_id(), &session);
     assert_eq!(sessions[0].selected_model(), Some(&model()));
+    assert_eq!(sessions[0].message_count(), 1);
     assert_eq!(sessions[0].last_sequence().get(), 3);
     assert_eq!(sessions[0].created_at().get(), 300);
     assert_eq!(sessions[0].updated_at().get(), 100);

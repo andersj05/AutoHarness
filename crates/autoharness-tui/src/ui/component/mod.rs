@@ -25,7 +25,7 @@ pub use callout::Callout;
 pub use chip::{Chip, ChipVariant};
 pub use hero::Hero;
 pub use key_value::{KeyValue, KeyValueTable};
-pub use list_view::{ListItem, ListView};
+pub use list_view::{ListBadge, ListItem, ListView};
 pub use message_block::MessageBlock;
 pub use meter::{Meter, MeterThreshold};
 pub use modal::{Modal, size as modal_size};

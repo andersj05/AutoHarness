@@ -163,12 +163,14 @@ fn every_component_renders_symbols_and_styles_at_reviewed_widths() {
             label: "Cafe launch",
             metadata: Some("2m ago"),
             group: Some("Today"),
+            badges: &[],
             action: 0,
         },
         ListItem {
             label: "Earlier notes",
             metadata: Some("3d ago"),
             group: Some("This week"),
+            badges: &[],
             action: 1,
         },
     ];

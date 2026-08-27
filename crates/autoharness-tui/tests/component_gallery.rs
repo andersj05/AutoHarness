@@ -132,6 +132,7 @@ fn render_component_gallery() {
             label: "Cafe launch",
             metadata: Some("2m ago"),
             group: Some("Today"),
+            badges: &[],
             action: 0,
         }];
         let _ = ListView::new(&theme, icons, &items, 0, "No sessions").render(&mut buf, rect);

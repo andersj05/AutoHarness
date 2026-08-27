@@ -572,6 +572,8 @@ pub struct SessionBrowserEntry {
     pub archived: bool,
     /// Latest selected provider-neutral model identity, when any.
     pub selected_model: Option<ModelRef>,
+    /// Number of provider-neutral transcript messages in durable storage.
+    pub message_count: u64,
     /// Last event's observed time in epoch milliseconds.
     pub updated_at_ms: i64,
     /// Whether this row is the currently active session.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use autoharness_tui::{
     CatalogProjection, Focus, Message, Model, ModelSummary, SessionBrowserEntry, SessionProjection,
-    SessionsProjection, UiEffect, UiIntent, UiNotice, update, view,
+    SessionsProjection, UiClock, UiEffect, UiIntent, UiNotice, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -50,6 +50,7 @@ fn entry(session_id: &str, title: &str, archived: bool, active: bool) -> Session
         title: title.to_owned(),
         archived,
         selected_model: Some(model_ref("models/gemini-2.5-pro")),
+        message_count: 4,
         updated_at_ms: 1_000,
         active,
     }
@@ -126,12 +127,41 @@ fn ctrl_l_opens_browser_and_lists_durable_sessions() {
     let rendered = render_text(&model, 80, 24);
     assert!(rendered.contains("Sessions"));
     assert!(rendered.contains("Deep dive"));
-    assert!(rendered.contains("[active]"));
+    assert!(rendered.contains("active"));
 
     // Escape closes and restores composer focus.
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.browser_open());
     assert_eq!(model.focus, Focus::Composer);
+}
+
+#[test]
+fn sessions_group_real_ages_and_show_durable_details() {
+    const DAY: i64 = 86_400_000;
+    let wall = 20_000 * DAY;
+    let mut today = entry("today", "Today session", false, true);
+    today.updated_at_ms = wall - 2 * 60_000;
+    let mut yesterday = entry("yesterday", "Yesterday session", false, false);
+    yesterday.updated_at_ms = wall - DAY;
+    let mut week = entry("week", "Week session", false, false);
+    week.updated_at_ms = wall - 3 * DAY;
+    let mut older = entry("older", "Older session", true, false);
+    older.updated_at_ms = wall - 8 * DAY;
+    let mut model = Model::new(
+        session("today"),
+        sessions(&[today, yesterday, week, older]),
+        ready_catalog(),
+    );
+    let _ = update(&mut model, Message::Tick(UiClock::new(500, wall)));
+    let _ = update(&mut model, Message::Input(ctrl('l')));
+
+    let rendered = render_text(&model, 120, 40);
+    for group in ["Today", "Yesterday", "This week", "Older"] {
+        assert!(rendered.contains(group), "missing age group {group}");
+    }
+    assert!(rendered.contains("2m ago"));
+    assert!(rendered.contains("Messages"));
+    assert!(rendered.contains("4"));
 }
 
 #[test]

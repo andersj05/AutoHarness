@@ -14,15 +14,18 @@ use crate::model::{
     SettingsPreference,
 };
 use crate::text::display_safe;
+use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
 use crate::ui::component::{
-    KeyValue, KeyValueTable, Provenance, SearchField, SettingKind, SettingRow,
+    Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge, ListItem as PresentationListItem,
+    ListView, Panel, Provenance, SearchField, SettingKind, SettingRow,
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
     CREDENTIAL_COMPACT_WIDTH, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
-    SESSION_HELP_WIDE, SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH,
-    SETTINGS_THEME_PREVIEW_CELLS, SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
+    SESSION_DETAIL_PERCENT, SESSION_HELP_WIDE, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
+    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
+    SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
 };
 use crate::ui::{Icon, Theme, Token, normalized_t};
 
@@ -1200,9 +1203,21 @@ fn session_timestamp_label(model: &Model, updated_at_ms: i64) -> Option<String> 
         .terminal_timestamp_style()
         .value()
     {
-        TerminalTimestampStyle::Relative => Some("updated".to_owned()),
-        TerminalTimestampStyle::Absolute => Some(format!("updated {updated_at_ms}")),
+        TerminalTimestampStyle::Relative => Some(format_relative_age(relative_age(
+            updated_at_ms,
+            model.wall_ms(),
+        ))),
+        TerminalTimestampStyle::Absolute => Some(format!("{updated_at_ms} ms")),
         TerminalTimestampStyle::Hidden => None,
+    }
+}
+
+fn session_age_group(model: &Model, updated_at_ms: i64) -> &'static str {
+    match age_bucket(updated_at_ms, model.wall_ms()) {
+        AgeBucket::Today => "Today",
+        AgeBucket::Yesterday => "Yesterday",
+        AgeBucket::ThisWeek => "This week",
+        AgeBucket::Older => "Older",
     }
 }
 
@@ -1868,41 +1883,43 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 /// Renders the searchable session-browser overlay from local state only.
 fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = area;
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Sessions ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 3);
-    let list_height = inner.height.saturating_sub(search_height + help_height);
-    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
-    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height,
-        inner.width,
-        help_height,
-    );
-
-    let search_line = if model.browser.renaming {
-        format!("Rename: {}", display_safe(&model.browser.rename_buffer))
-    } else {
-        format!("Filter: {}", display_safe(&model.browser.query))
-    };
-    frame.render_widget(
-        Paragraph::new(search_line).style(visual_style(model, VisualRole::Field)),
-        search,
-    );
-
+    let confirmation_armed = model.overlay() == Some(OverlayKind::Confirmation);
+    let help_height = u16::from(inner.height >= PAGE_HELP_MIN && !confirmation_armed);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(ROW),
+            Constraint::Min(ROW),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
     let entries = model.browser_entries();
+    let search_value = if model.browser.renaming {
+        model.browser.rename_buffer.as_str()
+    } else {
+        model.browser.query.as_str()
+    };
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        search_value,
+        search_value.chars().count(),
+        (!model.browser.renaming).then_some(u32::try_from(entries.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), rows[0]);
+
     if entries.is_empty() {
         let empty = if model.sessions.sessions.is_empty() {
             "No durable sessions yet.\nCtrl+N creates and opens the first session."
@@ -1913,77 +1930,204 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Paragraph::new(empty)
                 .style(visual_style(model, VisualRole::Muted))
                 .wrap(Wrap { trim: false }),
-            list,
+            rows[1],
         );
     } else {
-        let selected_index = model
-            .browser
-            .selected
-            .as_ref()
-            .and_then(|selected| {
-                entries
-                    .iter()
-                    .position(|entry| &entry.session_id == selected)
-            })
-            .unwrap_or(0);
-        let visible = usize::from(list.height);
-        let start = selected_index
-            .saturating_add(1)
-            .saturating_sub(visible)
-            .min(entries.len().saturating_sub(visible));
-        let items = entries
-            .iter()
-            .skip(start)
-            .take(visible)
-            .map(|entry| browser_item(entry, model))
-            .collect::<Vec<_>>();
-        frame.render_widget(List::new(items), list);
+        let (list, detail) =
+            if inner.width >= SESSION_TWO_PANE_MIN_WIDTH && !presentation(model).single_column {
+                let columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(SESSION_LIST_PERCENT),
+                        Constraint::Percentage(SESSION_DETAIL_PERCENT),
+                    ])
+                    .split(rows[1]);
+                (columns[0], Some(columns[1]))
+            } else {
+                (rows[1], None)
+            };
+        render_session_list(frame, list, model, &entries);
+        if let Some(detail) = detail {
+            render_session_detail(frame, detail, model, &entries);
+        }
     }
 
-    if help.height > 0 && !model.browser.renaming {
-        let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
-            "[ Y Confirm ]  [ N Cancel ]"
-        } else if help.width >= SESSION_HELP_WIDE {
+    if rows[2].height > 0 && !model.browser.renaming {
+        let hints = if rows[2].width >= SESSION_HELP_WIDE {
             "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
             "[ Open ]  [ Rename ]  [ Delete ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
-            help,
+            rows[2],
         );
     }
 }
 
-fn browser_item(entry: &crate::model::SessionBrowserEntry, model: &Model) -> ListItem<'static> {
+fn render_session_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    entries: &[&crate::model::SessionBrowserEntry],
+) {
     let selected = model
         .browser
         .selected
         .as_ref()
-        .is_some_and(|candidate| candidate == &entry.session_id);
-    let prefix = if selected {
-        selection_marker(model)
-    } else {
-        " "
+        .and_then(|selected| {
+            entries
+                .iter()
+                .position(|entry| &entry.session_id == selected)
+        })
+        .unwrap_or(0);
+    let metadata = entries
+        .iter()
+        .map(|entry| session_timestamp_label(model, entry.updated_at_ms).unwrap_or_default())
+        .collect::<Vec<_>>();
+    let groups = entries
+        .iter()
+        .map(|entry| session_age_group(model, entry.updated_at_ms))
+        .collect::<Vec<_>>();
+    let default_model = model.profiles().user.default_model.as_deref();
+    let badges = entries
+        .iter()
+        .map(|entry| {
+            let mut badges = Vec::new();
+            if entry.active {
+                badges.push(ListBadge {
+                    label: "active",
+                    variant: ChipVariant::Success,
+                });
+            }
+            if entry.archived {
+                badges.push(ListBadge {
+                    label: "archived",
+                    variant: ChipVariant::Muted,
+                });
+            }
+            if entry
+                .selected_model
+                .as_ref()
+                .map(|model| model.model_id().as_str())
+                == default_model
+            {
+                badges.push(ListBadge {
+                    label: "default model",
+                    variant: ChipVariant::Accent,
+                });
+            }
+            badges
+        })
+        .collect::<Vec<_>>();
+    let items = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| PresentationListItem {
+            label: &entry.title,
+            metadata: (!metadata[index].is_empty()).then_some(metadata[index].as_str()),
+            group: Some(groups[index]),
+            badges: badges[index].as_slice(),
+            action: (),
+        })
+        .collect::<Vec<_>>();
+    ListView::new(
+        model.theme(),
+        model.theme().icons(),
+        &items,
+        selected,
+        "No matching sessions",
+    )
+    .render(frame.buffer_mut(), area);
+}
+
+fn render_session_detail(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    entries: &[&crate::model::SessionBrowserEntry],
+) {
+    let inner = Panel::new(
+        model.theme(),
+        model.theme().icons(),
+        Some(Icon::RouteSessions),
+        Some("Session details"),
+        None,
+        None,
+        false,
+    )
+    .render(frame.buffer_mut(), area);
+    let Some(entry) = model.browser.selected.as_ref().and_then(|selected| {
+        entries
+            .iter()
+            .find(|entry| &entry.session_id == selected)
+            .copied()
+    }) else {
+        return;
     };
-    let mut label = format!("{prefix} {}", display_safe(&entry.title));
-    if entry.active {
-        label.push_str("  [active]");
+    let model_label = entry.selected_model.as_ref().map_or_else(
+        || "not selected".to_owned(),
+        |model| {
+            format!(
+                "{}/{}",
+                model.provider_id().as_str(),
+                model.model_id().as_str()
+            )
+        },
+    );
+    let message_count = entry.message_count.to_string();
+    let activity =
+        session_timestamp_label(model, entry.updated_at_ms).unwrap_or_else(|| "hidden".to_owned());
+    let state = if entry.archived { "archived" } else { "active" };
+    let rows = [
+        KeyValue {
+            label: "Title",
+            value: &entry.title,
+            chip: entry.active.then_some("current"),
+        },
+        KeyValue {
+            label: "Model",
+            value: &model_label,
+            chip: None,
+        },
+        KeyValue {
+            label: "Messages",
+            value: &message_count,
+            chip: None,
+        },
+        KeyValue {
+            label: "Last activity",
+            value: &activity,
+            chip: None,
+        },
+        KeyValue {
+            label: "State",
+            value: state,
+            chip: None,
+        },
+    ];
+    KeyValueTable::new(model.theme(), &rows).render(frame.buffer_mut(), inner);
+    let state_chip = Chip::new(
+        model.theme(),
+        state,
+        if entry.archived {
+            ChipVariant::Muted
+        } else {
+            ChipVariant::Success
+        },
+    );
+    let chip_width = state_chip.measure().min(inner.width);
+    if inner.height > 0 {
+        state_chip.render(
+            frame.buffer_mut(),
+            Rect::new(
+                inner.right().saturating_sub(chip_width),
+                inner.bottom().saturating_sub(1),
+                chip_width,
+                ROW,
+            ),
+        );
     }
-    if entry.archived {
-        label.push_str("  [archived]");
-    }
-    if let Some(timestamp) = session_timestamp_label(model, entry.updated_at_ms) {
-        let _ = write!(label, "  [{timestamp}]");
-    }
-    let style = if selected {
-        visual_style(model, VisualRole::Selected)
-    } else if entry.archived {
-        visual_style(model, VisualRole::Muted)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
 }
 
 fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {

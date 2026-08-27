@@ -535,6 +535,7 @@ impl Coordinator {
                 title: summary.display_title(),
                 archived: summary.status() == SessionStatus::Archived,
                 selected_model: summary.selected_model().cloned(),
+                message_count: summary.message_count(),
                 updated_at_ms: summary.updated_at().get(),
                 active: summary.session_id().as_str() == active,
             })

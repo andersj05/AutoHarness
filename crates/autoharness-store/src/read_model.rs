@@ -21,6 +21,7 @@ pub struct SessionSummary {
     status: SessionStatus,
     title: Option<SessionTitle>,
     selected_model: Option<ModelRef>,
+    message_count: u64,
     last_sequence: SessionSequence,
     created_at: TimestampMillis,
     updated_at: TimestampMillis,
@@ -29,11 +30,13 @@ pub struct SessionSummary {
 impl SessionSummary {
     /// Constructs a validated session summary from a store implementation.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         session_id: SessionId,
         status: SessionStatus,
         title: Option<SessionTitle>,
         selected_model: Option<ModelRef>,
+        message_count: u64,
         last_sequence: SessionSequence,
         created_at: TimestampMillis,
         updated_at: TimestampMillis,
@@ -43,6 +46,7 @@ impl SessionSummary {
             status,
             title,
             selected_model,
+            message_count,
             last_sequence,
             created_at,
             updated_at,
@@ -84,6 +88,12 @@ impl SessionSummary {
     #[must_use]
     pub const fn selected_model(&self) -> Option<&ModelRef> {
         self.selected_model.as_ref()
+    }
+
+    /// Returns the number of provider-neutral transcript messages.
+    #[must_use]
+    pub const fn message_count(&self) -> u64 {
+        self.message_count
     }
 
     /// Returns the last authoritative event sequence.

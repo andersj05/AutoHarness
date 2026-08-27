@@ -448,7 +448,8 @@ impl SessionStore for SqliteStore {
                     s.last_sequence, s.created_at_ms, s.updated_at_ms, \
                     (SELECT MIN(e.sequence) FROM session_events AS e WHERE e.session_id = s.session_id), \
                     (SELECT MAX(e.sequence) FROM session_events AS e WHERE e.session_id = s.session_id), \
-                    (SELECT COUNT(*) FROM session_events AS e WHERE e.session_id = s.session_id) \
+                    (SELECT COUNT(*) FROM session_events AS e WHERE e.session_id = s.session_id), \
+                    (SELECT COUNT(*) FROM transcript_messages AS m WHERE m.session_id = s.session_id) \
                  FROM sessions AS s \
                  ORDER BY s.updated_at_ms DESC, s.session_id ASC",
             )
@@ -467,6 +468,7 @@ impl SessionStore for SqliteStore {
                     minimum_event_sequence: row.get(8)?,
                     maximum_event_sequence: row.get(9)?,
                     event_count: row.get(10)?,
+                    message_count: row.get(11)?,
                 })
             })
             .map_err(map_sqlite_error)?;
@@ -1685,6 +1687,7 @@ struct SessionProjectionRow {
     minimum_event_sequence: Option<i64>,
     maximum_event_sequence: Option<i64>,
     event_count: i64,
+    message_count: i64,
 }
 
 impl SessionProjectionRow {
@@ -1713,6 +1716,7 @@ impl SessionProjectionRow {
         };
         let sequence_value = u64::try_from(self.last_sequence).map_err(|_| corrupt())?;
         let last_sequence = SessionSequence::new(sequence_value).map_err(|_| corrupt())?;
+        let message_count = u64::try_from(self.message_count).map_err(|_| corrupt())?;
         if self.minimum_event_sequence != Some(1)
             || self.maximum_event_sequence != Some(self.last_sequence)
             || self.event_count != self.last_sequence
@@ -1724,6 +1728,7 @@ impl SessionProjectionRow {
             status,
             title,
             selected_model,
+            message_count,
             last_sequence,
             TimestampMillis::new(self.created_at_ms),
             TimestampMillis::new(self.updated_at_ms),

@@ -230,6 +230,7 @@ fn render_accessibility_review_matrix() {
             title: "Destructive accessibility review".to_owned(),
             archived: false,
             selected_model: Some(pro_model()),
+            message_count: 6,
             updated_at_ms: 1_700_000_000_000,
             active: false,
         }],

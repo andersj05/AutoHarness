@@ -184,6 +184,12 @@ pub const PROFILE_DETAIL_CHROME_ROWS: u16 = 9;
 
 /// Session action bar uses the long hint at or above this width.
 pub const SESSION_HELP_WIDE: u16 = 50;
+/// Sessions use list and detail panes at the medium breakpoint and above.
+pub const SESSION_TWO_PANE_MIN_WIDTH: u16 = 72;
+/// Session list share in the two-pane workspace.
+pub const SESSION_LIST_PERCENT: u16 = 58;
+/// Session detail share in the two-pane workspace.
+pub const SESSION_DETAIL_PERCENT: u16 = 42;
 /// Session action hits land this many rows above the frame bottom.
 pub const SESSION_ACTION_FROM_BOTTOM: u16 = 2;
 
