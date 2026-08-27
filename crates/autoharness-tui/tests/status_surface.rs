@@ -4,7 +4,7 @@ use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Message, Model, ModelSummary, ProviderKindLabel,
     ProviderStatusProjection, RetryPolicy, SessionProjection, SessionsProjection,
-    SettingsProjection, TranscriptItem, UiClock, UiFailure, update,
+    SettingsProjection, TranscriptItem, UiClock, UiFailure, style_snapshot, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -82,11 +82,13 @@ fn buffer_text(backend: &TestBackend) -> String {
 fn chat_surface_uses_compact_transparent_composer_metadata() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("Gemini 2.5 Pro │ auto ○○○○○○ │ ctx 0% │ ."));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("auto"));
+    assert!(rendered.contains("ctx 0%"));
+    assert!(!rendered.contains("auto ○○○○○○"));
     assert!(!rendered.contains("model:"));
     assert!(!rendered.contains("think:"));
     assert!(!rendered.contains("path:"));
-    assert!(rendered.contains("Profile"));
     assert!(rendered.contains("Settings"));
     assert!(!rendered.contains("AutoHarness  |"));
     assert!(!rendered.contains("state:ready"));
@@ -98,7 +100,10 @@ fn chat_surface_omits_provider_status_chrome() {
     let rendered = buffer_text(&render_model(&model, 120, 40));
     assert!(!rendered.contains("gemini (default)"));
     assert!(!rendered.contains("session only"));
-    assert!(rendered.contains("auto ○○○○○○ │ ctx 0% │ ."));
+    assert!(rendered.contains("auto"));
+    assert!(rendered.contains("ctx 0%"));
+    assert!(!rendered.contains("auto ○○○○○○"));
+    assert!(!rendered.contains(" │ ."));
 }
 
 #[test]
@@ -152,8 +157,8 @@ fn aggregate_usage_appears_in_the_status_surface_after_turns() {
     );
 
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("120 input tokens"));
-    assert!(rendered.contains("340 output tokens"));
+    assert!(rendered.contains("120 in"));
+    assert!(rendered.contains("340 out"));
 }
 
 #[test]
@@ -162,7 +167,8 @@ fn narrow_chat_keeps_prompt_metadata_without_status_header() {
 
     let rendered = buffer_text(&render_model(&model, 40, 12));
     assert!(rendered.contains("Gemini 2.5 Pro"));
-    assert!(rendered.contains("auto ○○○○○○"));
+    assert!(rendered.contains("auto"));
+    assert!(!rendered.contains("auto ○○○○○○"));
     assert!(rendered.contains("0%"));
     assert!(!rendered.contains(" │ ."));
     assert!(!rendered.contains("AutoHarness  |"));
@@ -177,7 +183,9 @@ fn prompt_follows_the_scrollable_conversation_and_stays_at_the_bottom() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 80, 24));
     let prompt = rendered.find("❯").expect("prompt marker");
-    let conversation = rendered.find("GET STARTED").expect("conversation content");
+    let conversation = rendered
+        .find("New conversation")
+        .expect("conversation content");
     assert!(conversation < prompt);
     assert!(
         rendered
@@ -205,12 +213,13 @@ fn active_generation_uses_a_tick_driven_ascii_scanner() {
         catalog_ready(),
     );
 
-    let first = buffer_text(&render_model(&model, 80, 24));
-    assert!(first.contains("[>-------] generating"));
+    let first_backend = render_model(&model, 80, 24);
+    let first = buffer_text(&first_backend);
+    assert!(first.contains("generating") || first.contains("[==>-----]"));
+    let first_style = style_snapshot(first_backend.buffer());
     let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
-    let later = buffer_text(&render_model(&model, 80, 24));
-    assert!(later.contains("[----===>] generating"));
-    assert_ne!(first, later);
+    let later_style = style_snapshot(render_model(&model, 80, 24).buffer());
+    assert_ne!(first_style, later_style);
 }
 
 #[test]

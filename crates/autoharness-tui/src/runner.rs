@@ -435,7 +435,7 @@ mod tests {
         });
         assert!(matches!(
             terminal_message(profile_event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::SettingsTab(2)))
+            Some(Message::Mouse(MouseAction::FocusComposer))
         ));
         let settings_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -445,7 +445,7 @@ mod tests {
         });
         assert!(matches!(
             terminal_message(settings_event, &model, 80, 24),
-            Some(Message::Mouse(MouseAction::SettingsTab(0)))
+            Some(Message::Mouse(MouseAction::FocusComposer))
         ));
     }
 

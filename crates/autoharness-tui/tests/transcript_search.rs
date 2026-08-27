@@ -131,12 +131,12 @@ fn ctrl_f_opens_a_search_bar_that_owns_the_keyboard() {
     assert_eq!(model.focus, Focus::Search);
 
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("Search:"));
+    assert!(rendered.contains("Search"));
 
     let _ = update(&mut model, Message::Input(key_input(Key::Esc)));
     assert!(!model.search_open());
     assert_eq!(model.focus, Focus::Composer);
-    assert!(!buffer_text(&render_model(&model, 80, 24)).contains("Search:"));
+    assert!(!buffer_text(&render_model(&model, 80, 24)).contains("Search"));
 }
 
 #[test]

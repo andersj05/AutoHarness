@@ -244,7 +244,7 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "GET STARTED"),
+        ('1', "New conversation"),
         ('2', "Sessions"),
         ('3', "Providers"),
         ('4', "Settings & Provenance"),
@@ -267,10 +267,10 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                     );
                 }
             }
-            assert!(rendered.contains("Profile"), "profile action missing");
-            assert!(rendered.contains("Settings"), "settings action missing");
             if width >= 100 {
-                assert!(rendered.contains("PROJECTS"), "projects section missing");
+                assert!(rendered.contains("Profiles"), "profiles rail missing");
+                assert!(rendered.contains("Settings"), "settings rail missing");
+                assert!(rendered.contains("Workspace"), "workspace section missing");
                 assert!(!rendered.contains("PREVIOUS SESSIONS"));
             }
         }
@@ -286,15 +286,15 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
-    assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("Provider API key: use /settings"));
+    assert!(offline.contains("Offline"));
+    assert!(offline.contains("/settings"));
 
     let _ = update(
         &mut model,
         Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
     );
     let loading = render_text(&model, 80, 24);
-    assert!(loading.contains("CONNECTING"));
+    assert!(loading.contains("Connecting"));
 
     let _ = update(
         &mut model,
@@ -305,7 +305,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
         )))),
     );
     let failed = render_text(&model, 80, 24);
-    assert!(failed.contains("CONNECTION ERROR"));
+    assert!(failed.contains("Connection error"));
 
     assert!(failed.contains("Ctrl+R retry"));
 }
@@ -326,7 +326,7 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
-    assert!(settled.contains("CONNECTING"));
+    assert!(settled.contains("Connecting"));
     assert!(settled.contains("Loading provider models..."));
 }
 
@@ -340,15 +340,15 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 
     let rendered = render_text(&model, 80, 24);
     assert!(!rendered.contains("Starting"));
-    assert!(rendered.contains("OFFLINE"));
+    assert!(rendered.contains("Offline"));
 }
 
 #[test]
 fn chat_empty_state_explains_the_zero_shell_start_path() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
-    assert!(rendered.contains("GET STARTED"));
-    assert!(rendered.contains("/settings set a provider key"));
+    assert!(rendered.contains("New conversation"));
+    assert!(rendered.contains("Write a prompt below"));
     assert!(!rendered.contains("Conversation"));
 }
 
@@ -487,7 +487,7 @@ fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
     );
     let rendered = render_text(&model, 120, 40);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Profiles"));
     assert!(rendered.contains("Settings"));
     assert!(rendered.contains("…"));
     assert_eq!(
@@ -503,15 +503,10 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("Profile"));
-    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("New conversation"));
     assert_eq!(
         hit_test(&model, 48, 18, 2, 17),
-        Some(MouseAction::SettingsTab(2))
-    );
-    assert_eq!(
-        hit_test(&model, 48, 18, 14, 17),
-        Some(MouseAction::SettingsTab(0))
+        Some(MouseAction::FocusComposer)
     );
 }
 
@@ -563,19 +558,19 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
         hit_test(&model, 120, 40, 2, 1),
-        Some(MouseAction::Route(Route::Sessions))
+        Some(MouseAction::Route(Route::Chat))
     );
     assert_eq!(
         hit_test(&model, 120, 40, 2, 39),
-        Some(MouseAction::SettingsTab(2))
+        Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
         hit_test(&model, 120, 40, 14, 39),
-        Some(MouseAction::SettingsTab(0))
+        Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
         hit_test(&model, 80, 24, 2, 23),
-        Some(MouseAction::SettingsTab(2))
+        Some(MouseAction::FocusComposer)
     );
 }
 

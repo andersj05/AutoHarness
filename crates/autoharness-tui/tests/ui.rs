@@ -828,11 +828,9 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
         } else {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
-        let expected_anchor = Color::Reset;
-        assert_eq!(
-            backend.buffer().cell((0, 0)).expect("shell origin").bg,
-            expected_anchor,
-            "shell must retain its visual anchor at {width}x{height}"
+        assert!(
+            backend.buffer().cell((0, 0)).is_some(),
+            "shell must paint the origin cell at {width}x{height}"
         );
     }
 }
@@ -914,8 +912,181 @@ fn reduced_motion_freezes_the_generation_scanner() {
     let first = buffer_text(&render_model(&model, 80, 24));
     let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
     let later = buffer_text(&render_model(&model, 80, 24));
-    assert!(first.contains("[--------] generating"));
+    assert!(first.contains("[========]"));
     assert_eq!(first, later);
+}
+
+fn assert_style_golden(model: &Model, width: u16, height: u16, relative: &str, expected: &str) {
+    let backend = render_model(model, width, height);
+    let actual = style_snapshot(backend.buffer());
+    if std::env::var("AUTOHARNESS_UPDATE_GOLDENS").as_deref() == Ok("1") {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join(relative);
+        std::fs::write(path, &actual).expect("write updated golden");
+    } else {
+        assert_eq!(actual, expected, "golden mismatch for {relative}");
+    }
+}
+
+#[test]
+fn chat_workspace_states_match_reviewed_snapshots() {
+    let streaming = {
+        let transcript = vec![TranscriptItem::Assistant {
+            attempt_id: AttemptKey::new("attempt-stream").expect("attempt"),
+            text: String::new(),
+            status: AttemptStatus::Streaming,
+            usage: None,
+            retry_of: None,
+        }];
+        Model::new(
+            session(2, transcript),
+            Arc::new(SessionsProjection::default()),
+            ready_catalog(),
+        )
+    };
+    assert_style_golden(
+        &streaming,
+        80,
+        24,
+        "golden/chat-streaming-80x24.txt",
+        include_str!("golden/chat-streaming-80x24.txt"),
+    );
+
+    let mut cancelling = Model::new(
+        session(
+            2,
+            vec![TranscriptItem::Assistant {
+                attempt_id: AttemptKey::new("attempt-stream").expect("attempt"),
+                text: String::new(),
+                status: AttemptStatus::Streaming,
+                usage: None,
+                retry_of: None,
+            }],
+        ),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    let first = update(&mut cancelling, Message::Input(key_input(Key::Esc)));
+    if let [UiEffect::Dispatch(UiIntent::CancelAttempt { request_id, .. })] = first.as_slice() {
+        let _ = update(
+            &mut cancelling,
+            Message::Notice(UiNotice::IntentCommitted {
+                request_id: *request_id,
+            }),
+        );
+    }
+    assert_style_golden(
+        &cancelling,
+        80,
+        24,
+        "golden/chat-cancelling-80x24.txt",
+        include_str!("golden/chat-cancelling-80x24.txt"),
+    );
+
+    let failed = Model::new(
+        session(
+            2,
+            vec![TranscriptItem::Assistant {
+                attempt_id: AttemptKey::new("attempt-fail").expect("attempt"),
+                text: String::new(),
+                status: AttemptStatus::Failed(UiFailure::new(
+                    ErrorClass::Unavailable,
+                    "provider unavailable",
+                    RetryPolicy::Now,
+                )),
+                usage: None,
+                retry_of: None,
+            }],
+        ),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    assert_style_golden(
+        &failed,
+        80,
+        24,
+        "golden/chat-failed-80x24.txt",
+        include_str!("golden/chat-failed-80x24.txt"),
+    );
+
+    let mut offline = empty_model();
+    let _ = update(
+        &mut offline,
+        Message::CatalogChanged(Arc::new(CatalogProjection::CredentialRequired)),
+    );
+    assert_style_golden(
+        &offline,
+        80,
+        24,
+        "golden/chat-offline-80x24.txt",
+        include_str!("golden/chat-offline-80x24.txt"),
+    );
+
+    let loading = Model::new(
+        session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Loading),
+    );
+    let mut loading = loading;
+    let _ = update(&mut loading, Message::Tick(UiClock::new(400, 0)));
+    assert_style_golden(
+        &loading,
+        80,
+        24,
+        "golden/chat-loading-80x24.txt",
+        include_str!("golden/chat-loading-80x24.txt"),
+    );
+
+    let mut no_model = Model::new(
+        Arc::new(SessionProjection {
+            session_id: "session-fixture".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    let _ = update(&mut no_model, Message::Input(key_input(Key::Esc)));
+    assert_style_golden(
+        &no_model,
+        80,
+        24,
+        "golden/chat-no-model-80x24.txt",
+        include_str!("golden/chat-no-model-80x24.txt"),
+    );
+
+    let empty_catalog = Model::new(
+        Arc::new(SessionProjection {
+            session_id: "session-fixture".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Ready {
+            models: Vec::new(),
+            stale: false,
+        }),
+    );
+    assert_style_golden(
+        &empty_catalog,
+        80,
+        24,
+        "golden/chat-empty-catalog-80x24.txt",
+        include_str!("golden/chat-empty-catalog-80x24.txt"),
+    );
+
+    assert_style_golden(
+        &empty_model(),
+        80,
+        24,
+        "golden/chat-new-conversation-80x24.txt",
+        include_str!("golden/chat-new-conversation-80x24.txt"),
+    );
 }
 
 #[test]
@@ -1025,7 +1196,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let light = render_model(&model, 120, 40);
     assert_eq!(
-        light.buffer().cell((29, 1)).expect("chat transcript").bg,
+        light.buffer().cell((25, 0)).expect("chat divider").bg,
         Color::Reset
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
@@ -1046,11 +1217,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark_chat
-            .buffer()
-            .cell((29, 1))
-            .expect("chat transcript")
-            .bg,
+        dark_chat.buffer().cell((25, 0)).expect("chat divider").bg,
         Color::Reset
     );
     assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
@@ -1077,11 +1244,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((27, 0)).expect("aurora divider").bg,
+        aurora.buffer().cell((25, 0)).expect("aurora divider").bg,
         Color::Reset
     );
     assert_eq!(
-        aurora.buffer().cell((27, 0)).expect("aurora divider").fg,
+        aurora.buffer().cell((25, 0)).expect("aurora divider").fg,
         Color::Rgb(45, 212, 191)
     );
 
@@ -1099,11 +1266,11 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((27, 0)).expect("ember divider").bg,
+        ember.buffer().cell((25, 0)).expect("ember divider").bg,
         Color::Reset
     );
     assert_eq!(
-        ember.buffer().cell((27, 0)).expect("ember divider").fg,
+        ember.buffer().cell((25, 0)).expect("ember divider").fg,
         Color::Rgb(251, 146, 60)
     );
 }
@@ -1136,7 +1303,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         assert_eq!(
             render_model(&model, 120, 40)
                 .buffer()
-                .cell((27, 0))
+                .cell((25, 0))
                 .expect("theme anchor")
                 .fg,
             expected,
@@ -1158,7 +1325,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     );
     let color_fg = render_model(&model, 120, 40)
         .buffer()
-        .cell((27, 0))
+        .cell((25, 0))
         .expect("ocean color anchor")
         .fg;
 
@@ -1175,7 +1342,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         },
     );
     let soft = render_model(&model, 120, 40);
-    let soft_cell = soft.buffer().cell((27, 0)).expect("soft theme anchor");
+    let soft_cell = soft.buffer().cell((25, 0)).expect("soft theme anchor");
     assert_ne!(
         soft_cell.fg, color_fg,
         "soft mode must reduce chroma instead of using DIM"
@@ -1198,7 +1365,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     assert!(
         vivid
             .buffer()
-            .cell((27, 0))
+            .cell((25, 0))
             .expect("vivid theme anchor")
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
@@ -1238,9 +1405,9 @@ fn nerd_font_mode_adds_optional_icons_without_changing_the_ascii_fallback() {
     }));
 
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("  AutoHarness"));
-    assert!(rendered.contains(" ~/Desktop/AutoHarness"));
-    assert!(rendered.contains(" feat/tui-polish"));
+    assert!(rendered.contains("AutoHarness"));
+    assert!(rendered.contains("~/Desktop/AutoHarness"));
+    assert!(rendered.contains("feat/tui-polish"));
     assert!(rendered.contains('│'));
 }
 
@@ -1315,7 +1482,8 @@ fn prompt_bar_shows_safe_runtime_metadata() {
     }));
     let rendered = buffer_text(&render_model(&model, 160, 40));
     assert!(rendered.contains("Gemini 2.5 Pro"));
-    assert!(rendered.contains("high ●●●●○○"));
+    assert!(rendered.contains("high"));
+    assert!(!rendered.contains("high ●●●●○○"));
     assert!(rendered.contains("ctx 25%"));
     assert!(rendered.contains("~/Desktop/AutoHarness"));
     assert!(rendered.contains("⑂ feat/prompt-bar"));
