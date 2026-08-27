@@ -1,6 +1,6 @@
 # ADR-0014: Use the official Codex CLI subscription boundary
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0015
 
 **Date:** 2026-08-25
 

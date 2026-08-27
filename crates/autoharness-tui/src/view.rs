@@ -1,33 +1,35 @@
-use std::fmt::Write as _;
-
-use autoharness_settings::{
-    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout as PreferenceLayout,
-    TerminalTimestampStyle, ThemePreset,
-};
+use autoharness_settings::{Source, TerminalTimestampStyle, ThemePreset};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::model::{
-    AgentDefaultStep, AttemptStatus, COMMANDS, CatalogProjection, Focus, Model, ModelSummary,
-    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
-    ProfileConnectionState, ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel,
-    ProviderProfileProjection, RetryPolicy, Route, SettingsPreference, TranscriptItem,
+    COMMANDS, CatalogProjection, MODEL_THINKING_LEVELS, Model, ModelDefaultStep, ModelSummary,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus,
+    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, Route, SettingsCategory,
+    SettingsPreference,
 };
 use crate::text::display_safe;
-
-const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
-    top_left: "+",
-    top_right: "+",
-    bottom_left: "+",
-    bottom_right: "+",
-    vertical_left: "|",
-    vertical_right: "|",
-    horizontal_top: "-",
-    horizontal_bottom: "-",
+use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
+use crate::ui::component::{
+    Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge,
+    ListItem as PresentationListItem, ListView, Modal, ModalIntent, Panel, Provenance, SearchField,
+    SegmentedControl, SettingKind, SettingRow,
 };
+use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
+use crate::ui::metrics::{
+    CREDENTIAL_COMPACT_WIDTH, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN,
+    PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_COLUMN_GAPS, PALETTE_IDENTIFIER_MAX_WIDTH,
+    PALETTE_KEY_MAX_WIDTH, PALETTE_LABEL_MIN_WIDTH, PALETTE_THREE_COLUMN_MIN_WIDTH,
+    PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
+    SESSION_DETAIL_PERCENT, SESSION_HELP_WIDE, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
+    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
+    SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
+};
+use crate::ui::{Icon, Theme, Token, normalized_t};
 
 #[derive(Clone, Copy)]
 enum VisualRole {
@@ -37,350 +39,58 @@ enum VisualRole {
     User,
     Assistant,
     Error,
-    Tool,
     Selected,
     Border,
     Warning,
     Field,
 }
 
-#[derive(Clone, Copy)]
-struct Presentation {
-    color_mode: ColorMode,
-    theme: ThemePreset,
-    ascii: bool,
-    reduced_motion: bool,
-    compact: bool,
-    single_column: bool,
-}
-
-#[derive(Clone, Copy)]
-struct ShellLayout {
-    sidebar: Option<Rect>,
-    content: Rect,
-    footer: Rect,
-}
 fn presentation(model: &Model) -> Presentation {
-    let preferences = model.settings().local_profile.preferences();
-    Presentation {
-        color_mode: *preferences.color_mode().value(),
-        theme: *preferences.theme_preset().value(),
-        ascii: *preferences.glyph_mode().value() == GlyphMode::Ascii,
-        reduced_motion: *preferences.reduced_motion().value(),
-        compact: *preferences.density().value() == Density::Compact,
-        single_column: *preferences.layout().value() == PreferenceLayout::SingleColumn,
-    }
+    ui_layout::presentation(model)
 }
 
-fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
-    let (background, normal, header, selected, user, assistant, error, tool, warning, field) =
-        match theme {
-            ThemePreset::Aurora => (
-                Color::Rgb(4, 15, 30),
-                Color::Rgb(224, 242, 254),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(129, 140, 248),
-                Color::Rgb(56, 189, 248),
-                Color::Rgb(94, 234, 212),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(167, 139, 250),
-                Color::Rgb(250, 204, 21),
-                Color::Rgb(15, 35, 60),
-            ),
-            ThemePreset::Ember => (
-                Color::Rgb(26, 10, 10),
-                Color::Rgb(255, 241, 232),
-                Color::Rgb(251, 146, 60),
-                Color::Rgb(244, 63, 94),
-                Color::Rgb(253, 186, 116),
-                Color::Rgb(251, 191, 36),
-                Color::Rgb(248, 113, 113),
-                Color::Rgb(232, 121, 249),
-                Color::Rgb(251, 146, 60),
-                Color::Rgb(62, 24, 20),
-            ),
-            ThemePreset::Midnight => (
-                Color::Rgb(3, 7, 18),
-                Color::Rgb(226, 232, 240),
-                Color::Rgb(96, 165, 250),
-                Color::Rgb(99, 102, 241),
-                Color::Rgb(147, 197, 253),
-                Color::Rgb(129, 140, 248),
-                Color::Rgb(248, 113, 113),
-                Color::Rgb(192, 132, 252),
-                Color::Rgb(250, 204, 21),
-                Color::Rgb(17, 24, 39),
-            ),
-            ThemePreset::Ocean => (
-                Color::Rgb(2, 20, 32),
-                Color::Rgb(224, 247, 250),
-                Color::Rgb(34, 211, 238),
-                Color::Rgb(14, 165, 233),
-                Color::Rgb(56, 189, 248),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(103, 232, 249),
-                Color::Rgb(253, 224, 71),
-                Color::Rgb(8, 47, 73),
-            ),
-            ThemePreset::Forest => (
-                Color::Rgb(7, 20, 13),
-                Color::Rgb(236, 253, 245),
-                Color::Rgb(74, 222, 128),
-                Color::Rgb(34, 197, 94),
-                Color::Rgb(134, 239, 172),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(163, 230, 53),
-                Color::Rgb(251, 191, 36),
-                Color::Rgb(20, 48, 31),
-            ),
-            ThemePreset::Rose => (
-                Color::Rgb(29, 8, 20),
-                Color::Rgb(255, 241, 246),
-                Color::Rgb(244, 114, 182),
-                Color::Rgb(236, 72, 153),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(232, 121, 249),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(216, 180, 254),
-                Color::Rgb(253, 186, 116),
-                Color::Rgb(66, 20, 45),
-            ),
-            ThemePreset::System | ThemePreset::Light | ThemePreset::Dark => {
-                unreachable!("base themes use dedicated palettes")
-            }
-        };
+fn visual_token(role: VisualRole) -> Token {
     match role {
-        VisualRole::Normal => Style::new().fg(normal).bg(background),
-        VisualRole::Header => Style::new()
-            .fg(Color::Rgb(8, 12, 24))
-            .bg(header)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Selected => Style::new()
-            .fg(Color::Rgb(8, 12, 24))
-            .bg(selected)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Muted | VisualRole::Border => Style::new().fg(Color::Gray).bg(background),
-        VisualRole::User => Style::new()
-            .fg(user)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Assistant => Style::new()
-            .fg(assistant)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Error => Style::new()
-            .fg(error)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Tool => Style::new().fg(tool).bg(background),
-        VisualRole::Warning => Style::new().fg(warning).bg(background),
-        VisualRole::Field => Style::new().fg(Color::White).bg(field),
+        VisualRole::Normal => Token::TextPrimary,
+        VisualRole::Header => Token::Accent,
+        VisualRole::Selected => Token::SurfaceSelected,
+        VisualRole::Muted => Token::TextMuted,
+        VisualRole::User => Token::RoleUser,
+        VisualRole::Assistant => Token::RoleAssistant,
+        VisualRole::Error => Token::Danger,
+        VisualRole::Warning => Token::Warning,
+        VisualRole::Border => Token::BorderSubtle,
+        VisualRole::Field => Token::SurfaceRaised,
     }
 }
 
 fn visual_style(model: &Model, role: VisualRole) -> Style {
-    let presentation = presentation(model);
-    let style = match presentation.color_mode {
-        ColorMode::Color | ColorMode::Soft | ColorMode::Vivid => {
-            let style = match presentation.theme {
-                ThemePreset::System => match role {
-                    VisualRole::Normal => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Header => Style::new()
-                        .fg(Color::Rgb(5, 10, 20))
-                        .bg(Color::Rgb(34, 211, 238))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Selected => Style::new()
-                        .fg(Color::Rgb(8, 12, 24))
-                        .bg(Color::Rgb(167, 139, 250))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => Style::new()
-                        .fg(Color::Rgb(100, 116, 139))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::User => Style::new()
-                        .fg(Color::Rgb(96, 165, 250))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Rgb(45, 212, 191))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Rgb(251, 113, 133))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool => Style::new()
-                        .fg(Color::Rgb(192, 132, 252))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Warning => Style::new()
-                        .fg(Color::Rgb(251, 191, 36))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Field => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(30, 41, 59)),
-                },
-                ThemePreset::Light => match role {
-                    VisualRole::Normal => Style::new().fg(Color::Black).bg(Color::White),
-                    VisualRole::Header | VisualRole::Selected => Style::new()
-                        .fg(Color::White)
-                        .bg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => {
-                        Style::new().fg(Color::DarkGray).bg(Color::White)
-                    }
-                    VisualRole::User => Style::new()
-                        .fg(Color::Blue)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Cyan)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Red)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool | VisualRole::Warning => {
-                        Style::new().fg(Color::Yellow).bg(Color::White)
-                    }
-                    VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
-                },
-                ThemePreset::Dark => match role {
-                    VisualRole::Normal => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Header => Style::new()
-                        .fg(Color::Rgb(5, 10, 20))
-                        .bg(Color::Rgb(34, 211, 238))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Selected => Style::new()
-                        .fg(Color::Rgb(8, 12, 24))
-                        .bg(Color::Rgb(167, 139, 250))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => Style::new()
-                        .fg(Color::Rgb(100, 116, 139))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::User => Style::new()
-                        .fg(Color::Rgb(96, 165, 250))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Rgb(45, 212, 191))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Rgb(251, 113, 133))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool => Style::new()
-                        .fg(Color::Rgb(192, 132, 252))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Warning => Style::new()
-                        .fg(Color::Rgb(251, 191, 36))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Field => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(30, 41, 59)),
-                },
-                ThemePreset::Aurora
-                | ThemePreset::Ember
-                | ThemePreset::Midnight
-                | ThemePreset::Ocean
-                | ThemePreset::Forest
-                | ThemePreset::Rose => extra_theme_style(presentation.theme, role),
-            };
-            match presentation.color_mode {
-                ColorMode::Soft if !matches!(role, VisualRole::Header | VisualRole::Selected) => {
-                    style.add_modifier(Modifier::DIM)
-                }
-                ColorMode::Vivid if !matches!(role, VisualRole::Muted | VisualRole::Border) => {
-                    style.add_modifier(Modifier::BOLD)
-                }
-                _ => style,
-            }
-        }
-        ColorMode::NoColor => match role {
-            VisualRole::Header | VisualRole::Selected | VisualRole::Field => {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            }
-            VisualRole::Muted => Style::default().add_modifier(Modifier::DIM),
-            VisualRole::User | VisualRole::Assistant | VisualRole::Tool | VisualRole::Warning => {
-                Style::default().add_modifier(Modifier::BOLD)
-            }
-            VisualRole::Error => {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            }
-            VisualRole::Normal | VisualRole::Border => Style::default(),
-        },
-        ColorMode::HighContrast => match role {
-            VisualRole::Header | VisualRole::Selected | VisualRole::Field => Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD),
-            VisualRole::Normal | VisualRole::Muted | VisualRole::Border => {
-                Style::default().fg(Color::White).bg(Color::Black)
-            }
-            VisualRole::User | VisualRole::Assistant | VisualRole::Tool => Style::default()
-                .fg(Color::LightCyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-            VisualRole::Error => Style::default()
-                .fg(Color::LightRed)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            VisualRole::Warning => Style::default()
-                .fg(Color::LightYellow)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        },
-    };
-    if matches!(role, VisualRole::Border) {
-        style.bg(Color::Reset)
-    } else {
-        style
+    let theme = model.theme();
+    match role {
+        VisualRole::Header => theme.filled(Token::Accent),
+        other => theme.style(visual_token(other)),
     }
 }
+
 fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
-    visual_style(model, role).bg(Color::Reset)
+    let theme = model.theme();
+    match role {
+        VisualRole::Header => theme.filled(Token::Accent),
+        other => theme.style_transparent(visual_token(other)),
+    }
 }
 
 fn app_block(model: &Model) -> Block<'static> {
-    let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
-    if presentation(model).ascii {
-        block.border_set(ASCII_BORDER)
-    } else {
-        block
-    }
-}
-
-fn chrome_separator(model: &Model) -> &'static str {
-    if presentation(model).ascii {
-        " | "
-    } else {
-        " · "
-    }
+    Block::default().border_set(model.theme().icons().border_set())
 }
 
 fn selection_marker(model: &Model) -> &'static str {
-    if presentation(model).ascii {
-        ">"
-    } else {
-        "›"
-    }
+    model.theme().icons().compact_selection_marker()
 }
 
 fn navigation_keys(model: &Model) -> &'static str {
-    if presentation(model).ascii {
-        "Up/Down"
-    } else {
-        "↑/↓"
-    }
+    model.theme().icons().vertical_navigation_hint()
 }
-
-const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Agents"];
 
 /// Renders the complete terminal client from local state only.
 pub fn view(frame: &mut Frame<'_>, model: &Model) {
@@ -388,21 +98,16 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    let layout = UiLayout::compute(area, model);
     frame.render_widget(Clear, area);
-    let shell = render_shell(frame, area, model);
+    let shell = render_shell(frame, &layout.regions, model);
     let content = shell.content;
     if content.width > 0 && content.height > 0 {
         match model.route() {
-            Route::Chat => {
-                if content.width < 24 || content.height < 7 {
-                    render_compact(frame, content, model);
-                } else {
-                    render_standard(frame, content, model);
-                }
-            }
+            Route::Chat => crate::ui::page::render_chat(frame, &layout.regions, model),
             Route::Sessions => render_browser(frame, content, model),
             Route::Profiles => render_profile_center(frame, content, model),
-            Route::Settings => render_settings(frame, content, model),
+            Route::Settings => render_settings(frame, &layout.regions, model),
             Route::Help => render_help(frame, content, model),
         }
     }
@@ -425,20 +130,14 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::ModelPicker) => render_picker(frame, area, model),
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
         Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
-        Some(OverlayKind::TranscriptSearch | OverlayKind::ProfileCredential) | None => {}
+        Some(OverlayKind::ProfileCredential) => render_profile_credential(frame, area, model),
+        Some(OverlayKind::TranscriptSearch) | None => {}
     }
 }
 
 fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Clear, area);
-    let width = area.width.clamp(28, 48);
-    let height = area.height.clamp(4, 5);
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = ui_layout::startup_rect(area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" AutoHarness ")
@@ -468,8 +167,7 @@ fn render_startup(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 /// Resolves a left-click coordinate against the currently visible controls.
 ///
-/// Hit testing is derived from the same responsive layout thresholds as the
-/// renderer and returns semantic actions for the deterministic update layer.
+/// Hit testing reverse-scans the paint-order regions produced by `Layout::compute`.
 pub fn hit_test(
     model: &Model,
     width: u16,
@@ -477,452 +175,20 @@ pub fn hit_test(
     column: u16,
     row: u16,
 ) -> Option<MouseAction> {
-    if model.startup_active() {
-        return None;
-    }
-    let area = Rect::new(0, 0, width, height);
-    if model.overlay() == Some(OverlayKind::UserProfile) {
-        let popup = user_profile_rect(area);
-        let button_row = popup.y.saturating_add(10);
-        if button_row < popup.bottom() && row == button_row {
-            return (column < popup.x + popup.width / 2)
-                .then_some(MouseAction::UserProfileSave)
-                .or(Some(MouseAction::UserProfileCancel));
-        }
-        return None;
-    }
-    if model.overlay() == Some(OverlayKind::Confirmation) {
-        let popup = confirmation_rect(area);
-        if row == popup.bottom().saturating_sub(2) {
-            return (column < popup.x + popup.width / 2)
-                .then_some(MouseAction::Confirm)
-                .or(Some(MouseAction::Cancel));
-        }
-        return None;
-    }
-    if model.overlay() == Some(OverlayKind::ModelPicker) {
-        return picker_mouse_target(area, model, row);
-    }
-    if model.overlay() == Some(OverlayKind::CommandPalette) {
-        if model.route() == Route::Chat {
-            let content = shell_layout(area, model).content;
-            return inline_palette_mouse_target(content, model, column, row);
-        }
-        return palette_mouse_target(area, model, row);
-    }
-    if model.overlay() == Some(OverlayKind::SessionCredential) {
-        return modal_button_target(
-            credential_rect(area),
-            row,
-            column,
-            MouseAction::CredentialSubmit,
-            MouseAction::CredentialCancel,
-        );
-    }
-    if model.overlay() == Some(OverlayKind::ProfileCredential) {
-        return modal_button_target(
-            popup_rect(area),
-            row,
-            column,
-            MouseAction::ProfileCredentialSubmit,
-            MouseAction::ProfileCredentialCancel,
-        );
-    }
-    if model.overlay() == Some(OverlayKind::Permission) {
-        return modal_button_target(
-            credential_rect(area),
-            row,
-            column,
-            MouseAction::PermissionAllow,
-            MouseAction::PermissionDeny,
-        );
-    }
-    let layout = shell_layout(area, model);
-    if let Some(sidebar) = layout.sidebar {
-        if column < sidebar.right() {
-            let footer_row = sidebar.bottom().saturating_sub(2);
-            if row == footer_row {
-                return shell_footer_action(column.saturating_sub(sidebar.x));
-            }
-            let sessions_start = sidebar.y.saturating_add(1);
-            let session_count = model
-                .sessions
-                .sessions
-                .len()
-                .min(sidebar_session_limit(sidebar));
-            let sessions_end =
-                sessions_start.saturating_add(u16::try_from(session_count).unwrap_or(u16::MAX));
-            if row >= sessions_start && row < sessions_end {
-                return Some(MouseAction::Route(Route::Sessions));
-            }
-            return None;
-        }
-    } else if row == layout.footer.y {
-        return shell_footer_action(column);
-    }
-    let content = layout.content;
-    if model.route() == Route::Settings && row == content.y.saturating_add(1) {
-        return settings_nav_action(content, column);
-    }
-    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 1 {
-        let profile_area = settings_body_area(content);
-        if profile_local_hit_row(profile_area, model)
-            .is_some_and(|local| local.contains(Position::new(column, row)))
-        {
-            return Some(MouseAction::OpenUserProfile);
-        }
-        if let Some(action) = provider_choice_at_row(model, profile_area, column, row) {
-            return Some(action);
-        }
-        if profile_detail_button_rows(model, profile_area).is_some_and(|(first, _)| row == first) {
-            return profile_detail_action_at_column(model, profile_area, column, false);
-        }
-        if profile_detail_button_rows(model, profile_area).is_some_and(|(_, second)| row == second)
-        {
-            return profile_detail_action_at_column(model, profile_area, column, true);
-        }
-        if row == profile_area.bottom().saturating_sub(2) {
-            return profile_action_at_column(column.saturating_sub(profile_area.x));
-        }
-        return profile_at_row(model, profile_area, column, row);
-    }
-    if model.route() == Route::Settings && model.settings_workspace.nav_selected == 2 {
-        let profile_area = settings_body_area(content);
-        if profile_area.contains(Position::new(column, row)) {
-            return Some(MouseAction::OpenUserProfile);
-        }
-    }
-    match model.route() {
-        Route::Sessions if row == height.saturating_sub(2) => {
-            let relative_column = column.saturating_sub(content.x);
-            if relative_column < 18 {
-                Some(MouseAction::SessionOpen)
-            } else if relative_column < 38 {
-                Some(MouseAction::SessionRename)
-            } else if relative_column < 58 {
-                Some(MouseAction::SessionArchive)
-            } else {
-                Some(MouseAction::SessionDelete)
-            }
-        }
-        Route::Profiles
-            if profile_local_hit_row(content, model)
-                .is_some_and(|local| local.contains(Position::new(column, row))) =>
-        {
-            Some(MouseAction::OpenUserProfile)
-        }
-        Route::Profiles if provider_choice_at_row(model, content, column, row).is_some() => {
-            provider_choice_at_row(model, content, column, row)
-        }
-        Route::Profiles
-            if profile_detail_button_rows(model, content)
-                .is_some_and(|(first, _)| row == first) =>
-        {
-            profile_detail_action_at_column(model, content, column, false)
-        }
-        Route::Profiles
-            if profile_detail_button_rows(model, content)
-                .is_some_and(|(_, second)| row == second) =>
-        {
-            profile_detail_action_at_column(model, content, column, true)
-        }
-        Route::Profiles if row == height.saturating_sub(2) => {
-            profile_action_at_column(column.saturating_sub(content.x))
-        }
-        Route::Profiles => profile_at_row(model, content, column, row),
-        _ => None,
-    }
+    UiLayout::compute(Rect::new(0, 0, width, height), model).hit_at(column, row)
 }
 
-fn profile_local_hit_row(area: Rect, model: &Model) -> Option<Rect> {
-    let _ = (area, model);
-    None
-}
-
-fn profile_center_content_area(model: &Model, area: Rect) -> Rect {
-    let inner = area;
-    let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let header_height = if inner.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(inner.height >= 4);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(notice_height),
-            Constraint::Length(help_height),
-        ])
-        .split(inner);
-    rows[1]
-}
-
-fn profile_list_inner_rect(model: &Model, area: Rect) -> Option<Rect> {
-    let content = profile_center_content_area(model, area);
-    let (list_area, _) = profile_list_detail_areas(content, model);
-    Some(
-        Block::default()
-            .border_set(ratatui::symbols::border::ROUNDED)
-            .borders(Borders::ALL)
-            .inner(list_area),
-    )
-}
-
-fn profile_detail_area(model: &Model, area: Rect) -> Option<Rect> {
-    let content = profile_center_content_area(model, area);
-    profile_list_detail_areas(content, model).1
-}
-
-fn profile_detail_action_at_column(
+fn render_shell(
+    frame: &mut Frame<'_>,
+    regions: &ui_layout::NamedRects,
     model: &Model,
-    area: Rect,
-    column: u16,
-    secondary: bool,
-) -> Option<MouseAction> {
-    let detail = profile_detail_area(model, area)?;
-    let relative = column.saturating_sub(detail.x.saturating_add(1));
-    if secondary {
-        profile_secondary_action_at_column(relative)
-    } else {
-        profile_action_at_column(relative)
+) -> ui_layout::NamedRects {
+    if let Some(sidebar) = regions.sidebar {
+        crate::ui::page::render_rail(frame, sidebar, model);
+    } else if regions.footer.height > 0 {
+        render_shell_footer(frame, regions.footer, model);
     }
-}
-
-fn profile_detail_button_rows(model: &Model, area: Rect) -> Option<(u16, u16)> {
-    let selected = model.selected_profile()?;
-    let detail = profile_detail_area(model, area)?;
-    let mut lines = u16::try_from(model.filtered_profiles().count())
-        .unwrap_or(u16::MAX)
-        .saturating_add(9);
-    if selected.kind == ProviderKindLabel::Router {
-        lines = lines.saturating_add(1);
-        if !selected.project.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-        if !selected.auth_header.is_empty() {
-            lines = lines.saturating_add(1);
-        }
-    }
-    if matches!(selected.connection, ProfileConnectionState::Failed(_)) {
-        lines = lines.saturating_add(1);
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines = lines.saturating_add(1);
-    }
-    let first = detail
-        .y
-        .saturating_add(1)
-        .saturating_add(lines)
-        .saturating_add(1);
-    Some((first, first.saturating_add(1)))
-}
-
-fn provider_choice_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    let list = profile_list_inner_rect(model, area)?;
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let selected = model
-        .profile_center
-        .choice_selected
-        .min(PROVIDER_CHOICES.len().saturating_sub(1));
-    let index = usize::from(row.saturating_sub(list.y)).saturating_add(usize::from(
-        profile_list_scroll(selected, PROVIDER_CHOICES.len(), list.height),
-    ));
-    (index < PROVIDER_CHOICES.len()).then_some(MouseAction::SelectProviderChoice(index))
-}
-
-fn profile_at_row(model: &Model, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
-    let list = Block::default()
-        .border_set(ratatui::symbols::border::ROUNDED)
-        .borders(Borders::ALL)
-        .inner(profile_detail_area(model, area)?);
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let profiles = model.filtered_profiles().collect::<Vec<_>>();
-    let index = usize::from(row.saturating_sub(list.y));
-    profiles
-        .get(index)
-        .map(|profile| MouseAction::SelectProfile(profile.id.clone()))
-}
-
-fn picker_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
-    let popup = popup_rect(area);
-    let inner_height = popup.height.saturating_sub(2);
-    let stale_height = u16::from(
-        matches!(
-            &*model.catalog,
-            CatalogProjection::Ready { stale: true, .. }
-        ) && inner_height >= 3,
-    );
-    let help_height = u16::from(inner_height >= 4);
-    let list_height = inner_height.saturating_sub(1 + stale_height + help_height);
-    let list_start = popup.y.saturating_add(2);
-    if row < list_start || row >= list_start.saturating_add(list_height) {
-        return None;
-    }
-    let models = filtered_models(model);
-    let selected_index = model
-        .picker
-        .selected
-        .as_ref()
-        .and_then(|selected| models.iter().position(|summary| &summary.model == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list_height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(models.len().saturating_sub(visible));
-    models
-        .get(start + usize::from(row - list_start))
-        .map(|summary| MouseAction::PickerSelect(summary.model.clone()))
-}
-fn modal_button_target(
-    popup: Rect,
-    row: u16,
-    column: u16,
-    primary: MouseAction,
-    secondary: MouseAction,
-) -> Option<MouseAction> {
-    let action_row = popup.bottom().saturating_sub(2);
-    if row != action_row {
-        return None;
-    }
-    if column < popup.x + popup.width / 2 {
-        Some(primary)
-    } else {
-        Some(secondary)
-    }
-}
-
-fn inline_palette_mouse_target(
-    area: Rect,
-    model: &Model,
-    column: u16,
-    row: u16,
-) -> Option<MouseAction> {
-    let list = inline_palette_rect(area, model);
-    if !list.contains(Position::new(column, row)) {
-        return None;
-    }
-    let entries = model.palette_entries();
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list.height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    entries
-        .get(start + usize::from(row.saturating_sub(list.y)))
-        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
-}
-
-fn palette_mouse_target(area: Rect, model: &Model, row: u16) -> Option<MouseAction> {
-    let popup = popup_rect(area);
-    let inner_height = popup.height.saturating_sub(2);
-    let help_height = u16::from(inner_height >= 3);
-    let list_height = inner_height.saturating_sub(1 + help_height);
-    let list_start = popup.y.saturating_add(2);
-    if row < list_start || row >= list_start.saturating_add(list_height) {
-        return None;
-    }
-    let entries = model.palette_entries();
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list_height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    entries
-        .get(start + usize::from(row - list_start))
-        .map(|entry| MouseAction::PaletteRun(entry.id.to_owned()))
-}
-fn profile_action_at_column(column: u16) -> Option<MouseAction> {
-    match column {
-        0..=6 => Some(MouseAction::ProfileNew),
-        8..=14 => Some(MouseAction::ProfileCredential),
-        16..=22 => Some(MouseAction::ProfileTest),
-        24..=34 => Some(MouseAction::ProfileDefaultModel),
-        _ => None,
-    }
-}
-
-fn profile_secondary_action_at_column(column: u16) -> Option<MouseAction> {
-    match column {
-        0..=13 => Some(MouseAction::ProfileDisconnect),
-        15..=24 => Some(MouseAction::ProfileDelete),
-        _ => None,
-    }
-}
-
-fn settings_nav_action(area: Rect, column: u16) -> Option<MouseAction> {
-    let mut offset = area.x;
-    for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        let width = u16::try_from(label.len().saturating_add(2)).unwrap_or(u16::MAX);
-        if column >= offset && column < offset.saturating_add(width) {
-            return Some(MouseAction::SettingsTab(index));
-        }
-        offset = offset.saturating_add(width).saturating_add(2);
-    }
-    None
-}
-
-fn render_shell(frame: &mut Frame<'_>, area: Rect, model: &Model) -> ShellLayout {
-    let layout = shell_layout(area, model);
-    if let Some(sidebar) = layout.sidebar {
-        render_navigation_rail(frame, sidebar, model);
-    } else {
-        render_shell_footer(frame, layout.footer, model);
-    }
-    layout
-}
-
-fn shell_footer_action(column: u16) -> Option<MouseAction> {
-    if column < 10 {
-        Some(MouseAction::SettingsTab(2))
-    } else if column < 22 {
-        Some(MouseAction::SettingsTab(0))
-    } else {
-        None
-    }
-}
-
-fn shell_layout(area: Rect, model: &Model) -> ShellLayout {
-    let wide = !presentation(model).single_column && area.width >= 100 && area.height >= 16;
-    if wide {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(1)])
-            .split(area);
-        ShellLayout {
-            sidebar: Some(columns[0]),
-            content: columns[1],
-            footer: Rect::default(),
-        }
-    } else {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(area);
-        ShellLayout {
-            sidebar: None,
-            content: rows[0],
-            footer: rows[1],
-        }
-    }
+    *regions
 }
 
 fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -951,142 +217,23 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         area,
     );
 }
-fn sidebar_session_limit(area: Rect) -> usize {
-    let inner_height = area.height.saturating_sub(2);
-    usize::from(inner_height.saturating_sub(4)).max(1)
-}
-
-fn single_line_label(value: &str, width: u16) -> String {
-    let safe = display_safe(value);
-    let width = usize::from(width);
-    if safe.chars().count() <= width {
-        return safe;
-    }
-    if width <= 1 {
-        return "…".chars().take(width).collect();
-    }
-    let mut truncated = safe.chars().take(width - 1).collect::<String>();
-    truncated.push('…');
-    truncated
-}
-
-fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" AutoHarness ")
-        .title_style(visual_style(model, VisualRole::Header))
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    let footer_height = u16::from(inner.height >= 2);
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
-        .split(inner);
-    let content = sections[0];
-    let mut lines = Vec::new();
-    let session_limit = sidebar_session_limit(area);
-    let session_width = content.width.saturating_sub(4);
-    for entry in model.sessions.sessions.iter().take(session_limit) {
-        let marker = if entry.active || entry.session_id == model.session.session_id {
-            selection_marker(model)
-        } else {
-            " "
-        };
-        let style = if entry.active || entry.session_id == model.session.session_id {
-            visual_style(model, VisualRole::Selected)
-        } else {
-            visual_style(model, VisualRole::Normal)
-        };
-        lines.push(Line::styled(
-            format!(
-                " {marker} {}",
-                single_line_label(&entry.title, session_width)
-            ),
-            style,
-        ));
-    }
-    if model.sessions.sessions.is_empty() {
-        lines.push(Line::styled(
-            " No sessions yet",
-            visual_style(model, VisualRole::Muted),
-        ));
-    }
-    lines.extend([
-        Line::from(""),
-        Line::styled("PROJECTS", visual_style(model, VisualRole::Muted)),
-        Line::styled(
-            format!(" {} ", workspace_label(&model.profiles().user.workspace)),
-            visual_style(model, VisualRole::Normal),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(lines), content);
-    if footer_height > 0 {
-        render_shell_footer(frame, sections[1], model);
-    }
-}
-
-fn active_session_title(model: &Model) -> Option<String> {
-    model
-        .sessions
-        .sessions
-        .iter()
-        .find(|entry| entry.active || entry.session_id == model.session.session_id)
-        .map(|entry| display_safe(&entry.title))
-}
-
-fn conversation_title(model: &Model) -> String {
-    active_session_title(model).map_or_else(
-        || " Conversation ".to_owned(),
-        |title| format!(" Conversation{}{} ", chrome_separator(model), title),
-    )
-}
-
-fn onboarding_step(model: &Model) -> (&'static str, &'static str) {
-    if model.session.selected_model.is_none() {
-        ("NEXT", "/models choose a model")
-    } else if model.settings().provider_status.credential_connected {
-        ("READY", "Write a prompt below")
-    } else {
-        ("NEXT", "/settings set a provider key")
-    }
-}
-
-fn render_onboarding(lines: &mut Vec<Line<'static>>, model: &Model) {
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "GET STARTED",
-        visual_style(model, VisualRole::User),
-    ));
-    lines.push(Line::from("1  /settings connect a provider key"));
-    lines.push(Line::from("2  /models choose a compatible model"));
-    let (label, action) = onboarding_step(model);
-    lines.push(Line::styled(
-        format!("3  {label} · {action}"),
-        visual_style(model, VisualRole::Assistant),
-    ));
-}
 
 fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let confirmation = if let Some(session_id) = &model.browser.confirming_archive {
         Some((
-            " Archive session ",
+            "Archive session",
             format!("Archive session '{}'?", display_safe(session_id)),
             "The session remains durable and can be unarchived.",
         ))
     } else if let Some(session_id) = &model.browser.confirming_delete {
         Some((
-            " Delete session ",
+            "Delete session",
             format!("Permanently delete session '{}'?", display_safe(session_id)),
             "A complete provider-neutral archive is written before deletion.",
         ))
     } else if let Some(profile_id) = &model.profile_center.confirming_disconnect {
         Some((
-            " Disconnect credential ",
+            "Disconnect credential",
             format!(
                 "Disconnect the stored credential for '{}'?",
                 display_safe(profile_id)
@@ -1100,7 +247,7 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .as_ref()
             .map(|profile_id| {
                 (
-                    " Delete provider profile ",
+                    "Delete provider profile",
                     format!(
                         "Delete profile '{}' and its stored credential?",
                         display_safe(profile_id)
@@ -1113,13 +260,29 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     };
     let popup = confirmation_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(visual_style(model, VisualRole::Error));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Cancel",
+            Some("N/Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::Cancel,
+        ),
+        Button::new(
+            "Confirm",
+            Some("Y".to_owned()),
+            ButtonVariant::Danger,
+            MouseAction::Confirm,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        title,
+        Some(Icon::Danger),
+        &buttons,
+    )
+    .intent(ModalIntent::Danger)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -1127,24 +290,34 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Line::styled(question, visual_style(model, VisualRole::User)),
         Line::from(""),
         Line::styled(consequence, visual_style(model, VisualRole::Warning)),
-        Line::from(""),
-        Line::styled(
-            "Y confirm  N or Esc cancel",
-            visual_style(model, VisualRole::Assistant),
-        ),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = user_profile_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" User profile ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Save",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::UserProfileSave,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::UserProfileCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "User profile",
+        Some(Icon::User),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -1176,12 +349,6 @@ fn render_user_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         detail_line(model, "Provider", default_profile),
         detail_line(model, "Model", default_model),
         detail_line(model, "Thinking", default_mode),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("[ Save ]", visual_style(model, VisualRole::Selected)),
-            Span::raw("  "),
-            Span::styled("[ Cancel ]", visual_style(model, VisualRole::Field)),
-        ]),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -1194,175 +361,374 @@ fn workspace_label(workspace: &str) -> String {
 }
 
 fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
-    let height = u16::try_from(model.palette_entries().len())
-        .unwrap_or(u16::MAX)
-        .min(8)
-        .min(area.height.saturating_sub(5));
-    Rect::new(
-        area.x.saturating_add(1),
-        area.bottom().saturating_sub(height.saturating_add(4)),
-        area.width.saturating_sub(2),
-        height,
-    )
+    ui_layout::inline_palette_rect(area, model)
 }
 
 fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let list = inline_palette_rect(area, model);
-    if list.width == 0 || list.height == 0 {
+    let panel = inline_palette_rect(area, model);
+    if panel.width == 0 || panel.height == 0 {
         return;
     }
-    frame.render_widget(Clear, list);
-    let entries = model.palette_entries();
-    if entries.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No matching commands").style(visual_style(model, VisualRole::Muted)),
-            list,
-        );
-        return;
-    }
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list.height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    let items = entries
-        .iter()
-        .skip(start)
-        .take(visible)
-        .map(|entry| inline_palette_item(entry, model.palette.selected, model))
-        .collect::<Vec<_>>();
-    frame.render_widget(List::new(items), list);
-}
-
-fn inline_palette_item(
-    entry: &crate::model::CommandEntry,
-    selected: Option<&'static str>,
-    model: &Model,
-) -> ListItem<'static> {
-    let is_selected = selected == Some(entry.id);
-    let prefix = if is_selected {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let mut label = format!(
-        "{prefix} /{}  {} - {}",
-        entry.id,
-        display_safe(entry.label),
-        display_safe(entry.description)
+    frame.render_widget(Clear, Rect::new(area.x, panel.y, area.width, panel.height));
+    let body = Panel::new(
+        model.theme(),
+        model.theme().icons(),
+        Some(Icon::Search),
+        Some("Commands"),
+        None,
+        None,
+        true,
+    )
+    .render(frame.buffer_mut(), panel);
+    render_palette_contents(
+        frame.buffer_mut(),
+        body,
+        ui_layout::inline_palette_list_rect(panel),
+        model,
     );
-    if let Some(hint) = entry.key_hint {
-        let _ = write!(label, "  [{hint}]");
-    }
-    let style = if is_selected {
-        chat_visual_style(model, VisualRole::Assistant)
-    } else {
-        chat_visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
 }
 
 /// Renders the searchable command-palette overlay from local state only.
 fn render_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let mut buttons = Vec::new();
+    if let Some(selected) = model.palette_selection() {
+        buttons.push(Button::new(
+            "Run",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::PaletteRun(selected.to_owned()),
+        ));
+    }
+    buttons.push(Button::new(
+        "Close",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::OverlayCancel,
+    ));
+    let (body, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Commands",
+        Some(Icon::Search),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, MODAL_MAX_WIDTH, MODAL_MAX_HEIGHT);
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Commands ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    if inner.width == 0 || inner.height == 0 {
+    render_palette_contents(
+        frame.buffer_mut(),
+        body,
+        ui_layout::modal_palette_list_rect(popup),
+        model,
+    );
+}
+
+fn render_palette_contents(
+    buffer: &mut ratatui::buffer::Buffer,
+    body: Rect,
+    list: Rect,
+    model: &Model,
+) {
+    if body.width == 0 || body.height == 0 {
         return;
     }
-
-    let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 3);
-    let list_height = inner.height.saturating_sub(search_height + help_height);
-    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
-    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height,
-        inner.width,
-        help_height,
-    );
-
-    frame.render_widget(
-        Paragraph::new(format!("Filter: {}", display_safe(&model.palette.query)))
-            .style(visual_style(model, VisualRole::Field)),
-        search,
-    );
-
     let entries = model.palette_entries();
-    if entries.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No commands match this filter.")
-                .style(visual_style(model, VisualRole::Muted)),
-            list,
-        );
-    } else {
-        let selected = model.palette.selected;
-        let selected_index = selected
-            .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-            .unwrap_or(0);
-        let visible = usize::from(list.height);
-        let start = selected_index
-            .saturating_add(1)
-            .saturating_sub(visible)
-            .min(entries.len().saturating_sub(visible));
-        let items = entries
-            .iter()
-            .skip(start)
-            .take(visible)
-            .map(|entry| palette_item(entry, selected, model))
-            .collect::<Vec<_>>();
-        frame.render_widget(List::new(items), list);
+    let search = Rect::new(body.x, body.y, body.width, ROW.min(body.height));
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.palette.query,
+        model.palette.query.chars().count(),
+        Some(u32::try_from(entries.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(buffer, search);
+    if list.width == 0 || list.height == 0 {
+        return;
     }
+    if entries.is_empty() {
+        crate::ui::component::paint::put(
+            buffer,
+            list.x,
+            list.y,
+            list.width,
+            "No commands match this search.",
+            model.theme().style(Token::TextMuted),
+        );
+        return;
+    }
+    let rows = ui_layout::visible_command_palette_rows(model, list.height);
+    let (identifier_width, label_width, key_width) =
+        palette_column_widths(&rows, list.width, model);
+    for (offset, row) in rows.into_iter().enumerate() {
+        let y = list
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        if y >= list.bottom() {
+            break;
+        }
+        match row {
+            ui_layout::CommandPaletteRow::Category(category) => {
+                crate::ui::component::paint::fill(
+                    buffer,
+                    Rect::new(list.x, y, list.width, ROW),
+                    model.theme().style(Token::SurfaceRaised),
+                    Some(' '),
+                );
+                crate::ui::component::paint::put(
+                    buffer,
+                    list.x,
+                    y,
+                    list.width,
+                    &category.to_ascii_uppercase(),
+                    model
+                        .theme()
+                        .style(Token::TextMuted)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            ui_layout::CommandPaletteRow::Command(entry) => render_palette_command(
+                buffer,
+                Rect::new(list.x, y, list.width, ROW),
+                entry,
+                identifier_width,
+                label_width,
+                key_width,
+                model,
+            ),
+        }
+    }
+}
 
-    if help.height > 0 {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} choose  Enter run  Esc close",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
-            help,
+fn palette_column_widths(
+    rows: &[ui_layout::CommandPaletteRow],
+    width: u16,
+    model: &Model,
+) -> (u16, u16, u16) {
+    let marker_width = model.theme().icons().width(Icon::SelectionCaret);
+    let identifier_desired = rows
+        .iter()
+        .filter_map(|row| match row {
+            ui_layout::CommandPaletteRow::Command(entry) => Some(
+                marker_width
+                    .saturating_add(2)
+                    .saturating_add(u16::try_from(entry.id.width()).unwrap_or(u16::MAX)),
+            ),
+            ui_layout::CommandPaletteRow::Category(_) => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(PALETTE_IDENTIFIER_MAX_WIDTH);
+    let gaps = if width == 0 {
+        0
+    } else if width >= PALETTE_THREE_COLUMN_MIN_WIDTH {
+        PALETTE_COLUMN_GAPS.min(width)
+    } else {
+        ROW.min(width)
+    };
+    let available = width.saturating_sub(gaps);
+    let reserved_label = PALETTE_LABEL_MIN_WIDTH.min(available / 2);
+    let identifier_width = identifier_desired.min(available.saturating_sub(reserved_label));
+    let key_width = if width >= PALETTE_THREE_COLUMN_MIN_WIDTH {
+        rows.iter()
+            .filter_map(|row| match row {
+                ui_layout::CommandPaletteRow::Command(entry) => entry.key_hint,
+                ui_layout::CommandPaletteRow::Category(_) => None,
+            })
+            .map(|hint| u16::try_from(hint.width()).unwrap_or(u16::MAX))
+            .max()
+            .unwrap_or(0)
+            .min(PALETTE_KEY_MAX_WIDTH)
+            .min(
+                available
+                    .saturating_sub(identifier_width)
+                    .saturating_sub(reserved_label),
+            )
+    } else {
+        0
+    };
+    let label_width = available
+        .saturating_sub(identifier_width)
+        .saturating_sub(key_width);
+    (identifier_width, label_width, key_width)
+}
+
+fn render_palette_command(
+    buffer: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    entry: crate::model::CommandEntry,
+    identifier_width: u16,
+    label_width: u16,
+    key_width: u16,
+    model: &Model,
+) {
+    let selected = model.palette_selection() == Some(entry.id);
+    let base_style = if selected {
+        model.theme().filled(Token::Accent)
+    } else {
+        model.theme().style(Token::TextPrimary)
+    };
+    if selected {
+        crate::ui::component::paint::fill(buffer, area, base_style, Some(' '));
+    }
+    let icons = model.theme().icons();
+    let marker = if selected {
+        icons.glyph(Icon::SelectionCaret).to_owned()
+    } else {
+        " ".repeat(usize::from(icons.width(Icon::SelectionCaret)))
+    };
+    let identifier = format!("{marker} /{}", entry.id);
+    let identifier = crate::ui::component::paint::ellipsize_words(&identifier, identifier_width);
+    let middle = format!(
+        "{} - {}",
+        display_safe(entry.label),
+        display_safe(entry.description)
+    );
+    let middle = crate::ui::component::paint::ellipsize_words(&middle, label_width);
+    let highlights = palette_highlights(entry, &model.palette.query);
+    put_highlighted(
+        buffer,
+        area.x,
+        area.y,
+        identifier_width,
+        &identifier,
+        &highlights.identifier,
+        base_style,
+    );
+    let label_x = area.x.saturating_add(identifier_width).saturating_add(ROW);
+    put_highlighted(
+        buffer,
+        label_x,
+        area.y,
+        label_width,
+        &middle,
+        &highlights.middle,
+        base_style,
+    );
+    if key_width > 0 {
+        let key = entry.key_hint.unwrap_or_default();
+        let key = crate::ui::component::paint::ellipsize_words(key, key_width);
+        let key = crate::ui::component::paint::right_align(&key, key_width);
+        crate::ui::component::paint::put(
+            buffer,
+            area.right().saturating_sub(key_width),
+            area.y,
+            key_width,
+            &key,
+            if selected {
+                base_style
+            } else {
+                model.theme().style(Token::TextMuted)
+            },
         );
     }
 }
 
-fn palette_item(
-    entry: &crate::model::CommandEntry,
-    selected: Option<&'static str>,
-    model: &Model,
-) -> ListItem<'static> {
-    let is_selected = selected == Some(entry.id);
-    let prefix = if is_selected {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let mut label = format!(
-        "{prefix} /{}  {} - {}",
-        entry.id,
-        display_safe(entry.label),
-        display_safe(entry.description)
-    );
-    if let Some(hint) = entry.key_hint {
-        let _ = write!(label, "  [{hint}]");
+#[derive(Default)]
+struct PaletteHighlights {
+    identifier: Vec<usize>,
+    middle: Vec<usize>,
+}
+
+fn palette_highlights(entry: crate::model::CommandEntry, query: &str) -> PaletteHighlights {
+    let query = query.trim_start_matches('/').trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return PaletteHighlights::default();
     }
-    let style = if is_selected {
-        visual_style(model, VisualRole::Selected)
+    let marker_offset = 3;
+    let identifier = entry.id.to_ascii_lowercase();
+    let label = entry.label.to_ascii_lowercase();
+    let description = entry.description.to_ascii_lowercase();
+    let mut highlights = PaletteHighlights::default();
+    append_occurrences(
+        &mut highlights.identifier,
+        &identifier,
+        &query,
+        marker_offset,
+    );
+    append_occurrences(&mut highlights.middle, &label, &query, 0);
+    append_occurrences(
+        &mut highlights.middle,
+        &description,
+        &query,
+        entry.label.chars().count().saturating_add(3),
+    );
+    if !highlights.identifier.is_empty() || !highlights.middle.is_empty() {
+        return highlights;
+    }
+    let id_fuzzy = fuzzy_character_positions(&identifier, &query);
+    let label_fuzzy = fuzzy_character_positions(&label, &query);
+    if id_fuzzy.len() >= label_fuzzy.len() {
+        highlights.identifier.extend(
+            id_fuzzy
+                .into_iter()
+                .map(|index| index.saturating_add(marker_offset)),
+        );
     } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
+        highlights.middle.extend(label_fuzzy);
+    }
+    highlights
+}
+
+fn append_occurrences(target: &mut Vec<usize>, haystack: &str, needle: &str, offset: usize) {
+    let mut rest = haystack;
+    let mut byte_offset = 0_usize;
+    while let Some(found) = rest.find(needle) {
+        let start = haystack[..byte_offset.saturating_add(found)]
+            .chars()
+            .count();
+        target.extend(
+            (start..start.saturating_add(needle.chars().count()))
+                .map(|index| index.saturating_add(offset)),
+        );
+        let advance = found.saturating_add(needle.len());
+        byte_offset = byte_offset.saturating_add(advance);
+        rest = &rest[advance..];
+    }
+}
+
+fn fuzzy_character_positions(candidate: &str, query: &str) -> Vec<usize> {
+    let query = query.chars().collect::<Vec<_>>();
+    let mut query_index = 0;
+    let mut positions = Vec::new();
+    for (candidate_index, character) in candidate.chars().enumerate() {
+        if query.get(query_index) == Some(&character) {
+            positions.push(candidate_index);
+            query_index = query_index.saturating_add(1);
+        }
+    }
+    positions
+}
+
+fn put_highlighted(
+    buffer: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+    width: u16,
+    text: &str,
+    highlighted: &[usize],
+    base_style: Style,
+) {
+    let mut used = 0_u16;
+    for (index, character) in text.chars().enumerate() {
+        let character_width = u16::try_from(character.width().unwrap_or(0)).unwrap_or(0);
+        if used.saturating_add(character_width) > width {
+            break;
+        }
+        let style = if highlighted.contains(&index) {
+            base_style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            base_style
+        };
+        crate::ui::component::paint::put(
+            buffer,
+            x.saturating_add(used),
+            y,
+            character_width,
+            &character.to_string(),
+            style,
+        );
+        used = used.saturating_add(character_width);
+    }
 }
 
 /// Renders the contextual help overlay from local state only.
@@ -1370,22 +736,93 @@ fn palette_item(
 /// The section matching the surface help was requested from is rendered
 /// first and highlighted, and content scrolls without clipping the frame.
 fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = area;
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Help ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    // The surface help was opened from leads; everything else follows in
-    // table order so context is never below the fold on small terminals.
-    // The always-true Global section never leads.
-    let origin = model.navigation.previous_route.focus();
+    let hint_height = u16::from(inner.height >= 2);
+    let content_height = inner.height - hint_height;
+    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    let rows = generated_help_rows(model.navigation.previous_route.focus());
+    let label_width = rows
+        .iter()
+        .filter_map(|row| match row {
+            HelpRenderRow::Pair { key, .. } => Some(key.chars().count()),
+            HelpRenderRow::Header { .. } | HelpRenderRow::Gap => None,
+        })
+        .max()
+        .unwrap_or(0);
+    for (visual, row) in rows
+        .iter()
+        .skip(usize::from(model.help.scroll))
+        .take(usize::from(content.height))
+        .enumerate()
+    {
+        let y = content
+            .y
+            .saturating_add(u16::try_from(visual).unwrap_or(u16::MAX));
+        let line = Rect::new(content.x, y, content.width, ROW);
+        match row {
+            HelpRenderRow::Header { title, icon } => {
+                let heading = format!("{} {title}", model.theme().icons().glyph(*icon));
+                let used = crate::ui::component::paint::put(
+                    frame.buffer_mut(),
+                    line.x,
+                    line.y,
+                    line.width,
+                    &heading,
+                    model.theme().style(Token::Accent),
+                );
+                let rule = model.theme().icons().border().horizontal;
+                for x in line.x.saturating_add(used).saturating_add(1)..line.right() {
+                    crate::ui::component::paint::put(
+                        frame.buffer_mut(),
+                        x,
+                        line.y,
+                        ROW,
+                        rule,
+                        model.theme().style(Token::Divider),
+                    );
+                }
+            }
+            HelpRenderRow::Pair { key, description } => {
+                let padded = format!("{key:label_width$}");
+                let table = [KeyValue {
+                    label: &padded,
+                    value: description,
+                    chip: None,
+                }];
+                KeyValueTable::new(model.theme(), &table).render(frame.buffer_mut(), line);
+            }
+            HelpRenderRow::Gap => {}
+        }
+    }
+
+    if hint_height > 0 {
+        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
+        frame.render_widget(
+            Paragraph::new(format!("{} scroll  Esc close", navigation_keys(model)))
+                .style(visual_style(model, VisualRole::Muted)),
+            hint,
+        );
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HelpRenderRow {
+    Header { title: &'static str, icon: Icon },
+    Pair { key: String, description: String },
+    Gap,
+}
+
+fn generated_help_rows(origin: crate::model::Focus) -> Vec<HelpRenderRow> {
     let mut ordered: Vec<&crate::model::HelpSection> = Vec::new();
     if let Some(first) = crate::model::HELP_SECTIONS
         .iter()
@@ -1398,180 +835,87 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ordered.push(section);
         }
     }
-
-    let mut lines = Vec::new();
-    for (position, section) in ordered.iter().enumerate() {
-        let style = if position == 0 {
-            visual_style(model, VisualRole::Selected)
-        } else {
-            visual_style(model, VisualRole::Normal)
-        };
-        lines.push(Line::styled(section.title.to_owned(), style));
-        for (key, description) in section.rows {
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {key}"), visual_style(model, VisualRole::Muted)),
-                Span::raw(format!("  {description}")),
-            ]));
+    let command_hints = COMMANDS
+        .iter()
+        .filter_map(|command| command.key_hint)
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for (position, section) in ordered.into_iter().enumerate() {
+        rows.push(HelpRenderRow::Header {
+            title: section.title,
+            icon: help_section_icon(section.title),
+        });
+        rows.extend(
+            section
+                .rows
+                .iter()
+                .filter(|(key, _)| !command_hints.contains(key))
+                .map(|(key, description)| HelpRenderRow::Pair {
+                    key: (*key).to_owned(),
+                    description: (*description).to_owned(),
+                }),
+        );
+        rows.push(HelpRenderRow::Gap);
+        if position == 0 {
+            append_command_help_rows(&mut rows);
+            rows.push(HelpRenderRow::Gap);
         }
     }
-
-    let hint_height = u16::from(inner.height >= 2);
-    let content_height = inner.height - hint_height;
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph.scroll((model.help.scroll, 0)), content);
-
-    if hint_height > 0 {
-        let hint = Rect::new(inner.x, inner.y + content_height, inner.width, hint_height);
-        frame.render_widget(
-            Paragraph::new(format!("{} scroll  Esc close", navigation_keys(model)))
-                .style(visual_style(model, VisualRole::Muted)),
-            hint,
-        );
-    }
+    rows
 }
 
-fn settings_body_area(area: Rect) -> Rect {
-    Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(2),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(3),
-    )
+fn append_command_help_rows(rows: &mut Vec<HelpRenderRow>) {
+    rows.push(HelpRenderRow::Header {
+        title: "Commands",
+        icon: Icon::PromptCaret,
+    });
+    rows.extend(COMMANDS.iter().filter_map(|command| {
+        command.key_hint.map(|key| HelpRenderRow::Pair {
+            key: key.to_owned(),
+            description: format!("/{}  {}", command.id, command.label),
+        })
+    }));
+}
+
+fn help_section_icon(title: &str) -> Icon {
+    match title {
+        "Composer" => Icon::RouteChat,
+        "Browser" => Icon::RouteSessions,
+        "Profiles" => Icon::RouteProviders,
+        "Models" => Icon::RouteModels,
+        "Settings" => Icon::RouteSettings,
+        "Global" => Icon::Brand,
+        _ => Icon::RouteHelp,
+    }
 }
 
 /// Renders resolved runtime settings and safe provenance as a primary route.
-fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+fn render_settings(frame: &mut Frame<'_>, regions: &ui_layout::NamedRects, model: &Model) {
+    let area = regions.content;
     frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Settings & Provenance ")
+        .title(" Settings ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
+    let (Some(rail), Some(body), Some(footer)) = (
+        regions.settings_nav,
+        regions.settings_body,
+        regions.settings_footer,
+    ) else {
         return;
-    }
-
-    let nav_height = u16::from(inner.height >= 2);
-    if nav_height > 0 {
-        render_settings_nav(
-            frame,
-            Rect::new(inner.x, inner.y, inner.width, nav_height),
-            model,
-        );
-    }
-    let body = if nav_height > 0 {
-        settings_body_area(area)
-    } else {
-        inner
     };
-    match model.settings_workspace.nav_selected {
-        1 => render_profile_center(frame, body, model),
-        2 => render_settings_profile(frame, body, model),
-        3 => render_agent_defaults(frame, body, model),
-        _ => {}
+    render_settings_nav(frame, rail, model);
+    if model.settings_workspace.search_active {
+        render_settings_search(frame, body, model);
+    } else if model.settings_workspace.choice_picker_open {
+        render_settings_theme_picker(frame, body, model);
+    } else if model.settings_workspace.detail_open {
+        render_model_defaults(frame, body, model);
+    } else {
+        render_settings_category(frame, body, model);
     }
-    if model.settings_workspace.nav_selected != 0 {
-        return;
-    }
-
-    let header_height = if body.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(body.height >= 3);
-    let page_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(help_height),
-        ])
-        .split(body);
-    render_settings_page_header(
-        frame,
-        page_rows[0],
-        model,
-        "General",
-        "Review runtime state, preferences, appearance, and terminal behavior.",
-    );
-
-    let mut lines = vec![
-        Line::styled("PROFILE DEFAULTS", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::DisplayLabel),
-        Line::from(""),
-        settings_preference_line(model, SettingsPreference::Provider),
-        settings_preference_line(model, SettingsPreference::Profile),
-        settings_preference_line(model, SettingsPreference::Credential),
-        settings_preference_line(model, SettingsPreference::Source),
-        Line::styled(
-            "API KEY  /connect or press K",
-            visual_style(model, VisualRole::Field),
-        ),
-        Line::styled(
-            "Stored provider credentials remain managed from Providers.",
-            visual_style(model, VisualRole::Muted),
-        ),
-        Line::from(""),
-        Line::styled("MODEL & THINKING", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Model),
-        settings_preference_line(model, SettingsPreference::Mode),
-        Line::styled(
-            "Read-only here: choose a model from /models; thinking follows its advertised capability.",
-            visual_style(model, VisualRole::Muted),
-        ),
-        Line::from(""),
-        Line::styled("APPROVALS", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Approvals),
-        Line::styled("RETENTION", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Retention),
-        Line::from(""),
-        Line::styled("APPEARANCE", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::ThemePreset),
-        settings_preference_line(model, SettingsPreference::ColorMode),
-        settings_preference_line(model, SettingsPreference::GlyphMode),
-        Line::styled("ACCESSIBILITY", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::ReducedMotion),
-        settings_preference_line(model, SettingsPreference::Density),
-        Line::styled("LOGGING", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Logging),
-        Line::styled("TERMINAL BEHAVIOR", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Layout),
-        settings_preference_line(model, SettingsPreference::TerminalTimestampStyle),
-        settings_preference_line(model, SettingsPreference::ComposerSubmitBehavior),
-        Line::from(""),
-        Line::styled("SHORTCUT REFERENCE", visual_style(model, VisualRole::User)),
-    ];
-    lines.extend(COMMANDS.iter().filter_map(|command| {
-        command.key_hint.map(|hint| {
-            Line::styled(
-                format!(" {hint:<24} /{} - {}", command.id, command.description),
-                visual_style(model, VisualRole::Muted),
-            )
-        })
-    }));
-    let content = page_rows[1];
-    let scroll = settings_scroll(
-        &lines,
-        SettingsPreference::at(model.settings_workspace.selected),
-        content,
-    );
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        content,
-    );
-    if help_height > 0 {
-        let controls = if model.settings_workspace.nav_focus {
-            "←/→ page  Down open  Esc Chat"
-        } else {
-            "↑/↓ setting  ←/→ option  Enter edit  R inherit  D reset  Up return"
-        };
-        frame.render_widget(
-            Paragraph::new(format!("{} {controls}", navigation_keys(model)))
-                .style(visual_style(model, VisualRole::Muted)),
-            page_rows[2],
-        );
-    }
+    render_settings_footer(frame, footer, model);
 }
 
 fn render_settings_page_header(
@@ -1599,419 +943,554 @@ fn render_settings_page_header(
 }
 
 fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let mut spans = Vec::new();
-    for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("  "));
+    let theme = model.theme();
+    let icons = theme.icons();
+    let visible = usize::from(area.height);
+    let scroll = model
+        .settings_workspace
+        .nav_selected
+        .saturating_sub(visible.saturating_sub(1));
+    for (index, category) in SettingsCategory::ALL
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(scroll)
+    {
+        let Ok(row) = u16::try_from(index.saturating_sub(scroll)) else {
+            continue;
+        };
+        if row >= area.height {
+            break;
         }
         let style = if index == model.settings_workspace.nav_selected {
             if model.settings_workspace.nav_focus {
-                visual_style(model, VisualRole::Selected)
+                theme.filled(Token::SurfaceSelected)
             } else {
-                visual_style(model, VisualRole::User)
+                theme.style(Token::Accent)
             }
         } else {
-            visual_style(model, VisualRole::Muted)
+            theme.style(Token::TextSecondary)
         };
-        spans.push(Span::styled(format!(" {label} "), style));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let header_height = if area.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(area.height >= 3);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(help_height),
-        ])
-        .split(area);
-    render_settings_page_header(
-        frame,
-        rows[0],
-        model,
-        "Profile",
-        "Manage the local identity and workspace defaults used across sessions.",
-    );
-    let card_height = rows[1].height.min(4);
-    render_local_profile(
-        frame,
-        Rect::new(rows[1].x, rows[1].y, rows[1].width, card_height),
-        model,
-    );
-    if help_height > 0 {
-        frame.render_widget(
-            Paragraph::new("Enter edit  Up return  Left/Right pages  Esc Settings")
-                .style(visual_style(model, VisualRole::Muted)),
-            rows[2],
+        let icon = settings_category_icon(category);
+        let text = if area.width <= SETTINGS_CATEGORY_RAIL_XS {
+            icons.glyph(icon).to_owned()
+        } else {
+            format!("{} {}", icons.glyph(icon), category.label())
+        };
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.x,
+            area.y.saturating_add(row),
+            area.width,
+            &text,
+            style,
         );
     }
 }
 
-fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
-    let profile = &model.settings().local_profile;
-    let (label, value, source, explanation) = match preference {
-        SettingsPreference::Provider => (
-            "Provider",
-            model.settings().provider_label(),
-            "runtime",
-            "active provider adapter",
-        ),
-        SettingsPreference::Profile => (
-            "Profile",
-            model
-                .settings()
-                .provider_status
-                .active_profile
-                .as_deref()
-                .unwrap_or("none")
-                .to_owned(),
-            "runtime",
-            "active provider profile",
-        ),
-        SettingsPreference::Credential => (
-            "Credential",
-            if model.settings().provider_status.credential_connected {
-                "connected".to_owned()
-            } else {
-                "disconnected".to_owned()
-            },
-            "runtime",
-            "safe connection state",
-        ),
-        SettingsPreference::Source => (
-            "Source",
-            model
-                .settings()
-                .provider_status
-                .credential_source
-                .as_str()
-                .to_owned(),
-            "runtime",
-            "credential provenance",
-        ),
-        SettingsPreference::Model => (
-            "Model",
-            selected_model_label(model),
-            "runtime",
-            "active session model",
-        ),
-        SettingsPreference::Mode => (
-            "Thinking",
-            thinking_label(model).to_owned(),
-            "model",
-            "capability advertised by the selected model",
-        ),
-        SettingsPreference::Approvals => (
-            "Approvals",
-            "per-call".to_owned(),
-            "policy",
-            "exact capability decisions",
-        ),
-        SettingsPreference::Retention => (
-            "Retention",
-            "durable".to_owned(),
-            "policy",
-            "session history and deletion controls",
-        ),
-        SettingsPreference::Logging => (
-            "Logging",
-            "redacted".to_owned(),
-            "policy",
-            "credentials and content excluded",
-        ),
-        SettingsPreference::DisplayLabel => (
-            "Display label",
-            model
-                .settings_workspace
-                .display_label_editor
-                .as_ref()
-                .map_or_else(
-                    || {
-                        profile.display_label().value().as_ref().map_or_else(
-                            || "not set".to_owned(),
-                            |label| display_safe(label.as_str()),
-                        )
-                    },
-                    |value| format!("{} [editing]", display_safe(value)),
-                ),
-            profile.display_label().source().as_str(),
-            "local identity shown only in this terminal",
-        ),
-        SettingsPreference::ThemePreset => (
-            "Theme preset",
-            theme_preset_label(*profile.preferences().theme_preset().value()).to_owned(),
-            profile.preferences().theme_preset().source().as_str(),
-            "terminal palette preference",
-        ),
-        SettingsPreference::ColorMode => (
-            "Color mode",
-            color_mode_label(*profile.preferences().color_mode().value()).to_owned(),
-            profile.preferences().color_mode().source().as_str(),
-            "status and focus contrast",
-        ),
-        SettingsPreference::GlyphMode => (
-            "Glyph mode",
-            glyph_mode_label(*profile.preferences().glyph_mode().value()).to_owned(),
-            profile.preferences().glyph_mode().source().as_str(),
-            "application chrome only",
-        ),
-        SettingsPreference::ReducedMotion => (
-            "Reduced motion",
-            bool_label(*profile.preferences().reduced_motion().value()).to_owned(),
-            profile.preferences().reduced_motion().source().as_str(),
-            "stops animated status indicators",
-        ),
-        SettingsPreference::Density => (
-            "Density",
-            density_label(*profile.preferences().density().value()).to_owned(),
-            profile.preferences().density().source().as_str(),
-            "spacing between terminal elements",
-        ),
-        SettingsPreference::Layout => (
-            "Layout",
-            layout_label(*profile.preferences().layout().value()).to_owned(),
-            profile.preferences().layout().source().as_str(),
-            "panel arrangement",
-        ),
-        SettingsPreference::TerminalTimestampStyle => (
-            "Timestamp style",
-            timestamp_style_label(*profile.preferences().terminal_timestamp_style().value())
-                .to_owned(),
-            profile
-                .preferences()
-                .terminal_timestamp_style()
-                .source()
-                .as_str(),
-            "terminal timestamp display",
-        ),
-        SettingsPreference::ComposerSubmitBehavior => (
-            "Composer submit",
-            composer_submit_label(*profile.preferences().composer_submit_behavior().value())
-                .to_owned(),
-            profile
-                .preferences()
-                .composer_submit_behavior()
-                .source()
-                .as_str(),
-            "prompt submission chord",
-        ),
-    };
-    let selected = !model.settings_workspace.nav_focus
-        && SettingsPreference::at(model.settings_workspace.selected) == preference;
-    let wheel = selected
-        .then(|| settings_preference_wheel(model, preference))
-        .flatten();
-    let marker = if selected {
-        selection_marker(model)
+const THEME_OPTIONS: [&str; 9] = [
+    "system", "light", "dark", "aurora", "ember", "midnight", "ocean", "forest", "rose",
+];
+const COLOR_OPTIONS: [&str; 5] = ["color", "soft", "vivid", "no color", "high contrast"];
+const GLYPH_OPTIONS: [&str; 3] = ["unicode", "Nerd Font", "ASCII"];
+const PROMPT_OPTIONS: [&str; 3] = ["essential", "workspace", "detailed"];
+const DENSITY_OPTIONS: [&str; 2] = ["comfortable", "compact"];
+const LAYOUT_OPTIONS: [&str; 2] = ["responsive", "single column"];
+const TIMESTAMP_OPTIONS: [&str; 3] = ["relative", "absolute", "hidden"];
+const SUBMIT_OPTIONS: [&str; 2] = ["Ctrl+S", "Enter"];
+
+fn settings_category_icon(category: SettingsCategory) -> Icon {
+    match category {
+        SettingsCategory::Appearance => Icon::RouteSettings,
+        SettingsCategory::ChatComposer => Icon::RouteChat,
+        SettingsCategory::Accessibility => Icon::Success,
+        SettingsCategory::Providers => Icon::RouteProviders,
+        SettingsCategory::ModelsThinking => Icon::RouteModels,
+        SettingsCategory::Profile => Icon::User,
+        SettingsCategory::SessionsData => Icon::RouteSessions,
+        SettingsCategory::Shortcuts => Icon::PromptCaret,
+        SettingsCategory::About => Icon::Info,
+    }
+}
+
+fn render_settings_category(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let title_height = if area.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
     } else {
-        " "
+        ROW.min(area.height)
     };
-    let saving = model
-        .pending
-        .values()
-        .any(|pending| matches!(pending, PendingKind::UpdateLocalPreference(_)));
-    let suffix = if selected && saving { " [saving]" } else { "" };
-    let style = if selected {
-        visual_style(model, VisualRole::Selected)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    let content = wheel.map_or_else(
-        || format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
-        |wheel| format!("{marker} {label:<14} {wheel}{suffix}"),
+    render_settings_page_header(
+        frame,
+        Rect::new(area.x, area.y, area.width, title_height),
+        model,
+        category.label(),
+        settings_category_description(category),
     );
-    Line::styled(content, style)
+    let content = Rect::new(
+        area.x,
+        area.y.saturating_add(title_height),
+        area.width,
+        area.height.saturating_sub(title_height),
+    );
+    if category == SettingsCategory::Shortcuts {
+        render_settings_shortcuts(frame, content, model);
+        return;
+    }
+    let rows = SettingsPreference::rows(category);
+    let label_width = rows
+        .iter()
+        .map(|row| u16::try_from(row.label().len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let visible = usize::from(content.height.max(ROW));
+    let scroll = model
+        .settings_workspace
+        .selected
+        .saturating_sub(visible.saturating_div(3));
+    let mut y = content.y;
+    for (index, preference) in rows.iter().copied().enumerate().skip(scroll) {
+        if y >= content.bottom() {
+            break;
+        }
+        let focused = !model.settings_workspace.nav_focus
+            && index == model.settings_workspace.selected
+            && preference.editable();
+        let remaining = content.bottom().saturating_sub(y);
+        let used = render_typed_settings_row(
+            frame,
+            Rect::new(content.x, y, content.width, remaining),
+            model,
+            preference,
+            focused,
+            label_width,
+        );
+        y = y.saturating_add(used.max(ROW));
+    }
 }
 
-fn wheel_value<T: Copy + PartialEq>(
-    current: T,
-    values: &[T],
-    label: fn(T) -> &'static str,
-) -> String {
-    let index = values
+fn settings_category_description(category: SettingsCategory) -> &'static str {
+    match category {
+        SettingsCategory::Appearance => {
+            "Nerd Font needs a patched font. Diamonds mean it is missing."
+        }
+        SettingsCategory::ChatComposer => "Prompt metadata, timestamps, layout, and submission.",
+        SettingsCategory::Accessibility => "Motion, color treatment, and redundant state cues.",
+        SettingsCategory::Providers => "Safe connection facts and provider actions.",
+        SettingsCategory::ModelsThinking => "Active model and profile thinking defaults.",
+        SettingsCategory::Profile => "Local identity and workspace defaults.",
+        SettingsCategory::SessionsData => "Durability, redaction, and session access.",
+        SettingsCategory::Shortcuts => "Keyboard reference generated from the command table.",
+        SettingsCategory::About => "Runtime capabilities and policy facts.",
+    }
+}
+
+fn render_typed_settings_row(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    preference: SettingsPreference,
+    focused: bool,
+    label_width: u16,
+) -> u16 {
+    let value = model.settings_row_value(preference);
+    let provenance = settings_provenance(model, preference);
+    let description = settings_row_description(preference);
+    let kind = match preference {
+        SettingsPreference::ReducedMotion => SettingKind::Toggle {
+            on: *model
+                .settings()
+                .local_profile
+                .preferences()
+                .reduced_motion()
+                .value(),
+        },
+        SettingsPreference::ThemePreset => choice_kind(&THEME_OPTIONS, &value),
+        SettingsPreference::ColorMode => choice_kind(&COLOR_OPTIONS, &value),
+        SettingsPreference::GlyphMode => choice_kind(&GLYPH_OPTIONS, &value),
+        SettingsPreference::PromptStatusDetail => choice_kind(&PROMPT_OPTIONS, &value),
+        SettingsPreference::Density => choice_kind(&DENSITY_OPTIONS, &value),
+        SettingsPreference::Layout => choice_kind(&LAYOUT_OPTIONS, &value),
+        SettingsPreference::TerminalTimestampStyle => choice_kind(&TIMESTAMP_OPTIONS, &value),
+        SettingsPreference::ComposerSubmitBehavior => choice_kind(&SUBMIT_OPTIONS, &value),
+        SettingsPreference::DisplayLabel => SettingKind::Text {
+            value: &value,
+            max_len: 64,
+        },
+        SettingsPreference::ManageProviders
+        | SettingsPreference::ConnectCredential
+        | SettingsPreference::ConfigureModels
+        | SettingsPreference::OpenSessions => SettingKind::Action { label: &value },
+        _ => SettingKind::Info { value: &value },
+    };
+    let row = SettingRow::new(
+        model.theme(),
+        preference.label(),
+        kind,
+        provenance,
+        Some(if preference == SettingsPreference::ThemePreset {
+            ""
+        } else {
+            description
+        }),
+        focused,
+        label_width,
+    );
+    let used = row.measure().min(area.height);
+    row.render(
+        frame.buffer_mut(),
+        Rect::new(area.x, area.y, area.width, used),
+    );
+    if focused && preference == SettingsPreference::ThemePreset && used > ROW {
+        render_theme_preview(
+            frame.buffer_mut(),
+            Rect::new(
+                area.x.saturating_add(label_width).saturating_add(ROW),
+                area.y.saturating_add(ROW),
+                area.width.saturating_sub(label_width.saturating_add(ROW)),
+                ROW,
+            ),
+            model.theme(),
+        );
+    }
+    used
+}
+
+fn choice_kind<'a>(options: &'a [&'a str], value: &str) -> SettingKind<'a> {
+    let selected = options
         .iter()
-        .position(|candidate| *candidate == current)
+        .position(|option| option.eq_ignore_ascii_case(value))
         .unwrap_or_default();
-    let previous = values[index.checked_sub(1).unwrap_or(values.len() - 1)];
-    let next = values[(index + 1) % values.len()];
-    format!(
-        "‹{}  [{}]  {}›",
-        label(previous),
-        label(current),
-        label(next)
-    )
+    SettingKind::Choice { options, selected }
 }
 
-fn settings_preference_wheel(model: &Model, preference: SettingsPreference) -> Option<String> {
-    let preferences = model.settings().local_profile.preferences();
-    match preference {
-        SettingsPreference::ThemePreset => Some(wheel_value(
-            *preferences.theme_preset().value(),
-            &[
-                ThemePreset::System,
-                ThemePreset::Light,
-                ThemePreset::Dark,
-                ThemePreset::Aurora,
-                ThemePreset::Ember,
-                ThemePreset::Midnight,
-                ThemePreset::Ocean,
-                ThemePreset::Forest,
-                ThemePreset::Rose,
-            ],
-            theme_preset_label,
-        )),
-        SettingsPreference::ColorMode => Some(wheel_value(
-            *preferences.color_mode().value(),
-            &[
-                ColorMode::Color,
-                ColorMode::Soft,
-                ColorMode::Vivid,
-                ColorMode::NoColor,
-                ColorMode::HighContrast,
-            ],
-            color_mode_label,
-        )),
-        SettingsPreference::GlyphMode => Some(wheel_value(
-            *preferences.glyph_mode().value(),
-            &[GlyphMode::Unicode, GlyphMode::Ascii],
-            glyph_mode_label,
-        )),
-        SettingsPreference::ReducedMotion => Some(wheel_value(
-            *preferences.reduced_motion().value(),
-            &[false, true],
-            bool_label,
-        )),
-        SettingsPreference::Density => Some(wheel_value(
-            *preferences.density().value(),
-            &[Density::Comfortable, Density::Compact],
-            density_label,
-        )),
-        SettingsPreference::Layout => Some(wheel_value(
-            *preferences.layout().value(),
-            &[PreferenceLayout::Responsive, PreferenceLayout::SingleColumn],
-            layout_label,
-        )),
-        SettingsPreference::TerminalTimestampStyle => Some(wheel_value(
-            *preferences.terminal_timestamp_style().value(),
-            &[
-                TerminalTimestampStyle::Relative,
-                TerminalTimestampStyle::Absolute,
-                TerminalTimestampStyle::Hidden,
-            ],
-            timestamp_style_label,
-        )),
-        SettingsPreference::ComposerSubmitBehavior => Some(wheel_value(
-            *preferences.composer_submit_behavior().value(),
-            &[
-                ComposerSubmitBehavior::ControlS,
-                ComposerSubmitBehavior::Enter,
-            ],
-            composer_submit_label,
-        )),
-        _ => None,
+fn render_theme_preview(buf: &mut ratatui::buffer::Buffer, area: Rect, theme: &Theme) {
+    let sample_width = area.width.min(SETTINGS_THEME_PREVIEW_CELLS);
+    for index in 0..sample_width {
+        crate::ui::component::paint::put(
+            buf,
+            area.x.saturating_add(index),
+            area.y,
+            ROW,
+            theme.icons().horizontal_rule(),
+            theme.gradient_style(normalized_t(index, sample_width.max(ROW))),
+        );
+    }
+    for (offset, token) in [
+        Token::SurfaceSunken,
+        Token::SurfaceBase,
+        Token::SurfaceRaised,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let x = area
+            .x
+            .saturating_add(sample_width)
+            .saturating_add(ROW)
+            .saturating_add(u16::try_from(offset).unwrap_or(0));
+        crate::ui::component::paint::put(buf, x, area.y, ROW, " ", theme.style(token));
     }
 }
 
-fn settings_preference_label(preference: SettingsPreference) -> &'static str {
-    match preference {
-        SettingsPreference::DisplayLabel => "Display label",
-        SettingsPreference::Provider => "Provider",
-        SettingsPreference::Profile => "Profile",
-        SettingsPreference::Credential => "Credential",
-        SettingsPreference::Source => "Source",
-        SettingsPreference::Model => "Model",
-        SettingsPreference::Mode => "Thinking",
-        SettingsPreference::ThemePreset => "Theme preset",
-        SettingsPreference::ColorMode => "Color mode",
-        SettingsPreference::GlyphMode => "Glyph mode",
-        SettingsPreference::ReducedMotion => "Reduced motion",
-        SettingsPreference::Density => "Density",
-        SettingsPreference::Approvals => "Approvals",
-        SettingsPreference::Retention => "Retention",
-        SettingsPreference::Logging => "Logging",
-        SettingsPreference::Layout => "Layout",
-        SettingsPreference::TerminalTimestampStyle => "Timestamp style",
-        SettingsPreference::ComposerSubmitBehavior => "Composer submit",
+fn render_settings_theme_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    render_settings_page_header(
+        frame,
+        Rect::new(area.x, area.y, area.width, TWO_ROWS.min(area.height)),
+        model,
+        "Choose theme",
+        "Each option previews its gradient and three surface levels.",
+    );
+    let mut y = area.y.saturating_add(TWO_ROWS);
+    for (index, preset) in [
+        ThemePreset::System,
+        ThemePreset::Light,
+        ThemePreset::Dark,
+        ThemePreset::Aurora,
+        ThemePreset::Ember,
+        ThemePreset::Midnight,
+        ThemePreset::Ocean,
+        ThemePreset::Forest,
+        ThemePreset::Rose,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if y >= area.bottom() {
+            break;
+        }
+        let selected = index == model.settings_workspace.choice_picker_selected;
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let preview_theme = Theme::from_preset_with_icons(
+            preset,
+            model.theme().mode(),
+            model.theme().depth(),
+            model.theme().icons().mode(),
+        );
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.x,
+            y,
+            SETTINGS_THEME_LABEL_WIDTH.min(area.width),
+            &format!("{marker} {}", THEME_OPTIONS[index]),
+            if selected {
+                model.theme().style(Token::FocusRing)
+            } else {
+                model.theme().style(Token::TextSecondary)
+            },
+        );
+        render_theme_preview(
+            frame.buffer_mut(),
+            Rect::new(
+                area.x.saturating_add(SETTINGS_THEME_PREVIEW_INSET),
+                y,
+                area.width.saturating_sub(SETTINGS_THEME_PREVIEW_INSET),
+                ROW,
+            ),
+            &preview_theme,
+        );
+        y = y.saturating_add(ROW);
     }
 }
 
-fn settings_scroll(lines: &[Line<'static>], selected: SettingsPreference, area: Rect) -> u16 {
-    let needle = settings_preference_label(selected);
-    let target = lines
+fn render_settings_shortcuts(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let rows = COMMANDS
         .iter()
-        .position(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-                .contains(needle)
+        .filter_map(|command| {
+            command.key_hint.map(|key| KeyValue {
+                label: key,
+                value: command.description,
+                chip: None,
+            })
         })
-        .unwrap_or_default();
-    let prefix_rows = Paragraph::new(Text::from(lines[..target].to_vec()))
-        .wrap(Wrap { trim: false })
-        .line_count(area.width);
-    let visible_rows = usize::from(area.height.max(1));
-    u16::try_from(prefix_rows.saturating_sub(visible_rows / 3)).unwrap_or(u16::MAX)
+        .collect::<Vec<_>>();
+    KeyValueTable::new(model.theme(), &rows).render(frame.buffer_mut(), area);
 }
 
-fn theme_preset_label(value: ThemePreset) -> &'static str {
-    match value {
-        ThemePreset::System => "system",
-        ThemePreset::Light => "light",
-        ThemePreset::Dark => "dark",
-        ThemePreset::Aurora => "aurora",
-        ThemePreset::Ember => "ember",
-        ThemePreset::Midnight => "midnight",
-        ThemePreset::Ocean => "ocean",
-        ThemePreset::Forest => "forest",
-        ThemePreset::Rose => "rose",
+fn settings_provenance(model: &Model, preference: SettingsPreference) -> Provenance {
+    let local = &model.settings().local_profile;
+    let source = match preference {
+        SettingsPreference::DisplayLabel => Some(local.display_label().source()),
+        SettingsPreference::ThemePreset => Some(local.preferences().theme_preset().source()),
+        SettingsPreference::ColorMode => Some(local.preferences().color_mode().source()),
+        SettingsPreference::GlyphMode => Some(local.preferences().glyph_mode().source()),
+        SettingsPreference::PromptStatusDetail => {
+            Some(local.preferences().prompt_status_detail().source())
+        }
+        SettingsPreference::ReducedMotion => Some(local.preferences().reduced_motion().source()),
+        SettingsPreference::Density => Some(local.preferences().density().source()),
+        SettingsPreference::Layout => Some(local.preferences().layout().source()),
+        SettingsPreference::TerminalTimestampStyle => {
+            Some(local.preferences().terminal_timestamp_style().source())
+        }
+        SettingsPreference::ComposerSubmitBehavior => {
+            Some(local.preferences().composer_submit_behavior().source())
+        }
+        _ => None,
+    };
+    match source {
+        Some(Source::Default) => Provenance::Default,
+        Some(Source::UserFile) => Provenance::User,
+        Some(Source::WorkspaceFile) => Provenance::Workspace,
+        Some(Source::Environment | Source::CommandLine) => Provenance::Env,
+        None => match preference {
+            SettingsPreference::Mode | SettingsPreference::Profile => Provenance::Profile,
+            SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging
+            | SettingsPreference::StateIndicators => Provenance::Policy,
+            SettingsPreference::ColorDepth | SettingsPreference::Version => Provenance::System,
+            _ => Provenance::Runtime,
+        },
     }
 }
 
-fn color_mode_label(value: ColorMode) -> &'static str {
-    match value {
-        ColorMode::Color => "color",
-        ColorMode::Soft => "soft",
-        ColorMode::Vivid => "vivid",
-        ColorMode::NoColor => "no color",
-        ColorMode::HighContrast => "high contrast",
+fn settings_row_description(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::DisplayLabel => "Local identity shown only in this terminal.",
+        SettingsPreference::Provider => "Active provider adapter.",
+        SettingsPreference::Profile => "Named provider profile used by new sessions.",
+        SettingsPreference::Credential => "Safe connection state; secret material is never shown.",
+        SettingsPreference::Source => {
+            "Credential precedence is environment, vault, then session only."
+        }
+        SettingsPreference::Model => "Active session model.",
+        SettingsPreference::Mode => "Provider-native reasoning default for new sessions.",
+        SettingsPreference::ThemePreset => "Palette preview uses the resolved three-stop gradient.",
+        SettingsPreference::ColorMode => "Color treatment preserves documented contrast floors.",
+        SettingsPreference::GlyphMode => "Nerd Font needs a patched terminal font.",
+        SettingsPreference::PromptStatusDetail => {
+            "Chooses essential, workspace, or token metadata."
+        }
+        SettingsPreference::ReducedMotion => "Freezes animated status indicators.",
+        SettingsPreference::Density => "Controls spacing between terminal elements.",
+        SettingsPreference::Approvals => "Every capability decision remains explicit and per call.",
+        SettingsPreference::Retention => "Sessions remain replayable until explicitly deleted.",
+        SettingsPreference::Logging => "Credentials and prompt content stay out of diagnostics.",
+        SettingsPreference::Layout => "Responsive or forced single-column panel arrangement.",
+        SettingsPreference::TerminalTimestampStyle => {
+            "Relative, absolute, or hidden transcript times."
+        }
+        SettingsPreference::ComposerSubmitBehavior => "Selects the key that submits a prompt.",
+        SettingsPreference::GlyphCheck => "Every icon in the currently selected glyph mode.",
+        SettingsPreference::KeyboardNavigation => "No Settings action requires a mouse.",
+        SettingsPreference::StateIndicators => "Important state always uses a glyph plus fill.",
+        SettingsPreference::Workspace => "Current safe workspace label.",
+        SettingsPreference::ColorDepth => "Detected once from terminal capability variables.",
+        SettingsPreference::Version => "Running AutoHarness package version.",
+        SettingsPreference::ManageProviders => "Open the full provider profile workspace.",
+        SettingsPreference::ConnectCredential => "Open the existing zeroizing credential editor.",
+        SettingsPreference::ConfigureModels => "Choose a profile default model and thinking level.",
+        SettingsPreference::OpenSessions => "Open durable session search and lifecycle controls.",
     }
 }
 
-fn glyph_mode_label(value: GlyphMode) -> &'static str {
-    match value {
-        GlyphMode::Unicode => "unicode",
-        GlyphMode::Ascii => "ASCII",
+fn render_settings_search(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let results = model.settings_search_results();
+    let field = Rect::new(area.x, area.y, area.width, ROW.min(area.height));
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.settings_workspace.search_query,
+        model.settings_workspace.search_query.chars().count(),
+        Some(u32::try_from(results.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), field);
+    let mut y = area.y.saturating_add(2).min(area.bottom());
+    let mut previous = None;
+    for (result_index, (category, _, preference)) in results.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        if previous != Some(category) {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                area.x,
+                y,
+                area.width,
+                category.label(),
+                model.theme().style(Token::Accent),
+            );
+            y = y.saturating_add(ROW);
+            previous = Some(category);
+        }
+        if y >= area.bottom() {
+            break;
+        }
+        let selected = result_index == model.settings_workspace.search_selected;
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let text = format!(
+            "{marker} {}  {}",
+            preference.label(),
+            model.settings_row_value(preference)
+        );
+        let style = if selected {
+            model.theme().filled(Token::SurfaceSelected)
+        } else {
+            model.theme().style(Token::TextSecondary)
+        };
+        crate::ui::component::paint::put(frame.buffer_mut(), area.x, y, area.width, &text, style);
+        y = y.saturating_add(ROW);
     }
 }
 
-fn bool_label(value: bool) -> &'static str {
-    if value { "on" } else { "off" }
-}
-
-fn density_label(value: Density) -> &'static str {
-    match value {
-        Density::Comfortable => "comfortable",
-        Density::Compact => "compact",
+fn render_settings_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.height == 0 {
+        return;
     }
-}
-
-fn layout_label(value: PreferenceLayout) -> &'static str {
-    match value {
-        PreferenceLayout::Responsive => "responsive",
-        PreferenceLayout::SingleColumn => "single column",
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let selected = SettingsPreference::rows(category)
+        .get(model.settings_workspace.selected)
+        .copied();
+    let first = if model.settings_workspace.search_active {
+        "Search Settings by label or current value".to_owned()
+    } else if let Some(preference) = selected.filter(|row| row.editable()) {
+        format!(
+            "{}  {}  {}",
+            preference.label(),
+            model.settings_row_value(preference),
+            settings_provenance(model, preference).label()
+        )
+    } else {
+        category.label().to_owned()
+    };
+    frame.render_widget(
+        Paragraph::new(first).style(model.theme().style(Token::TextSecondary)),
+        Rect::new(area.x, area.y, area.width, ROW),
+    );
+    if area.height < TWO_ROWS {
+        return;
     }
+    let controls = settings_footer_controls(model, selected);
+    frame.render_widget(
+        Paragraph::new(controls).style(model.theme().style(Token::TextMuted)),
+        Rect::new(area.x, area.y.saturating_add(ROW), area.width, ROW),
+    );
 }
 
-fn timestamp_style_label(value: TerminalTimestampStyle) -> &'static str {
-    match value {
-        TerminalTimestampStyle::Relative => "relative",
-        TerminalTimestampStyle::Absolute => "absolute",
-        TerminalTimestampStyle::Hidden => "hidden",
+fn settings_footer_controls(model: &Model, selected: Option<SettingsPreference>) -> String {
+    if model.settings_workspace.search_active {
+        return "Type filter  Up/Down select  Enter open  Esc close".to_owned();
+    }
+    if model.settings_workspace.choice_picker_open {
+        return "Up/Down choose  Enter apply  Esc cancel".to_owned();
+    }
+    if model.settings_workspace.nav_focus {
+        return "Up/Down category  Tab/Enter rows  Ctrl+F search  Esc Chat".to_owned();
+    }
+    let Some(preference) = selected.filter(|row| row.editable()) else {
+        return "Tab categories  Ctrl+F search  Esc categories".to_owned();
+    };
+    let mut controls = match preference {
+        SettingsPreference::DisplayLabel => "Enter edit".to_owned(),
+        SettingsPreference::ManageProviders
+        | SettingsPreference::ConnectCredential
+        | SettingsPreference::ConfigureModels
+        | SettingsPreference::OpenSessions => "Enter activate".to_owned(),
+        SettingsPreference::ReducedMotion => "Left/Right or Space toggle".to_owned(),
+        _ => "Left/Right change".to_owned(),
+    };
+    let provenance = settings_provenance(model, preference);
+    if provenance == Provenance::User {
+        controls.push_str(&format!(
+            "  Backspace inherit -> {}",
+            settings_default_value(preference)
+        ));
+    }
+    if !settings_default_value(preference).is_empty() {
+        controls.push_str(&format!(
+            "  Shift+Backspace default -> {}",
+            settings_default_value(preference)
+        ));
+    }
+    controls.push_str("  Tab categories  Esc categories");
+    controls
+}
+
+fn settings_default_value(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::ThemePreset => "system",
+        SettingsPreference::ColorMode => "color",
+        SettingsPreference::GlyphMode => "unicode",
+        SettingsPreference::PromptStatusDetail => "workspace",
+        SettingsPreference::ReducedMotion => "off",
+        SettingsPreference::Density => "comfortable",
+        SettingsPreference::Layout => "responsive",
+        SettingsPreference::TerminalTimestampStyle => "relative",
+        SettingsPreference::ComposerSubmitBehavior => "Ctrl+S",
+        _ => "",
     }
 }
 
@@ -2023,18 +1502,24 @@ fn session_timestamp_label(model: &Model, updated_at_ms: i64) -> Option<String> 
         .terminal_timestamp_style()
         .value()
     {
-        TerminalTimestampStyle::Relative => Some("updated".to_owned()),
-        TerminalTimestampStyle::Absolute => Some(format!("updated {updated_at_ms}")),
+        TerminalTimestampStyle::Relative => Some(format_relative_age(relative_age(
+            updated_at_ms,
+            model.wall_ms(),
+        ))),
+        TerminalTimestampStyle::Absolute => Some(format!("{updated_at_ms} ms")),
         TerminalTimestampStyle::Hidden => None,
     }
 }
 
-fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
-    match value {
-        ComposerSubmitBehavior::ControlS => "Ctrl+S / Ctrl+Enter",
-        ComposerSubmitBehavior::Enter => "Enter",
+fn session_age_group(model: &Model, updated_at_ms: i64) -> &'static str {
+    match age_bucket(updated_at_ms, model.wall_ms()) {
+        AgeBucket::Today => "Today",
+        AgeBucket::Yesterday => "Yesterday",
+        AgeBucket::ThisWeek => "This week",
+        AgeBucket::Older => "Older",
     }
 }
+
 /// Renders provider choices, connected profiles, and provider-specific setup.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
@@ -2045,14 +1530,18 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
 
-    let compact = presentation(model).compact;
-    let notice_height = if model.notice.is_some() && inner.height >= 8 {
-        if compact { 1 } else { 2 }
+    let compact = presentation(model).compact || inner.width < PROFILE_COMPACT_WIDTH;
+    let notice_height = if model.notice.is_some() && inner.height >= PAGE_HEADER_TALL_MIN {
+        if compact { ROW } else { TWO_ROWS }
     } else {
         0
     };
-    let header_height = if inner.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(inner.height >= 4);
+    let header_height = if inner.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(inner.height >= PAGE_HELP_COMFORTABLE);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2063,13 +1552,12 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         ])
         .split(inner);
 
-    render_settings_page_header(
-        frame,
-        rows[0],
-        model,
-        "Providers",
-        "Connect a provider. Connected accounts stay visible alongside the list.",
-    );
+    let subtitle = if compact {
+        "Add or manage provider connections."
+    } else {
+        "Choose a provider on the left. Manage connected providers on the right."
+    };
+    render_settings_page_header(frame, rows[0], model, "Providers", subtitle);
     let (list_area, detail_area) = profile_list_detail_areas(rows[1], model);
     render_connected_profiles(frame, list_area, model);
     if let Some(detail_area) = detail_area {
@@ -2084,11 +1572,23 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             "Chat"
         };
+        let vertical = model.theme().icons().vertical_navigation_hint();
+        let horizontal = model.theme().icons().horizontal_navigation_hint();
+        let help = if inner.width < PROFILE_HELP_NARROW {
+            format!("{vertical} choose  Enter open  Esc {return_to}")
+        } else if inner.width < PROFILE_HELP_MEDIUM {
+            format!("{vertical} choose  {horizontal} section  Enter open  Esc {return_to}")
+        } else if inner.width < PROFILE_HELP_WIDE {
+            format!(
+                "{horizontal} section  {vertical} choose  Enter open  Alt+K sign-in  Esc {return_to}"
+            )
+        } else {
+            format!(
+                "{horizontal} section  {vertical} choose  Enter open  Alt+K sign-in  Alt+T test  Del remove  Esc {return_to}"
+            )
+        };
         frame.render_widget(
-            Paragraph::new(format!(
-                "←/→ section  ↑/↓ choose  Enter open/activate  Esc {return_to}"
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new(help).style(visual_style(model, VisualRole::Muted)),
             rows[3],
         );
     }
@@ -2096,32 +1596,18 @@ fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         render_codex_authentication(frame, area, model);
     } else if model.profile_center.editor.is_some() {
         render_profile_editor(frame, area, model);
-    } else if model.profile_center.credential.is_some() {
-        render_profile_credential(frame, area, model);
     }
 }
 
 fn profile_list_detail_areas(area: Rect, model: &Model) -> (Rect, Option<Rect>) {
-    if !presentation(model).single_column && area.width >= 60 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
-            .split(area);
-        (columns[0], Some(columns[1]))
-    } else {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-            .split(area);
-        (rows[0], Some(rows[1]))
-    }
+    ui_layout::profile_list_detail_areas(area, model)
 }
 
 fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ProviderChoices;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Available providers ")
+        .title(" Provider catalog ")
         .border_style(visual_style(
             model,
             if focused {
@@ -2140,38 +1626,83 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .profile_center
         .choice_selected
         .min(PROVIDER_CHOICES.len().saturating_sub(1));
-    let lines = PROVIDER_CHOICES
+    let scroll = profile_list_scroll(selected, PROVIDER_CHOICES.len(), inner.height);
+    for (index, choice) in PROVIDER_CHOICES
         .iter()
+        .copied()
         .enumerate()
-        .map(|(index, choice)| {
-            let selected = index == selected;
-            let style = if selected && focused {
-                visual_style(model, VisualRole::Selected)
-            } else {
-                visual_style(model, VisualRole::Normal)
-            };
-            let marker = if selected {
-                selection_marker(model)
-            } else {
-                " "
-            };
-            Line::styled(
-                format!(
-                    "{marker} {:<22} {}",
-                    choice.label(),
-                    provider_choice_status(model, *choice)
-                ),
-                style,
-            )
-        })
-        .collect::<Vec<_>>();
-    let scroll = profile_list_scroll(selected, lines.len(), inner.height);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        inner,
-    );
+        .skip(usize::from(scroll))
+    {
+        let y = inner
+            .y
+            .saturating_add(u16::try_from(index.saturating_sub(usize::from(scroll))).unwrap_or(0));
+        if y >= inner.bottom() {
+            break;
+        }
+        let row = Rect::new(inner.x, y, inner.width, ROW);
+        let selected_row = index == selected;
+        if selected_row && focused {
+            crate::ui::component::paint::fill(
+                frame.buffer_mut(),
+                row,
+                model.theme().style(Token::SurfaceSelected),
+                Some(' '),
+            );
+        }
+        let style = if selected_row && focused {
+            model.theme().style(Token::TextOnAccent)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        };
+        let marker = if selected_row {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let label = format!("{marker} {}", choice.label());
+        let label_width = crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            row.x,
+            row.y,
+            row.width,
+            &label,
+            style,
+        );
+        let (status, variant) = provider_choice_chip(model, choice);
+        let chip = Chip::new(model.theme(), status, variant);
+        let chip_width = chip.measure().min(row.width.saturating_sub(label_width));
+        let reason = provider_unavailable_reason(choice);
+        let reason_width = reason
+            .map(|reason| {
+                u16::try_from(reason.len())
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(1)
+            })
+            .unwrap_or(0)
+            .min(
+                row.width
+                    .saturating_sub(label_width)
+                    .saturating_sub(chip_width),
+            );
+        let chip_x = row
+            .right()
+            .saturating_sub(reason_width)
+            .saturating_sub(chip_width);
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(chip_x, row.y, chip_width, ROW),
+        );
+        if let Some(reason) = reason {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                chip_x.saturating_add(chip_width).saturating_add(1),
+                row.y,
+                reason_width.saturating_sub(1),
+                reason,
+                model.theme().style(Token::TextMuted),
+            );
+        }
+    }
 }
 
 fn profile_list_scroll(selected: usize, count: usize, visible: u16) -> u16 {
@@ -2187,7 +1718,7 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let focused = model.profile_center.focus == ProfileCenterFocus::ConnectedProfiles;
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Connected accounts ")
+        .title(" Saved connections ")
         .border_style(visual_style(
             model,
             if focused {
@@ -2202,152 +1733,397 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let Some(profile) = model.selected_profile() else {
         if inner.width > 0 && inner.height > 0 {
             frame.render_widget(
-                Paragraph::new("No connected accounts yet. Choose a provider to get started.")
-                    .style(visual_style(model, VisualRole::Muted)),
+                Paragraph::new(
+                    "No saved connections yet. Choose a provider on the left to connect.",
+                )
+                .style(visual_style(model, VisualRole::Muted)),
                 inner,
             );
         }
         return;
     };
-    let mut lines = profiles
-        .iter()
-        .map(|candidate| {
-            let selected = candidate.id == profile.id;
-            let marker = if selected {
-                selection_marker(model)
+    let button_rows = provider_button_rows(inner);
+    let list_height = u16::try_from(profiles.len())
+        .unwrap_or(u16::MAX)
+        .min(button_rows.body.height);
+    for (index, candidate) in profiles.iter().enumerate() {
+        let y = button_rows
+            .body
+            .y
+            .saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
+        if y >= button_rows.body.bottom() {
+            break;
+        }
+        let selected = candidate.id == profile.id;
+        let row = Rect::new(button_rows.body.x, y, button_rows.body.width, ROW);
+        if selected && focused {
+            crate::ui::component::paint::fill(
+                frame.buffer_mut(),
+                row,
+                model.theme().style(Token::SurfaceSelected),
+                Some(' '),
+            );
+        }
+        let style = if selected && focused {
+            model.theme().style(Token::TextOnAccent)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        };
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            row.x,
+            row.y,
+            row.width,
+            &format!("{marker} {}", display_safe(&candidate.id)),
+            style,
+        );
+        let state = if candidate.active {
+            "active"
+        } else {
+            candidate.connection.label()
+        };
+        let chip = Chip::new(
+            model.theme(),
+            state,
+            if candidate.active {
+                ChipVariant::Success
             } else {
-                " "
-            };
-            let state = if candidate.active {
-                "active"
-            } else {
-                candidate.connection.label()
-            };
-            Line::styled(
-                format!("{marker} {:<20} {state}", display_safe(&candidate.id)),
-                if selected && focused {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.push(Line::from(""));
-    lines.extend([
-        detail_line(model, "Name", &profile.id),
-        detail_line(model, "Provider", profile.kind.as_str()),
-        detail_line(
-            model,
-            "Status",
-            if profile.active {
-                "active"
-            } else {
-                "available"
+                ChipVariant::Neutral
             },
+        );
+        let width = chip.measure().min(row.width);
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(row.right().saturating_sub(width), row.y, width, ROW),
+        );
+    }
+    let credential_stored = matches!(
+        profile.credential_state,
+        crate::model::ProfileCredentialStateLabel::Stored
+    );
+    let (sign_in, managed_by) = if profile.kind == ProviderKindLabel::CodexCli {
+        (
+            "ChatGPT browser",
+            if credential_stored {
+                "operating-system vault"
+            } else {
+                "not connected"
+            },
+        )
+    } else {
+        (
+            "API key",
+            match profile.credential_source {
+                crate::model::CredentialSourceLabel::Environment => "environment variable",
+                crate::model::CredentialSourceLabel::CredentialVault => "operating-system vault",
+                crate::model::CredentialSourceLabel::SessionOnly => "not saved",
+            },
+        )
+    };
+    let status = if profile.active && credential_stored {
+        "active"
+    } else if profile.active {
+        "selected - sign-in required"
+    } else {
+        "saved"
+    };
+    let model_default = profile
+        .default_model
+        .as_deref()
+        .unwrap_or("provider default");
+    let identity = [
+        KeyValue {
+            label: "Profile",
+            value: &profile.id,
+            chip: profile.active.then_some("active"),
+        },
+        KeyValue {
+            label: "Provider",
+            value: provider_display_name(profile.kind),
+            chip: None,
+        },
+    ];
+    let connection = [
+        KeyValue {
+            label: "Status",
+            value: status,
+            chip: None,
+        },
+        KeyValue {
+            label: "Connection",
+            value: profile.connection.label(),
+            chip: None,
+        },
+    ];
+    let credential = [
+        KeyValue {
+            label: "Sign-in",
+            value: sign_in,
+            chip: None,
+        },
+        KeyValue {
+            label: "Credential",
+            value: managed_by,
+            chip: None,
+        },
+    ];
+    let defaults = [
+        KeyValue {
+            label: "Model",
+            value: model_default,
+            chip: None,
+        },
+        KeyValue {
+            label: "Thinking",
+            value: &profile.default_mode,
+            chip: None,
+        },
+    ];
+    let mut y = button_rows.body.y.saturating_add(list_height);
+    for (title, rows) in [
+        ("Identity", identity.as_slice()),
+        ("Connection", connection.as_slice()),
+        ("Credential", credential.as_slice()),
+        ("Defaults", defaults.as_slice()),
+    ] {
+        y = render_provider_section(frame, button_rows.body, y, model, title, rows);
+    }
+    if profile.kind == ProviderKindLabel::Router && y < button_rows.body.bottom() {
+        let router = [
+            KeyValue {
+                label: "Base URL",
+                value: &profile.base_url,
+                chip: None,
+            },
+            KeyValue {
+                label: "Project",
+                value: &profile.project,
+                chip: None,
+            },
+            KeyValue {
+                label: "Auth header",
+                value: &profile.auth_header,
+                chip: None,
+            },
+        ];
+        let _ = render_provider_section(frame, button_rows.body, y, model, "Router", &router);
+    }
+    let primary = provider_primary_buttons(model);
+    ButtonRow::new(model.theme(), &primary).render(frame.buffer_mut(), button_rows.primary);
+    let secondary = provider_secondary_buttons();
+    ButtonRow::new(model.theme(), &secondary).render(frame.buffer_mut(), button_rows.secondary);
+}
+
+#[derive(Clone, Copy)]
+struct ProviderButtonRows {
+    body: Rect,
+    primary: Rect,
+    secondary: Rect,
+}
+
+fn provider_button_rows(inner: Rect) -> ProviderButtonRows {
+    let secondary = Rect::new(
+        inner.x,
+        inner.bottom().saturating_sub(ROW),
+        inner.width,
+        ROW.min(inner.height),
+    );
+    let primary = Rect::new(
+        inner.x,
+        secondary.y.saturating_sub(ROW),
+        inner.width,
+        ROW.min(inner.height.saturating_sub(ROW)),
+    );
+    ProviderButtonRows {
+        body: Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(TWO_ROWS),
         ),
-        detail_line(model, "Connection", profile.connection.label()),
-        detail_line(model, "Credential", profile.credential_state.as_str()),
-        detail_line(model, "Source", profile.credential_source.as_str()),
-        detail_line(
-            model,
-            "Default model",
-            profile.default_model.as_deref().unwrap_or("not set"),
+        primary,
+        secondary,
+    }
+}
+
+fn render_provider_section(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    y: u16,
+    model: &Model,
+    title: &str,
+    rows: &[KeyValue<'_>],
+) -> u16 {
+    if y >= area.bottom() {
+        return y;
+    }
+    crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        area.x,
+        y,
+        area.width,
+        title,
+        model.theme().style(Token::Accent),
+    );
+    let table_y = y.saturating_add(ROW);
+    let table = Rect::new(
+        area.x,
+        table_y,
+        area.width,
+        area.bottom().saturating_sub(table_y),
+    );
+    let used = KeyValueTable::new(model.theme(), rows).measure(table.width);
+    KeyValueTable::new(model.theme(), rows).render(frame.buffer_mut(), table);
+    table_y.saturating_add(used)
+}
+
+fn provider_primary_buttons(model: &Model) -> Vec<Button<MouseAction>> {
+    vec![
+        Button::new(
+            if model
+                .selected_profile()
+                .is_some_and(|profile| profile.kind == ProviderKindLabel::CodexCli)
+            {
+                "Sign in"
+            } else {
+                "API key"
+            },
+            None,
+            ButtonVariant::Primary,
+            MouseAction::ProfileCredential,
         ),
-        detail_line(model, "Thinking", &profile.default_mode),
-    ]);
-    if profile.kind == ProviderKindLabel::Router {
-        lines.push(detail_line(model, "Base URL", &profile.base_url));
-        if !profile.project.is_empty() {
-            lines.push(detail_line(model, "Project", &profile.project));
-        }
-        if !profile.auth_header.is_empty() {
-            lines.push(detail_line(model, "Auth header", &profile.auth_header));
-        }
-    }
-    if let ProfileConnectionState::Failed(reason) = &profile.connection {
-        lines.push(detail_line(model, "Failure", reason));
-    }
-    if model.profiles().pending_recovery > 0 {
-        lines.push(detail_line(model, "Recovery", "pending"));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::styled(
-        "New  Credential  Test  Default model",
-        visual_style(model, VisualRole::Assistant),
-    ));
-    lines.push(Line::styled(
-        "Disconnect  Delete",
-        visual_style(model, VisualRole::Warning),
-    ));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        Button::new(
+            "Test",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileTest,
+        ),
+        Button::new(
+            "Model",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDefaultModel,
+        ),
+    ]
+}
+
+fn provider_secondary_buttons() -> Vec<Button<MouseAction>> {
+    vec![
+        Button::new(
+            "Disconnect",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::ProfileDisconnect,
+        ),
+        Button::new(
+            "Remove",
+            None,
+            ButtonVariant::Danger,
+            MouseAction::ProfileDelete,
+        ),
+    ]
 }
 
 fn render_codex_authentication(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Sign in to Codex ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let popup = codex_auth_rect(area);
+    let can_start = !matches!(
+        model.profile_center.codex_login,
+        crate::model::CodexLoginState::Starting | crate::model::CodexLoginState::BrowserOpened
+    );
+    let mut buttons = Vec::new();
+    if can_start {
+        buttons.push(Button::new(
+            if model.profile_center.codex_login == crate::model::CodexLoginState::Failed {
+                "Retry"
+            } else {
+                "Sign in"
+            },
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::CodexLogin,
+        ));
+    }
+    buttons.push(Button::new(
+        "Cancel",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::CodexLoginCancel,
+    ));
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Sign in to Codex",
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let login_marker = if model.profile_center.auth_selected == 0 {
-        selection_marker(model)
-    } else {
-        " "
+    let (action, status) = match model.profile_center.codex_login {
+        crate::model::CodexLoginState::Idle => (
+            format!("{} Sign in with ChatGPT", selection_marker(model)),
+            "The browser will open for secure sign-in.",
+        ),
+        crate::model::CodexLoginState::Starting => (
+            format!("{} Opening your browser...", spinner(model)),
+            "AutoHarness is preparing a secure local callback.",
+        ),
+        crate::model::CodexLoginState::BrowserOpened => (
+            "Browser opened".to_owned(),
+            "Finish signing in there. AutoHarness will connect automatically.",
+        ),
+        crate::model::CodexLoginState::Failed => (
+            format!("{} Try sign-in again", selection_marker(model)),
+            "Sign-in did not finish. Press Enter to retry.",
+        ),
     };
-    let save_marker = if model.profile_center.auth_selected == 1 {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(
-                "Connect your ChatGPT Codex subscription.",
-                visual_style(model, VisualRole::User),
-            ),
-            Line::from(""),
-            Line::styled(
-                format!("{login_marker} Enter  Open official browser sign-in"),
-                visual_style(model, VisualRole::Normal),
-            ),
-            Line::styled(
-                format!("{save_marker} S      Save this Codex account after sign-in"),
-                visual_style(model, VisualRole::Normal),
-            ),
-            Line::from(""),
-            Line::styled(
-                "↑/↓ choose  Enter confirm  Esc return to Providers",
-                visual_style(model, VisualRole::Muted),
-            ),
-            Line::from(""),
-            Line::styled(
-                "AutoHarness never reads or stores Codex credentials.",
-                visual_style(model, VisualRole::Muted),
-            ),
-        ])
-        .wrap(Wrap { trim: false }),
-        inner,
-    );
+    let lines = vec![
+        Line::styled(
+            "Connect your Codex subscription in your default browser.",
+            visual_style(model, VisualRole::User),
+        ),
+        Line::from(""),
+        Line::styled(action, visual_style(model, VisualRole::Selected)),
+        Line::styled(status, visual_style(model, VisualRole::Muted)),
+        Line::from(""),
+        Line::styled(
+            "Sign-in tokens are kept in your operating-system credential vault.",
+            visual_style(model, VisualRole::Muted),
+        ),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -> &'static str {
-    match choice {
+fn provider_display_name(kind: ProviderKindLabel) -> &'static str {
+    match kind {
+        ProviderKindLabel::Gemini => "Google AI Studio",
+        ProviderKindLabel::Router => "OpenAI-compatible API",
+        ProviderKindLabel::CodexCli => "Codex subscription",
+    }
+}
+
+fn provider_choice_chip(
+    model: &Model,
+    choice: crate::model::ProviderChoice,
+) -> (&'static str, ChipVariant) {
+    let label = match choice {
         crate::model::ProviderChoice::Gemini | crate::model::ProviderChoice::GoogleAiStudio => {
             "API key"
         }
         crate::model::ProviderChoice::Codex => {
-            if model
-                .profiles()
-                .profiles
-                .iter()
-                .any(|profile| profile.kind == ProviderKindLabel::CodexCli)
-            {
+            if model.profiles().profiles.iter().any(|profile| {
+                profile.kind == ProviderKindLabel::CodexCli
+                    && matches!(
+                        profile.credential_state,
+                        crate::model::ProfileCredentialStateLabel::Stored
+                    )
+            }) {
                 "Connected"
             } else {
                 "Subscription"
@@ -2356,20 +2132,45 @@ fn provider_choice_status(model: &Model, choice: crate::model::ProviderChoice) -
         crate::model::ProviderChoice::Cursor => "Unavailable",
         crate::model::ProviderChoice::ClaudeCode => "Unavailable",
         crate::model::ProviderChoice::OpenAiCompatible => "API key",
+    };
+    let variant = match choice {
+        crate::model::ProviderChoice::Cursor | crate::model::ProviderChoice::ClaudeCode => {
+            ChipVariant::Muted
+        }
+        crate::model::ProviderChoice::Codex if label == "Connected" => ChipVariant::Success,
+        _ => ChipVariant::Neutral,
+    };
+    (label, variant)
+}
+
+fn provider_unavailable_reason(choice: crate::model::ProviderChoice) -> Option<&'static str> {
+    match choice {
+        crate::model::ProviderChoice::Cursor => Some("adapter not available"),
+        crate::model::ProviderChoice::ClaudeCode => Some("adapter not available"),
+        crate::model::ProviderChoice::Gemini
+        | crate::model::ProviderChoice::GoogleAiStudio
+        | crate::model::ProviderChoice::Codex
+        | crate::model::ProviderChoice::OpenAiCompatible => None,
     }
 }
 
-fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let header_height = if area.height >= 8 { 2 } else { 1 };
-    let help_height = u16::from(area.height >= 3);
+    let header_height = if area.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let help_height = u16::from(area.height >= PAGE_HELP_MIN);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),
+            Constraint::Length(TWO_ROWS.min(area.height)),
             Constraint::Min(1),
+            Constraint::Length(TWO_ROWS.min(area.height)),
             Constraint::Length(help_height),
         ])
         .split(area);
@@ -2377,202 +2178,226 @@ fn render_agent_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         frame,
         rows[0],
         model,
-        "Agents",
-        "Choose the provider, model, and thinking defaults for every new session.",
+        "Models",
+        "Choose the model and thinking mode used by every new session.",
     );
-    let inner = rows[1];
-    let step = model.agent_defaults.step;
-    let step_chip = |label, candidate| {
-        Span::styled(
-            format!(" {label} "),
-            if step == candidate {
-                visual_style(model, VisualRole::Selected)
-            } else {
-                visual_style(model, VisualRole::Muted)
-            },
+    let active_profile = model
+        .profiles()
+        .profiles
+        .iter()
+        .find(|profile| profile.active);
+    let profile_label = active_profile.map_or_else(
+        || "No active provider connection".to_owned(),
+        |profile| {
+            format!(
+                "Active profile  {}   Current default  {}",
+                display_safe(&profile.id),
+                display_safe(profile.default_model.as_deref().unwrap_or("not set"))
+            )
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(profile_label).style(model.theme().style(Token::TextSecondary)),
+        rows[1],
+    );
+    render_model_cards(frame, rows[2], model, active_profile);
+
+    if rows[3].height > 0 {
+        frame.render_widget(
+            Paragraph::new("Thinking").style(
+                if model.model_defaults.step == ModelDefaultStep::Thinking {
+                    model.theme().style(Token::Accent)
+                } else {
+                    model.theme().style(Token::TextMuted)
+                },
+            ),
+            Rect::new(rows[3].x, rows[3].y, rows[3].width, ROW),
+        );
+        SegmentedControl::new(
+            model.theme(),
+            &MODEL_THINKING_LEVELS,
+            model.model_defaults.thinking_selected,
         )
-    };
-    let mut lines = vec![
-        Line::from(vec![
-            step_chip("1  PROVIDER", AgentDefaultStep::Provider),
-            Span::raw("  "),
-            step_chip("2  MODEL", AgentDefaultStep::Model),
-            Span::raw("  "),
-            step_chip("3  THINKING", AgentDefaultStep::Thinking),
-        ]),
-        Line::from(""),
-    ];
-    match step {
-        AgentDefaultStep::Provider => {
-            lines.push(Line::styled(
-                "Choose the connected provider account",
-                visual_style(model, VisualRole::User),
-            ));
-            for (index, profile) in model.profiles().profiles.iter().enumerate() {
-                let selected = index == model.agent_defaults.profile_selected;
-                let prefix = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(
-                    format!(
-                        "{prefix} {}  {}",
-                        display_safe(&profile.id),
-                        provider_connection_label(profile)
-                    ),
-                    style,
-                ));
-            }
-            if model.profiles().profiles.is_empty() {
-                lines.push(Line::styled(
-                    "No connected accounts. Add one from Providers first.",
-                    visual_style(model, VisualRole::Muted),
-                ));
-            }
-        }
-        AgentDefaultStep::Model => {
-            lines.push(Line::styled(
-                "Choose a compatible model",
-                visual_style(model, VisualRole::User),
-            ));
-            let mut selectable_count = 0;
-            for (index, summary) in model
-                .catalog
-                .models()
-                .iter()
-                .filter(|summary| summary.selectable)
-                .enumerate()
-            {
-                selectable_count += 1;
-                let selected = index == model.agent_defaults.model_selected;
-                let prefix = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(
-                    format!(
-                        "{prefix} {}  {}",
-                        display_safe(&summary.display_name),
-                        display_safe(&summary.detail)
-                    ),
-                    style,
-                ));
-            }
-            if selectable_count == 0 {
-                lines.push(Line::styled(
-                    "Waiting for the selected provider's compatible model catalog.",
-                    visual_style(model, VisualRole::Muted),
-                ));
-            }
-        }
-        AgentDefaultStep::Thinking => {
-            lines.push(Line::styled(
-                "Thinking mode",
-                visual_style(model, VisualRole::User),
-            ));
-            for (index, effort) in [
-                "Provider default",
-                "None",
-                "Low",
-                "Medium",
-                "High",
-                "Extra high",
-                "Maximum",
-            ]
-            .iter()
-            .enumerate()
-            {
-                let selected = index == model.agent_defaults.thinking_selected;
-                let marker = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(format!("{marker} {effort}"), style));
-            }
-            lines.push(Line::styled(
-                "The chosen effort is saved with this provider default.",
-                visual_style(model, VisualRole::Muted),
-            ));
-        }
+        .render(
+            frame.buffer_mut(),
+            Rect::new(
+                rows[3].x,
+                rows[3].y.saturating_add(ROW),
+                rows[3].width,
+                ROW.min(rows[3].height.saturating_sub(ROW)),
+            ),
+        );
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     if help_height > 0 {
         frame.render_widget(
-            Paragraph::new(
-                "↑/↓ choose  Enter continue/save  Up return  Left/Right pages  Esc Settings",
-            )
-            .style(visual_style(model, VisualRole::Muted)),
-            rows[2],
+            Paragraph::new("Up/Down model  Left/Right thinking  Enter save  Esc Settings")
+                .style(visual_style(model, VisualRole::Muted)),
+            rows[4],
         );
     }
 }
 
-fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let user = &model.profiles().user;
-    let label = user.display_label.as_deref().unwrap_or("Local user");
-    let default_profile = user.default_profile.as_deref().unwrap_or("session only");
-    let default_model = user.default_model.as_deref().unwrap_or("not set");
-    let default_mode = if user.default_mode.is_empty() {
-        "safe agent"
-    } else {
-        user.default_mode.as_str()
-    };
-    let workspace_value = if user.workspace.is_empty() {
-        "current workspace"
-    } else {
-        user.workspace.as_str()
-    };
-    let first = Line::from(vec![
-        Span::styled(
-            format!(" {} ", display_safe(label)),
-            visual_style(model, VisualRole::Header),
-        ),
-        Span::styled("Default ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_profile)),
-        Span::styled("  Model ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_model)),
-        Span::styled("  Thinking ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_mode)),
-    ]);
-    let workspace = Line::from(vec![
-        Span::styled(" Workspace ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(workspace_value)),
-    ]);
-    let mut lines = vec![first];
-    if area.height >= 2 {
-        lines.push(workspace);
+fn render_model_cards(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    active_profile: Option<&crate::model::ProviderProfileProjection>,
+) {
+    let models = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        let message = if active_profile.is_some() {
+            "Waiting for the active provider's compatible model catalog."
+        } else {
+            "Connect and activate a provider from Providers first."
+        };
+        frame.render_widget(
+            Paragraph::new(message).style(model.theme().style(Token::TextMuted)),
+            area,
+        );
+        return;
     }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(app_block(model).borders(Borders::BOTTOM))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    let visible = usize::from(area.height / TWO_ROWS).max(1);
+    let selected = model
+        .model_defaults
+        .model_selected
+        .min(models.len().saturating_sub(1));
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(models.len().saturating_sub(visible));
+    for (index, summary) in models.iter().enumerate().skip(start).take(visible) {
+        let offset = u16::try_from(index.saturating_sub(start))
+            .unwrap_or(u16::MAX)
+            .saturating_mul(TWO_ROWS);
+        let card = Rect::new(
+            area.x,
+            area.y.saturating_add(offset),
+            area.width,
+            TWO_ROWS.min(area.bottom().saturating_sub(area.y.saturating_add(offset))),
+        );
+        render_model_card(
+            frame,
+            card,
+            model,
+            summary,
+            index == selected,
+            active_profile.and_then(|profile| profile.default_model.as_deref())
+                == Some(summary.model.model_id().as_str()),
+        );
+    }
 }
 
-fn provider_connection_label(profile: &ProviderProfileProjection) -> &'static str {
-    match profile.kind {
-        ProviderKindLabel::Gemini => "Google AI Studio",
-        ProviderKindLabel::Router => "OpenAI-compatible",
-        ProviderKindLabel::CodexCli => "Codex subscription",
+fn render_model_card(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    summary: &ModelSummary,
+    selected: bool,
+    is_default: bool,
+) {
+    if selected {
+        crate::ui::component::paint::fill(
+            frame.buffer_mut(),
+            area,
+            model.theme().style(Token::SurfaceSelected),
+            Some(' '),
+        );
+    }
+    let style = if selected {
+        model.theme().style(Token::TextOnAccent)
+    } else {
+        model.theme().style(Token::TextPrimary)
+    };
+    let caret = if selected {
+        model.theme().icons().glyph(Icon::SelectionCaret)
+    } else {
+        " "
+    };
+    let mut x = area.x;
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.width,
+        caret,
+        style,
+    ));
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.right().saturating_sub(x),
+        " ",
+        style,
+    ));
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.right().saturating_sub(x),
+        &display_safe(&summary.display_name),
+        style,
+    ));
+    if is_default && x < area.right() {
+        x = x.saturating_add(1);
+        let chip = Chip::new(model.theme(), "Default", ChipVariant::Accent);
+        let width = chip.measure().min(area.right().saturating_sub(x));
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(x, area.y, width, ROW.min(area.height)),
+        );
+    }
+    if let Some(context) = summary.context_window_tokens {
+        let label = format_context_window(context);
+        let width = u16::try_from(label.len())
+            .unwrap_or(u16::MAX)
+            .min(area.width);
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.right().saturating_sub(width),
+            area.y,
+            width,
+            &label,
+            model.theme().style(Token::TextMuted),
+        );
+    }
+    if area.height < TWO_ROWS {
+        return;
+    }
+    let mut chip_x = area.x.saturating_add(TWO_ROWS);
+    for capability in model_capabilities(&summary.detail) {
+        let chip = Chip::new(model.theme(), capability, ChipVariant::Neutral);
+        let width = chip.measure().min(area.right().saturating_sub(chip_x));
+        if width == 0 {
+            break;
+        }
+        chip_x = chip_x.saturating_add(chip.render(
+            frame.buffer_mut(),
+            Rect::new(chip_x, area.y.saturating_add(ROW), width, ROW),
+        ));
+        chip_x = chip_x.saturating_add(1);
+    }
+}
+
+fn model_capabilities(detail: &str) -> impl Iterator<Item = &str> {
+    detail
+        .split(['|', ','])
+        .map(str::trim)
+        .filter(|capability| !capability.is_empty())
+}
+
+fn format_context_window(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{}M context", tokens / 1_000_000)
+    } else if tokens >= 1_000 {
+        format!("{}K context", tokens / 1_000)
+    } else {
+        format!("{tokens} context")
     }
 }
 
@@ -2593,20 +2418,35 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .as_ref()
         .expect("profile editor is open");
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
     let title = match (editor.mode, editor.kind) {
-        (ProfileEditorMode::Create, ProviderKindLabel::CodexCli) => " Connect Codex subscription ",
-        (ProfileEditorMode::Create, ProviderKindLabel::Gemini) => " Connect Gemini ",
-        (ProfileEditorMode::Create, ProviderKindLabel::Router) => " Connect compatible API ",
-        (ProfileEditorMode::Edit, _) => " Edit provider profile ",
-        (ProfileEditorMode::Duplicate, _) => " Duplicate provider profile ",
+        (ProfileEditorMode::Create, ProviderKindLabel::CodexCli) => "Connect Codex subscription",
+        (ProfileEditorMode::Create, ProviderKindLabel::Gemini) => "Connect Gemini",
+        (ProfileEditorMode::Create, ProviderKindLabel::Router) => "Connect compatible API",
+        (ProfileEditorMode::Edit, _) => "Edit provider profile",
+        (ProfileEditorMode::Duplicate, _) => "Duplicate provider profile",
     };
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Save",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::ProfileEditorSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::ProfileEditorCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        title,
+        Some(Icon::RouteProviders),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2630,23 +2470,22 @@ fn render_profile_editor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         } else {
             visual_style(model, VisualRole::Normal)
         };
-        let marker = if selected { ">" } else { " " };
+        let marker = if selected {
+            selection_marker(model)
+        } else {
+            " "
+        };
         lines.push(Line::styled(
             format!("{marker} {label:<12} {}", display_safe(value)),
             style,
         ));
     }
-    lines.push(Line::from(""));
     if editor.mode == ProfileEditorMode::Create && editor.kind == ProviderKindLabel::CodexCli {
+        lines.push(Line::from(""));
         lines.push(Line::styled(
-            "Run 'codex login' in another terminal, complete browser sign-in, then save and test.",
+            "Use the Codex provider card instead. AutoHarness opens browser sign-in directly.",
             visual_style(model, VisualRole::Muted),
         ));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "↑/↓ next field  Left/Right provider  Enter save  Esc cancel",
-            visual_style(model, VisualRole::Muted),
-        )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -2658,87 +2497,91 @@ fn render_profile_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .as_ref()
         .expect("profile credential editor is open");
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
     let action = match editor.action {
         ProfileCredentialAction::Save => "Save",
         ProfileCredentialAction::Replace => "Replace",
     };
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(format!(
-            " {action} credential - {} ",
-            display_safe(&editor.profile_id)
-        ))
-        .border_style(visual_style(model, VisualRole::Warning));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let title = format!("{action} credential - {}", display_safe(&editor.profile_id));
+    let buttons = [
+        Button::new(
+            action,
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::ProfileCredentialSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::ProfileCredentialCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        &title,
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .intent(ModalIntent::Warning)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
     let masked = if editor.has_value() {
-        if presentation(model).ascii {
-            "********"
-        } else {
-            "••••••••"
-        }
+        model.theme().icons().secret_mask(8)
     } else {
-        "paste or type API key"
+        "paste or type API key".to_owned()
     };
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!("{masked}\n\nStored only in the operating-system vault.",),
             visual_style(model, VisualRole::Warning),
         )))
         .wrap(Wrap { trim: false }),
-        content,
-    );
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new("[ Save ] Enter    [ Cancel ] Esc")
-            .style(visual_style(model, VisualRole::Assistant)),
-        actions,
+        inner,
     );
 }
 
 /// Renders the searchable session-browser overlay from local state only.
 fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let popup = area;
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Sessions ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 3);
-    let list_height = inner.height.saturating_sub(search_height + help_height);
-    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
-    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height,
-        inner.width,
-        help_height,
-    );
-
-    let search_line = if model.browser.renaming {
-        format!("Rename: {}", display_safe(&model.browser.rename_buffer))
-    } else {
-        format!("Filter: {}", display_safe(&model.browser.query))
-    };
-    frame.render_widget(
-        Paragraph::new(search_line).style(visual_style(model, VisualRole::Field)),
-        search,
-    );
-
+    let confirmation_armed = model.overlay() == Some(OverlayKind::Confirmation);
+    let help_height = u16::from(inner.height >= PAGE_HELP_MIN && !confirmation_armed);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(ROW),
+            Constraint::Min(ROW),
+            Constraint::Length(help_height),
+        ])
+        .split(inner);
     let entries = model.browser_entries();
+    let search_value = if model.browser.renaming {
+        model.browser.rename_buffer.as_str()
+    } else {
+        model.browser.query.as_str()
+    };
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        search_value,
+        search_value.chars().count(),
+        (!model.browser.renaming).then_some(u32::try_from(entries.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), rows[0]);
+
     if entries.is_empty() {
         let empty = if model.sessions.sessions.is_empty() {
             "No durable sessions yet.\nCtrl+N creates and opens the first session."
@@ -2749,92 +2592,241 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Paragraph::new(empty)
                 .style(visual_style(model, VisualRole::Muted))
                 .wrap(Wrap { trim: false }),
-            list,
+            rows[1],
         );
     } else {
-        let selected_index = model
-            .browser
-            .selected
-            .as_ref()
-            .and_then(|selected| {
-                entries
-                    .iter()
-                    .position(|entry| &entry.session_id == selected)
-            })
-            .unwrap_or(0);
-        let visible = usize::from(list.height);
-        let start = selected_index
-            .saturating_add(1)
-            .saturating_sub(visible)
-            .min(entries.len().saturating_sub(visible));
-        let items = entries
-            .iter()
-            .skip(start)
-            .take(visible)
-            .map(|entry| browser_item(entry, model))
-            .collect::<Vec<_>>();
-        frame.render_widget(List::new(items), list);
+        let (list, detail) =
+            if inner.width >= SESSION_TWO_PANE_MIN_WIDTH && !presentation(model).single_column {
+                let columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(SESSION_LIST_PERCENT),
+                        Constraint::Percentage(SESSION_DETAIL_PERCENT),
+                    ])
+                    .split(rows[1]);
+                (columns[0], Some(columns[1]))
+            } else {
+                (rows[1], None)
+            };
+        render_session_list(frame, list, model, &entries);
+        if let Some(detail) = detail {
+            render_session_detail(frame, detail, model, &entries);
+        }
     }
 
-    if help.height > 0 && !model.browser.renaming {
-        let hints = if model.overlay() == Some(OverlayKind::Confirmation) {
-            "[ Y Confirm ]  [ N Cancel ]"
-        } else if help.width >= 50 {
+    if rows[2].height > 0 {
+        let hints = if model.browser.renaming {
+            "Rename session  Enter save  Esc cancel"
+        } else if rows[2].width >= SESSION_HELP_WIDE {
             "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
         } else {
             "[ Open ]  [ Rename ]  [ Delete ]  Esc"
         };
         frame.render_widget(
             Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
-            help,
+            rows[2],
         );
     }
 }
 
-fn browser_item(entry: &crate::model::SessionBrowserEntry, model: &Model) -> ListItem<'static> {
+fn render_session_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    entries: &[&crate::model::SessionBrowserEntry],
+) {
     let selected = model
         .browser
         .selected
         .as_ref()
-        .is_some_and(|candidate| candidate == &entry.session_id);
-    let prefix = if selected {
-        selection_marker(model)
-    } else {
-        " "
+        .and_then(|selected| {
+            entries
+                .iter()
+                .position(|entry| &entry.session_id == selected)
+        })
+        .unwrap_or(0);
+    let metadata = entries
+        .iter()
+        .map(|entry| session_timestamp_label(model, entry.updated_at_ms).unwrap_or_default())
+        .collect::<Vec<_>>();
+    let groups = entries
+        .iter()
+        .map(|entry| session_age_group(model, entry.updated_at_ms))
+        .collect::<Vec<_>>();
+    let default_model = model.profiles().user.default_model.as_deref();
+    let badges = entries
+        .iter()
+        .map(|entry| {
+            let mut badges = Vec::new();
+            if entry.active {
+                badges.push(ListBadge {
+                    label: "active",
+                    variant: ChipVariant::Success,
+                });
+            }
+            if entry.archived {
+                badges.push(ListBadge {
+                    label: "archived",
+                    variant: ChipVariant::Muted,
+                });
+            }
+            if entry
+                .selected_model
+                .as_ref()
+                .map(|model| model.model_id().as_str())
+                == default_model
+            {
+                badges.push(ListBadge {
+                    label: "default model",
+                    variant: ChipVariant::Accent,
+                });
+            }
+            badges
+        })
+        .collect::<Vec<_>>();
+    let items = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| PresentationListItem {
+            label: &entry.title,
+            metadata: (!metadata[index].is_empty()).then_some(metadata[index].as_str()),
+            group: Some(groups[index]),
+            badges: badges[index].as_slice(),
+            action: (),
+        })
+        .collect::<Vec<_>>();
+    ListView::new(
+        model.theme(),
+        model.theme().icons(),
+        &items,
+        selected,
+        "No matching sessions",
+    )
+    .render(frame.buffer_mut(), area);
+}
+
+fn render_session_detail(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    entries: &[&crate::model::SessionBrowserEntry],
+) {
+    let inner = Panel::new(
+        model.theme(),
+        model.theme().icons(),
+        Some(Icon::RouteSessions),
+        Some("Session details"),
+        None,
+        None,
+        false,
+    )
+    .render(frame.buffer_mut(), area);
+    let Some(entry) = model.browser.selected.as_ref().and_then(|selected| {
+        entries
+            .iter()
+            .find(|entry| &entry.session_id == selected)
+            .copied()
+    }) else {
+        return;
     };
-    let mut label = format!("{prefix} {}", display_safe(&entry.title));
-    if entry.active {
-        label.push_str("  [active]");
+    let model_label = entry.selected_model.as_ref().map_or_else(
+        || "not selected".to_owned(),
+        |model| {
+            format!(
+                "{}/{}",
+                model.provider_id().as_str(),
+                model.model_id().as_str()
+            )
+        },
+    );
+    let message_count = entry.message_count.to_string();
+    let activity =
+        session_timestamp_label(model, entry.updated_at_ms).unwrap_or_else(|| "hidden".to_owned());
+    let state = if entry.archived { "archived" } else { "active" };
+    let rows = [
+        KeyValue {
+            label: "Title",
+            value: &entry.title,
+            chip: entry.active.then_some("current"),
+        },
+        KeyValue {
+            label: "Model",
+            value: &model_label,
+            chip: None,
+        },
+        KeyValue {
+            label: "Messages",
+            value: &message_count,
+            chip: None,
+        },
+        KeyValue {
+            label: "Last activity",
+            value: &activity,
+            chip: None,
+        },
+        KeyValue {
+            label: "State",
+            value: state,
+            chip: None,
+        },
+    ];
+    KeyValueTable::new(model.theme(), &rows).render(frame.buffer_mut(), inner);
+    let state_chip = Chip::new(
+        model.theme(),
+        state,
+        if entry.archived {
+            ChipVariant::Muted
+        } else {
+            ChipVariant::Success
+        },
+    );
+    let chip_width = state_chip.measure().min(inner.width);
+    if inner.height > 0 {
+        state_chip.render(
+            frame.buffer_mut(),
+            Rect::new(
+                inner.right().saturating_sub(chip_width),
+                inner.bottom().saturating_sub(1),
+                chip_width,
+                ROW,
+            ),
+        );
     }
-    if entry.archived {
-        label.push_str("  [archived]");
-    }
-    if let Some(timestamp) = session_timestamp_label(model, entry.updated_at_ms) {
-        let _ = write!(label, "  [{timestamp}]");
-    }
-    let style = if selected {
-        visual_style(model, VisualRole::Selected)
-    } else if entry.archived {
-        visual_style(model, VisualRole::Muted)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
 }
 
 fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = credential_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Tool permission ")
-        .border_style(visual_style(model, VisualRole::Warning));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
     let Some(request) = model.session.permission_requests.first() else {
         return;
     };
     let pending = model.answering_permissions.contains(&request.tool_call_id);
+    let buttons = if pending {
+        Vec::new()
+    } else {
+        vec![
+            Button::new(
+                "Allow",
+                Some("Y".to_owned()),
+                ButtonVariant::Primary,
+                MouseAction::PermissionAllow,
+            ),
+            Button::new(
+                "Deny",
+                Some("N/Esc".to_owned()),
+                ButtonVariant::Danger,
+                MouseAction::PermissionDeny,
+            ),
+        ]
+    };
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Tool permission",
+        Some(Icon::Warning),
+        &buttons,
+    )
+    .intent(ModalIntent::Warning)
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     let mut lines = vec![
         Line::styled(
             "A model requested an external capability.",
@@ -2853,7 +2845,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::styled("Resource: ", visual_style(model, VisualRole::Muted)),
             Span::raw(display_safe(&request.resource)),
         ]),
-        Line::from(""),
     ];
     lines.extend(request.details.iter().map(|detail| {
         Line::from(vec![
@@ -2864,251 +2855,24 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             Span::raw(display_safe(&detail.value)),
         ])
     }));
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
+    lines.push(Line::from(""));
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .scroll((model.permission_scroll, 0)),
-        content,
+        inner,
     );
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    let action_text = if pending {
-        "Saving answer..."
-    } else {
-        "[ Allow ] Y    [ Deny ] N/Esc deny"
-    };
-    frame.render_widget(
-        Paragraph::new(action_text).style(visual_style(model, VisualRole::Warning)),
-        actions,
-    );
-}
-
-fn thinking_label(model: &Model) -> &'static str {
-    let Some(selected) = model.session.selected_model.as_ref() else {
-        return "unknown";
-    };
-    model
-        .catalog
-        .models()
-        .iter()
-        .find(|summary| &summary.model == selected)
-        .map(|summary| {
-            if summary
-                .detail
-                .split('|')
-                .any(|part| part.trim() == "thinking")
-            {
-                "supported"
-            } else {
-                "standard"
-            }
-        })
-        .unwrap_or("unknown")
-}
-
-fn workspace_path_label(workspace: &str) -> String {
-    format!("/{}", workspace_label(workspace))
-}
-
-fn prompt_metadata_line(model: &Model) -> Line<'static> {
-    let user = &model.profiles().user;
-    Line::from(vec![
-        Span::styled(" think:", chat_visual_style(model, VisualRole::Muted)),
-        Span::styled(
-            thinking_label(model),
-            chat_visual_style(model, VisualRole::Assistant),
-        ),
-        Span::styled("  path:", chat_visual_style(model, VisualRole::Muted)),
-        Span::styled(
-            workspace_path_label(&user.workspace),
-            chat_visual_style(model, VisualRole::User),
-        ),
-    ])
-}
-
-fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let bordered = area.height >= 3 && area.width >= 12;
-    let block = bordered.then(|| {
-        app_block(model)
-            .borders(Borders::ALL)
-            .border_style(visual_style(model, VisualRole::Border))
-    });
-    let inner = block.as_ref().map_or(area, |block| block.inner(area));
-    if let Some(block) = block {
-        frame.render_widget(block, area);
-    }
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let metadata = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(prompt_metadata_line(model))
-            .style(chat_visual_style(model, VisualRole::Normal)),
-        metadata,
-    );
-    if inner.height < 2 {
-        return;
-    }
-    let editor_area = Rect::new(
-        inner.x.saturating_add(2),
-        inner.y + 1,
-        inner.width.saturating_sub(2),
-        inner.height - 1,
-    );
-    let prompt = if presentation(model).ascii {
-        "> "
-    } else {
-        "❯ "
-    };
-    frame.render_widget(
-        Paragraph::new(prompt).style(chat_visual_style(model, VisualRole::Assistant)),
-        Rect::new(inner.x, inner.y + 1, inner.width.min(2), inner.height - 1),
-    );
-    if model.palette_open() {
+    if pending && inner.height > 0 {
         frame.render_widget(
-            Paragraph::new(format!("/{}", display_safe(&model.palette.query)))
-                .style(chat_visual_style(model, VisualRole::Assistant)),
-            editor_area,
+            Paragraph::new("Saving answer...").style(visual_style(model, VisualRole::Warning)),
+            Rect::new(
+                inner.x,
+                inner.bottom().saturating_sub(ROW),
+                inner.width,
+                ROW,
+            ),
         );
-        set_palette_cursor(frame, editor_area, model);
-        return;
     }
-    let mut composer = model.composer.editor.clone();
-    composer.remove_block();
-    composer.set_cursor_line_style(chat_visual_style(model, VisualRole::Normal));
-    composer.set_cursor_style(visual_style(model, VisualRole::Selected));
-    frame.render_widget(&composer, editor_area);
-    set_composer_cursor(frame, editor_area, model, bordered);
-}
-
-fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let compact = presentation(model).compact;
-    let composer_height = u16::try_from(model.composer.lines().len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(1)
-        .clamp(4, if compact { 5 } else { 6 });
-    let notice_height = if model.notice.is_some() {
-        if compact { 1 } else { 2 }
-    } else {
-        0
-    };
-    let search_height = u16::from(model.search_open());
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(notice_height),
-            Constraint::Length(search_height),
-            Constraint::Length(composer_height),
-        ])
-        .split(area);
-
-    render_transcript(frame, chunks[0], model, true);
-    if notice_height > 0 {
-        render_notice(frame, chunks[1], model);
-    }
-    if search_height > 0 {
-        render_search_bar(frame, chunks[2], model);
-    }
-    render_prompt_bar(frame, chunks[3], model);
-}
-
-/// Renders the one-row transcript search bar.
-fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let status = model.search_status_label();
-    let query = display_safe(&model.search.query);
-    frame.render_widget(
-        Paragraph::new(format!(" Search: /{query} - {status} "))
-            .style(visual_style(model, VisualRole::Field)),
-        area,
-    );
-}
-
-fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let composer_height = area.height.min(2);
-    let transcript_height = area.height.saturating_sub(composer_height);
-    let transcript = Rect::new(area.x, area.y, area.width, transcript_height);
-    let composer = Rect::new(
-        area.x,
-        area.y + transcript_height,
-        area.width,
-        composer_height,
-    );
-    if transcript.height > 0 {
-        render_transcript(frame, transcript, model, false);
-    }
-    if composer.height > 0 {
-        render_prompt_bar(frame, composer, model);
-    }
-}
-fn selected_model_label(model: &Model) -> String {
-    model
-        .session
-        .selected_model
-        .as_ref()
-        .map(|selected| {
-            model
-                .catalog
-                .models()
-                .iter()
-                .find(|summary| &summary.model == selected)
-                .map_or_else(
-                    || selected.model_id().as_str().to_owned(),
-                    |summary| summary.display_name.clone(),
-                )
-        })
-        .unwrap_or_else(|| "no model".to_owned())
-}
-
-fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let text = transparent_chat_text(transcript_text(model));
-    let block = bordered.then(|| {
-        app_block(model)
-            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-            .title(conversation_title(model))
-            .border_style(visual_style(model, VisualRole::Border))
-    });
-    let inner = block.as_ref().map_or(area, |block| block.inner(area));
-    if let Some(block) = block {
-        frame.render_widget(block, area);
-    }
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    let paragraph = Paragraph::new(text)
-        .style(chat_visual_style(model, VisualRole::Normal))
-        .wrap(Wrap { trim: false });
-    let total_rows = paragraph.line_count(inner.width);
-    let viewport_rows = usize::from(inner.height);
-    let maximum_scroll = total_rows.saturating_sub(viewport_rows);
-
-    // An active search jump pins its row into view; ordinary scrolling and
-    // tail-follow apply otherwise.
-    let top: usize = if let Some(pinned) = model.search_pinned_row.filter(|_| model.search_open()) {
-        pinned.saturating_sub(viewport_rows / 4).min(maximum_scroll)
-    } else if model.transcript.follow_tail {
-        maximum_scroll
-    } else {
-        maximum_scroll.saturating_sub(model.transcript.rows_from_bottom.min(maximum_scroll))
-    };
-    let top = u16::try_from(top).unwrap_or(u16::MAX);
-    frame.render_widget(paragraph.scroll((top, 0)), inner);
-}
-fn transparent_chat_text(mut text: Text<'static>) -> Text<'static> {
-    for line in &mut text.lines {
-        for span in &mut line.spans {
-            span.style = span.style.bg(Color::Reset);
-        }
-    }
-    text
 }
 
 /// Plain text of the whole transcript for clipboard copy.
@@ -3124,230 +2888,7 @@ pub(crate) fn transcript_plain_text(model: &Model) -> String {
 /// Plain display text of every transcript line, shared by rendering and
 /// search so match counts always describe what is actually visible.
 pub(crate) fn transcript_display_lines(model: &Model) -> Vec<String> {
-    let text = transcript_text(model);
-    text.lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.to_string())
-                .collect::<String>()
-        })
-        .collect()
-}
-
-fn transcript_text(model: &Model) -> Text<'static> {
-    let mut lines = Vec::new();
-    if model.session.transcript.is_empty() {
-        match &*model.catalog {
-            CatalogProjection::CredentialRequired => {
-                lines.push(Line::styled(
-                    "OFFLINE",
-                    visual_style(model, VisualRole::Warning),
-                ));
-                lines.push(Line::from("No provider credential is available."));
-                lines.push(Line::styled(
-                    "Provider API key: use /settings",
-                    visual_style(model, VisualRole::Assistant),
-                ));
-                lines.push(Line::styled(
-                    "An API key is still required. Ask AutoHarness after setup.",
-                    visual_style(model, VisualRole::Muted),
-                ));
-            }
-            CatalogProjection::Loading => {
-                lines.push(Line::styled(
-                    format!("{}  CONNECTING", spinner(model)),
-                    visual_style(model, VisualRole::Warning),
-                ));
-                lines.push(Line::from("Loading provider models..."));
-            }
-            CatalogProjection::Failed(failure) => {
-                lines.push(Line::styled(
-                    "CONNECTION ERROR",
-                    visual_style(model, VisualRole::Error),
-                ));
-                lines.push(Line::from(display_safe(&failure.message)));
-                lines.push(Line::styled(
-                    "Ctrl+R retry or Alt+3 inspect provider settings",
-                    visual_style(model, VisualRole::Assistant),
-                ));
-            }
-            CatalogProjection::Ready { models, .. } if models.is_empty() => {
-                lines.push(Line::styled(
-                    "NO COMPATIBLE MODELS",
-                    visual_style(model, VisualRole::Warning),
-                ));
-                lines.push(Line::styled(
-                    "Ctrl+R refresh the catalog",
-                    visual_style(model, VisualRole::Assistant),
-                ));
-            }
-            CatalogProjection::Ready { .. } if model.session.selected_model.is_none() => {
-                lines.push(Line::styled(
-                    "CHOOSE A MODEL",
-                    visual_style(model, VisualRole::User),
-                ));
-                lines.push(Line::styled(
-                    "Ctrl+P opens the searchable model catalog",
-                    visual_style(model, VisualRole::Assistant),
-                ));
-            }
-            CatalogProjection::Ready { .. } => {
-                lines.push(Line::styled(
-                    "NEW CONVERSATION",
-                    visual_style(model, VisualRole::User),
-                ));
-                lines.push(Line::from("Write a prompt below."));
-                let send = if *model
-                    .settings()
-                    .local_profile
-                    .preferences()
-                    .composer_submit_behavior()
-                    .value()
-                    == ComposerSubmitBehavior::ControlS
-                {
-                    "Ctrl+S sends"
-                } else {
-                    "Enter sends"
-                };
-                lines.push(Line::styled(send, visual_style(model, VisualRole::Muted)));
-                render_onboarding(&mut lines, model);
-            }
-        }
-        return transparent_chat_text(Text::from(lines));
-    }
-
-    for (index, item) in model.session.transcript.iter().enumerate() {
-        if index > 0 {
-            lines.push(Line::default());
-        }
-        match item {
-            TranscriptItem::User { text, .. } => {
-                lines.push(Line::styled("YOU", visual_style(model, VisualRole::User)));
-                push_safe_lines(&mut lines, text, visual_style(model, VisualRole::Normal));
-            }
-            TranscriptItem::Tool(row) => {
-                let mut heading = format!("TOOL{}", chrome_separator(model));
-                heading.push_str(&display_safe(&row.tool_name));
-                if !row.status.is_empty() {
-                    heading.push_str(chrome_separator(model));
-                    heading.push_str(&display_safe(&row.status));
-                }
-                if let Some(summary) = &row.summary {
-                    heading.push_str(chrome_separator(model));
-                    heading.push_str(&display_safe(summary));
-                }
-                if model.tools_expanded {
-                    heading.push_str("  [");
-                    heading.push_str(&display_safe(&row.resource));
-                    heading.push(']');
-                }
-                lines.push(Line::styled(heading, visual_style(model, VisualRole::Tool)));
-            }
-            TranscriptItem::Assistant {
-                attempt_id,
-                text,
-                status,
-                usage,
-                retry_of,
-            } => {
-                let mut heading = String::from("AUTOHARNESS");
-                if retry_of.is_some() {
-                    heading.push_str(chrome_separator(model));
-                    heading.push_str("retry");
-                }
-                match status {
-                    AttemptStatus::Streaming => {
-                        let _ = write!(
-                            heading,
-                            "{}{} streaming",
-                            chrome_separator(model),
-                            spinner(model)
-                        );
-                    }
-                    AttemptStatus::Cancelling => {
-                        let _ = write!(
-                            heading,
-                            "{}{} cancelling",
-                            chrome_separator(model),
-                            spinner(model)
-                        );
-                    }
-                    AttemptStatus::Completed => {
-                        heading.push_str(chrome_separator(model));
-                        heading.push_str("complete");
-                    }
-                    AttemptStatus::Cancelled => {
-                        heading.push_str(chrome_separator(model));
-                        heading.push_str("cancelled");
-                    }
-                    AttemptStatus::Failed(_) => {
-                        heading.push_str(chrome_separator(model));
-                        heading.push_str("failed");
-                    }
-                }
-                if matches!(status, AttemptStatus::Streaming)
-                    && (model.pending.values().any(|pending| {
-                        matches!(pending, PendingKind::CancelAttempt(candidate) if candidate == attempt_id)
-                    }) || model.cancelling.contains(attempt_id))
-                {
-                    heading.push_str(chrome_separator(model));
-                    heading.push_str("cancelling");
-                }
-                if model.retry_requested(attempt_id) {
-                    heading.push_str(chrome_separator(model));
-                    heading.push_str("retrying");
-                }
-                let style = if matches!(status, AttemptStatus::Failed(_)) {
-                    visual_style(model, VisualRole::Error)
-                } else {
-                    visual_style(model, VisualRole::Assistant)
-                };
-                lines.push(Line::styled(heading, style));
-                if text.is_empty() && matches!(status, AttemptStatus::Streaming) {
-                    lines.push(Line::styled(
-                        "Waiting for the first token...",
-                        visual_style(model, VisualRole::Muted),
-                    ));
-                } else {
-                    push_safe_lines(&mut lines, text, visual_style(model, VisualRole::Normal));
-                }
-                if let AttemptStatus::Failed(failure) = status {
-                    lines.push(Line::styled(
-                        format!("Error: {}", display_safe(&failure.message)),
-                        visual_style(model, VisualRole::Error),
-                    ));
-                    lines.push(Line::styled(
-                        format!(
-                            "{} | {} | ref {}",
-                            display_safe(&failure.code),
-                            retry_label(model, attempt_id, failure.retry),
-                            diagnostic_reference(attempt_id)
-                        ),
-                        visual_style(model, VisualRole::Muted),
-                    ));
-                }
-                if let Some(usage) = usage {
-                    lines.push(Line::styled(
-                        format!(
-                            "{} input tokens · {} output tokens",
-                            usage.input_tokens, usage.output_tokens
-                        ),
-                        visual_style(model, VisualRole::Muted),
-                    ));
-                }
-            }
-        }
-    }
-    transparent_chat_text(Text::from(lines))
-}
-
-fn push_safe_lines(lines: &mut Vec<Line<'static>>, text: &str, style: Style) {
-    let safe = display_safe(text);
-    for line in safe.split('\n') {
-        lines.push(Line::styled(line.to_owned(), style));
-    }
+    crate::ui::page::chat_display_lines(model)
 }
 
 fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -3378,28 +2919,41 @@ fn render_notice(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Models ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let mut buttons = Vec::new();
+    if let Some(selection) = model.picker.selected.clone() {
+        buttons.push(Button::new(
+            "Select",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::PickerSelect(selection),
+        ));
+    }
+    buttons.push(Button::new(
+        "Close",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::OverlayCancel,
+    ));
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Models",
+        Some(Icon::RouteModels),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
     let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 4);
     let stale_height = u16::from(
         matches!(
             &*model.catalog,
             CatalogProjection::Ready { stale: true, .. }
         ) && inner.height >= 3,
     );
-    let list_height = inner
-        .height
-        .saturating_sub(search_height + stale_height + help_height);
+    let list_height = inner.height.saturating_sub(search_height + stale_height);
     let search = Rect::new(inner.x, inner.y, inner.width, search_height);
     let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
     let stale_area = Rect::new(
@@ -3408,17 +2962,15 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         inner.width,
         stale_height,
     );
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height + stale_height,
-        inner.width,
-        help_height,
-    );
-    frame.render_widget(
-        Paragraph::new(format!("Filter: {}", display_safe(&model.picker.query)))
-            .style(visual_style(model, VisualRole::Field)),
-        search,
-    );
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.picker.query,
+        model.picker.query.chars().count(),
+        Some(u32::try_from(filtered_models(model).len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), search);
 
     match &*model.catalog {
         CatalogProjection::CredentialRequired => {
@@ -3471,41 +3023,42 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             }
         }
     }
-    if help.height > 0 {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} choose  Enter select  D default  Esc close",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
-            help,
-        );
-    }
 }
 
 fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let popup = credential_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Provider API key ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let buttons = [
+        Button::new(
+            "Connect",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::CredentialSubmit,
+        ),
+        Button::new(
+            "Cancel",
+            Some("Esc".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::CredentialCancel,
+        ),
+    ];
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Provider API key",
+        Some(Icon::Locked),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, popup.width, popup.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
 
     let mask = if model.credential.has_value() {
-        if presentation(model).ascii {
-            "************"
-        } else {
-            "••••••••••••"
-        }
+        model.theme().icons().secret_mask(12)
     } else {
-        "paste or type key"
+        "paste or type key".to_owned()
     };
-    let compact = inner.height < 8 || inner.width < 36;
+    let compact = inner.height < PAGE_HEADER_TALL_MIN || inner.width < CREDENTIAL_COMPACT_WIDTH;
     let text = if compact {
         Text::from(vec![
             Line::from("API key required"),
@@ -3522,15 +3075,7 @@ fn render_credential(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ),
         ])
     };
-    let content_height = inner.height.saturating_sub(1);
-    let content = Rect::new(inner.x, inner.y, inner.width, content_height);
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
-    let actions = Rect::new(inner.x, inner.y + content_height, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new("[ Connect ] Enter    [ Cancel ] Esc")
-            .style(visual_style(model, VisualRole::Assistant)),
-        actions,
-    );
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_picker_models(frame: &mut Frame<'_>, area: Rect, model: &Model) {
@@ -3595,17 +3140,7 @@ fn picker_item(summary: &ModelSummary, model: &Model) -> ListItem<'static> {
 }
 
 fn confirmation_rect(area: Rect) -> Rect {
-    if area.width <= 40 || area.height <= 12 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).clamp(1, 72);
-    let height = area.height.saturating_sub(2).clamp(1, 9);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
+    ui_layout::confirmation_rect(area)
 }
 
 fn filtered_models(model: &Model) -> Vec<&ModelSummary> {
@@ -3634,127 +3169,65 @@ fn filtered_models(model: &Model) -> Vec<&ModelSummary> {
 }
 
 fn popup_rect(area: Rect) -> Rect {
-    if area.width < 30 || area.height < 10 {
-        return area;
-    }
-    let width = area.width.saturating_mul(4) / 5;
-    let height = area.height.saturating_mul(3) / 4;
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::popup_rect(area)
+}
+
+fn codex_auth_rect(area: Rect) -> Rect {
+    ui_layout::codex_auth_rect(area)
 }
 
 fn credential_rect(area: Rect) -> Rect {
-    if area.width <= 40 || area.height <= 12 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(68);
-    let height = area.height.saturating_sub(2).min(11);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
+    ui_layout::credential_rect(area)
 }
 
 fn user_profile_rect(area: Rect) -> Rect {
-    if area.width <= 44 || area.height <= 14 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(72);
-    let height = area.height.saturating_sub(4).min(16);
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width.max(1),
-        height.max(1),
-    )
-}
-
-fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
-    if model.focus != Focus::Composer
-        || model.overlay().is_some()
-        || model
-            .pending
-            .values()
-            .any(|pending| matches!(pending, PendingKind::SubmitPrompt(_)))
-    {
-        return;
-    }
-    let cursor = model.composer.editor.screen_cursor();
-    let inset = u16::from(bordered);
-    let x = area
-        .x
-        .saturating_add(inset)
-        .saturating_add(u16::try_from(cursor.col).unwrap_or(u16::MAX));
-    let y = area
-        .y
-        .saturating_add(inset)
-        .saturating_add(u16::try_from(cursor.row).unwrap_or(u16::MAX));
-    if x < area.right() && y < area.bottom() {
-        frame.set_cursor_position((x, y));
-    }
-}
-
-fn set_palette_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    if !model.palette_open() || area.width == 0 || area.height == 0 {
-        return;
-    }
-    let x = area.x.saturating_add(1).saturating_add(
-        u16::try_from(display_safe(&model.palette.query).chars().count()).unwrap_or(u16::MAX),
-    );
-    if x < area.right() {
-        frame.set_cursor_position((x, area.y));
-    }
+    ui_layout::user_profile_rect(area)
 }
 
 fn spinner(model: &Model) -> &'static str {
-    if presentation(model).reduced_motion {
-        return "-";
-    }
-    if presentation(model).ascii {
-        const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-        return FRAMES[usize::try_from((model.now / 100) % 4).unwrap_or(0)];
-    }
-    const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-    FRAMES[usize::try_from((model.now / 100) % 8).unwrap_or(0)]
-}
-
-fn retry_label(model: &Model, attempt_id: &crate::model::AttemptKey, retry: RetryPolicy) -> String {
-    match retry {
-        RetryPolicy::Never => "Ctrl+N new".to_owned(),
-        RetryPolicy::Now => "Ctrl+R retry | Ctrl+N new".to_owned(),
-        RetryPolicy::After { .. } | RetryPolicy::At(_)
-            if model.retry_available(attempt_id, retry) =>
-        {
-            "Ctrl+R retry | Ctrl+N new".to_owned()
-        }
-        RetryPolicy::After { .. } | RetryPolicy::At(_) => {
-            model.retry_remaining_ms(attempt_id, retry).map_or_else(
-                || "retry pending | Ctrl+N new".to_owned(),
-                |remaining_ms| format!("retry in {} | Ctrl+N new", retry_countdown(remaining_ms)),
-            )
-        }
-    }
-}
-
-fn diagnostic_reference(attempt_id: &crate::model::AttemptKey) -> String {
-    let value = attempt_id.as_str();
-    let characters = value.chars().count();
-    if characters <= 16 {
-        return display_safe(value);
-    }
-    value
-        .chars()
-        .skip(characters.saturating_sub(12))
-        .collect::<String>()
+    model.motion().pending_glyph()
 }
 
 fn retry_countdown(remaining_ms: u64) -> String {
     let seconds = remaining_ms.saturating_add(999) / 1_000;
     format!("{seconds}s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HelpRenderRow, generated_help_rows, palette_highlights};
+    use crate::model::{COMMANDS, Focus};
+
+    #[test]
+    fn generated_help_lists_every_command_hint_exactly_once() {
+        let rows = generated_help_rows(Focus::Composer);
+        for command in COMMANDS.iter().filter(|command| command.key_hint.is_some()) {
+            let hint = command.key_hint.expect("filtered command hint");
+            let count = rows
+                .iter()
+                .filter(|row| matches!(row, HelpRenderRow::Pair { key, .. } if key == hint))
+                .count();
+            assert_eq!(count, 1, "command hint {hint} must appear exactly once");
+        }
+    }
+
+    #[test]
+    fn palette_highlights_exact_prefix_substring_and_fuzzy_matches() {
+        let settings = COMMANDS
+            .iter()
+            .find(|command| command.id == "settings")
+            .copied()
+            .expect("settings command");
+        let exact = palette_highlights(settings, "settings");
+        assert_eq!(exact.identifier, (3..11).collect::<Vec<_>>());
+
+        let prefix = palette_highlights(settings, "set");
+        assert_eq!(prefix.identifier, vec![3, 4, 5]);
+
+        let substring = palette_highlights(settings, "ting");
+        assert_eq!(substring.identifier, vec![6, 7, 8, 9]);
+
+        let fuzzy = palette_highlights(settings, "setings");
+        assert_eq!(fuzzy.identifier, vec![3, 4, 5, 7, 8, 9, 10]);
+    }
 }

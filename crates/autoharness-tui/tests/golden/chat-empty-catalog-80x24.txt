@@ -1,0 +1,188 @@
+# autoharness-tui style snapshot v1
+# 80x24
+@0
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@1
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@2
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@3
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@4
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@5
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@6
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@7
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@8
+                                  AutoHarness                                   
+ | 0-33 fg=#f2f9fc bg=reset
+ | 34-34 fg=#22d3ee bg=reset
+ | 35-35 fg=#4ad0f1 bg=reset
+ | 36-36 fg=#62cef5 bg=reset
+ | 37-37 fg=#75cbf8 bg=reset
+ | 38-38 fg=#85c8fc bg=reset
+ | 39-39 fg=#93c4ff bg=reset
+ | 40-40 fg=#99b9fe bg=reset
+ | 41-41 fg=#9daefd bg=reset
+ | 42-42 fg=#a1a3fc bg=reset
+ | 43-43 fg=#a497fb bg=reset
+ | 44-44 fg=#a78bfa bg=reset
+ | 45-79 fg=#f2f9fc bg=reset
+@9
+                              No compatible models                              
+ | 0-29 fg=#f2f9fc bg=reset
+ | 30-49 fg=#a2a9b0 bg=reset
+ | 50-79 fg=#f2f9fc bg=reset
+@10
+    1. Refresh the catalog                                                      
+ | 0-2 fg=#f2f9fc bg=reset
+ | 3-26 fg=#f2f9fc bg=#151926
+ | 27-79 fg=#f2f9fc bg=reset
+@11
+                                 Ctrl+R refresh                                 
+ | 0-31 fg=#f2f9fc bg=reset
+ | 32-47 fg=#0b0f19 bg=#22d3ee bold
+ | 48-79 fg=#f2f9fc bg=reset
+@12
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@13
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@14
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@15
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@16
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@17
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@18
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@19
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@20
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@21
+ ────────────────────────────────────────────────────────────────────────────── 
+ | 0-0 fg=reset bg=reset
+ | 1-1 fg=#22d3ee bg=reset
+ | 2-2 fg=#2ad3ee bg=reset
+ | 3-3 fg=#30d2ef bg=reset
+ | 4-4 fg=#36d2ef bg=reset
+ | 5-5 fg=#3bd2f0 bg=reset
+ | 6-6 fg=#3fd1f0 bg=reset
+ | 7-7 fg=#44d1f1 bg=reset
+ | 8-8 fg=#48d1f1 bg=reset
+ | 9-9 fg=#4bd0f2 bg=reset
+ | 10-10 fg=#4fd0f2 bg=reset
+ | 11-11 fg=#52cff2 bg=reset
+ | 12-12 fg=#55cff3 bg=reset
+ | 13-13 fg=#59cff3 bg=reset
+ | 14-14 fg=#5ccef4 bg=reset
+ | 15-15 fg=#5ecef4 bg=reset
+ | 16-16 fg=#61cef5 bg=reset
+ | 17-17 fg=#64cdf5 bg=reset
+ | 18-18 fg=#66cdf6 bg=reset
+ | 19-19 fg=#69cdf6 bg=reset
+ | 20-20 fg=#6bccf6 bg=reset
+ | 21-21 fg=#6eccf7 bg=reset
+ | 22-22 fg=#70cbf7 bg=reset
+ | 23-23 fg=#73cbf8 bg=reset
+ | 24-24 fg=#75cbf8 bg=reset
+ | 25-25 fg=#77caf9 bg=reset
+ | 26-26 fg=#79caf9 bg=reset
+ | 27-27 fg=#7bc9fa bg=reset
+ | 28-28 fg=#7dc9fa bg=reset
+ | 29-29 fg=#7fc9fa bg=reset
+ | 30-30 fg=#81c8fb bg=reset
+ | 31-31 fg=#83c8fb bg=reset
+ | 32-32 fg=#85c7fc bg=reset
+ | 33-33 fg=#87c7fc bg=reset
+ | 34-34 fg=#89c7fd bg=reset
+ | 35-35 fg=#8bc6fd bg=reset
+ | 36-36 fg=#8dc6fd bg=reset
+ | 37-37 fg=#8fc5fe bg=reset
+ | 38-38 fg=#91c5fe bg=reset
+ | 39-39 fg=#92c5ff bg=reset
+ | 40-40 fg=#94c4ff bg=reset
+ | 41-41 fg=#94c2ff bg=reset
+ | 42-42 fg=#95c1ff bg=reset
+ | 43-43 fg=#96bfff bg=reset
+ | 44-44 fg=#96beff bg=reset
+ | 45-45 fg=#97bcfe bg=reset
+ | 46-46 fg=#98bbfe bg=reset
+ | 47-47 fg=#98bafe bg=reset
+ | 48-48 fg=#99b8fe bg=reset
+ | 49-49 fg=#9ab7fe bg=reset
+ | 50-50 fg=#9ab5fe bg=reset
+ | 51-51 fg=#9bb4fe bg=reset
+ | 52-52 fg=#9cb2fe bg=reset
+ | 53-53 fg=#9cb1fe bg=reset
+ | 54-54 fg=#9daffd bg=reset
+ | 55-55 fg=#9daefd bg=reset
+ | 56-56 fg=#9eacfd bg=reset
+ | 57-57 fg=#9eabfd bg=reset
+ | 58-58 fg=#9faafd bg=reset
+ | 59-59 fg=#9fa8fd bg=reset
+ | 60-60 fg=#a0a7fd bg=reset
+ | 61-61 fg=#a0a5fd bg=reset
+ | 62-62 fg=#a1a4fc bg=reset
+ | 63-63 fg=#a1a2fc bg=reset
+ | 64-64 fg=#a2a1fc bg=reset
+ | 65-65 fg=#a29ffc bg=reset
+ | 66-66 fg=#a39efc bg=reset
+ | 67-67 fg=#a39cfc bg=reset
+ | 68-68 fg=#a39bfc bg=reset
+ | 69-69 fg=#a499fb bg=reset
+ | 70-70 fg=#a497fb bg=reset
+ | 71-71 fg=#a596fb bg=reset
+ | 72-72 fg=#a594fb bg=reset
+ | 73-73 fg=#a593fb bg=reset
+ | 74-74 fg=#a691fb bg=reset
+ | 75-75 fg=#a690fa bg=reset
+ | 76-76 fg=#a68efa bg=reset
+ | 77-77 fg=#a78dfa bg=reset
+ | 78-78 fg=#a78bfa bg=reset
+ | 79-79 fg=reset bg=reset
+@22
+ ● no model · ◐ auto · ▰ ctx --                                                 
+ | 0-0 fg=reset bg=reset
+ | 1-1 fg=#22d3ee bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-10 fg=#f2f9fc bg=reset
+ | 11-13 fg=#2e343f bg=reset
+ | 14-14 fg=#22d3ee bg=reset
+ | 15-15 fg=#a2a9b0 bg=reset
+ | 16-19 fg=#f2f9fc bg=reset
+ | 20-22 fg=#2e343f bg=reset
+ | 23-23 fg=#22d3ee bg=reset
+ | 24-24 fg=#a2a9b0 bg=reset
+ | 25-78 fg=#f2f9fc bg=reset
+ | 79-79 fg=reset bg=reset
+@23
+ ❯  Ask AutoHarness...                                                          
+ | 0-0 fg=reset bg=reset
+ | 1-2 fg=#67dbf1 bg=reset bold
+ | 3-3 fg=#f8fafc bg=#0b0f19 bold
+ | 4-21 fg=darkgray bg=reset
+ | 22-78 fg=#f2f9fc bg=reset
+ | 79-79 fg=reset bg=reset

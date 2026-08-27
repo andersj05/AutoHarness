@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, Notice, Route, SessionProjection,
-    SessionsProjection, UiEffect, UiIntent, update,
+    CatalogProjection, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
+    ModelSummary, Notice, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
+    ProviderKindLabel, ProviderProfileProjection, Route, SessionProjection, SessionsProjection,
+    UiEffect, UiIntent, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -11,15 +13,28 @@ use ratatui_textarea::{Input, Key};
 
 fn catalog_ready() -> Arc<CatalogProjection> {
     Arc::new(CatalogProjection::Ready {
-        models: vec![ModelSummary {
-            model: ModelRef::new(
-                ProviderId::new("google-ai-studio").expect("provider id"),
-                ModelId::new("models/gemini-2.5-pro").expect("model id"),
-            ),
-            display_name: "Gemini 2.5 Pro".to_owned(),
-            detail: String::new(),
-            selectable: true,
-        }],
+        models: vec![
+            ModelSummary {
+                model: ModelRef::new(
+                    ProviderId::new("google-ai-studio").expect("provider id"),
+                    ModelId::new("models/gemini-2.5-pro").expect("model id"),
+                ),
+                display_name: "Gemini 2.5 Pro".to_owned(),
+                detail: "text | thinking".to_owned(),
+                context_window_tokens: Some(1_000_000),
+                selectable: true,
+            },
+            ModelSummary {
+                model: ModelRef::new(
+                    ProviderId::new("openai-compatible").expect("provider id"),
+                    ModelId::new("router-reasoner").expect("model id"),
+                ),
+                display_name: "Router Reasoner".to_owned(),
+                detail: "text | tools".to_owned(),
+                context_window_tokens: Some(128_000),
+                selectable: true,
+            },
+        ],
         stale: false,
     })
 }
@@ -47,6 +62,31 @@ fn empty_model() -> Model {
         Arc::new(SessionsProjection::default()),
         catalog_ready(),
     )
+}
+
+fn apply_active_profile(model: &mut Model) {
+    model.apply_profiles(Arc::new(ProfilesProjection {
+        user: LocalUserProfileProjection {
+            default_profile: Some("personal".to_owned()),
+            default_model: Some("models/gemini-2.5-pro".to_owned()),
+            default_mode: "high".to_owned(),
+            ..LocalUserProfileProjection::default()
+        },
+        profiles: vec![ProviderProfileProjection {
+            id: "personal".to_owned(),
+            kind: ProviderKindLabel::Gemini,
+            active: true,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+            credential_state: ProfileCredentialStateLabel::Stored,
+            credential_source: CredentialSourceLabel::CredentialVault,
+            connection: ProfileConnectionState::Ready,
+            default_model: Some("models/gemini-2.5-pro".to_owned()),
+            default_mode: "high".to_owned(),
+        }],
+        pending_recovery: 0,
+    }));
 }
 
 fn key_input(key: Key) -> Input {
@@ -113,16 +153,18 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     assert_eq!(model.focus, Focus::Palette, "the palette owns the keyboard");
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("/models"));
-    assert!(!rendered.contains("Commands"));
+    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("WORKSPACE"));
+    assert!(rendered.contains("SESSION SETUP"));
     for expected in [
         "/chat",
         "/sessions",
         "/profile",
         "/provider",
-        "/agents",
+        "/models",
         "/user",
         "/new",
-        "/models",
+        "/session-model",
     ] {
         assert!(rendered.contains(expected), "missing {expected} row");
     }
@@ -149,7 +191,7 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
         filtered
             .lines()
             .rev()
-            .take(3)
+            .take(4)
             .any(|line| line.contains("/mod"))
     );
     assert!(filtered.contains("/models"));
@@ -161,8 +203,16 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("/profile  Profile settings"));
-    assert!(rendered.contains("/agents  Agents settings"));
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("/profile") && line.contains("Profile settings"))
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("/models") && line.contains("Default model"))
+    );
     assert_eq!(rendered.matches("/profile").count(), 1);
     assert!(!rendered.contains("/profiles"));
 
@@ -172,27 +222,16 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
 }
 
 #[test]
-fn inline_command_rows_preserve_the_chat_panel_border_at_narrow_width() {
+fn inline_command_rows_stay_above_the_bottom_prompt_at_narrow_width() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
 
     let rendered = render_model(&model, 40, 12);
-    assert_eq!(
-        rendered
-            .buffer()
-            .cell((0, 1))
-            .expect("left transcript border")
-            .symbol(),
-        "│"
-    );
-    assert_eq!(
-        rendered
-            .buffer()
-            .cell((1, 1))
-            .expect("first command column")
-            .symbol(),
-        "›"
-    );
+    let text = buffer_text(&rendered);
+    assert!(text.lines().rev().take(4).any(|line| line.contains("❯ /")));
+    let command = text.find("/chat").expect("command row");
+    let prompt = text.rfind("❯ /").expect("bottom prompt");
+    assert!(command < prompt);
 }
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {
@@ -373,8 +412,8 @@ fn provider_command_opens_provider_setup_route() {
     let mut model = empty_model();
     type_text(&mut model, "/provider");
     let _ = update(&mut model, Message::Input(enter()));
-    assert_eq!(model.route(), Route::Settings);
-    assert_eq!(model.focus, Focus::Settings);
+    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.focus, Focus::Profiles);
     assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 }
 
@@ -397,15 +436,69 @@ fn profile_slash_command_matches_palette_route() {
 }
 
 #[test]
-fn agents_command_opens_the_integrated_settings_tab() {
+fn models_command_opens_the_integrated_default_model_tab() {
     let mut model = empty_model();
-    type_text(&mut model, "/agents");
+    type_text(&mut model, "/models");
     let _ = update(&mut model, Message::Input(enter()));
     assert_eq!(model.route(), Route::Settings);
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("Agents"));
-    assert!(rendered.contains("1  PROVIDER"));
-    assert!(rendered.contains("2  MODEL"));
+    assert!(rendered.contains("Models"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("Router Reasoner"));
+    assert!(rendered.contains("1M context"));
+    assert!(rendered.contains("128K context"));
+    assert!(rendered.contains("thinking"));
+    assert!(rendered.contains("tools"));
+    assert!(rendered.contains("Thinking"));
+}
+
+#[test]
+fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
+    let mut model = empty_model();
+    apply_active_profile(&mut model);
+    type_text(&mut model, "/models");
+    let _ = update(&mut model, Message::Input(enter()));
+
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("Default"));
+    assert!(rendered.contains("Thinking"));
+    assert!(rendered.contains("high"));
+
+    let effects = update(&mut model, Message::Input(enter()));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault {
+            profile_id,
+            model: selected,
+            reasoning_effort: Some(effort),
+            ..
+        })] if profile_id == "personal"
+            && selected == &pro_model()
+            && effort == "high"
+    ));
+}
+
+#[test]
+fn thinking_mode_changes_inline_before_saving_with_the_model() {
+    let mut model = empty_model();
+    apply_active_profile(&mut model);
+    type_text(&mut model, "/models");
+    let _ = update(&mut model, Message::Input(enter()));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::Left)));
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Thinking"));
+    assert!(rendered.contains("medium"));
+
+    let effects = update(&mut model, Message::Input(enter()));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault {
+            reasoning_effort: Some(effort),
+            ..
+        })] if effort == "medium"
+    ));
 }
 
 #[test]
@@ -525,4 +618,28 @@ fn palette_renders_at_small_sizes_without_panicking() {
         assert_eq!(backend.buffer().area.width, width);
         assert_eq!(backend.buffer().area.height, height);
     }
+}
+
+#[test]
+fn inline_and_centered_palettes_paint_the_same_command_row() {
+    let mut inline = empty_model();
+    let _ = update(&mut inline, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut inline, "settings");
+    let inline = buffer_text(&render_model(&inline, 80, 24));
+
+    let mut centered = empty_model();
+    let _ = update(&mut centered, Message::Input(ctrl(Key::Char('2'))));
+    let _ = update(&mut centered, Message::Input(ctrl(Key::Char('/'))));
+    type_text(&mut centered, "settings");
+    let centered = buffer_text(&render_model(&centered, 80, 24));
+
+    let command_row = |rendered: &str| {
+        rendered
+            .lines()
+            .find(|line| line.contains("/settings"))
+            .map(str::trim)
+            .expect("settings palette row")
+            .to_owned()
+    };
+    assert_eq!(command_row(&inline), command_row(&centered));
 }

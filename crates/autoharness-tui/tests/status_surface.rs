@@ -4,7 +4,7 @@ use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Message, Model, ModelSummary, ProviderKindLabel,
     ProviderStatusProjection, RetryPolicy, SessionProjection, SessionsProjection,
-    SettingsProjection, TranscriptItem, UiFailure, update,
+    SettingsProjection, TranscriptItem, UiClock, UiFailure, style_snapshot, update,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -22,6 +22,7 @@ fn catalog_ready() -> Arc<CatalogProjection> {
             model: pro_model(),
             display_name: "Gemini 2.5 Pro".to_owned(),
             detail: String::new(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,
@@ -81,12 +82,33 @@ fn buffer_text(backend: &TestBackend) -> String {
 fn chat_surface_uses_compact_transparent_composer_metadata() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("think:"));
-    assert!(rendered.contains("path:/workspace"));
-    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("auto"));
+    assert!(rendered.contains("ctx 0%"));
+    assert!(!rendered.contains("auto ○○○○○○"));
+    assert!(!rendered.contains("model:"));
+    assert!(!rendered.contains("think:"));
+    assert!(!rendered.contains("path:"));
     assert!(rendered.contains("Settings"));
     assert!(!rendered.contains("AutoHarness  |"));
     assert!(!rendered.contains("state:ready"));
+}
+
+#[test]
+fn chat_rail_transcript_and_composer_preserve_terminal_background() {
+    let model = empty_model(SettingsProjection::default());
+    let rendered = render_model(&model, 120, 40);
+    for (column, row, surface) in [
+        (5, 30, "rail"),
+        (80, 20, "transcript"),
+        (110, 38, "composer"),
+    ] {
+        assert_eq!(
+            rendered.buffer()[(column, row)].bg,
+            ratatui::style::Color::Reset,
+            "{surface} must inherit the terminal background"
+        );
+    }
 }
 
 #[test]
@@ -95,7 +117,10 @@ fn chat_surface_omits_provider_status_chrome() {
     let rendered = buffer_text(&render_model(&model, 120, 40));
     assert!(!rendered.contains("gemini (default)"));
     assert!(!rendered.contains("session only"));
-    assert!(rendered.contains("path:/workspace"));
+    assert!(rendered.contains("auto"));
+    assert!(rendered.contains("ctx 0%"));
+    assert!(!rendered.contains("auto ○○○○○○"));
+    assert!(!rendered.contains(" │ ."));
 }
 
 #[test]
@@ -149,8 +174,8 @@ fn aggregate_usage_appears_in_the_status_surface_after_turns() {
     );
 
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("120 input tokens"));
-    assert!(rendered.contains("340 output tokens"));
+    assert!(rendered.contains("120 in"));
+    assert!(rendered.contains("340 out"));
 }
 
 #[test]
@@ -158,13 +183,60 @@ fn narrow_chat_keeps_prompt_metadata_without_status_header() {
     let model = empty_model(SettingsProjection::default());
 
     let rendered = buffer_text(&render_model(&model, 40, 12));
-    assert!(rendered.contains("think:"));
-    assert!(rendered.contains("path:/"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("auto"));
+    assert!(!rendered.contains("auto ○○○○○○"));
+    assert!(rendered.contains("0%"));
+    assert!(!rendered.contains(" │ ."));
     assert!(!rendered.contains("AutoHarness  |"));
 
     let tiny = buffer_text(&render_model(&model, 24, 7));
     assert!(!tiny.contains("1 Chat"));
     assert!(!tiny.contains("state:ready"));
+}
+
+#[test]
+fn prompt_follows_the_scrollable_conversation_and_stays_at_the_bottom() {
+    let model = empty_model(SettingsProjection::default());
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    let prompt = rendered.find("❯").expect("prompt marker");
+    let conversation = rendered
+        .find("New conversation")
+        .expect("conversation content");
+    assert!(conversation < prompt);
+    assert!(
+        rendered
+            .lines()
+            .rev()
+            .take(3)
+            .any(|line| line.contains("❯"))
+    );
+    assert!(!rendered.contains("Conversation"));
+}
+
+#[test]
+fn active_generation_uses_a_tick_driven_ascii_scanner() {
+    use autoharness_tui::{AttemptKey, AttemptStatus};
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-generating").expect("valid attempt"),
+        text: String::new(),
+        status: AttemptStatus::Streaming,
+        usage: None,
+        retry_of: None,
+    }];
+    let mut model = Model::new(
+        session(2, transcript),
+        Arc::new(SessionsProjection::default()),
+        catalog_ready(),
+    );
+
+    let first_backend = render_model(&model, 80, 24);
+    let first = buffer_text(&first_backend);
+    assert!(first.contains("generating") || first.contains("[==>-----]"));
+    let first_style = style_snapshot(first_backend.buffer());
+    let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
+    let later_style = style_snapshot(render_model(&model, 80, 24).buffer());
+    assert_ne!(first_style, later_style);
 }
 
 #[test]

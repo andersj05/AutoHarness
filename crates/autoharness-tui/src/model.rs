@@ -5,12 +5,14 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelRef, RetryAdvice};
 use autoharness_settings::{
     ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
-    TerminalTimestampStyle, ThemePreset,
+    PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::{TextArea, WrapMode};
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::ui::{ColorDepth, Theme, Token};
 
 const MAX_CREDENTIAL_BYTES: usize = 4_096;
 
@@ -83,6 +85,8 @@ pub struct ModelSummary {
     pub display_name: String,
     /// Short provider-neutral capability summary.
     pub detail: String,
+    /// Maximum provider-advertised context window in tokens, when known.
+    pub context_window_tokens: Option<u64>,
     /// Whether this model can be selected for chat.
     pub selectable: bool,
 }
@@ -394,6 +398,23 @@ impl SessionProjection {
 /// Monotonic milliseconds supplied by the runner or a deterministic test.
 pub type UiInstant = u64;
 
+/// One clock sample published by the runner or a deterministic test.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiClock {
+    /// Monotonic milliseconds since the runner started, used for animation and deadlines.
+    pub now: UiInstant,
+    /// Unix epoch milliseconds, used for relative session timestamps.
+    pub wall_ms: i64,
+}
+
+impl UiClock {
+    /// Creates a clock sample from monotonic and wall-clock milliseconds.
+    #[must_use]
+    pub const fn new(now: UiInstant, wall_ms: i64) -> Self {
+        Self { now, wall_ms }
+    }
+}
+
 /// Current keyboard focus.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Focus {
@@ -551,6 +572,8 @@ pub struct SessionBrowserEntry {
     pub archived: bool,
     /// Latest selected provider-neutral model identity, when any.
     pub selected_model: Option<ModelRef>,
+    /// Number of provider-neutral transcript messages in durable storage.
+    pub message_count: u64,
     /// Last event's observed time in epoch milliseconds.
     pub updated_at_ms: i64,
     /// Whether this row is the currently active session.
@@ -722,26 +745,29 @@ pub struct ComposerState {
 impl Default for ComposerState {
     fn default() -> Self {
         let mut editor = TextArea::default();
-        editor.set_block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Prompt ")
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        editor.set_cursor_line_style(Style::default());
-        editor.set_cursor_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
         editor.set_placeholder_text("Ask AutoHarness...");
         editor.set_wrap_mode(WrapMode::WordOrGlyph);
-        Self { editor }
+        editor.set_cursor_line_style(Style::default());
+        let mut state = Self { editor };
+        state.apply_theme(&Theme::from_preset(
+            ThemePreset::System,
+            ColorMode::Color,
+            ColorDepth::TrueColor,
+        ));
+        state
     }
 }
 
 impl ComposerState {
+    fn apply_theme(&mut self, theme: &Theme) {
+        self.editor.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Prompt ")
+                .border_style(theme.style(Token::BorderSubtle)),
+        );
+        self.editor.set_cursor_style(theme.filled(Token::Accent));
+    }
     /// Returns exact composer content using line-feed separators.
     #[must_use]
     pub fn text(&self) -> String {
@@ -808,6 +834,8 @@ pub enum LocalPreferenceChange {
     TerminalTimestampStyle(Option<TerminalTimestampStyle>),
     /// Composer submission chord.
     ComposerSubmitBehavior(Option<ComposerSubmitBehavior>),
+    /// Prompt status-bar information density.
+    PromptStatusDetail(Option<PromptStatusDetail>),
 }
 
 /// Kind of request awaiting application acknowledgement.
@@ -863,6 +891,8 @@ pub enum PendingKind {
     UpdateLocalPreference(LocalPreferenceChange),
     /// Confirmed profile deletion.
     DeleteProfile(String),
+    /// Native Codex browser authentication.
+    CodexLogin,
 }
 
 /// Runner-side side effects the pure update layer cannot perform itself.
@@ -870,8 +900,6 @@ pub enum PendingKind {
 pub enum UiEffect {
     /// Dispatch an intent through the bounded application mailbox.
     Dispatch(UiIntent),
-    /// Start the official Codex CLI browser-login flow without handling credentials.
-    LaunchCodexLogin,
     /// Copy exact text to the system clipboard through OSC 52.
     CopyTranscript(String),
     /// Exit the terminal client.
@@ -888,6 +916,10 @@ pub enum UiIntent {
         request_id: RequestId,
         credential: ApiCredential,
     },
+    /// Start application-owned Codex subscription authentication.
+    StartCodexLogin { request_id: RequestId },
+    /// Cancel application-owned Codex subscription authentication.
+    CancelCodexLogin { request_id: RequestId },
     /// Creates or edits one non-secret provider profile.
     UpsertProfile {
         request_id: RequestId,
@@ -1016,6 +1048,8 @@ impl UiIntent {
         match self {
             Self::CreateSession { request_id }
             | Self::ConfigureCredential { request_id, .. }
+            | Self::StartCodexLogin { request_id }
+            | Self::CancelCodexLogin { request_id }
             | Self::UpsertProfile { request_id, .. }
             | Self::DuplicateProfile { request_id, .. }
             | Self::ActivateProfile { request_id, .. }
@@ -1053,6 +1087,10 @@ pub enum UiNotice {
         request_id: RequestId,
         failure: UiFailure,
     },
+    /// The Codex authorization page was handed to the default browser.
+    CodexLoginBrowserOpened { request_id: RequestId },
+    /// Codex authentication completed and the connected profile is active.
+    CodexLoginCompleted { request_id: RequestId },
 }
 /// Semantic mouse actions produced by terminal hit testing.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1061,17 +1099,19 @@ pub enum MouseAction {
     Route(Route),
     /// Switch to one of the nested Settings tabs.
     SettingsTab(usize),
-    /// Open the local user-profile dialog.
-    OpenUserProfile,
-    /// Chat footer actions.
-    ChatSend,
+    /// Focus the Chat composer by clicking it.
+    FocusComposer,
+    /// Click the Chat transcript to inspect it without tail-follow.
+    FocusTranscript,
+    /// Open the model picker from the Chat status line.
     ChatModels,
-    ChatNewSession,
-    ChatSessions,
-    ChatCredential,
-    ChatHelp,
+    /// Retry the failed Chat attempt from a callout button.
+    ChatRetry,
+    /// Create a fresh session from a Chat recovery callout.
+    ChatFreshSession,
+    /// Select a General Settings preference row.
+    SettingsRow(usize),
     /// Profile-center actions.
-    ProfileNew,
     ProfileCredential,
     ProfileTest,
     ProfileDefaultModel,
@@ -1079,6 +1119,13 @@ pub enum MouseAction {
     ProfileDelete,
     /// Select a provider setup choice.
     SelectProviderChoice(usize),
+    /// Start or retry the visible Codex browser sign-in action.
+    CodexLogin,
+    /// Cancel the visible Codex browser sign-in flow.
+    CodexLoginCancel,
+    /// Save or cancel the provider profile editor.
+    ProfileEditorSubmit,
+    ProfileEditorCancel,
     /// Select a connected provider profile.
     SelectProfile(String),
     UserProfileSave,
@@ -1100,6 +1147,8 @@ pub enum MouseAction {
     CredentialCancel,
     ProfileCredentialSubmit,
     ProfileCredentialCancel,
+    /// Close a non-authority picker or palette modal.
+    OverlayCancel,
     PermissionAllow,
     PermissionDeny,
 }
@@ -1124,8 +1173,8 @@ pub enum Message {
     SettingsChanged(Arc<SettingsProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
-    /// Deterministic monotonic time update.
-    Tick(UiInstant),
+    /// Clock sample with monotonic time for animation and wall time for display.
+    Tick(UiClock),
     /// Terminal resize notification.
     Resize,
     /// Process-level shutdown request.
@@ -1159,7 +1208,7 @@ impl Debug for Message {
                 .field(settings)
                 .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
-            Self::Tick(now) => formatter.debug_tuple("Tick").field(now).finish(),
+            Self::Tick(clock) => formatter.debug_tuple("Tick").field(clock).finish(),
             Self::Resize => formatter.write_str("Resize"),
             Self::ShutdownRequested => formatter.write_str("ShutdownRequested"),
         }
@@ -1335,13 +1384,27 @@ pub(crate) enum ProfileCenterFocus {
     ConnectedProfiles,
 }
 
+/// Observable state of the native Codex browser authentication handoff.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum CodexLoginState {
+    /// No login process is running.
+    #[default]
+    Idle,
+    /// AutoHarness is checking the existing CLI session or starting login.
+    Starting,
+    /// The official authentication page was opened in the default browser.
+    BrowserOpened,
+    /// The last launch failed and may be retried.
+    Failed,
+}
+
 /// Provider-choice, authentication-page, and account-editor state.
 #[derive(Debug, Default)]
 pub(crate) struct ProfileCenterState {
     pub focus: ProfileCenterFocus,
     pub choice_selected: usize,
     pub auth_page: Option<ProviderChoice>,
-    pub auth_selected: usize,
+    pub codex_login: CodexLoginState,
     pub open_credential_after_save: Option<String>,
     pub query: String,
     pub selected: Option<String>,
@@ -1351,25 +1414,32 @@ pub(crate) struct ProfileCenterState {
     pub confirming_delete: Option<String>,
 }
 
-/// Step in the keyboard-first default-agent selection sequence.
+/// Step in the keyboard-first default-model selection sequence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum AgentDefaultStep {
-    /// Select a connected provider account.
-    #[default]
-    Provider,
+pub(crate) enum ModelDefaultStep {
     /// Select one compatible model from the active provider catalog.
+    #[default]
     Model,
-    /// Confirm the only currently portable thinking choice.
+    /// Select the provider-native thinking effort saved with the model.
     Thinking,
 }
 
-/// Local state for selecting the default agent provider, model, and thinking mode.
+/// Provider-neutral thinking choices persisted with a profile default.
+pub(crate) const MODEL_THINKING_LEVELS: [&str; 7] = [
+    "provider default",
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+];
+
+/// Local state for selecting the active profile's default model and thinking mode.
 #[derive(Debug, Default)]
-pub(crate) struct AgentDefaultsState {
-    pub step: AgentDefaultStep,
-    pub profile_selected: usize,
+pub(crate) struct ModelDefaultsState {
+    pub step: ModelDefaultStep,
     pub model_selected: usize,
-    pub profile_id: Option<String>,
     pub model: Option<ModelRef>,
     pub thinking_selected: usize,
 }
@@ -1387,7 +1457,56 @@ pub(crate) struct HelpState {
     /// Rows scrolled from the top of the help content.
     pub scroll: u16,
 }
-/// The selectable rows in deterministic Settings workspace order.
+/// One category in the two-pane Settings workspace.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SettingsCategory {
+    #[default]
+    Appearance,
+    ChatComposer,
+    Accessibility,
+    Providers,
+    ModelsThinking,
+    Profile,
+    SessionsData,
+    Shortcuts,
+    About,
+}
+
+impl SettingsCategory {
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Appearance,
+        Self::ChatComposer,
+        Self::Accessibility,
+        Self::Providers,
+        Self::ModelsThinking,
+        Self::Profile,
+        Self::SessionsData,
+        Self::Shortcuts,
+        Self::About,
+    ];
+
+    #[must_use]
+    pub(crate) fn at(index: usize) -> Self {
+        Self::ALL[index.min(Self::ALL.len().saturating_sub(1))]
+    }
+
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::ChatComposer => "Chat & Composer",
+            Self::Accessibility => "Accessibility",
+            Self::Providers => "Providers",
+            Self::ModelsThinking => "Models & Thinking",
+            Self::Profile => "Profile",
+            Self::SessionsData => "Sessions & Data",
+            Self::Shortcuts => "Shortcuts",
+            Self::About => "About",
+        }
+    }
+}
+
+/// Typed rows in deterministic Settings workspace order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsPreference {
     DisplayLabel,
@@ -1400,6 +1519,7 @@ pub(crate) enum SettingsPreference {
     ThemePreset,
     ColorMode,
     GlyphMode,
+    PromptStatusDetail,
     ReducedMotion,
     Density,
     Approvals,
@@ -1408,52 +1528,156 @@ pub(crate) enum SettingsPreference {
     Layout,
     TerminalTimestampStyle,
     ComposerSubmitBehavior,
+    GlyphCheck,
+    KeyboardNavigation,
+    StateIndicators,
+    Workspace,
+    ColorDepth,
+    Version,
+    ManageProviders,
+    ConnectCredential,
+    ConfigureModels,
+    OpenSessions,
 }
 
 impl SettingsPreference {
-    pub(crate) const ALL: [Self; 18] = [
-        Self::DisplayLabel,
-        Self::Provider,
-        Self::Profile,
-        Self::Credential,
-        Self::Source,
-        Self::Model,
-        Self::Mode,
+    const APPEARANCE: [Self; 4] = [
         Self::ThemePreset,
-        Self::ColorMode,
-        Self::GlyphMode,
-        Self::ReducedMotion,
         Self::Density,
-        Self::Approvals,
-        Self::Retention,
-        Self::Logging,
+        Self::GlyphMode,
+        Self::GlyphCheck,
+    ];
+    const CHAT_COMPOSER: [Self; 4] = [
+        Self::PromptStatusDetail,
         Self::Layout,
         Self::TerminalTimestampStyle,
         Self::ComposerSubmitBehavior,
     ];
+    const ACCESSIBILITY: [Self; 4] = [
+        Self::ReducedMotion,
+        Self::ColorMode,
+        Self::KeyboardNavigation,
+        Self::StateIndicators,
+    ];
+    const PROVIDERS: [Self; 5] = [
+        Self::Provider,
+        Self::Credential,
+        Self::Source,
+        Self::ConnectCredential,
+        Self::ManageProviders,
+    ];
+    const MODELS_THINKING: [Self; 3] = [Self::Model, Self::Mode, Self::ConfigureModels];
+    const PROFILE: [Self; 4] = [
+        Self::Profile,
+        Self::Workspace,
+        Self::DisplayLabel,
+        Self::ManageProviders,
+    ];
+    const SESSIONS_DATA: [Self; 3] = [Self::Retention, Self::Logging, Self::OpenSessions];
+    const SHORTCUTS: [Self; 0] = [];
+    const ABOUT: [Self; 3] = [Self::Approvals, Self::ColorDepth, Self::Version];
 
     #[must_use]
-    pub(crate) fn at(index: usize) -> Self {
-        Self::ALL[index.min(Self::ALL.len().saturating_sub(1))]
+    pub(crate) const fn rows(category: SettingsCategory) -> &'static [Self] {
+        match category {
+            SettingsCategory::Appearance => &Self::APPEARANCE,
+            SettingsCategory::ChatComposer => &Self::CHAT_COMPOSER,
+            SettingsCategory::Accessibility => &Self::ACCESSIBILITY,
+            SettingsCategory::Providers => &Self::PROVIDERS,
+            SettingsCategory::ModelsThinking => &Self::MODELS_THINKING,
+            SettingsCategory::Profile => &Self::PROFILE,
+            SettingsCategory::SessionsData => &Self::SESSIONS_DATA,
+            SettingsCategory::Shortcuts => &Self::SHORTCUTS,
+            SettingsCategory::About => &Self::ABOUT,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::DisplayLabel => "Display label",
+            Self::Provider => "Provider",
+            Self::Profile => "Active profile",
+            Self::Credential => "Connection",
+            Self::Source => "Credential source",
+            Self::Model => "Default model",
+            Self::Mode => "Thinking",
+            Self::ThemePreset => "Theme",
+            Self::ColorMode => "Color mode",
+            Self::GlyphMode => "Glyph mode",
+            Self::PromptStatusDetail => "Prompt detail",
+            Self::ReducedMotion => "Reduced motion",
+            Self::Density => "Density",
+            Self::Approvals => "Approvals",
+            Self::Retention => "Retention",
+            Self::Logging => "Logging",
+            Self::Layout => "Layout",
+            Self::TerminalTimestampStyle => "Timestamps",
+            Self::ComposerSubmitBehavior => "Submit prompt",
+            Self::GlyphCheck => "Glyph check",
+            Self::KeyboardNavigation => "Keyboard navigation",
+            Self::StateIndicators => "State indicators",
+            Self::Workspace => "Workspace",
+            Self::ColorDepth => "Terminal colors",
+            Self::Version => "Version",
+            Self::ManageProviders => "Provider profiles",
+            Self::ConnectCredential => "API credential",
+            Self::ConfigureModels => "Model defaults",
+            Self::OpenSessions => "Session browser",
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn editable(self) -> bool {
+        !matches!(
+            self,
+            Self::Provider
+                | Self::Profile
+                | Self::Credential
+                | Self::Source
+                | Self::Model
+                | Self::Mode
+                | Self::Approvals
+                | Self::Retention
+                | Self::Logging
+                | Self::GlyphCheck
+                | Self::KeyboardNavigation
+                | Self::StateIndicators
+                | Self::Workspace
+                | Self::ColorDepth
+                | Self::Version
+        )
     }
 }
 
 /// Inline state owned exclusively by the Settings route.
 #[derive(Debug, Default)]
 pub(crate) struct SettingsState {
-    /// Whether the top-level Settings navigation owns arrow-key focus.
+    /// Whether the category rail owns arrow-key focus.
     pub nav_focus: bool,
-    /// Index into the top-level Settings navigation.
+    /// Index into `SettingsCategory::ALL`.
     pub nav_selected: usize,
-    /// Index into `SettingsPreference::ALL`.
+    /// Index into the selected category's row slice.
     pub selected: usize,
-    /// First rendered Settings line kept visible while selecting preferences.
+    /// First typed row kept visible while selecting preferences.
     pub scroll: u16,
     /// Buffered local-label edit; no value is persisted until Enter.
     pub display_label_editor: Option<String>,
+    /// Inline Settings search query.
+    pub search_query: String,
+    /// Whether cross-category Settings search owns text input.
+    pub search_active: bool,
+    /// Highlighted result in the filtered Settings search.
+    pub search_selected: usize,
+    /// Whether the existing model-default workflow is open inside its category.
+    pub detail_open: bool,
+    /// Whether the focused long choice is showing its inline picker.
+    pub choice_picker_open: bool,
+    /// Highlighted option in the inline long-choice picker.
+    pub choice_picker_selected: usize,
 }
 
-pub(crate) const SETTINGS_NAV_COUNT: usize = 4;
+pub(crate) const SETTINGS_NAV_COUNT: usize = SettingsCategory::ALL.len();
 
 /// Local user-profile dialog state.
 #[derive(Debug, Default)]
@@ -1556,14 +1780,14 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Settings",
         rows: &[
-            ("Left/Right", "move between Settings pages"),
-            ("Down", "enter Settings preferences"),
-            ("Up/Down", "choose a preference"),
-            ("PageUp/PageDown", "move through settings"),
-            ("Home/End", "jump to the first or last preference"),
-            ("Enter", "activate a page or edit the display label"),
-            ("R / D", "inherit or restore the user default"),
-            ("Esc", "return to Chat"),
+            ("Tab / Shift+Tab", "move between categories and rows"),
+            ("Up/Down", "choose a category or editable row"),
+            ("Left/Right", "change the focused row value"),
+            ("Enter / Space", "edit, toggle, or activate the focused row"),
+            ("Ctrl+F", "search every category by label or value"),
+            ("Backspace", "inherit when a user override exists"),
+            ("Shift+Backspace", "restore the built-in default"),
+            ("Esc", "step back one Settings level"),
         ],
     },
     HelpSection {
@@ -1655,9 +1879,9 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: None,
     },
     CommandEntry {
-        id: "agents",
-        label: "Agents settings",
-        description: "Open the Agents tab in Settings",
+        id: "models",
+        label: "Default model",
+        description: "Choose the model and thinking mode for new sessions",
         key_hint: None,
     },
     CommandEntry {
@@ -1673,9 +1897,9 @@ pub const COMMANDS: &[CommandEntry] = &[
         key_hint: Some("Ctrl+N"),
     },
     CommandEntry {
-        id: "models",
-        label: "Models",
-        description: "Choose a model or save it as the active provider default",
+        id: "session-model",
+        label: "Session model",
+        description: "Choose the model used by the current session",
         key_hint: Some("Ctrl+P"),
     },
     CommandEntry {
@@ -1754,7 +1978,7 @@ pub enum ProviderKindLabel {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
-    /// User-owned official Codex CLI subscription session.
+    /// User-owned Codex subscription session.
     CodexCli,
 }
 
@@ -2111,8 +2335,8 @@ pub struct Model {
     pub(crate) help: HelpState,
     /// Deterministic inline Settings workspace interaction state.
     pub(crate) settings_workspace: SettingsState,
-    /// Keyboard-first connected-provider default agent selection state.
-    pub(crate) agent_defaults: AgentDefaultsState,
+    /// Keyboard-first active-profile model-default selection state.
+    pub(crate) model_defaults: ModelDefaultsState,
     /// Local user-profile dialog interaction state.
     pub(crate) user_profile: UserProfileState,
     /// Composer text saved while working in another session.
@@ -2137,6 +2361,10 @@ pub struct Model {
     pub(crate) catalog_retry_deadline: Option<UiInstant>,
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
+    pub(crate) last_activity_ms: UiInstant,
+    pub(crate) wall_ms: i64,
+    pub(crate) color_depth: ColorDepth,
+    pub(crate) theme: Theme,
 }
 
 const STARTUP_ANIMATION_MS: UiInstant = 400;
@@ -2148,11 +2376,28 @@ impl Model {
             && matches!(&*self.catalog, CatalogProjection::Loading)
     }
 
-    pub(crate) fn advance_startup(&mut self, now: UiInstant) {
-        self.now = now;
-        if now >= STARTUP_ANIMATION_MS {
+    pub(crate) fn mark_activity(&mut self) {
+        self.last_activity_ms = self.now;
+    }
+
+    pub(crate) fn advance_clock(&mut self, clock: UiClock) {
+        self.now = clock.now;
+        self.wall_ms = clock.wall_ms;
+        if clock.now >= STARTUP_ANIMATION_MS {
             self.startup_complete = true;
         }
+    }
+
+    /// Motion sample for the current clock and accessibility flags.
+    #[must_use]
+    pub fn motion(&self) -> crate::ui::Motion {
+        let preferences = self.settings.local_profile.preferences();
+        crate::ui::Motion::new(
+            self.now,
+            self.last_activity_ms,
+            *preferences.reduced_motion().value(),
+            *preferences.glyph_mode().value(),
+        )
     }
 }
 
@@ -2226,7 +2471,7 @@ impl Model {
             startup_complete,
             help: HelpState::default(),
             settings_workspace: SettingsState::default(),
-            agent_defaults: AgentDefaultsState::default(),
+            model_defaults: ModelDefaultsState::default(),
             drafts: SessionDrafts::default(),
             user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
@@ -2243,7 +2488,12 @@ impl Model {
             catalog_retry_deadline: None,
             next_request_id: 1,
             now: 0,
+            last_activity_ms: 0,
+            wall_ms: 0,
+            color_depth: ColorDepth::TrueColor,
+            theme: Theme::from_preset(ThemePreset::System, ColorMode::Color, ColorDepth::TrueColor),
         };
+        model.refresh_theme();
         model.sync_retry_deadline();
         model.sync_catalog_retry_deadline();
         model.sync_browser_selection();
@@ -2329,6 +2579,25 @@ impl Model {
     /// Replaces the resolved-settings read model.
     pub fn apply_settings(&mut self, settings: Arc<SettingsProjection>) {
         self.settings = settings;
+        self.refresh_theme();
+        self.dirty = true;
+    }
+
+    fn refresh_theme(&mut self) {
+        self.theme = Theme::resolve(self.settings.local_profile.preferences(), self.color_depth);
+        self.composer.apply_theme(&self.theme);
+    }
+
+    /// Returns the resolved presentation theme.
+    #[must_use]
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Updates terminal color depth and re-resolves the theme.
+    pub fn set_color_depth(&mut self, depth: ColorDepth) {
+        self.color_depth = depth;
+        self.refresh_theme();
         self.dirty = true;
     }
     /// Replaces the safe local profile and provider-connection read model.
@@ -2346,10 +2615,11 @@ impl Model {
 
     /// Returns whether the Profiles route is active.
     #[must_use]
-    pub const fn profile_center_open(&self) -> bool {
+    pub fn profile_center_open(&self) -> bool {
         matches!(self.navigation.route, Route::Profiles)
             || (matches!(self.navigation.route, Route::Settings)
-                && self.settings_workspace.nav_selected == 1)
+                && SettingsCategory::at(self.settings_workspace.nav_selected)
+                    == SettingsCategory::Providers)
     }
 
     /// Returns the highlighted provider profile identity.
@@ -2387,6 +2657,179 @@ impl Model {
     #[must_use]
     pub const fn settings_open(&self) -> bool {
         matches!(self.navigation.route, Route::Settings)
+    }
+
+    /// Returns display-safe row data shared by Settings rendering and search.
+    #[must_use]
+    pub(crate) fn settings_row_value(&self, preference: SettingsPreference) -> String {
+        let profile = &self.settings.local_profile;
+        let preferences = profile.preferences();
+        match preference {
+            SettingsPreference::DisplayLabel => self
+                .settings_workspace
+                .display_label_editor
+                .as_ref()
+                .cloned()
+                .or_else(|| {
+                    profile
+                        .display_label()
+                        .value()
+                        .as_ref()
+                        .map(|label| label.as_str().to_owned())
+                })
+                .unwrap_or_else(|| "not set".to_owned()),
+            SettingsPreference::Provider => self.settings.provider_label(),
+            SettingsPreference::Profile => self
+                .settings
+                .provider_status
+                .active_profile
+                .clone()
+                .unwrap_or_else(|| "none".to_owned()),
+            SettingsPreference::Credential => if self.settings.provider_status.credential_connected
+            {
+                "connected"
+            } else {
+                "disconnected"
+            }
+            .to_owned(),
+            SettingsPreference::Source => self
+                .settings
+                .provider_status
+                .credential_source
+                .as_str()
+                .to_owned(),
+            SettingsPreference::Model => self.session.selected_model.as_ref().map_or_else(
+                || "no model".to_owned(),
+                |model| model.model_id().as_str().to_owned(),
+            ),
+            SettingsPreference::Mode => if self.profiles.user.default_mode.is_empty() {
+                "provider default"
+            } else {
+                self.profiles.user.default_mode.as_str()
+            }
+            .to_owned(),
+            SettingsPreference::ThemePreset => match preferences.theme_preset().value() {
+                ThemePreset::System => "system",
+                ThemePreset::Light => "light",
+                ThemePreset::Dark => "dark",
+                ThemePreset::Aurora => "aurora",
+                ThemePreset::Ember => "ember",
+                ThemePreset::Midnight => "midnight",
+                ThemePreset::Ocean => "ocean",
+                ThemePreset::Forest => "forest",
+                ThemePreset::Rose => "rose",
+            }
+            .to_owned(),
+            SettingsPreference::ColorMode => match preferences.color_mode().value() {
+                ColorMode::Color => "color",
+                ColorMode::Soft => "soft",
+                ColorMode::Vivid => "vivid",
+                ColorMode::NoColor => "no color",
+                ColorMode::HighContrast => "high contrast",
+            }
+            .to_owned(),
+            SettingsPreference::GlyphMode => match preferences.glyph_mode().value() {
+                GlyphMode::Unicode => "unicode",
+                GlyphMode::NerdFont => "Nerd Font",
+                GlyphMode::Ascii => "ASCII",
+            }
+            .to_owned(),
+            SettingsPreference::PromptStatusDetail => {
+                match preferences.prompt_status_detail().value() {
+                    PromptStatusDetail::Essential => "essential",
+                    PromptStatusDetail::Workspace => "workspace",
+                    PromptStatusDetail::Detailed => "detailed",
+                }
+                .to_owned()
+            }
+            SettingsPreference::ReducedMotion => if *preferences.reduced_motion().value() {
+                "on"
+            } else {
+                "off"
+            }
+            .to_owned(),
+            SettingsPreference::Density => match preferences.density().value() {
+                Density::Comfortable => "comfortable",
+                Density::Compact => "compact",
+            }
+            .to_owned(),
+            SettingsPreference::Layout => match preferences.layout().value() {
+                Layout::Responsive => "responsive",
+                Layout::SingleColumn => "single column",
+            }
+            .to_owned(),
+            SettingsPreference::TerminalTimestampStyle => {
+                match preferences.terminal_timestamp_style().value() {
+                    TerminalTimestampStyle::Relative => "relative",
+                    TerminalTimestampStyle::Absolute => "absolute",
+                    TerminalTimestampStyle::Hidden => "hidden",
+                }
+                .to_owned()
+            }
+            SettingsPreference::ComposerSubmitBehavior => {
+                match preferences.composer_submit_behavior().value() {
+                    ComposerSubmitBehavior::ControlS => "Ctrl+S",
+                    ComposerSubmitBehavior::Enter => "Enter",
+                }
+                .to_owned()
+            }
+            SettingsPreference::Approvals => "per-call capability decisions".to_owned(),
+            SettingsPreference::Retention => "durable until explicitly deleted".to_owned(),
+            SettingsPreference::Logging => "redacted; credentials excluded".to_owned(),
+            SettingsPreference::GlyphCheck => self.theme.icons().glyph_check_line(),
+            SettingsPreference::KeyboardNavigation => {
+                "all controls are keyboard reachable".to_owned()
+            }
+            SettingsPreference::StateIndicators => "fill and glyph, never color alone".to_owned(),
+            SettingsPreference::Workspace => if self.profiles.user.workspace.is_empty() {
+                "not set"
+            } else {
+                self.profiles.user.workspace.as_str()
+            }
+            .to_owned(),
+            SettingsPreference::ColorDepth => match self.color_depth {
+                ColorDepth::TrueColor => "truecolor",
+                ColorDepth::Indexed256 => "256 colors",
+                ColorDepth::Basic16 => "16 colors",
+            }
+            .to_owned(),
+            SettingsPreference::Version => env!("CARGO_PKG_VERSION").to_owned(),
+            SettingsPreference::ManageProviders => "Manage providers".to_owned(),
+            SettingsPreference::ConnectCredential => "Connect API key".to_owned(),
+            SettingsPreference::ConfigureModels => "Choose model and thinking".to_owned(),
+            SettingsPreference::OpenSessions => "Open sessions".to_owned(),
+        }
+    }
+
+    /// Finds typed Settings rows by label or current rendered value.
+    #[must_use]
+    pub(crate) fn settings_search_results(
+        &self,
+    ) -> Vec<(SettingsCategory, usize, SettingsPreference)> {
+        let query = self
+            .settings_workspace
+            .search_query
+            .trim()
+            .to_ascii_lowercase();
+        let mut results = Vec::new();
+        for category in SettingsCategory::ALL {
+            for (index, preference) in SettingsPreference::rows(category)
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let matches = query.is_empty()
+                    || preference.label().to_ascii_lowercase().contains(&query)
+                    || self
+                        .settings_row_value(preference)
+                        .to_ascii_lowercase()
+                        .contains(&query);
+                if matches {
+                    results.push((category, index, preference));
+                }
+            }
+        }
+        results
     }
     /// Returns whether the local user-profile dialog owns the modal slot.
     #[must_use]
@@ -2650,6 +3093,12 @@ impl Model {
     #[must_use]
     pub const fn now(&self) -> UiInstant {
         self.now
+    }
+
+    /// Returns the current Unix-epoch wall-clock milliseconds.
+    #[must_use]
+    pub const fn wall_ms(&self) -> i64 {
+        self.wall_ms
     }
 
     /// Returns whether the failed catalog may be refreshed under its retry policy.

@@ -37,8 +37,10 @@ impl fmt::Display for VaultError {
 
 impl std::error::Error for VaultError {}
 
-/// Maximum accepted credential length, matching the TUI entry bound.
-const MAX_SECRET_BYTES: usize = 4_096;
+/// Maximum accepted opaque credential payload length.
+const MAX_SECRET_BYTES: usize = 32 * 1_024;
+const KEYRING_CHUNK_BYTES: usize = 1_000;
+const KEYRING_MANIFEST_PREFIX: &str = "autoharness-vault-v1";
 
 /// Application-owned port to the operating-system credential store.
 pub trait VaultPort: Send + Sync {
@@ -167,6 +169,81 @@ impl KeyringVault {
     fn entry(&self, reference: &str) -> Result<keyring::Entry, VaultError> {
         keyring::Entry::new(self.service, reference).map_err(map_keyring_error)
     }
+
+    fn chunk_reference(reference: &str, generation: char, index: usize) -> String {
+        format!("{reference}#v1#{generation}#{index}")
+    }
+
+    fn manifest(generation: char, count: usize) -> String {
+        format!("{KEYRING_MANIFEST_PREFIX}:{generation}:{count}")
+    }
+
+    fn parse_manifest(value: &str) -> Result<Option<(char, usize)>, VaultError> {
+        if !value.starts_with(KEYRING_MANIFEST_PREFIX) {
+            return Ok(None);
+        }
+        let mut fields = value.split(':');
+        if fields.next() != Some(KEYRING_MANIFEST_PREFIX) {
+            return Err(VaultError::Unavailable);
+        }
+        let generation = fields
+            .next()
+            .and_then(|value| value.chars().next().filter(|_| value.len() == 1))
+            .filter(|value| matches!(value, 'a' | 'b'))
+            .ok_or(VaultError::Unavailable)?;
+        let count = fields
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0 && *count <= MAX_SECRET_BYTES.div_ceil(KEYRING_CHUNK_BYTES))
+            .ok_or(VaultError::Unavailable)?;
+        if fields.next().is_some() {
+            return Err(VaultError::Unavailable);
+        }
+        Ok(Some((generation, count)))
+    }
+
+    fn delete_generation(&self, reference: &str, generation: char, count: usize) {
+        for index in 0..count {
+            let chunk = Self::chunk_reference(reference, generation, index);
+            if let Ok(entry) = self.entry(&chunk) {
+                let _ = entry.delete_credential();
+            }
+        }
+    }
+
+    fn write_chunked(
+        &self,
+        reference: &str,
+        secret: &str,
+        generation: char,
+    ) -> Result<usize, VaultError> {
+        let chunks = secret
+            .as_bytes()
+            .chunks(KEYRING_CHUNK_BYTES)
+            .collect::<Vec<_>>();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let chunk = std::str::from_utf8(chunk).map_err(|_| VaultError::Unavailable)?;
+            let chunk_reference = Self::chunk_reference(reference, generation, index);
+            if let Err(error) = self
+                .entry(&chunk_reference)?
+                .set_password(chunk)
+                .map_err(map_keyring_error)
+            {
+                self.delete_generation(reference, generation, index);
+                return Err(error);
+            }
+        }
+        let count = chunks.len();
+        if let Err(error) = self
+            .entry(reference)?
+            .set_password(&Self::manifest(generation, count))
+            .map_err(map_keyring_error)
+        {
+            self.delete_generation(reference, generation, count);
+            return Err(error);
+        }
+        Ok(count)
+    }
 }
 
 impl Default for KeyringVault {
@@ -187,33 +264,96 @@ impl VaultPort for KeyringVault {
     fn save(&self, reference: &str, secret: &str) -> Result<CredentialReference, VaultError> {
         validate_secret(secret)?;
         let stored = CredentialReference::new(reference).map_err(VaultError::InvalidSecret)?;
-        let entry = self.entry(stored.as_str())?;
-        entry.set_password(secret).map_err(map_keyring_error)?;
+        let existing = self
+            .entry(stored.as_str())?
+            .get_password()
+            .ok()
+            .and_then(|value| Self::parse_manifest(&value).ok().flatten());
+        let generation = existing.map_or(
+            'a',
+            |(generation, _)| if generation == 'a' { 'b' } else { 'a' },
+        );
+        self.write_chunked(stored.as_str(), secret, generation)?;
+        if let Some((old_generation, old_count)) = existing {
+            self.delete_generation(stored.as_str(), old_generation, old_count);
+        }
         Ok(stored)
     }
 
     fn load(&self, reference: &CredentialReference) -> Result<Zeroizing<String>, VaultError> {
         let entry = self.entry(reference.as_str())?;
         let secret = entry.get_password().map_err(map_keyring_error)?;
-        Ok(Zeroizing::new(secret))
+        let Some((generation, count)) = Self::parse_manifest(&secret)? else {
+            return Ok(Zeroizing::new(secret));
+        };
+        let mut assembled = Zeroizing::new(String::new());
+        for index in 0..count {
+            let chunk_reference = Self::chunk_reference(reference.as_str(), generation, index);
+            let chunk = self
+                .entry(&chunk_reference)?
+                .get_password()
+                .map_err(map_keyring_error)?;
+            assembled.push_str(&chunk);
+        }
+        validate_secret(&assembled)?;
+        Ok(assembled)
     }
 
     fn replace(&self, reference: &CredentialReference, secret: &str) -> Result<(), VaultError> {
         validate_secret(secret)?;
-        let entry = self.entry(reference.as_str())?;
-        // Distinguish a missing target from a platform failure.
-        match entry.get_password() {
-            Ok(_) => {}
-            Err(error) => return Err(map_keyring_error(error)),
+        let current = self
+            .entry(reference.as_str())?
+            .get_password()
+            .map_err(map_keyring_error)?;
+        let existing = Self::parse_manifest(&current)?;
+        let generation = existing.map_or(
+            'a',
+            |(generation, _)| if generation == 'a' { 'b' } else { 'a' },
+        );
+        self.write_chunked(reference.as_str(), secret, generation)?;
+        if let Some((old_generation, old_count)) = existing {
+            self.delete_generation(reference.as_str(), old_generation, old_count);
         }
-        entry.set_password(secret).map_err(map_keyring_error)
+        Ok(())
     }
 
     fn delete(&self, reference: &CredentialReference) -> Result<(), VaultError> {
         let entry = self.entry(reference.as_str())?;
+        let existing = entry
+            .get_password()
+            .ok()
+            .and_then(|value| Self::parse_manifest(&value).ok().flatten());
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(map_keyring_error(error)),
+        }?;
+        if let Some((generation, count)) = existing {
+            self.delete_generation(reference.as_str(), generation, count);
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_manifests_are_strict_and_bounded() {
+        assert_eq!(
+            KeyringVault::parse_manifest("autoharness-vault-v1:a:3"),
+            Ok(Some(('a', 3)))
+        );
+        assert_eq!(KeyringVault::parse_manifest("ordinary-secret"), Ok(None));
+        assert!(KeyringVault::parse_manifest("autoharness-vault-v1:c:3").is_err());
+        assert!(KeyringVault::parse_manifest("autoharness-vault-v1:a:999").is_err());
+    }
+
+    #[test]
+    fn chunk_references_are_generation_scoped() {
+        assert_eq!(
+            KeyringVault::chunk_reference("autoharness/profile/codex", 'b', 7),
+            "autoharness/profile/codex#v1#b#7"
+        );
     }
 }

@@ -108,6 +108,8 @@ pub enum GlyphMode {
     /// Use Unicode box drawing and symbols.
     #[default]
     Unicode,
+    /// Use Nerd Font symbols when the active terminal font provides them.
+    NerdFont,
     /// Use ASCII-only terminal decoration.
     Ascii,
 }
@@ -158,6 +160,19 @@ pub enum ComposerSubmitBehavior {
     Enter,
 }
 
+/// Amount of trusted runtime context shown in the prompt status bar.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptStatusDetail {
+    /// Show only model, thinking, and context utilization.
+    Essential,
+    /// Add compact workspace path and Git branch context.
+    #[default]
+    Workspace,
+    /// Add latest-turn input and output token usage when available.
+    Detailed,
+}
+
 /// Optional local preferences stored by one configuration layer.
 ///
 /// An absent field intentionally means that the layer does not override that
@@ -182,6 +197,8 @@ pub struct LocalPreferences {
     terminal_timestamp_style: Option<TerminalTimestampStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     composer_submit_behavior: Option<ComposerSubmitBehavior>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_status_detail: Option<PromptStatusDetail>,
 }
 
 impl LocalPreferences {
@@ -197,6 +214,7 @@ impl LocalPreferences {
             layout: None,
             terminal_timestamp_style: None,
             composer_submit_behavior: None,
+            prompt_status_detail: None,
         }
     }
 
@@ -211,6 +229,7 @@ impl LocalPreferences {
             && self.layout.is_none()
             && self.terminal_timestamp_style.is_none()
             && self.composer_submit_behavior.is_none()
+            && self.prompt_status_detail.is_none()
     }
 
     /// Returns this layer's optional theme preset.
@@ -356,6 +375,24 @@ impl LocalPreferences {
         self.set_composer_submit_behavior(Some(value));
         self
     }
+
+    /// Returns the optional prompt status-bar detail level.
+    #[must_use]
+    pub const fn prompt_status_detail(&self) -> Option<PromptStatusDetail> {
+        self.prompt_status_detail
+    }
+
+    /// Sets the prompt status-bar detail level, or clears it to inherit.
+    pub fn set_prompt_status_detail(&mut self, value: Option<PromptStatusDetail>) {
+        self.prompt_status_detail = value;
+    }
+
+    /// Returns this layer with a prompt status-bar detail override.
+    #[must_use]
+    pub fn with_prompt_status_detail(mut self, value: PromptStatusDetail) -> Self {
+        self.set_prompt_status_detail(Some(value));
+        self
+    }
 }
 
 /// Local identity and UI preferences stored in a settings document.
@@ -457,6 +494,7 @@ pub struct EffectiveLocalPreferences {
     layout: EffectiveValue<Layout>,
     terminal_timestamp_style: EffectiveValue<TerminalTimestampStyle>,
     composer_submit_behavior: EffectiveValue<ComposerSubmitBehavior>,
+    prompt_status_detail: EffectiveValue<PromptStatusDetail>,
 }
 
 impl Default for EffectiveLocalPreferences {
@@ -474,6 +512,10 @@ impl Default for EffectiveLocalPreferences {
             ),
             composer_submit_behavior: EffectiveValue::new(
                 ComposerSubmitBehavior::default(),
+                Source::Default,
+            ),
+            prompt_status_detail: EffectiveValue::new(
+                PromptStatusDetail::default(),
                 Source::Default,
             ),
         }
@@ -517,6 +559,10 @@ impl EffectiveLocalPreferences {
         value: EffectiveValue<ComposerSubmitBehavior>,
     ) {
         self.composer_submit_behavior = value;
+    }
+
+    pub(crate) fn set_prompt_status_detail(&mut self, value: EffectiveValue<PromptStatusDetail>) {
+        self.prompt_status_detail = value;
     }
 
     /// Returns the effective theme preset.
@@ -565,6 +611,12 @@ impl EffectiveLocalPreferences {
     #[must_use]
     pub const fn composer_submit_behavior(&self) -> &EffectiveValue<ComposerSubmitBehavior> {
         &self.composer_submit_behavior
+    }
+
+    /// Returns the effective prompt status-bar detail level.
+    #[must_use]
+    pub const fn prompt_status_detail(&self) -> &EffectiveValue<PromptStatusDetail> {
+        &self.prompt_status_detail
     }
 }
 

@@ -127,7 +127,7 @@ pub enum ProviderKind {
     Gemini,
     /// Configurable OpenAI-compatible router.
     Router,
-    /// User-owned official Codex CLI subscription session.
+    /// User-owned Codex subscription session.
     CodexCli,
 }
 
@@ -171,7 +171,7 @@ impl ProviderProfile {
         }
     }
 
-    /// Creates a profile backed by the user's official Codex CLI session.
+    /// Creates a profile backed by the user's Codex subscription session.
     #[must_use]
     pub const fn codex_cli() -> Self {
         Self {

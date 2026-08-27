@@ -198,7 +198,7 @@ impl<'a> ProfileCredentialResolver<'a> {
         let environment_key = match provider_kind {
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
             ProviderKind::Router => Some("AUTOHARNESS_ROUTER_API_KEY"),
-            // Subscription authentication remains exclusively inside Codex CLI.
+            // Codex subscription credentials resolve only from the vault.
             ProviderKind::CodexCli => None,
         };
 

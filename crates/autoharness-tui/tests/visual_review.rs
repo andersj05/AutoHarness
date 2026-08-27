@@ -8,7 +8,7 @@ use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary,
     PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
     SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
-    TranscriptItem, UiFailure, UiNotice, UsageView, update, view,
+    TranscriptItem, UiClock, UiFailure, UiNotice, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -32,12 +32,14 @@ fn ready_catalog() -> Arc<CatalogProjection> {
                 model: pro_model(),
                 display_name: "Gemini 2.5 Pro".to_owned(),
                 detail: "reasoning | text".to_owned(),
+                context_window_tokens: Some(1_000_000),
                 selectable: true,
             },
             ModelSummary {
                 model: model_ref("models/gemini-2.5-flash"),
                 display_name: "Gemini 2.5 Flash".to_owned(),
                 detail: "fast".to_owned(),
+                context_window_tokens: Some(1_000_000),
                 selectable: true,
             },
         ],
@@ -100,7 +102,7 @@ fn snapshot_model() -> Model {
         &mut model,
         Message::Paste("Retry with smaller scope.".to_owned()),
     );
-    let _ = update(&mut model, Message::Tick(1_400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(1_400, 0)));
     model
 }
 
@@ -228,6 +230,7 @@ fn render_accessibility_review_matrix() {
             title: "Destructive accessibility review".to_owned(),
             archived: false,
             selected_model: Some(pro_model()),
+            message_count: 6,
             updated_at_ms: 1_700_000_000_000,
             active: false,
         }],

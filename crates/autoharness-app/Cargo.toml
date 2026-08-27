@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "ah"
-path = "src/main.rs"
+path = "src/ah.rs"
 
 [features]
 benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]

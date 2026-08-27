@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use autoharness_domain::{ModelId, ModelRef, ProviderId};
+use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
     CatalogProjection, CredentialSourceLabel, Focus, LocalUserProfileProjection, Message, Model,
     ModelSummary, MouseAction, ProfileConnectionState, ProfileCredentialStateLabel,
-    ProfilesProjection, ProviderKindLabel, ProviderProfileProjection, SessionProjection,
-    SessionsProjection, UiEffect, UiIntent, hit_test, update, view,
+    ProfilesProjection, ProviderKindLabel, ProviderProfileProjection, RetryPolicy,
+    SessionProjection, SessionsProjection, UiEffect, UiFailure, UiIntent, UiNotice, hit_test,
+    update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -31,6 +32,7 @@ fn model() -> Model {
             model: model_ref(),
             display_name: "Gemini 2.5 Pro".to_owned(),
             detail: "thinking".to_owned(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,
@@ -122,8 +124,10 @@ fn providers_list_connection_choices_at_responsive_sizes() {
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
     assert!(model.profile_center_open());
-    assert_eq!(model.focus, Focus::Settings);
+    assert_eq!(model.focus, Focus::Profiles);
     let wide = render_text(&model, 120, 40);
+    assert!(wide.contains("Provider catalog"));
+    assert!(wide.contains("Saved connections"));
     for provider in [
         "Gemini",
         "Google AI Studio API",
@@ -132,6 +136,14 @@ fn providers_list_connection_choices_at_responsive_sizes() {
         "Claude Code",
     ] {
         assert!(wide.contains(provider), "missing {provider}");
+    }
+    assert!(wide.contains("Unavailable"));
+    assert!(wide.contains("adapter not available"));
+    for section in ["Identity", "Connection", "Credential", "Defaults"] {
+        assert!(
+            wide.contains(section),
+            "missing provider detail section {section}"
+        );
     }
     for (width, height) in [(80, 24), (60, 18), (40, 12)] {
         assert!(render_text(&model, width, height).contains("Providers"));
@@ -148,50 +160,107 @@ fn codex_provider_selection_opens_the_subscription_authentication_page() {
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("Sign in to Codex"));
-    assert!(rendered.contains("Open official browser sign-in"));
+    assert!(rendered.contains("Sign in with ChatGPT"));
+    assert!(rendered.contains("default browser"));
+    assert!((0..40).any(|row| {
+        (0..120).any(|column| {
+            matches!(
+                hit_test(&model, 120, 40, column, row),
+                Some(MouseAction::CodexLogin)
+            )
+        })
+    }));
+    assert!((0..40).any(|row| {
+        (0..120).any(|column| {
+            hit_test(&model, 120, 40, column, row) == Some(MouseAction::CodexLoginCancel)
+        })
+    }));
 
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let request_id = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected login effects: {other:?}"),
+    };
+    assert!(
+        render_text(&model, 120, 40).contains("Opening your browser"),
+        "the authentication popup should show launch progress"
+    );
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::CodexLoginBrowserOpened { request_id }),
+    );
+    assert!(render_text(&model, 120, 40).contains("Browser opened"));
+    let effects = update(
+        &mut model,
+        Message::Notice(UiNotice::CodexLoginCompleted { request_id }),
+    );
+    assert!(effects.is_empty());
+    assert!(render_text(&model, 120, 40).contains("Codex subscription connected"));
+}
+
+#[test]
+fn codex_sign_in_can_be_cancelled_or_retried_after_failure() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(ctrl('g')));
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let request_id = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected login effects: {other:?}"),
+    };
+    assert!(matches!(
+        update(&mut model, Message::Input(key(Key::Esc))).as_slice(),
+        [UiEffect::Dispatch(UiIntent::CancelCodexLogin { request_id: cancelled })]
+            if *cancelled == request_id
+    ));
+
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted { request_id }),
+    );
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let failed_request = match effects.as_slice() {
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { request_id })] => *request_id,
+        other => panic!("unexpected retry effects: {other:?}"),
+    };
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentRejected {
+            request_id: failed_request,
+            failure: UiFailure::new(
+                ErrorClass::Unavailable,
+                "The browser could not be opened",
+                RetryPolicy::Now,
+            ),
+        }),
+    );
+    assert!(render_text(&model, 120, 40).contains("Try sign-in again"));
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::LaunchCodexLogin]
-    ));
-    let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    assert!(render_text(&model, 120, 40).contains("Connect Codex"));
-    let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Char('s'))));
-    let effects = update(&mut model, Message::Input(key(Key::Enter)));
-    assert!(matches!(
-        effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::UpsertProfile { profile, .. })]
-            if profile.id == "codex" && profile.kind == ProviderKindLabel::CodexCli
+        [UiEffect::Dispatch(UiIntent::StartCodexLogin { .. })]
     ));
 }
 
 #[test]
-fn agents_select_default_provider_then_model_and_provider_thinking_mode() {
+fn models_tab_saves_the_active_profiles_model_and_thinking_mode() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-
-    let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("1  PROVIDER"));
-    assert!(rendered.contains("2  MODEL"));
-    assert!(rendered.contains("3  THINKING"));
-    assert!(matches!(
-        update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
-        [UiEffect::Dispatch(UiIntent::ActivateProfile { profile_id, .. })]
-            if profile_id == "personal-gemini"
-    ));
-    assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
-    assert!(render_text(&model, 120, 40).contains("Thinking mode"));
     for _ in 0..4 {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+
+    let rendered = render_text(&model, 120, 40);
+    assert!(rendered.contains("Models"));
+    assert!(rendered.contains("Thinking"));
+    assert!(rendered.contains("Active profile  personal-gemini"));
+    for _ in 0..4 {
+        let _ = update(&mut model, Message::Input(key(Key::Right)));
     }
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
@@ -207,7 +276,7 @@ fn provider_arrows_preserve_connected_profile_selection() {
     for _ in 0..6 {
         let _ = update(&mut model, Message::Input(key(Key::Down)));
     }
-    assert!(render_text(&model, 80, 24).contains("Connected accounts"));
+    assert!(render_text(&model, 80, 24).contains("Saved connections"));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
 
     let _ = update(&mut model, Message::Input(key(Key::Right)));
@@ -241,7 +310,17 @@ fn provider_editor_uses_arrows_instead_of_tab() {
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     assert_eq!(render_text(&model, 80, 24), before);
     let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("> Provider"));
+    assert!(render_text(&model, 80, 24).contains("› Provider"));
+    for expected in [
+        MouseAction::ProfileEditorSubmit,
+        MouseAction::ProfileEditorCancel,
+    ] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
+    let _ = update(&mut model, Message::Mouse(MouseAction::ProfileEditorCancel));
+    assert!(!render_text(&model, 80, 24).contains("Connect Gemini"));
 }
 #[test]
 fn credential_entry_is_masked_redacted_and_profile_scoped() {
@@ -250,14 +329,14 @@ fn credential_entry_is_masked_redacted_and_profile_scoped() {
     let _ = update(&mut model, Message::Input(key(Key::Down)));
     assert_eq!(model.profile_selection(), Some("personal-gemini"));
     let _ = update(&mut model, Message::Input(alt('k')));
-    assert_eq!(
-        hit_test(&model, 80, 24, 12, 19),
-        Some(MouseAction::ProfileCredentialSubmit)
-    );
-    assert_eq!(
-        hit_test(&model, 80, 24, 60, 19),
-        Some(MouseAction::ProfileCredentialCancel)
-    );
+    for expected in [
+        MouseAction::ProfileCredentialSubmit,
+        MouseAction::ProfileCredentialCancel,
+    ] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
     let sentinel = "router-secret-sentinel";
     let _ = update(&mut model, Message::Paste(sentinel.to_owned()));
 
@@ -295,7 +374,6 @@ fn every_profile_detail_button_has_a_semantic_click_target() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('g')));
     for expected in [
-        MouseAction::ProfileNew,
         MouseAction::ProfileCredential,
         MouseAction::ProfileTest,
         MouseAction::ProfileDefaultModel,

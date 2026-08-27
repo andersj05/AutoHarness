@@ -6,7 +6,8 @@ use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, Message, Model, ModelSummary, MouseAction,
     Notice, PermissionDetailView, PermissionRequestView, RetryPolicy, SessionBrowserEntry,
     SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, TranscriptItem,
-    UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, hit_test, update, view,
+    UiClock, UiEffect, UiFailure, UiIntent, UiNotice, UsageView, display_safe, hit_test,
+    style_snapshot, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -32,18 +33,21 @@ fn ready_catalog() -> Arc<CatalogProjection> {
                 model: pro_model(),
                 display_name: "Gemini 2.5 Pro".to_owned(),
                 detail: "reasoning · text".to_owned(),
+                context_window_tokens: Some(1_000_000),
                 selectable: true,
             },
             ModelSummary {
                 model: model_ref("models/gemini-2.5-flash"),
                 display_name: "Gemini 2.5 Flash".to_owned(),
                 detail: "fast · text".to_owned(),
+                context_window_tokens: Some(1_000_000),
                 selectable: true,
             },
             ModelSummary {
                 model: model_ref("models/embedding-001"),
                 display_name: "Embedding 001".to_owned(),
                 detail: "embedding only".to_owned(),
+                context_window_tokens: None,
                 selectable: false,
             },
         ],
@@ -99,14 +103,11 @@ fn permission_overlay_scopes_the_resource_and_dispatches_one_exact_answer() {
     assert!(rendered.contains("workspace:src/lib.rs"));
     assert!(rendered.contains("Content bytes"));
     assert!(rendered.contains("27"));
-    assert_eq!(
-        hit_test(&model, 80, 24, 10, 15),
-        Some(MouseAction::PermissionAllow)
-    );
-    assert_eq!(
-        hit_test(&model, 80, 24, 60, 15),
-        Some(MouseAction::PermissionDeny)
-    );
+    for expected in [MouseAction::PermissionAllow, MouseAction::PermissionDeny] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
     let effects = update(&mut model, Message::Mouse(MouseAction::PermissionAllow));
 
     assert_eq!(effects.len(), 1);
@@ -254,7 +255,7 @@ fn snapshot_model() -> Model {
         &mut model,
         Message::Paste("Retry with a smaller scope.\nKeep the checklist concise.".to_owned()),
     );
-    let _ = update(&mut model, Message::Tick(1_400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(1_400, 0)));
     model
 }
 
@@ -309,7 +310,7 @@ fn submission_keeps_draft_until_commit_and_rejection_keeps_it_editable() {
         .first()
         .and_then(|effect| match effect {
             UiEffect::Dispatch(intent) => Some(intent.request_id()),
-            UiEffect::LaunchCodexLogin | UiEffect::CopyTranscript(_) | UiEffect::Quit => None,
+            UiEffect::CopyTranscript(_) | UiEffect::Quit => None,
         })
         .expect("second request ID");
     let _ = update(
@@ -369,7 +370,7 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
     );
     assert!(model.cancellation_requested(&attempt));
     assert!(update(&mut model, Message::Input(key_input(Key::Esc))).is_empty());
-    let _ = update(&mut model, Message::Tick(10_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(10_000, 0)));
 
     let failed = TranscriptItem::Assistant {
         attempt_id: attempt.clone(),
@@ -386,12 +387,12 @@ fn cancellation_and_retry_are_correlated_and_deduplicated() {
         &mut model,
         Message::SessionChanged(session(4, vec![failed.clone()])),
     );
-    let _ = update(&mut model, Message::Tick(14_999));
+    let _ = update(&mut model, Message::Tick(UiClock::new(14_999, 0)));
     assert!(
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty(),
         "retry must wait for the projected deadline"
     );
-    let _ = update(&mut model, Message::Tick(15_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(15_000, 0)));
     let retry = update(&mut model, Message::Input(ctrl(Key::Char('r'))));
     let retry_request = match retry.as_slice() {
         [
@@ -475,9 +476,9 @@ fn catalog_refresh_respects_provider_retry_delay() {
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty(),
         "refresh must wait for Retry-After"
     );
-    let _ = update(&mut model, Message::Tick(4_999));
+    let _ = update(&mut model, Message::Tick(UiClock::new(4_999, 0)));
     assert!(update(&mut model, Message::Input(ctrl(Key::Char('r')))).is_empty());
-    let _ = update(&mut model, Message::Tick(5_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(5_000, 0)));
 
     assert!(matches!(
         update(&mut model, Message::Input(ctrl(Key::Char('r')))).as_slice(),
@@ -505,7 +506,7 @@ fn model_picker_filters_selectable_rows_and_waits_for_commit() {
     );
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("Models"));
-    assert!(rendered.contains("Filter: flash"));
+    assert!(rendered.contains("flash"));
     assert!(rendered.contains("Gemini 2.5 Flash"));
     assert!(!rendered.contains("Embedding 001"));
 
@@ -562,13 +563,17 @@ fn missing_credential_opens_a_masked_zeroizing_editor() {
         Arc::new(CatalogProjection::CredentialRequired),
     );
     assert!(!model.credential_open());
-    let _ = update(&mut model, Message::Tick(2_000));
+    let _ = update(&mut model, Message::Tick(UiClock::new(2_000, 0)));
     for character in "/settings".chars() {
         let _ = update(&mut model, Message::Input(key_input(Key::Char(character))));
     }
     let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
     assert!(model.settings_open());
-    let _ = update(&mut model, Message::Input(key_input(Key::Char('k'))));
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key_input(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key_input(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key_input(Key::Enter)));
     assert!(model.credential_open());
 
     let paste = Message::Paste(format!("{sentinel}\r\n"));
@@ -676,6 +681,7 @@ fn a_replacement_credential_catalog_requires_a_valid_model_reselection() {
             model: replacement.clone(),
             display_name: "Gemini replacement".to_owned(),
             detail: "text".to_owned(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,
@@ -763,9 +769,28 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
 }
 
 #[test]
+fn tick_stores_wall_clock_beside_monotonic_time() {
+    let mut model = empty_model();
+    assert_eq!(model.now(), 0);
+    assert_eq!(model.wall_ms(), 0);
+    let _ = update(
+        &mut model,
+        Message::Tick(UiClock::new(1_400, 1_700_000_000_123)),
+    );
+    assert_eq!(model.now(), 1_400);
+    assert_eq!(model.wall_ms(), 1_700_000_000_123);
+}
+
+#[test]
 fn fixed_size_views_match_reviewed_golden_buffers() {
     let model = snapshot_model();
     let cases = [
+        (
+            120,
+            50,
+            "golden/main-120x50.txt",
+            include_str!("golden/main-120x50.txt"),
+        ),
         (
             120,
             40,
@@ -795,7 +820,7 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
 
     for (width, height, path, expected) in cases {
         let backend = render_model(&model, width, height);
-        let actual = buffer_text(&backend);
+        let actual = style_snapshot(backend.buffer());
         if update_goldens {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests")
@@ -804,11 +829,9 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
         } else {
             assert_eq!(actual, expected, "golden mismatch at {width}x{height}");
         }
-        let expected_anchor = Color::Reset;
-        assert_eq!(
-            backend.buffer().cell((0, 0)).expect("shell origin").bg,
-            expected_anchor,
-            "shell must retain its visual anchor at {width}x{height}"
+        assert!(
+            backend.buffer().cell((0, 0)).is_some(),
+            "shell must paint the origin cell at {width}x{height}"
         );
     }
 }
@@ -861,6 +884,213 @@ fn apply_visual_preferences(model: &mut Model, preferences: VisualPreferences) {
 }
 
 #[test]
+fn reduced_motion_freezes_the_generation_scanner() {
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-reduced-motion").expect("attempt"),
+        text: String::new(),
+        status: AttemptStatus::Streaming,
+        usage: None,
+        retry_of: None,
+    }];
+    let mut model = Model::new(
+        session(2, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "system",
+            glyph_mode: "ascii",
+            reduced_motion: true,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+
+    let first = buffer_text(&render_model(&model, 80, 24));
+    let _ = update(&mut model, Message::Tick(UiClock::new(700, 0)));
+    let later = buffer_text(&render_model(&model, 80, 24));
+    assert!(first.contains("[========]"));
+    assert_eq!(first, later);
+}
+
+fn assert_style_golden(model: &Model, width: u16, height: u16, relative: &str, expected: &str) {
+    let backend = render_model(model, width, height);
+    let actual = style_snapshot(backend.buffer());
+    if std::env::var("AUTOHARNESS_UPDATE_GOLDENS").as_deref() == Ok("1") {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join(relative);
+        std::fs::write(path, &actual).expect("write updated golden");
+    } else {
+        assert_eq!(actual, expected, "golden mismatch for {relative}");
+    }
+}
+
+#[test]
+fn chat_workspace_states_match_reviewed_snapshots() {
+    let streaming = {
+        let transcript = vec![TranscriptItem::Assistant {
+            attempt_id: AttemptKey::new("attempt-stream").expect("attempt"),
+            text: String::new(),
+            status: AttemptStatus::Streaming,
+            usage: None,
+            retry_of: None,
+        }];
+        Model::new(
+            session(2, transcript),
+            Arc::new(SessionsProjection::default()),
+            ready_catalog(),
+        )
+    };
+    assert_style_golden(
+        &streaming,
+        80,
+        24,
+        "golden/chat-streaming-80x24.txt",
+        include_str!("golden/chat-streaming-80x24.txt"),
+    );
+
+    let mut cancelling = Model::new(
+        session(
+            2,
+            vec![TranscriptItem::Assistant {
+                attempt_id: AttemptKey::new("attempt-stream").expect("attempt"),
+                text: String::new(),
+                status: AttemptStatus::Streaming,
+                usage: None,
+                retry_of: None,
+            }],
+        ),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    let first = update(&mut cancelling, Message::Input(key_input(Key::Esc)));
+    if let [UiEffect::Dispatch(UiIntent::CancelAttempt { request_id, .. })] = first.as_slice() {
+        let _ = update(
+            &mut cancelling,
+            Message::Notice(UiNotice::IntentCommitted {
+                request_id: *request_id,
+            }),
+        );
+    }
+    assert_style_golden(
+        &cancelling,
+        80,
+        24,
+        "golden/chat-cancelling-80x24.txt",
+        include_str!("golden/chat-cancelling-80x24.txt"),
+    );
+
+    let failed = Model::new(
+        session(
+            2,
+            vec![TranscriptItem::Assistant {
+                attempt_id: AttemptKey::new("attempt-fail").expect("attempt"),
+                text: String::new(),
+                status: AttemptStatus::Failed(UiFailure::new(
+                    ErrorClass::Unavailable,
+                    "provider unavailable",
+                    RetryPolicy::Now,
+                )),
+                usage: None,
+                retry_of: None,
+            }],
+        ),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    assert_style_golden(
+        &failed,
+        80,
+        24,
+        "golden/chat-failed-80x24.txt",
+        include_str!("golden/chat-failed-80x24.txt"),
+    );
+
+    let mut offline = empty_model();
+    let _ = update(
+        &mut offline,
+        Message::CatalogChanged(Arc::new(CatalogProjection::CredentialRequired)),
+    );
+    assert_style_golden(
+        &offline,
+        80,
+        24,
+        "golden/chat-offline-80x24.txt",
+        include_str!("golden/chat-offline-80x24.txt"),
+    );
+
+    let loading = Model::new(
+        session(1, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Loading),
+    );
+    let mut loading = loading;
+    let _ = update(&mut loading, Message::Tick(UiClock::new(400, 0)));
+    assert_style_golden(
+        &loading,
+        80,
+        24,
+        "golden/chat-loading-80x24.txt",
+        include_str!("golden/chat-loading-80x24.txt"),
+    );
+
+    let mut no_model = Model::new(
+        Arc::new(SessionProjection {
+            session_id: "session-fixture".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    let _ = update(&mut no_model, Message::Input(key_input(Key::Esc)));
+    assert_style_golden(
+        &no_model,
+        80,
+        24,
+        "golden/chat-no-model-80x24.txt",
+        include_str!("golden/chat-no-model-80x24.txt"),
+    );
+
+    let empty_catalog = Model::new(
+        Arc::new(SessionProjection {
+            session_id: "session-fixture".to_owned(),
+            revision: 1,
+            selected_model: None,
+            transcript: Vec::new(),
+            permission_requests: Vec::new(),
+        }),
+        Arc::new(SessionsProjection::default()),
+        Arc::new(CatalogProjection::Ready {
+            models: Vec::new(),
+            stale: false,
+        }),
+    );
+    assert_style_golden(
+        &empty_catalog,
+        80,
+        24,
+        "golden/chat-empty-catalog-80x24.txt",
+        include_str!("golden/chat-empty-catalog-80x24.txt"),
+    );
+
+    assert_style_golden(
+        &empty_model(),
+        80,
+        24,
+        "golden/chat-new-conversation-80x24.txt",
+        include_str!("golden/chat-new-conversation-80x24.txt"),
+    );
+}
+
+#[test]
 fn accessibility_visual_matrix_preserves_security_text_and_ascii_borders() {
     let sizes = [(120, 50), (120, 40), (80, 24), (60, 18), (40, 12)];
     let mut permission = (*session(9, Vec::new())).clone();
@@ -896,7 +1126,7 @@ fn accessibility_visual_matrix_preserves_security_text_and_ascii_borders() {
         assert!(rendered.contains("Tool permission"));
         assert!(rendered.contains("filesystem write"));
         assert!(rendered.contains("workspace:src/lib.rs"));
-        assert!(rendered.contains("N/Esc deny"));
+        assert!(rendered.contains("Deny (N/Esc)"));
         if width > 40 && height > 12 {
             assert!(rendered.contains('+'));
             assert!(!rendered.contains('┌'));
@@ -912,6 +1142,7 @@ fn accessibility_confirmation_matrix_retains_destructive_copy() {
             title: "Security review".to_owned(),
             archived: false,
             selected_model: Some(pro_model()),
+            message_count: 4,
             updated_at_ms: 1_700_000_000_000,
             active: false,
         }],
@@ -935,8 +1166,8 @@ fn accessibility_confirmation_matrix_retains_destructive_copy() {
         let rendered = buffer_text(&render_model(&model, width, height));
         assert!(rendered.contains("Delete session"));
         assert!(rendered.contains("Permanently delete"));
-        assert!(rendered.contains("Y confirm"));
-        assert!(rendered.contains("N or Esc cancel"));
+        assert!(rendered.contains("Confirm (Y)"));
+        assert!(rendered.contains("Cancel (N/Esc)"));
     }
 }
 
@@ -948,6 +1179,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
             title: "Timestamp fixture".to_owned(),
             archived: false,
             selected_model: Some(pro_model()),
+            message_count: 4,
             updated_at_ms: 1_700_000_000_000,
             active: false,
         }],
@@ -967,11 +1199,13 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let light = render_model(&model, 120, 40);
     assert_eq!(
-        light.buffer().cell((29, 1)).expect("chat transcript").bg,
+        light.buffer().cell((25, 0)).expect("chat divider").bg,
         Color::Reset
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
-    assert!(buffer_text(&render_model(&model, 120, 40)).contains("updated 1700000000000"));
+    let sessions = buffer_text(&render_model(&model, 120, 40));
+    assert!(sessions.contains("1700000000000 ms"));
+    assert!(sessions.contains("Messages"));
 
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('1'))));
     apply_visual_preferences(
@@ -988,11 +1222,7 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let dark_chat = render_model(&model, 120, 40);
     assert_eq!(
-        dark_chat
-            .buffer()
-            .cell((29, 1))
-            .expect("chat transcript")
-            .bg,
+        dark_chat.buffer().cell((25, 0)).expect("chat divider").bg,
         Color::Reset
     );
     assert!(!buffer_text(&dark_chat).contains("updated 1700000000000"));
@@ -1019,12 +1249,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((29, 1)).expect("aurora transcript").bg,
+        aurora.buffer().cell((25, 0)).expect("aurora divider").bg,
         Color::Reset
     );
     assert_eq!(
-        aurora.buffer().cell((29, 1)).expect("aurora transcript").fg,
-        Color::Rgb(56, 189, 248)
+        aurora.buffer().cell((25, 0)).expect("aurora divider").fg,
+        Color::Rgb(45, 212, 191)
     );
 
     apply_visual_preferences(
@@ -1041,12 +1271,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((29, 1)).expect("ember transcript").bg,
+        ember.buffer().cell((25, 0)).expect("ember divider").bg,
         Color::Reset
     );
     assert_eq!(
-        ember.buffer().cell((29, 1)).expect("ember transcript").fg,
-        Color::Rgb(253, 186, 116)
+        ember.buffer().cell((25, 0)).expect("ember divider").fg,
+        Color::Rgb(251, 146, 60)
     );
 }
 
@@ -1058,10 +1288,10 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         ready_catalog(),
     );
     for (theme, expected) in [
-        ("midnight", Color::Rgb(147, 197, 253)),
-        ("ocean", Color::Rgb(56, 189, 248)),
-        ("forest", Color::Rgb(134, 239, 172)),
-        ("rose", Color::Rgb(251, 113, 133)),
+        ("midnight", Color::Rgb(96, 165, 250)),
+        ("ocean", Color::Rgb(34, 211, 238)),
+        ("forest", Color::Rgb(74, 222, 128)),
+        ("rose", Color::Rgb(244, 114, 182)),
     ] {
         apply_visual_preferences(
             &mut model,
@@ -1078,13 +1308,31 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         assert_eq!(
             render_model(&model, 120, 40)
                 .buffer()
-                .cell((29, 1))
+                .cell((25, 0))
                 .expect("theme anchor")
                 .fg,
             expected,
-            "theme {theme} must keep its own user accent"
+            "theme {theme} must keep its own gradient accent"
         );
     }
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "ocean",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let color_fg = render_model(&model, 120, 40)
+        .buffer()
+        .cell((25, 0))
+        .expect("ocean color anchor")
+        .fg;
 
     apply_visual_preferences(
         &mut model,
@@ -1099,13 +1347,12 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         },
     );
     let soft = render_model(&model, 120, 40);
-    assert!(
-        soft.buffer()
-            .cell((29, 1))
-            .expect("soft theme anchor")
-            .modifier
-            .contains(ratatui::style::Modifier::DIM)
+    let soft_cell = soft.buffer().cell((25, 0)).expect("soft theme anchor");
+    assert_ne!(
+        soft_cell.fg, color_fg,
+        "soft mode must reduce chroma instead of using DIM"
     );
+    assert!(!soft_cell.modifier.contains(ratatui::style::Modifier::DIM));
 
     apply_visual_preferences(
         &mut model,
@@ -1123,11 +1370,50 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     assert!(
         vivid
             .buffer()
-            .cell((29, 1))
+            .cell((25, 0))
             .expect("vivid theme anchor")
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
+}
+
+#[test]
+fn nerd_font_mode_adds_optional_icons_without_changing_the_ascii_fallback() {
+    let mut model = Model::new(
+        session(16, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "aurora",
+            glyph_mode: "nerd_font",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
+        user: autoharness_tui::LocalUserProfileProjection {
+            workspace: r"C:\Users\jense\Desktop\AutoHarness".to_owned(),
+            default_mode: "high".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    model.apply_settings(Arc::new(SettingsProjection {
+        git_branch: Some("feat/tui-polish".to_owned()),
+        ..model.settings().clone()
+    }));
+
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("AutoHarness"));
+    assert!(rendered.contains("~/Desktop/AutoHarness"));
+    assert!(rendered.contains("feat/tui-polish"));
+    assert!(rendered.contains('│'));
 }
 
 #[test]
@@ -1164,26 +1450,51 @@ fn every_theme_and_color_treatment_renders_across_responsive_sizes() {
 
 #[test]
 fn prompt_bar_shows_safe_runtime_metadata() {
+    let transcript = vec![TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-metrics").expect("attempt"),
+        text: "answer".to_owned(),
+        status: AttemptStatus::Completed,
+        usage: Some(UsageView {
+            input_tokens: 249_000,
+            output_tokens: 1_000,
+        }),
+        retry_of: None,
+    }];
     let mut model = Model::new(
-        session(13, Vec::new()),
+        session(13, transcript),
         Arc::new(SessionsProjection::default()),
         ready_catalog(),
     );
     model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
         user: autoharness_tui::LocalUserProfileProjection {
-            workspace: r"C:\work\autoharness".to_owned(),
-            default_mode: "deliberate".to_owned(),
+            workspace: r"C:\Users\jense\Desktop\AutoHarness".to_owned(),
+            default_mode: "high".to_owned(),
             ..Default::default()
         },
         ..Default::default()
     }));
+    let settings = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{"schema_version":3,"local_profile":{"preferences":{"prompt_status_detail":"detailed"}}}"#,
+        )
+        .resolve()
+        .expect("prompt detail fixture");
     model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: settings.local_profile().clone(),
         git_branch: Some("feat/prompt-bar".to_owned()),
         ..SettingsProjection::default()
     }));
-    let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("think:standard"));
-    assert!(rendered.contains("path:/autoharness"));
-    assert!(!rendered.contains("git:feat/prompt-bar"));
-    assert!(!rendered.contains("model:"));
+    let rendered = buffer_text(&render_model(&model, 160, 40));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("high"));
+    assert!(!rendered.contains("high ●●●●○○"));
+    assert!(rendered.contains("ctx 25%"));
+    assert!(rendered.contains("~/Desktop/AutoHarness"));
+    assert!(rendered.contains("⑂ feat/prompt-bar"));
+    assert!(rendered.contains("in 249.0k / out 1.0k"));
+    assert!(rendered.matches('│').count() >= 4);
+    for prefix in ["model:", "mode:", "think:", "path:", "git:"] {
+        assert!(!rendered.contains(prefix));
+    }
 }

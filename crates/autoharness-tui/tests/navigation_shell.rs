@@ -3,10 +3,13 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction, OverlayKind,
-    PermissionDetailView, PermissionRequestView, RetryPolicy, Route, SessionBrowserEntry,
-    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent,
-    hit_test, update, view,
+    AttemptKey, AttemptStatus, CatalogProjection, CredentialSourceLabel, Focus,
+    LocalUserProfileProjection, Message, Model, ModelSummary, MouseAction, OverlayKind,
+    PermissionDetailView, PermissionRequestView, ProfileConnectionState,
+    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileProjection,
+    RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    SettingsProjection, ToolCallKey, TranscriptItem, UiClock, UiFailure, UiIntent, hit_test,
+    update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -34,6 +37,7 @@ fn model() -> Model {
                 title: "Active conversation".to_owned(),
                 archived: false,
                 selected_model: Some(model_ref()),
+                message_count: 2,
                 updated_at_ms: 2,
                 active: true,
             },
@@ -42,6 +46,7 @@ fn model() -> Model {
                 title: "Other conversation".to_owned(),
                 archived: false,
                 selected_model: None,
+                message_count: 0,
                 updated_at_ms: 1,
                 active: false,
             },
@@ -52,11 +57,55 @@ fn model() -> Model {
             model: model_ref(),
             display_name: "Gemini Shell".to_owned(),
             detail: String::new(),
+            context_window_tokens: Some(1_000_000),
             selectable: true,
         }],
         stale: false,
     });
     Model::new(session, sessions, catalog)
+}
+
+fn provider_model() -> Model {
+    let mut model = model();
+    model.apply_profiles(Arc::new(ProfilesProjection {
+        user: LocalUserProfileProjection {
+            display_label: Some("Conformance user".to_owned()),
+            workspace: "C:/work/autoharness".to_owned(),
+            default_profile: Some("personal-gemini".to_owned()),
+            default_model: Some("gemini-shell".to_owned()),
+            default_mode: "safe agent".to_owned(),
+        },
+        profiles: vec![
+            ProviderProfileProjection {
+                id: "personal-gemini".to_owned(),
+                kind: ProviderKindLabel::Gemini,
+                active: true,
+                base_url: String::new(),
+                project: String::new(),
+                auth_header: String::new(),
+                credential_state: ProfileCredentialStateLabel::Stored,
+                credential_source: CredentialSourceLabel::CredentialVault,
+                connection: ProfileConnectionState::Ready,
+                default_model: Some("gemini-shell".to_owned()),
+                default_mode: "safe agent".to_owned(),
+            },
+            ProviderProfileProjection {
+                id: "work-router".to_owned(),
+                kind: ProviderKindLabel::Router,
+                active: false,
+                base_url: "https://router.example.test/v1/".to_owned(),
+                project: "work".to_owned(),
+                auth_header: "x-router-key".to_owned(),
+                credential_state: ProfileCredentialStateLabel::Disconnected,
+                credential_source: CredentialSourceLabel::SessionOnly,
+                connection: ProfileConnectionState::Untested,
+                default_model: None,
+                default_mode: "safe agent".to_owned(),
+            },
+        ],
+        pending_recovery: 0,
+    }));
+    model
 }
 
 fn loading_model() -> Model {
@@ -243,10 +292,10 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "Conversation"),
+        ('1', "New conversation"),
         ('2', "Sessions"),
         ('3', "Providers"),
-        ('4', "Settings & Provenance"),
+        ('4', "Settings"),
         ('5', "Help"),
     ];
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
@@ -258,18 +307,28 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                 rendered.contains(expected),
                 "{expected} missing at {width}x{height}"
             );
-            if key == '4' && width >= 60 {
-                for section in ["Settings", "Providers", "Profile", "Agents"] {
+            if key == '4' && width >= 80 {
+                for section in [
+                    "Appearance",
+                    "Chat & Composer",
+                    "Accessibility",
+                    "Providers",
+                    "Models & Thinking",
+                    "Profile",
+                    "Sessions & Data",
+                    "Shortcuts",
+                    "About",
+                ] {
                     assert!(
                         rendered.contains(section),
                         "settings nav {section} missing at {width}x{height}"
                     );
                 }
             }
-            assert!(rendered.contains("Profile"), "profile action missing");
-            assert!(rendered.contains("Settings"), "settings action missing");
             if width >= 100 {
-                assert!(rendered.contains("PROJECTS"), "projects section missing");
+                assert!(rendered.contains("Profiles"), "profiles rail missing");
+                assert!(rendered.contains("Settings"), "settings rail missing");
+                assert!(rendered.contains("Workspace"), "workspace section missing");
                 assert!(!rendered.contains("PREVIOUS SESSIONS"));
             }
         }
@@ -285,15 +344,15 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
-    assert!(offline.contains("OFFLINE"));
-    assert!(offline.contains("Provider API key: use /settings"));
+    assert!(offline.contains("Offline"));
+    assert!(offline.contains("/settings"));
 
     let _ = update(
         &mut model,
         Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
     );
     let loading = render_text(&model, 80, 24);
-    assert!(loading.contains("CONNECTING"));
+    assert!(loading.contains("Connecting"));
 
     let _ = update(
         &mut model,
@@ -304,7 +363,7 @@ fn chat_empty_states_name_one_primary_recovery_action() {
         )))),
     );
     let failed = render_text(&model, 80, 24);
-    assert!(failed.contains("CONNECTION ERROR"));
+    assert!(failed.contains("Connection error"));
 
     assert!(failed.contains("Ctrl+R retry"));
 }
@@ -315,17 +374,17 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     assert!(initial.contains("AutoHarness"));
     assert!(initial.contains("Loading provider models..."));
     assert!(!initial.contains('%'));
-    let _ = update(&mut model, Message::Tick(100));
+    let _ = update(&mut model, Message::Tick(UiClock::new(100, 0)));
     let first = render_text(&model, 80, 24);
-    let _ = update(&mut model, Message::Tick(200));
+    let _ = update(&mut model, Message::Tick(UiClock::new(200, 0)));
     let second = render_text(&model, 80, 24);
     assert!(first.contains("Starting"));
     assert_ne!(first, second);
 
-    let _ = update(&mut model, Message::Tick(400));
+    let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
-    assert!(settled.contains("CONNECTING"));
+    assert!(settled.contains("Connecting"));
     assert!(settled.contains("Loading provider models..."));
 }
 
@@ -339,20 +398,20 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 
     let rendered = render_text(&model, 80, 24);
     assert!(!rendered.contains("Starting"));
-    assert!(rendered.contains("OFFLINE"));
+    assert!(rendered.contains("Offline"));
 }
 
 #[test]
 fn chat_empty_state_explains_the_zero_shell_start_path() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
-    assert!(rendered.contains("GET STARTED"));
-    assert!(rendered.contains("/settings set a provider key"));
-    assert!(rendered.contains("Conversation · Active conversation"));
+    assert!(rendered.contains("New conversation"));
+    assert!(rendered.contains("Write a prompt below"));
+    assert!(!rendered.contains("Conversation"));
 }
 
 #[test]
-fn ascii_glyph_mode_uses_ascii_conversation_separators() {
+fn ascii_glyph_mode_uses_a_single_sidebar_divider_without_conversation_chrome() {
     let mut model = model();
     let settings = SettingsBuilder::new()
         .with_layer(
@@ -373,45 +432,61 @@ fn ascii_glyph_mode_uses_ascii_conversation_separators() {
         ..SettingsProjection::default()
     }));
     let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("Conversation | Active conversation"));
-    assert!(!rendered.contains("Conversation · Active conversation"));
+    assert!(rendered.lines().all(|line| !line.contains('│')));
+    assert!(rendered.lines().filter(|line| line.contains('|')).count() >= 30);
+    assert!(!rendered.contains("Conversation"));
 }
 
 #[test]
 fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("←/→ option"));
+    assert!(rendered.contains("Glyph mode"));
+    assert!(rendered.contains("Left/Right"));
 }
 
 #[test]
 fn editable_settings_show_adjacent_values_as_a_scroll_wheel() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    for _ in 0..7 {
-        let _ = update(&mut model, Message::Input(key(Key::Down)));
-    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
 
     for (width, height) in [(120, 40), (80, 24), (40, 12)] {
         let rendered = render_text(&model, width, height);
-        assert!(rendered.contains("Theme preset"));
+        assert!(rendered.contains("Theme"));
         assert!(
-            rendered.contains("[system]"),
-            "missing wheel at {width}x{height}"
+            rendered.contains("system"),
+            "missing choice at {width}x{height}"
         );
-        assert!(rendered.contains("←/→ option"));
+        assert!(rendered.contains("Left/Right"));
     }
-    assert!(render_text(&model, 120, 40).contains("‹rose  [system]  light›"));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let rendered = render_text(&model, 120, 40);
+    for theme in [
+        "system", "light", "dark", "aurora", "ember", "midnight", "ocean", "forest", "rose",
+    ] {
+        assert!(rendered.contains(theme), "missing theme preview {theme}");
+    }
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let rendered = render_text(&model, 80, 24);
-    for section in ["Settings", "Providers", "Profile", "Agents"] {
+    for section in [
+        "Appearance",
+        "Chat & Composer",
+        "Accessibility",
+        "Providers",
+        "Models & Thinking",
+        "Profile",
+        "Sessions & Data",
+        "Shortcuts",
+        "About",
+    ] {
         assert!(rendered.contains(section), "missing settings nav {section}");
     }
 
@@ -422,33 +497,43 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
 }
 
 #[test]
-fn tab_does_not_switch_settings_pages() {
+fn tab_moves_between_settings_categories_and_rows() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let before = render_text(&model, 80, 24);
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
-    assert_eq!(render_text(&model, 80, 24), before);
-
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("Connect a provider"));
+    let after = render_text(&model, 80, 24);
+    assert_ne!(after, before);
+    assert!(after.contains("Left/Right change"));
+    let _ = update(
+        &mut model,
+        Message::Input(Input {
+            key: Key::Tab,
+            shift: true,
+            ..key(Key::Tab)
+        }),
+    );
+    assert!(render_text(&model, 80, 24).contains("Up/Down category"));
 }
 
 #[test]
-fn providers_returns_to_settings_navigation_before_leaving_the_route() {
+fn providers_category_uses_typed_actions_and_steps_back_one_level() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("Gemini"));
-
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("Connection"));
+    assert!(rendered.contains("API credential"));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
     assert_eq!(model.route(), Route::Settings);
-    assert_eq!(model.focus, Focus::UserProfile);
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    assert_eq!(model.route(), Route::Chat);
 }
 
 #[test]
@@ -478,6 +563,7 @@ fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
                 title: long_title,
                 archived: false,
                 selected_model: Some(model_ref()),
+                message_count: 2,
                 updated_at_ms: 1,
                 active: true,
             }],
@@ -485,7 +571,7 @@ fn wide_shell_keeps_route_bar_persistent_and_sidebar_titles_single_line() {
     );
     let rendered = render_text(&model, 120, 40);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("Profile"));
+    assert!(rendered.contains("Profiles"));
     assert!(rendered.contains("Settings"));
     assert!(rendered.contains("…"));
     assert_eq!(
@@ -501,15 +587,10 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("Profile"));
-    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("New conversation"));
     assert_eq!(
         hit_test(&model, 48, 18, 2, 17),
-        Some(MouseAction::SettingsTab(2))
-    );
-    assert_eq!(
-        hit_test(&model, 48, 18, 14, 17),
-        Some(MouseAction::SettingsTab(0))
+        Some(MouseAction::FocusComposer)
     );
 }
 
@@ -518,10 +599,12 @@ fn settings_tab_mouse_geometry_matches_persistent_shell() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     assert!(
-        (28..80).any(|column| {
-            hit_test(&model, 120, 40, column, 1) == Some(MouseAction::SettingsTab(1))
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                hit_test(&model, 120, 40, column, row) == Some(MouseAction::SettingsTab(3))
+            })
         }),
-        "provider Settings tab must have a mouse target"
+        "Providers category must have a mouse target"
     );
 }
 
@@ -561,67 +644,43 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
         hit_test(&model, 120, 40, 2, 1),
-        Some(MouseAction::Route(Route::Sessions))
+        Some(MouseAction::Route(Route::Chat))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 38),
-        Some(MouseAction::SettingsTab(2))
+        hit_test(&model, 120, 40, 2, 39),
+        Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 14, 38),
-        Some(MouseAction::SettingsTab(0))
+        hit_test(&model, 120, 40, 14, 39),
+        Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
         hit_test(&model, 80, 24, 2, 23),
-        Some(MouseAction::SettingsTab(2))
+        Some(MouseAction::FocusComposer)
     );
 }
 
 #[test]
-fn mouse_opens_and_saves_the_user_profile_dialog() {
+fn mouse_reaches_the_populated_profile_category_and_display_label_row() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 4),
-        Some(MouseAction::OpenUserProfile)
-    );
-    let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
-    assert!(model.user_profile_open());
-    assert!(render_text(&model, 120, 40).contains("User profile"));
-
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 22),
-        Some(MouseAction::UserProfileSave)
-    );
-    assert_eq!(
-        hit_test(&model, 120, 40, 70, 22),
-        Some(MouseAction::UserProfileCancel)
-    );
-    let effects = update(&mut model, Message::Mouse(MouseAction::UserProfileSave));
-    assert!(matches!(
-        effects.as_slice(),
-        [autoharness_tui::UiEffect::Dispatch(
-            UiIntent::UpdateLocalPreference { .. }
-        )]
-    ));
-    assert!(!model.user_profile_open());
+    let _ = update(&mut model, Message::Mouse(MouseAction::SettingsTab(5)));
+    assert!(render_text(&model, 120, 40).contains("Local identity"));
+    assert!((0..120).any(|column| {
+        (0..40)
+            .any(|row| hit_test(&model, 120, 40, column, row) == Some(MouseAction::SettingsRow(2)))
+    }));
+    let _ = update(&mut model, Message::Mouse(MouseAction::SettingsRow(2)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Char('A'))));
+    assert!(render_text(&model, 120, 40).contains("A|"));
 }
 
 #[test]
-fn mouse_profile_actions_share_keyboard_intents() {
+fn profile_help_row_has_no_hidden_mouse_action() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('3')));
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 38),
-        Some(MouseAction::ProfileNew)
-    );
-    let effects = update(&mut model, Message::Mouse(MouseAction::ProfileNew));
-
-    assert!(effects.is_empty());
-    assert!(render_text(&model, 120, 40).contains("Connect Gemini"));
+    assert_eq!(hit_test(&model, 120, 40, 30, 38), None);
 }
 #[test]
 fn mouse_session_action_bar_exposes_each_visible_action() {
@@ -645,7 +704,12 @@ fn mouse_session_action_bar_exposes_each_visible_action() {
 fn mouse_modal_rows_select_models_and_run_commands() {
     let mut picker = model();
     let _ = update(&mut picker, Message::Input(ctrl('p')));
-    let selection = hit_test(&picker, 80, 24, 12, 5);
+    let selection = (0..24).find_map(|row| {
+        (0..80).find_map(|column| {
+            hit_test(&picker, 80, 24, column, row)
+                .filter(|action| matches!(action, MouseAction::PickerSelect(_)))
+        })
+    });
     assert!(matches!(selection, Some(MouseAction::PickerSelect(_))));
     let effects = update(&mut picker, Message::Mouse(selection.expect("picker row")));
     assert!(matches!(
@@ -669,14 +733,256 @@ fn mouse_credential_dialog_controls_are_clickable() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('k')));
     assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
-    assert_eq!(
-        hit_test(&model, 80, 24, 10, 15),
-        Some(MouseAction::CredentialSubmit)
-    );
-    assert_eq!(
-        hit_test(&model, 80, 24, 60, 15),
-        Some(MouseAction::CredentialCancel)
-    );
+    for expected in [MouseAction::CredentialSubmit, MouseAction::CredentialCancel] {
+        assert!((0..24).any(|row| {
+            (0..80).any(|column| hit_test(&model, 80, 24, column, row) == Some(expected.clone()))
+        }));
+    }
     let _ = update(&mut model, Message::Mouse(MouseAction::CredentialCancel));
     assert!(model.overlay().is_none());
+}
+
+fn variant_name(action: &MouseAction) -> &'static str {
+    match action {
+        MouseAction::Route(_) => "Route",
+        MouseAction::SettingsTab(_) => "SettingsTab",
+        MouseAction::FocusComposer => "FocusComposer",
+        MouseAction::FocusTranscript => "FocusTranscript",
+        MouseAction::ChatModels => "ChatModels",
+        MouseAction::ChatRetry => "ChatRetry",
+        MouseAction::ChatFreshSession => "ChatFreshSession",
+        MouseAction::SettingsRow(_) => "SettingsRow",
+        MouseAction::ProfileCredential => "ProfileCredential",
+        MouseAction::ProfileTest => "ProfileTest",
+        MouseAction::ProfileDefaultModel => "ProfileDefaultModel",
+        MouseAction::ProfileDisconnect => "ProfileDisconnect",
+        MouseAction::ProfileDelete => "ProfileDelete",
+        MouseAction::SelectProviderChoice(_) => "SelectProviderChoice",
+        MouseAction::CodexLogin => "CodexLogin",
+        MouseAction::CodexLoginCancel => "CodexLoginCancel",
+        MouseAction::ProfileEditorSubmit => "ProfileEditorSubmit",
+        MouseAction::ProfileEditorCancel => "ProfileEditorCancel",
+        MouseAction::SelectProfile(_) => "SelectProfile",
+        MouseAction::UserProfileSave => "UserProfileSave",
+        MouseAction::SessionOpen => "SessionOpen",
+        MouseAction::SessionRename => "SessionRename",
+        MouseAction::SessionArchive => "SessionArchive",
+        MouseAction::SessionDelete => "SessionDelete",
+        MouseAction::Confirm => "Confirm",
+        MouseAction::Cancel => "Cancel",
+        MouseAction::UserProfileCancel => "UserProfileCancel",
+        MouseAction::PickerSelect(_) => "PickerSelect",
+        MouseAction::PaletteRun(_) => "PaletteRun",
+        MouseAction::CredentialSubmit => "CredentialSubmit",
+        MouseAction::CredentialCancel => "CredentialCancel",
+        MouseAction::ProfileCredentialSubmit => "ProfileCredentialSubmit",
+        MouseAction::ProfileCredentialCancel => "ProfileCredentialCancel",
+        MouseAction::OverlayCancel => "OverlayCancel",
+        MouseAction::PermissionAllow => "PermissionAllow",
+        MouseAction::PermissionDeny => "PermissionDeny",
+    }
+}
+
+fn collect_hit_variants(
+    model: &Model,
+    width: u16,
+    height: u16,
+    into: &mut std::collections::HashSet<&'static str>,
+) {
+    for column in 0..width {
+        for row in 0..height {
+            if let Some(action) = hit_test(model, width, height, column, row) {
+                into.insert(variant_name(&action));
+            }
+        }
+    }
+}
+
+#[test]
+fn chat_composer_transcript_and_settings_rows_are_clickable() {
+    let mut model = model();
+    assert_eq!(
+        hit_test(&model, 120, 40, 40, 20),
+        Some(MouseAction::FocusTranscript)
+    );
+    assert!(
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                hit_test(&model, 120, 40, column, row) == Some(MouseAction::FocusComposer)
+            })
+        }),
+        "composer must be clickable"
+    );
+    assert!(
+        (0..120).any(|column| {
+            (0..40)
+                .any(|row| hit_test(&model, 120, 40, column, row) == Some(MouseAction::ChatModels))
+        }),
+        "status-line model segment must open the picker"
+    );
+    let _ = update(&mut model, Message::Mouse(MouseAction::FocusComposer));
+    assert_eq!(model.focus, Focus::Composer);
+
+    let _ = update(&mut model, Message::Input(ctrl('4')));
+    assert!(
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                matches!(
+                    hit_test(&model, 120, 40, column, row),
+                    Some(MouseAction::SettingsRow(_))
+                )
+            })
+        }),
+        "General Settings rows must be clickable"
+    );
+}
+
+#[test]
+fn every_mouse_action_variant_is_produced_by_layout() {
+    let mut produced = std::collections::HashSet::new();
+    collect_hit_variants(&model(), 120, 40, &mut produced);
+    collect_hit_variants(&model(), 80, 24, &mut produced);
+    collect_hit_variants(&model(), 48, 18, &mut produced);
+
+    let mut settings = model();
+    let _ = update(&mut settings, Message::Input(ctrl('4')));
+    collect_hit_variants(&settings, 120, 40, &mut produced);
+
+    let mut user_profile = model();
+    let _ = update(
+        &mut user_profile,
+        Message::Input(Input {
+            key: Key::Char('u'),
+            alt: true,
+            ..key(Key::Char('u'))
+        }),
+    );
+    collect_hit_variants(&user_profile, 120, 40, &mut produced);
+    let _ = update(&mut settings, Message::Input(key(Key::Tab)));
+    collect_hit_variants(&settings, 120, 40, &mut produced);
+
+    let mut sessions = model();
+    let _ = update(&mut sessions, Message::Input(ctrl('2')));
+    collect_hit_variants(&sessions, 80, 24, &mut produced);
+    let _ = update(&mut sessions, Message::Input(key(Key::Down)));
+    let _ = update(&mut sessions, Message::Input(ctrl('d')));
+    collect_hit_variants(&sessions, 80, 24, &mut produced);
+
+    let mut picker = model();
+    let _ = update(&mut picker, Message::Input(ctrl('p')));
+    collect_hit_variants(&picker, 80, 24, &mut produced);
+
+    let mut palette = model();
+    let _ = update(&mut palette, Message::Input(ctrl('/')));
+    collect_hit_variants(&palette, 80, 24, &mut produced);
+
+    let mut credential = model();
+    let _ = update(&mut credential, Message::Input(ctrl('k')));
+    collect_hit_variants(&credential, 80, 24, &mut produced);
+
+    let mut permission = model();
+    let mut session = (*permission.session.clone()).clone();
+    session.permission_requests.push(PermissionRequestView {
+        tool_call_id: ToolCallKey::new("tool-call-1").expect("id"),
+        tool_name: "fs_read".to_owned(),
+        capability: "filesystem read".to_owned(),
+        resource: "workspace:src/lib.rs".to_owned(),
+        details: Vec::new(),
+    });
+    let _ = update(&mut permission, Message::SessionChanged(Arc::new(session)));
+    collect_hit_variants(&permission, 80, 24, &mut produced);
+
+    let mut providers = provider_model();
+    let _ = update(&mut providers, Message::Input(ctrl('g')));
+    collect_hit_variants(&providers, 120, 40, &mut produced);
+
+    let mut profile_credential = provider_model();
+    let _ = update(&mut profile_credential, Message::Input(ctrl('g')));
+    let _ = update(&mut profile_credential, Message::Input(key(Key::Down)));
+    let _ = update(
+        &mut profile_credential,
+        Message::Input(Input {
+            key: Key::Char('k'),
+            alt: true,
+            ..key(Key::Char('k'))
+        }),
+    );
+    collect_hit_variants(&profile_credential, 80, 24, &mut produced);
+
+    let mut profile_editor = provider_model();
+    let _ = update(&mut profile_editor, Message::Input(ctrl('g')));
+    let _ = update(&mut profile_editor, Message::Input(key(Key::Enter)));
+    collect_hit_variants(&profile_editor, 80, 24, &mut produced);
+
+    let mut codex_login = provider_model();
+    let _ = update(&mut codex_login, Message::Input(ctrl('g')));
+    for _ in 0..3 {
+        let _ = update(&mut codex_login, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut codex_login, Message::Input(key(Key::Enter)));
+    collect_hit_variants(&codex_login, 80, 24, &mut produced);
+
+    let mut failed = model();
+    let mut failed_session = (*failed.session).clone();
+    failed_session.revision = 2;
+    failed_session.transcript.push(TranscriptItem::Assistant {
+        attempt_id: AttemptKey::new("attempt-fail").expect("attempt"),
+        text: String::new(),
+        status: AttemptStatus::Failed(UiFailure::new(
+            ErrorClass::Unavailable,
+            "provider unavailable",
+            RetryPolicy::Now,
+        )),
+        usage: None,
+        retry_of: None,
+    });
+    let _ = update(
+        &mut failed,
+        Message::SessionChanged(Arc::new(failed_session)),
+    );
+    collect_hit_variants(&failed, 80, 24, &mut produced);
+
+    for expected in [
+        "Route",
+        "SettingsTab",
+        "FocusComposer",
+        "FocusTranscript",
+        "ChatModels",
+        "ChatRetry",
+        "ChatFreshSession",
+        "SettingsRow",
+        "ProfileCredential",
+        "ProfileTest",
+        "ProfileDefaultModel",
+        "ProfileDisconnect",
+        "ProfileDelete",
+        "UserProfileSave",
+        "UserProfileCancel",
+        "SessionOpen",
+        "SessionRename",
+        "SessionArchive",
+        "SessionDelete",
+        "Confirm",
+        "Cancel",
+        "PickerSelect",
+        "PaletteRun",
+        "CredentialSubmit",
+        "CredentialCancel",
+        "ProfileCredentialSubmit",
+        "ProfileCredentialCancel",
+        "OverlayCancel",
+        "PermissionAllow",
+        "PermissionDeny",
+        "SelectProviderChoice",
+        "CodexLogin",
+        "CodexLoginCancel",
+        "ProfileEditorSubmit",
+        "ProfileEditorCancel",
+        "SelectProfile",
+    ] {
+        assert!(
+            produced.contains(expected),
+            "{expected} was not produced by layout; have {produced:?}"
+        );
+    }
 }

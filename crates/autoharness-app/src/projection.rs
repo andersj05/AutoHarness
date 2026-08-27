@@ -157,6 +157,7 @@ pub fn catalog(models: Vec<ModelDescriptor>, stale: bool) -> CatalogProjection {
                 model: ModelRef::new(descriptor.provider_id, descriptor.model_id),
                 display_name: descriptor.display_name,
                 detail,
+                context_window_tokens: descriptor.input_token_limit,
                 selectable,
             }
         })

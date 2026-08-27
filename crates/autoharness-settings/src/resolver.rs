@@ -4,8 +4,8 @@ use std::fmt;
 use crate::error::SettingsError;
 use crate::preferences::{
     ColorMode, ComposerSubmitBehavior, Density, DisplayLabel, EffectiveLocalPreferences,
-    EffectiveLocalProfile, EffectiveValue, GlyphMode, Layout, LocalProfile, TerminalTimestampStyle,
-    ThemePreset,
+    EffectiveLocalProfile, EffectiveValue, GlyphMode, Layout, LocalProfile, PromptStatusDetail,
+    TerminalTimestampStyle, ThemePreset,
 };
 use crate::profile::{
     ProfileId, ProviderKind, ProviderProfile, SETTINGS_SCHEMA_VERSION, SettingsDocument,
@@ -51,6 +51,7 @@ struct RawLocalProfile {
     layout: Option<(Layout, Source)>,
     terminal_timestamp_style: Option<(TerminalTimestampStyle, Source)>,
     composer_submit_behavior: Option<(ComposerSubmitBehavior, Source)>,
+    prompt_status_detail: Option<(PromptStatusDetail, Source)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -360,7 +361,8 @@ fn validate_workspace_preferences(value: &serde_json::Value) -> Result<(), Setti
             | "reduced_motion"
             | "density"
             | "layout"
-            | "terminal_timestamp_style" => {}
+            | "terminal_timestamp_style"
+            | "prompt_status_detail" => {}
             _ => {
                 return Err(disallowed_workspace_key(&format!(
                     "local_profile.preferences.{key}"
@@ -419,6 +421,9 @@ fn merge_local_profile(merged: &mut RawLocalProfile, profile: LocalProfile, sour
     if let Some(value) = preferences.composer_submit_behavior() {
         merged.composer_submit_behavior = Some((value, source));
     }
+    if let Some(value) = preferences.prompt_status_detail() {
+        merged.prompt_status_detail = Some((value, source));
+    }
 }
 
 fn effective_local_profile(raw: &RawLocalProfile) -> EffectiveLocalProfile {
@@ -431,6 +436,7 @@ fn effective_local_profile(raw: &RawLocalProfile) -> EffectiveLocalProfile {
     preferences.set_layout(effective_leaf(&raw.layout));
     preferences.set_terminal_timestamp_style(effective_leaf(&raw.terminal_timestamp_style));
     preferences.set_composer_submit_behavior(effective_leaf(&raw.composer_submit_behavior));
+    preferences.set_prompt_status_detail(effective_leaf(&raw.prompt_status_detail));
     EffectiveLocalProfile::new(effective_optional_leaf(&raw.display_label), preferences)
 }
 

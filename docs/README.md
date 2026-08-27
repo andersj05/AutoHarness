@@ -6,6 +6,12 @@ This index routes humans and agents to the smallest authoritative document for a
 
 - [Project plan](PROJECT_PLAN.md): phases, deliverables, exit criteria, risks, and initial implementation order.
 
+## Design
+
+- [Terminal design system](design/TUI_DESIGN_SYSTEM.md): terminal visual tokens, gradients, icon triples, components, and responsive rules.
+- [Terminal interface audit](design/TUI_AUDIT.md): the evidence-backed defect baseline the redesign closes.
+- [Terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md): the ordered Phase 3.10 steps and exit criteria.
+
 ## Architecture
 
 - [System overview](architecture/OVERVIEW.md): component boundaries, dependency rules, runtime flow, and proposed workspace.
@@ -33,6 +39,7 @@ This index routes humans and agents to the smallest authoritative document for a
 ## Release
 
 - [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
+- [TUI redesign validation](release/TUI_REDESIGN_VALIDATION.md): Phase 3.10 step 10 candidate evidence, local results, and outstanding promotion gates.
 
 ## Validation
 
@@ -49,6 +56,7 @@ Each fact should have one authoritative home:
 | Milestone status | `docs/memory/progress.md` |
 | Delivery sequence and exit criteria | `docs/PROJECT_PLAN.md` |
 | Current system contracts | `docs/architecture/` |
+| Terminal visual contract | `docs/design/TUI_DESIGN_SYSTEM.md` |
 | Why a significant choice was made | `docs/adr/` |
 | Historical code changes | Git history |
 

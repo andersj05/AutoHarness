@@ -28,22 +28,33 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
             let text = screen.contents();
             text.contains("AutoHarness")
                 && text.contains("Sessions")
-                && text.contains("Filter:")
-                && text.contains("[active]")
+                && text.contains("Session details")
+                && text.contains("Offline seed")
+                && text.contains("active")
+                && text.contains("[ Open ]")
         },
         "Alt+2 should leave first-run credential entry for the Sessions route",
     );
 
     terminal.send_bytes(&ALT_3);
     terminal.wait_for(
-        |screen| screen.contents().contains("Providers & Connections"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Providers")
+                && text.contains("Choose a provider on the left")
+                && text.contains("Provider catalog")
+                && text.contains("Saved connections")
+        },
         "Alt+3 should open Providers",
     );
     terminal.send_bytes(&ALT_4);
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Settings & Provenance") && text.contains("session only")
+            text.contains("Settings")
+                && text.contains("Appearance")
+                && text.contains("Glyph mode")
+                && text.contains("Ctrl+F search")
         },
         "Alt+4 should open Settings",
     );
@@ -54,17 +65,35 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     );
     terminal.send_bytes(b"\x1b");
     terminal.wait_for(
-        |screen| screen.contents().contains("Settings & Provenance"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Settings") && text.contains("Appearance")
+        },
         "Esc should restore the exact Settings route",
     );
-    for _ in 0..10 {
+    terminal.send_bytes(b"\r");
+    for _ in 0..2 {
         terminal.send_bytes(&DOWN);
     }
     terminal.send_bytes(&RIGHT);
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Glyph mode") && text.contains("ASCII") && text.contains("user file")
+            text.contains("Glyph mode")
+                && text.contains("Nerd Font")
+                && text.contains("2/3")
+                && !text.contains("[saving]")
+        },
+        "Settings should persist Nerd Font mode before accepting another option",
+    );
+    terminal.send_bytes(&RIGHT);
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Glyph mode")
+                && text.contains("ASCII")
+                && text.contains("3/3")
+                && !text.contains("[saving]")
         },
         "Settings should persist an ASCII chrome preference without leaving the route",
     );
@@ -77,9 +106,9 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Conversation")
-                && text.contains("seeded navigation response")
+            text.contains("seeded navigation response")
                 && text.contains("Ask AutoHarness")
+                && !text.contains("Conversation")
         },
         "Alt+1 should return to replayable offline Chat",
     );
@@ -107,20 +136,25 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     );
     terminal.type_text("Offline seed");
     terminal.wait_for(
-        |screen| screen.contents().contains("Filter: Offline seed"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("/ Offline seed") && text.contains("Session details")
+        },
         "session filter should select the non-active session",
     );
     terminal.send_bytes(&CTRL_D);
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Delete session") && text.contains("Y confirm")
+            text.contains("Delete session")
+                && text.contains("Cancel (N/Esc)")
+                && text.contains("Confirm (Y)")
         },
         "destructive confirmation should own one modal slot",
     );
     terminal.send_bytes(b"n");
     terminal.wait_for(
-        |screen| !screen.contents().contains("Y confirm"),
+        |screen| !screen.contents().contains("Confirm (Y)"),
         "N should cancel and restore Sessions",
     );
 
@@ -129,11 +163,14 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Profile")
-                && text.contains("Settings")
+            text.contains("AutoHarness")
+                && text.contains("Offline")
+                && text.contains("Connect a provider key")
+                && text.contains("/settings")
                 && text.contains("Ask AutoHarness")
+                && !text.contains("Profile")
         },
-        "narrow layout should retain compact navigation actions",
+        "narrow layout should retain the primary recovery path without a redundant footer",
     );
 
     terminal.send_bytes(&ctrl_c());

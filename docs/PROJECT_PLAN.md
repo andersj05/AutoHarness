@@ -449,9 +449,36 @@ Exit criteria:
 **Local implementation evidence:** This branch adds a zero-shell onboarding path, responsive Settings selection with fixed action visibility, profile/default metadata presentation, command-palette labels, contextual help parity, bounded paste editing, and route/session title context.
 Focused `autoharness-tui` compilation, unit tests, navigation tests, help tests, ignored visual review rendering, and selected Windows PTY journeys pass; the full cross-platform, migration, recovery, benchmark, live-probe, vault, rollback, and release-approval gates remain to be executed for this release candidate.
 
+### Phase 3.10: Terminal visual overhaul
+
+**Status:** Planned
+
+**Goal:** Replace ad hoc per-surface styling with one typed presentation layer so every route shares a consistent, beautiful, responsive visual language that stays fully usable without color, without a Nerd Font, and on terminals that do not report truecolor.
+
+Authoritative documents: [terminal design system](design/TUI_DESIGN_SYSTEM.md), [terminal interface audit](design/TUI_AUDIT.md), [terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md), and [ADR-0016](adr/0016-use-typed-tui-presentation-layer.md).
+
+Deliverables:
+
+- A wall-clock projection field and a style-aware snapshot helper, both prerequisites for the rest of the phase.
+- An immutable per-frame theme built from four-value seeds and one shared derivation, with semantic tokens, enforced contrast floors, and terminal color-depth quantization.
+- Multi-stop gradient sampling and a complete Nerd Font, Unicode, and ASCII icon set with asserted cell widths.
+- A component library covering panels, lists, tables, chips, meters, segmented controls, setting rows, status bars, message blocks, tool cards, callouts, modals with a scrim, and button rows that own their hit regions.
+- One layout pass producing both the named rectangles used for rendering and the ordered hit regions used for mouse dispatch.
+- A rebuilt chat workspace, a two-pane settings workspace with explicit self-describing controls, and rebuilt sessions, models, providers, help, and overlay surfaces.
+- A conformance matrix over five sizes, nine themes, five color modes, three glyph modes, reduced motion, compact density, and single-column layout.
+
+Exit criteria:
+
+- Appearance resolves once per frame and no render function constructs a style, a color literal, or a glyph literal, asserted by source checks.
+- Contrast floors, icon widths, literal-color, literal-glyph, and mouse hit-region coverage all pass as automated gates.
+- Every route and overlay has reviewed style-aware snapshot evidence at every matrix cell with no clipped content and no mid-word truncation.
+- Every state conveyed by color is also conveyed by a symbol or a modifier, so no-color mode loses no information.
+- Frame render time and allocation behavior stay within the recorded pre-redesign envelope.
+- The cross-platform PTY matrix and three real terminal smokes pass on one candidate commit, and ADR-0016 is accepted.
+
 ### Phase 4: Persistent context and memory
 
-**Status:** Designed; implementation gated by Phase 3.1 through Phase 3.9
+**Status:** Designed; implementation gated by Phase 3.1 through Phase 3.10
 
 **Goal:** Turn durable history into useful, bounded, auditable model context.
 
@@ -519,7 +546,8 @@ Proceed in this order:
 1. Promote the Phase 3.7 implementation through green baseline and cross-platform serial PTY pull-request gates.
 2. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable route-based shell.
 3. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
-4. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+4. Execute Phase 3.10 in the order defined by the [terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md), building the presentation layer before rebuilding any surface.
+5. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 

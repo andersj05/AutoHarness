@@ -22,8 +22,8 @@ fn platform_vault_save_load_replace_and_delete_without_secret_output() {
     }
     let unique = uuid::Uuid::new_v4().simple().to_string();
     let reference_name = format!("autoharness/platform-smoke/{unique}");
-    let first = format!("AH-platform-smoke-first-{unique}");
-    let second = format!("AH-platform-smoke-second-{unique}");
+    let first = format!("AH-platform-smoke-first-{unique}-{}", "a".repeat(6 * 1024));
+    let second = format!("AH-platform-smoke-second-{unique}-{}", "b".repeat(7 * 1024));
     let vault = KeyringVault::new();
     let reference = vault
         .save(&reference_name, &first)
