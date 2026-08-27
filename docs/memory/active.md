@@ -4,16 +4,16 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 6 are on `dev`: the typed presentation layer now covers Chat and a nine-category Settings workspace while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 6 are on `dev`, and steps 7 and 8 are implemented and fully verified on `feat/tui-content-overlays`; the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Continue with Phase 3.10 step 7 (Sessions and Profiles) without changing route semantics, overlay ownership, intents, or the settings schema.
+Promote the verified Phase 3.10 steps 7 and 8 branch into `dev`, then continue with step 9 responsive and accessibility conformance without changing route semantics, overlay ownership, durable intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
 
-Phase 3.10 steps 0 through 6 are implemented.
+Phase 3.10 steps 0 through 8 are implemented.
 The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Current repository state
@@ -39,6 +39,10 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 - The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
 - Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
 - Settings is a responsive two-pane workspace with nine categories, editable typed rows, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
+- Sessions is a responsive grouped list and detail workspace with deterministic relative ages, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, and a shared search field.
+- Models persists the selected model and thinking level together from one workspace, while Providers uses catalog and saved-connection panes with grouped identity, connection, credential, and default tables and measured action buttons.
+- Every modal-like dialog now uses the shared scrim, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
+- The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
@@ -66,6 +70,8 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
+- On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 7 with grouped Sessions list and detail panes, durable message counts, deterministic relative ages, one-page model and thinking defaults, provider catalog and saved-connection detail tables, unavailable-provider reasons, exact measured button hits, and generated grouped Help content.
 - On 2026-08-27, `feat/tui-settings-workspace` replaced supplementary-plane Material Design Nerd Font symbols with verified BMP Font Awesome, Octicon, and Devicon equivalents after otherwise compatible Windows terminals rendered the former as replacement diamonds; all 33 forms exist in the installed reference font, retain the two-cell slot, and are guarded by a BMP-only test.
 - On 2026-08-27, `feat/tui-settings-workspace` implemented Phase 3.10 step 6 with a responsive nine-category rail, typed toggle, choice, text, action, and information rows, provenance chips, cross-category search, inline theme previews, complete glyph checks, shared shortcuts, populated Profile and About pages, and level-by-level focus behavior; Chat rail, transcript, and composer cells also preserve the terminal background, and formatting, strict workspace Clippy, the full locked workspace suite, focused visual review, and style-aware golden review pass.
 - On 2026-08-27, `feat/tui-chat-workspace` rebuilt Chat from the presentation catalog: `MessageBlock` transcript turns, `ToolCard` tool rows, `Callout` plus `ButtonRow` recovery, `Hero` empty and loading states, `StatusBar` composer metadata, a 26/32-column icon rail with recent sessions and workspace, and reviewed 80x24 snapshots for streaming, cancelling, failed, offline, loading, no-model, empty-catalog, and new-conversation.
@@ -141,7 +147,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Immediate next actions
 
-1. Begin Phase 3.10 step 7 for Sessions and Profiles from the latest `dev`.
+1. Promote `feat/tui-content-overlays` into `dev`, then begin the Phase 3.10 step 9 responsive, accessibility, and render-cost matrix.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -160,7 +166,8 @@ Configured router access, macOS and Linux platform vault environments, an approv
 ## Handoff note
 
 Phase 3.10 steps 0 through 6 are implemented, validated, and merged on `dev`.
+Steps 7 and 8 are implemented and fully verified on `feat/tui-content-overlays` in six scoped commits.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
-Relative session timestamps remain a step 7 surface change; the wall-clock field is present but Chat still shows the literal `updated` label.
-Do not skip the plan order: steps 7 and 8 still depend on the layout contract and catalog from steps 3 and 4.
+Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
+Do not skip the plan order: step 9 must review the complete responsive and accessibility matrix before step 10 promotion.
