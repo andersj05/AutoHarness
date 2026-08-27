@@ -4,11 +4,11 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 8 are on `dev`, and step 9 is implemented on `feat/tui-conformance` with final workspace validation in progress; the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 8 are on `dev`, and step 9 is implemented and fully verified on `feat/tui-conformance`; the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Complete the Phase 3.10 step 9 workspace gates on `feat/tui-conformance`, then promote the verified branch into `dev` and begin step 10 final validation without changing route semantics, overlay ownership, durable intents, or the settings schema.
+Promote the verified Phase 3.10 step 9 branch into `dev`, then begin step 10 final validation without changing route semantics, overlay ownership, durable intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
@@ -73,7 +73,7 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Recently completed
 
-- On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison.
+- On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison; formatting, strict workspace Clippy, the full locked workspace suite, the matrix, the allocation gate, and documentation links pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 7 with grouped Sessions list and detail panes, durable message counts, deterministic relative ages, one-page model and thinking defaults, provider catalog and saved-connection detail tables, unavailable-provider reasons, exact measured button hits, and generated grouped Help content.
 - On 2026-08-27, `feat/tui-settings-workspace` replaced supplementary-plane Material Design Nerd Font symbols with verified BMP Font Awesome, Octicon, and Devicon equivalents after otherwise compatible Windows terminals rendered the former as replacement diamonds; all 33 forms exist in the installed reference font, retain the two-cell slot, and are guarded by a BMP-only test.
@@ -151,7 +151,7 @@ Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Immediate next actions
 
-1. Finish the Phase 3.10 step 9 workspace gates, promote `feat/tui-conformance` into `dev`, then begin step 10 final validation and promotion.
+1. Promote `feat/tui-conformance` into `dev`, then begin Phase 3.10 step 10 final validation and promotion.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -170,7 +170,7 @@ Configured router access, macOS and Linux platform vault environments, an approv
 ## Handoff note
 
 Phase 3.10 steps 0 through 8 are implemented, validated, and merged on `dev`.
-Step 9 is implemented on `feat/tui-conformance` in seven scoped commits, with final workspace validation in progress.
+Step 9 is implemented and fully verified on `feat/tui-conformance` in ten scoped commits.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
 Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
