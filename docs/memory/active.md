@@ -4,17 +4,17 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 6 are on `dev`, and steps 7 and 8 are implemented and fully verified on `feat/tui-content-overlays`; the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 8 are on `dev`, and step 9 is implemented on `feat/tui-conformance` with final workspace validation in progress; the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Promote the verified Phase 3.10 steps 7 and 8 branch into `dev`, then continue with step 9 responsive and accessibility conformance without changing route semantics, overlay ownership, durable intents, or the settings schema.
+Complete the Phase 3.10 step 9 workspace gates on `feat/tui-conformance`, then promote the verified branch into `dev` and begin step 10 final validation without changing route semantics, overlay ownership, durable intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
 
-Phase 3.10 steps 0 through 8 are implemented.
-The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
+Phase 3.10 steps 0 through 9 are implemented.
+Step 10 remains in [the redesign plan](../design/TUI_REDESIGN_PLAN.md).
 
 ## Current repository state
 
@@ -43,6 +43,9 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 - Models persists the selected model and thinking level together from one workspace, while Providers uses catalog and saved-connection panes with grouped identity, connection, credential, and default tables and measured action buttons.
 - Every modal-like dialog now uses the shared scrim, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
 - The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
+- The Phase 3.10 conformance harness pins 5,035 style-aware cells across nineteen routes and overlays, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
+- Reduced motion produces identical frames at different tick times for every conformance surface, NoColor semantic states have distinct modifier signatures, and source guards keep presentation colors and symbols in their declared authorities.
+- Tail-following Chat rendering scans only the visible transcript window, so 32-turn and 4,096-turn renders use the same 333 allocations and approximately 67.5 KiB while remaining inside the recorded pre-redesign allocation envelope.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
@@ -70,6 +73,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 7 with grouped Sessions list and detail panes, durable message counts, deterministic relative ages, one-page model and thinking defaults, provider catalog and saved-connection detail tables, unavailable-provider reasons, exact measured button hits, and generated grouped Help content.
 - On 2026-08-27, `feat/tui-settings-workspace` replaced supplementary-plane Material Design Nerd Font symbols with verified BMP Font Awesome, Octicon, and Devicon equivalents after otherwise compatible Windows terminals rendered the former as replacement diamonds; all 33 forms exist in the installed reference font, retain the two-cell slot, and are guarded by a BMP-only test.
@@ -147,7 +151,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Immediate next actions
 
-1. Promote `feat/tui-content-overlays` into `dev`, then begin the Phase 3.10 step 9 responsive, accessibility, and render-cost matrix.
+1. Finish the Phase 3.10 step 9 workspace gates, promote `feat/tui-conformance` into `dev`, then begin step 10 final validation and promotion.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -165,9 +169,9 @@ Configured router access, macOS and Linux platform vault environments, an approv
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 6 are implemented, validated, and merged on `dev`.
-Steps 7 and 8 are implemented and fully verified on `feat/tui-content-overlays` in six scoped commits.
+Phase 3.10 steps 0 through 8 are implemented, validated, and merged on `dev`.
+Step 9 is implemented on `feat/tui-conformance` in seven scoped commits, with final workspace validation in progress.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
 Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
-Do not skip the plan order: step 9 must review the complete responsive and accessibility matrix before step 10 promotion.
+Do not skip the plan order: step 10 must complete final validation and promotion before ADR-0016 can be accepted.
