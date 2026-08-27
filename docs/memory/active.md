@@ -4,11 +4,11 @@
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 5 are on `dev`, and step 6 is implemented and validated on `feat/tui-settings-workspace`: the typed presentation layer now covers Chat and a nine-category Settings workspace while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
+**Status:** Phase 3.10 steps 0 through 6 are on `dev`: the typed presentation layer now covers Chat and a nine-category Settings workspace while route semantics, overlays, intents, and the settings schema stay unchanged and the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Review and merge Phase 3.10 step 6 from `feat/tui-settings-workspace`, then continue with step 7 (Sessions and Profiles) without changing route semantics, overlay ownership, intents, or the settings schema.
+Continue with Phase 3.10 step 7 (Sessions and Profiles) without changing route semantics, overlay ownership, intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until step 10.
@@ -141,7 +141,7 @@ The remaining sequence is in [the redesign plan](../design/TUI_REDESIGN_PLAN.md)
 
 ## Immediate next actions
 
-1. Review and merge `feat/tui-settings-workspace`, then begin Phase 3.10 step 7 for Sessions and Profiles.
+1. Begin Phase 3.10 step 7 for Sessions and Profiles from the latest `dev`.
 2. Run warning-denied rustdoc/doctests and isolated benchmark formatting, Clippy, and test gates on the release-candidate path.
 3. Run the same PTY matrix on macOS and Linux and refresh Windows evidence for the release-candidate commit.
 4. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
@@ -159,7 +159,7 @@ Configured router access, macOS and Linux platform vault environments, an approv
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 5 are on `dev`, and step 6 is implemented and validated on `feat/tui-settings-workspace`.
+Phase 3.10 steps 0 through 6 are implemented, validated, and merged on `dev`.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until step 10.
 Relative session timestamps remain a step 7 surface change; the wall-clock field is present but Chat still shows the literal `updated` label.
