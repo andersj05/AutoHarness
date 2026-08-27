@@ -250,6 +250,18 @@ pub const SETTINGS_BODY_INSET_Y: u16 = 2;
 pub const SETTINGS_BODY_INSET_Y_TOTAL: u16 = 3;
 /// Settings body drops left and right chrome.
 pub const SETTINGS_BODY_INSET_X_TOTAL: u16 = 2;
+/// Settings category rail width below the medium breakpoint.
+pub const SETTINGS_CATEGORY_RAIL_COMPACT: u16 = 16;
+/// Settings category rail width at the medium breakpoint and above.
+pub const SETTINGS_CATEGORY_RAIL_WIDE: u16 = 22;
+/// Settings footer height with context and active controls.
+pub const SETTINGS_FOOTER_ROWS: u16 = 2;
+/// Accent cells in the focused theme preview.
+pub const SETTINGS_THEME_PREVIEW_CELLS: u16 = 8;
+/// Theme picker label width before its visual preview.
+pub const SETTINGS_THEME_LABEL_WIDTH: u16 = 11;
+/// Theme picker preview inset including the label gap.
+pub const SETTINGS_THEME_PREVIEW_INSET: u16 = 12;
 
 /// Returns the width band for a column count.
 #[must_use]

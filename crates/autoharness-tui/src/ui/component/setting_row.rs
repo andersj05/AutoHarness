@@ -17,6 +17,10 @@ pub enum Provenance {
     User,
     Workspace,
     Env,
+    Runtime,
+    Profile,
+    Policy,
+    System,
 }
 
 impl Provenance {
@@ -28,6 +32,10 @@ impl Provenance {
             Self::User => "user",
             Self::Workspace => "workspace",
             Self::Env => "env",
+            Self::Runtime => "runtime",
+            Self::Profile => "profile",
+            Self::Policy => "policy",
+            Self::System => "system",
         }
     }
 }
@@ -170,18 +178,29 @@ impl<'a> SettingRow<'a> {
             }
             SettingKind::Text { value, max_len } => {
                 let indicator = format!("{}/{}", value.chars().count(), max_len);
-                put(
+                let value_width = control.width.saturating_sub(
+                    u16::try_from(indicator.len())
+                        .unwrap_or(0)
+                        .saturating_add(1),
+                );
+                let used = put(
                     buf,
                     control.x,
                     area.y,
-                    control.width.saturating_sub(
-                        u16::try_from(indicator.len())
-                            .unwrap_or(0)
-                            .saturating_add(1),
-                    ),
+                    value_width,
                     value,
                     self.theme.style(Token::TextPrimary),
                 );
+                if self.focused && used < value_width {
+                    put(
+                        buf,
+                        control.x.saturating_add(used),
+                        area.y,
+                        1,
+                        "|",
+                        self.theme.style(Token::FocusRing),
+                    );
+                }
                 put(
                     buf,
                     control
@@ -214,7 +233,13 @@ impl<'a> SettingRow<'a> {
                 );
             }
         }
-        Chip::new(self.theme, chip_label, ChipVariant::Muted).render(
+        let chip_variant = match self.provenance {
+            Provenance::Default | Provenance::Runtime | Provenance::System => ChipVariant::Muted,
+            Provenance::User | Provenance::Profile => ChipVariant::Accent,
+            Provenance::Workspace => ChipVariant::Success,
+            Provenance::Env | Provenance::Policy => ChipVariant::Warning,
+        };
+        Chip::new(self.theme, chip_label, chip_variant).render(
             buf,
             Rect::new(area.right().saturating_sub(chip_w), area.y, chip_w, 1),
         );

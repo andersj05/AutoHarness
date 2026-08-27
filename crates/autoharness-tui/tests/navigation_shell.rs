@@ -247,7 +247,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
         ('1', "New conversation"),
         ('2', "Sessions"),
         ('3', "Providers"),
-        ('4', "Settings & Provenance"),
+        ('4', "Settings"),
         ('5', "Help"),
     ];
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
@@ -259,8 +259,18 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
                 rendered.contains(expected),
                 "{expected} missing at {width}x{height}"
             );
-            if key == '4' && width >= 60 {
-                for section in ["Settings", "Providers", "Profile", "Models"] {
+            if key == '4' && width >= 80 {
+                for section in [
+                    "Appearance",
+                    "Chat & Composer",
+                    "Accessibility",
+                    "Providers",
+                    "Models & Thinking",
+                    "Profile",
+                    "Sessions & Data",
+                    "Shortcuts",
+                    "About",
+                ] {
                     assert!(
                         rendered.contains(section),
                         "settings nav {section} missing at {width}x{height}"
@@ -383,37 +393,52 @@ fn ascii_glyph_mode_uses_a_single_sidebar_divider_without_conversation_chrome() 
 fn settings_selection_keeps_the_selected_preference_visible_when_narrow() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
     let _ = update(&mut model, Message::Input(key(Key::End)));
     let rendered = render_text(&model, 40, 12);
-    assert!(rendered.contains("←/→ option"));
+    assert!(rendered.contains("Glyph mode"));
+    assert!(rendered.contains("Left/Right"));
 }
 
 #[test]
 fn editable_settings_show_adjacent_values_as_a_scroll_wheel() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    for _ in 0..7 {
-        let _ = update(&mut model, Message::Input(key(Key::Down)));
-    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
 
     for (width, height) in [(120, 40), (80, 24), (40, 12)] {
         let rendered = render_text(&model, width, height);
-        assert!(rendered.contains("Theme preset"));
+        assert!(rendered.contains("Theme"));
         assert!(
-            rendered.contains("[system]"),
-            "missing wheel at {width}x{height}"
+            rendered.contains("system"),
+            "missing choice at {width}x{height}"
         );
-        assert!(rendered.contains("←/→ option"));
+        assert!(rendered.contains("Left/Right"));
     }
-    assert!(render_text(&model, 120, 40).contains("‹rose  [system]  light›"));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let rendered = render_text(&model, 120, 40);
+    for theme in [
+        "system", "light", "dark", "aurora", "ember", "midnight", "ocean", "forest", "rose",
+    ] {
+        assert!(rendered.contains(theme), "missing theme preview {theme}");
+    }
 }
 #[test]
 fn settings_top_navigation_reaches_provider_and_future_sections() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let rendered = render_text(&model, 80, 24);
-    for section in ["Settings", "Providers", "Profile", "Models"] {
+    for section in [
+        "Appearance",
+        "Chat & Composer",
+        "Accessibility",
+        "Providers",
+        "Models & Thinking",
+        "Profile",
+        "Sessions & Data",
+        "Shortcuts",
+        "About",
+    ] {
         assert!(rendered.contains(section), "missing settings nav {section}");
     }
 
@@ -424,33 +449,43 @@ fn settings_top_navigation_reaches_provider_and_future_sections() {
 }
 
 #[test]
-fn tab_does_not_switch_settings_pages() {
+fn tab_moves_between_settings_categories_and_rows() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     let before = render_text(&model, 80, 24);
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
-    assert_eq!(render_text(&model, 80, 24), before);
-
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("Add provider"));
+    let after = render_text(&model, 80, 24);
+    assert_ne!(after, before);
+    assert!(after.contains("Left/Right change"));
+    let _ = update(
+        &mut model,
+        Message::Input(Input {
+            key: Key::Tab,
+            shift: true,
+            ..key(Key::Tab)
+        }),
+    );
+    assert!(render_text(&model, 80, 24).contains("Up/Down category"));
 }
 
 #[test]
-fn providers_returns_to_settings_navigation_before_leaving_the_route() {
+fn providers_category_uses_typed_actions_and_steps_back_one_level() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("Gemini"));
-
+    for _ in 0..3 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("Connection"));
+    assert!(rendered.contains("API credential"));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    assert_eq!(model.overlay(), Some(OverlayKind::SessionCredential));
     let _ = update(&mut model, Message::Input(key(Key::Esc)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
-
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
     assert_eq!(model.route(), Route::Settings);
-    assert_eq!(model.focus, Focus::UserProfile);
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    assert_eq!(model.route(), Route::Chat);
 }
 
 #[test]
@@ -515,10 +550,12 @@ fn settings_tab_mouse_geometry_matches_persistent_shell() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
     assert!(
-        (28..80).any(|column| {
-            hit_test(&model, 120, 40, column, 1) == Some(MouseAction::SettingsTab(1))
+        (0..120).any(|column| {
+            (0..40).any(|row| {
+                hit_test(&model, 120, 40, column, row) == Some(MouseAction::SettingsTab(3))
+            })
         }),
-        "provider Settings tab must have a mouse target"
+        "Providers category must have a mouse target"
     );
 }
 
@@ -575,36 +612,19 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
 }
 
 #[test]
-fn mouse_opens_and_saves_the_user_profile_dialog() {
+fn mouse_reaches_the_populated_profile_category_and_display_label_row() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 4),
-        Some(MouseAction::OpenUserProfile)
-    );
-    let _ = update(&mut model, Message::Mouse(MouseAction::OpenUserProfile));
-    assert!(model.user_profile_open());
-    assert!(render_text(&model, 120, 40).contains("User profile"));
-
-    assert_eq!(
-        hit_test(&model, 120, 40, 30, 22),
-        Some(MouseAction::UserProfileSave)
-    );
-    assert_eq!(
-        hit_test(&model, 120, 40, 70, 22),
-        Some(MouseAction::UserProfileCancel)
-    );
-    let effects = update(&mut model, Message::Mouse(MouseAction::UserProfileSave));
-    assert!(matches!(
-        effects.as_slice(),
-        [autoharness_tui::UiEffect::Dispatch(
-            UiIntent::UpdateLocalPreference { .. }
-        )]
-    ));
-    assert!(!model.user_profile_open());
+    let _ = update(&mut model, Message::Mouse(MouseAction::SettingsTab(5)));
+    assert!(render_text(&model, 120, 40).contains("Local identity"));
+    assert!((0..120).any(|column| {
+        (0..40)
+            .any(|row| hit_test(&model, 120, 40, column, row) == Some(MouseAction::SettingsRow(2)))
+    }));
+    let _ = update(&mut model, Message::Mouse(MouseAction::SettingsRow(2)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Input(key(Key::Char('A'))));
+    assert!(render_text(&model, 120, 40).contains("A|"));
 }
 
 #[test]
@@ -675,7 +695,6 @@ fn variant_name(action: &MouseAction) -> &'static str {
     match action {
         MouseAction::Route(_) => "Route",
         MouseAction::SettingsTab(_) => "SettingsTab",
-        MouseAction::OpenUserProfile => "OpenUserProfile",
         MouseAction::FocusComposer => "FocusComposer",
         MouseAction::FocusTranscript => "FocusTranscript",
         MouseAction::ChatModels => "ChatModels",
@@ -773,11 +792,18 @@ fn every_mouse_action_variant_is_produced_by_layout() {
     let mut settings = model();
     let _ = update(&mut settings, Message::Input(ctrl('4')));
     collect_hit_variants(&settings, 120, 40, &mut produced);
-    let _ = update(&mut settings, Message::Input(key(Key::Right)));
-    let _ = update(&mut settings, Message::Input(key(Key::Right)));
-    let _ = update(&mut settings, Message::Input(key(Key::Down)));
-    collect_hit_variants(&settings, 120, 40, &mut produced);
-    let _ = update(&mut settings, Message::Mouse(MouseAction::OpenUserProfile));
+
+    let mut user_profile = model();
+    let _ = update(
+        &mut user_profile,
+        Message::Input(Input {
+            key: Key::Char('u'),
+            alt: true,
+            ..key(Key::Char('u'))
+        }),
+    );
+    collect_hit_variants(&user_profile, 120, 40, &mut produced);
+    let _ = update(&mut settings, Message::Input(key(Key::Tab)));
     collect_hit_variants(&settings, 120, 40, &mut produced);
 
     let mut sessions = model();
@@ -838,7 +864,6 @@ fn every_mouse_action_variant_is_produced_by_layout() {
     for expected in [
         "Route",
         "SettingsTab",
-        "OpenUserProfile",
         "FocusComposer",
         "FocusTranscript",
         "ChatModels",

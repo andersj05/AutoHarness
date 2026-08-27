@@ -17,18 +17,29 @@ use super::metrics::{
     PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
     PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
     SETTINGS_BODY_INSET_X, SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y,
-    SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_NAV_COMPACT_WIDTH, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH,
-    STARTUP_MIN_HEIGHT, STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE,
-    USER_PROFILE_FULL_HEIGHT, USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y,
-    USER_PROFILE_MAX_HEIGHT, sidebar_width_for, wide_shell,
+    SETTINGS_BODY_INSET_Y_TOTAL, SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE,
+    SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT,
+    STARTUP_MIN_WIDTH, TWO_ROWS, USER_PROFILE_BUTTON_LINE, USER_PROFILE_FULL_HEIGHT,
+    USER_PROFILE_FULL_WIDTH, USER_PROFILE_MARGIN_Y, USER_PROFILE_MAX_HEIGHT, WidthBand,
+    sidebar_width_for, wide_shell, width_band,
 };
 use crate::model::{
     CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileConnectionState,
-    ProviderChoice, ProviderKindLabel, Route, SettingsPreference,
+    ProviderChoice, ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
 };
 
 /// Settings tab labels, in the same order as `SettingsTab` indices.
-pub const SETTINGS_NAV: [&str; 4] = ["Settings", "Providers", "Profile", "Models"];
+pub const SETTINGS_NAV: [&str; 9] = [
+    "Appearance",
+    "Chat & Composer",
+    "Accessibility",
+    "Providers",
+    "Models & Thinking",
+    "Profile",
+    "Sessions & Data",
+    "Shortcuts",
+    "About",
+];
 
 /// Compact footer labels used by both painting and hit testing.
 const FOOTER_PROFILE: &str = " Profile ";
@@ -60,6 +71,8 @@ pub struct NamedRects {
     pub settings_nav: Option<Rect>,
     /// Settings body below the tab strip.
     pub settings_body: Option<Rect>,
+    /// Persistent two-row Settings footer.
+    pub settings_footer: Option<Rect>,
     /// Active overlay frame.
     pub overlay: Option<Rect>,
     /// Centered startup indicator.
@@ -173,6 +186,7 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
             search: None,
             settings_nav: None,
             settings_body: None,
+            settings_footer: None,
             overlay: None,
             startup: None,
         }
@@ -193,6 +207,7 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
             search: None,
             settings_nav: None,
             settings_body: None,
+            settings_footer: None,
             overlay: None,
             startup: None,
         }
@@ -209,6 +224,7 @@ pub fn shell_regions(area: Rect, model: &Model) -> NamedRects {
             search: None,
             settings_nav: None,
             settings_body: None,
+            settings_footer: None,
             overlay: None,
             startup: None,
         }
@@ -299,10 +315,30 @@ fn fill_settings_regions(regions: &mut NamedRects) {
         content.width.saturating_sub(TWO_ROWS),
         content.height.saturating_sub(TWO_ROWS),
     );
-    if inner.height >= TWO_ROWS {
-        regions.settings_nav = Some(Rect::new(inner.x, inner.y, inner.width, ROW));
+    let footer_height = SETTINGS_FOOTER_ROWS.min(inner.height);
+    let workspace_height = inner.height.saturating_sub(footer_height);
+    let rail_width = if matches!(
+        width_band(inner.width),
+        WidthBand::Md | WidthBand::Lg | WidthBand::Xl
+    ) {
+        SETTINGS_CATEGORY_RAIL_WIDE
+    } else {
+        SETTINGS_CATEGORY_RAIL_COMPACT
     }
-    regions.settings_body = Some(settings_body_area(content));
+    .min(inner.width);
+    regions.settings_nav = Some(Rect::new(inner.x, inner.y, rail_width, workspace_height));
+    regions.settings_body = Some(Rect::new(
+        inner.x.saturating_add(rail_width).saturating_add(ROW),
+        inner.y,
+        inner.width.saturating_sub(rail_width.saturating_add(ROW)),
+        workspace_height,
+    ));
+    regions.settings_footer = Some(Rect::new(
+        inner.x,
+        inner.y.saturating_add(workspace_height),
+        inner.width,
+        footer_height,
+    ));
 }
 
 /// Settings body inside the bordered Settings page.
@@ -502,7 +538,7 @@ fn push_footer_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
     let settings_width = u16::try_from(FOOTER_SETTINGS.width()).unwrap_or(0);
     hits.push((
         Rect::new(area.x, area.y, profile_width.min(area.width), area.height),
-        MouseAction::SettingsTab(2),
+        MouseAction::Route(Route::Profiles),
     ));
     let settings_x = area
         .x
@@ -516,7 +552,7 @@ fn push_footer_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
                 settings_width.min(area.right().saturating_sub(settings_x)),
                 area.height,
             ),
-            MouseAction::SettingsTab(0),
+            MouseAction::Route(Route::Settings),
         ));
     }
 }
@@ -533,36 +569,38 @@ fn push_route_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, mo
 
 fn push_settings_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, model: &Model) {
     if let Some(nav) = regions.settings_nav {
-        push_settings_nav_hits(hits, nav);
+        push_settings_nav_hits(hits, nav, model.settings_workspace.nav_selected);
     }
     let Some(body) = regions.settings_body else {
         return;
     };
-    match model.settings_workspace.nav_selected {
-        1 => push_profile_hits(hits, body, model),
-        2 => hits.push((body, MouseAction::OpenUserProfile)),
-        0 => push_settings_row_hits(hits, body, model),
-        _ => {}
-    }
+    push_settings_row_hits(hits, body, model);
 }
 
-fn push_settings_nav_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect) {
-    let compact = area.width < SETTINGS_NAV_COMPACT_WIDTH;
-    let padding = if compact { 0 } else { TWO_ROWS };
-    let gap = if compact { ROW } else { TWO_ROWS };
-    let mut offset = area.x;
-    for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        let width =
-            u16::try_from(label.len().saturating_add(usize::from(padding))).unwrap_or(u16::MAX);
+fn push_settings_nav_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, selected: usize) {
+    let visible = usize::from(area.height);
+    let scroll = selected.saturating_sub(visible.saturating_sub(1));
+    for index in scroll..SETTINGS_NAV.len().min(scroll.saturating_add(visible)) {
         hits.push((
-            Rect::new(offset, area.y, width, area.height),
+            Rect::new(
+                area.x,
+                area.y
+                    .saturating_add(u16::try_from(index.saturating_sub(scroll)).unwrap_or(0)),
+                area.width,
+                ROW,
+            ),
             MouseAction::SettingsTab(index),
         ));
-        offset = offset.saturating_add(width).saturating_add(gap);
     }
 }
 
 fn push_settings_row_hits(hits: &mut Vec<(Rect, MouseAction)>, body: Rect, model: &Model) {
+    if model.settings_workspace.search_active
+        || model.settings_workspace.choice_picker_open
+        || model.settings_workspace.detail_open
+    {
+        return;
+    }
     let header_height = if body.height >= PAGE_HEADER_TALL_MIN {
         TWO_ROWS
     } else {
@@ -582,42 +620,25 @@ fn push_settings_row_hits(hits: &mut Vec<(Rect, MouseAction)>, body: Rect, model
         body.width,
         content_height,
     );
-    let selected_line = settings_preference_line(model.settings_workspace.selected);
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let rows = SettingsPreference::rows(category);
     let visible = usize::from(content.height.max(ROW));
-    let scroll = u16::try_from(usize::from(selected_line).saturating_sub(visible / 3)).unwrap_or(0);
-    for index in 0..SettingsPreference::ALL.len() {
-        let line = settings_preference_line(index);
-        let y = content.y.saturating_add(line.saturating_sub(scroll));
-        if y >= content.y && y < content.bottom() {
+    let scroll = model
+        .settings_workspace
+        .selected
+        .saturating_sub(visible.saturating_div(3));
+    let mut y = content.y;
+    for (index, preference) in rows.iter().copied().enumerate().skip(scroll) {
+        if y >= content.y && y < content.bottom() && preference.editable() {
             hits.push((
                 Rect::new(content.x, y, content.width, ROW),
                 MouseAction::SettingsRow(index),
             ));
         }
-    }
-}
-
-fn settings_preference_line(index: usize) -> u16 {
-    match SettingsPreference::at(index) {
-        SettingsPreference::DisplayLabel => 1,
-        SettingsPreference::Provider => 3,
-        SettingsPreference::Profile => 4,
-        SettingsPreference::Credential => 5,
-        SettingsPreference::Source => 6,
-        SettingsPreference::Model => 11,
-        SettingsPreference::Mode => 12,
-        SettingsPreference::Approvals => 16,
-        SettingsPreference::Retention => 18,
-        SettingsPreference::ThemePreset => 21,
-        SettingsPreference::ColorMode => 22,
-        SettingsPreference::GlyphMode => 23,
-        SettingsPreference::PromptStatusDetail => 25,
-        SettingsPreference::ReducedMotion => 27,
-        SettingsPreference::Density => 28,
-        SettingsPreference::Logging => 30,
-        SettingsPreference::Layout => 32,
-        SettingsPreference::TerminalTimestampStyle => 33,
-        SettingsPreference::ComposerSubmitBehavior => 34,
+        let focused = !model.settings_workspace.nav_focus
+            && preference.editable()
+            && index == model.settings_workspace.selected;
+        y = y.saturating_add(if focused { TWO_ROWS } else { ROW });
     }
 }
 
@@ -1049,7 +1070,20 @@ mod tests {
 
     #[test]
     fn settings_nav_labels_are_stable() {
-        assert_eq!(SETTINGS_NAV, ["Settings", "Providers", "Profile", "Models"]);
+        assert_eq!(
+            SETTINGS_NAV,
+            [
+                "Appearance",
+                "Chat & Composer",
+                "Accessibility",
+                "Providers",
+                "Models & Thinking",
+                "Profile",
+                "Sessions & Data",
+                "Shortcuts",
+                "About",
+            ]
+        );
     }
 
     fn empty_shell_model() -> crate::model::Model {

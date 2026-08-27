@@ -165,7 +165,13 @@ fn help_content_names_settings_navigation_and_reset_actions() {
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('4'))));
     let _ = update(&mut model, Message::Input(f1()));
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    for expected in ["Settings", "PageUp/PageDown", "Home/End", "R", "D"] {
+    for expected in [
+        "Settings",
+        "Tab / Shift+Tab",
+        "Ctrl+F",
+        "Backspace",
+        "Shift+Backspace",
+    ] {
         assert!(
             rendered.contains(expected),
             "settings help must mention {expected}"

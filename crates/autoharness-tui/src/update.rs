@@ -13,8 +13,8 @@ use crate::model::{
     PROVIDER_CHOICES, PendingKind, ProfileCenterFocus, ProfileCredentialAction,
     ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
     ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route,
-    SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsPreference, UiEffect,
-    UiFailure, UiIntent, UiNotice,
+    SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsCategory,
+    SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
 
@@ -134,11 +134,12 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             Vec::new()
         }
         MouseAction::SettingsTab(tab) => {
-            open_settings_tab(model, tab);
-            Vec::new()
-        }
-        MouseAction::OpenUserProfile => {
-            open_user_profile(model);
+            navigate_to_route(model, Route::Settings);
+            model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
+            model.settings_workspace.nav_focus = true;
+            model.settings_workspace.selected = 0;
+            normalize_settings_selection(model);
+            model.dirty = true;
             Vec::new()
         }
         MouseAction::FocusComposer => {
@@ -319,7 +320,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
     ) {
-        open_settings_tab(model, 1);
+        navigate_to_route(model, Route::Profiles);
         return Vec::new();
     }
     if matches!(
@@ -376,7 +377,8 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ctrl: true,
             ..
         }
-    ) {
+    ) && model.route() != Route::Settings
+    {
         close_active_overlay_state(model);
         if model.route() != Route::Chat {
             navigate_to_route(model, Route::Chat);
@@ -604,34 +606,31 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
 }
 
 fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
-    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 1 {
-        return handle_profile_input(model, input);
+    if model.settings_workspace.search_active {
+        return handle_settings_search_input(model, input);
     }
-    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 3 {
-        return handle_model_defaults_input(model, input);
+    if model.settings_workspace.choice_picker_open {
+        return handle_settings_choice_picker_input(model, input);
     }
-    if !model.settings_workspace.nav_focus && model.settings_workspace.nav_selected == 2 {
-        match input {
-            Input {
-                key: Key::Enter, ..
-            } => {
-                open_user_profile(model);
-                return Vec::new();
-            }
-            Input {
-                key: Key::Esc | Key::Up,
-                ..
-            } => {
-                model.settings_workspace.nav_focus = true;
-                model.dirty = true;
-                return Vec::new();
-            }
-            _ => {}
+    if model.settings_workspace.detail_open {
+        if matches!(input, Input { key: Key::Esc, .. }) {
+            model.settings_workspace.detail_open = false;
+            model.dirty = true;
+            return Vec::new();
         }
+        return handle_model_defaults_input(model, input);
     }
     match input {
         Input { key: Key::Esc, .. } => {
-            navigate_to_route(model, Route::Chat);
+            if model.settings_workspace.display_label_editor.is_some() {
+                model.settings_workspace.display_label_editor = None;
+                model.dirty = true;
+            } else if model.settings_workspace.nav_focus {
+                navigate_to_route(model, Route::Chat);
+            } else {
+                model.settings_workspace.nav_focus = true;
+                model.dirty = true;
+            }
             Vec::new()
         }
         Input {
@@ -669,30 +668,32 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             }
             Vec::new()
         }
-        Input { key: Key::Tab, .. } => Vec::new(),
+        Input {
+            key: Key::Char('f' | 'F'),
+            ctrl: true,
+            ..
+        } => {
+            model.settings_workspace.search_query.clear();
+            model.settings_workspace.search_selected = 0;
+            model.settings_workspace.search_active = true;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Tab, .. } => {
+            model.settings_workspace.nav_focus = !model.settings_workspace.nav_focus;
+            normalize_settings_selection(model);
+            model.dirty = true;
+            Vec::new()
+        }
         Input {
             key: Key::Enter, ..
-        } if model.settings_workspace.nav_focus => {
-            if model.settings_workspace.nav_selected == 0 {
-                model.settings_workspace.nav_focus = false;
-                model.dirty = true;
-                Vec::new()
-            } else {
-                activate_settings_nav(model)
-            }
-        }
+        } if model.settings_workspace.nav_focus => activate_settings_nav(model),
         Input { key: Key::Up, .. } if model.settings_workspace.nav_focus => {
             move_settings_nav(model, -1);
             Vec::new()
         }
         Input { key: Key::Down, .. } if model.settings_workspace.nav_focus => {
-            model.settings_workspace.nav_focus = false;
-            model.dirty = true;
-            Vec::new()
-        }
-        Input { key: Key::Up, .. } if model.settings_workspace.selected == 0 => {
-            model.settings_workspace.nav_focus = true;
-            model.dirty = true;
+            move_settings_nav(model, 1);
             Vec::new()
         }
         Input { key: Key::Up, .. } => {
@@ -718,61 +719,34 @@ fn handle_settings_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             Vec::new()
         }
         Input { key: Key::Home, .. } => {
-            model.settings_workspace.nav_focus = false;
-            move_settings_selection_to(model, 0);
+            move_settings_selection_to(model, first_editable_settings_row(model));
             Vec::new()
         }
         Input { key: Key::End, .. } => {
-            model.settings_workspace.nav_focus = false;
-            move_settings_selection_to(model, SettingsPreference::ALL.len().saturating_sub(1));
-            Vec::new()
-        }
-        Input { key: Key::Left, .. } if model.settings_workspace.nav_focus => {
-            move_settings_nav(model, -1);
+            move_settings_selection_to(model, last_editable_settings_row(model));
             Vec::new()
         }
         Input {
-            key: Key::Right, ..
-        } if model.settings_workspace.nav_focus => {
-            move_settings_nav(model, 1);
-            Vec::new()
-        }
+            key: Key::Left | Key::Right,
+            ..
+        } if model.settings_workspace.nav_focus => Vec::new(),
         Input { key: Key::Left, .. } => change_selected_preference(model, -1),
         Input {
             key: Key::Right, ..
         } => change_selected_preference(model, 1),
         Input {
-            key: Key::Enter, ..
-        } if selected_settings_preference(model) == SettingsPreference::DisplayLabel => {
-            begin_display_label_edit(model);
-            Vec::new()
-        }
-        Input {
-            key: Key::Char('r' | 'R'),
-            ctrl: false,
+            key: Key::Enter | Key::Char(' '),
             ..
-        } => reset_selected_preference(model),
+        } => activate_selected_setting(model),
         Input {
-            key: Key::Char('d' | 'D'),
-            ctrl: false,
+            key: Key::Backspace,
+            shift: true,
             ..
         } => default_selected_preference(model),
         Input {
-            key: Key::Char('k' | 'K'),
-            ctrl: false,
-            alt: false,
+            key: Key::Backspace,
             ..
-        } => {
-            open_credential(model);
-            Vec::new()
-        }
-        Input {
-            key: Key::Char('p' | 'P'),
-            ..
-        } => {
-            navigate_to_route(model, Route::Profiles);
-            Vec::new()
-        }
+        } => reset_selected_preference(model),
         _ => Vec::new(),
     }
 }
@@ -817,6 +791,121 @@ fn handle_user_profile_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         _ => Vec::new(),
     }
 }
+
+fn handle_settings_search_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            model.settings_workspace.search_active = false;
+            model.settings_workspace.search_query.clear();
+            model.settings_workspace.search_selected = 0;
+            model.dirty = true;
+        }
+        Input {
+            key: Key::Enter, ..
+        } => {
+            if let Some((category, row, preference)) = model
+                .settings_search_results()
+                .get(model.settings_workspace.search_selected)
+                .copied()
+            {
+                model.settings_workspace.nav_selected = SettingsCategory::ALL
+                    .iter()
+                    .position(|candidate| *candidate == category)
+                    .unwrap_or_default();
+                model.settings_workspace.selected = row;
+                model.settings_workspace.nav_focus = !preference.editable();
+                model.settings_workspace.search_active = false;
+                model.settings_workspace.search_query.clear();
+                normalize_settings_selection(model);
+                model.dirty = true;
+            }
+        }
+        Input { key: Key::Up, .. }
+        | Input {
+            key: Key::Tab,
+            shift: true,
+            ..
+        } => {
+            model.settings_workspace.search_selected =
+                model.settings_workspace.search_selected.saturating_sub(1);
+            model.dirty = true;
+        }
+        Input { key: Key::Down, .. } | Input { key: Key::Tab, .. } => {
+            let last = model.settings_search_results().len().saturating_sub(1);
+            model.settings_workspace.search_selected = model
+                .settings_workspace
+                .search_selected
+                .saturating_add(1)
+                .min(last);
+            model.dirty = true;
+        }
+        Input {
+            key: Key::Backspace,
+            ..
+        } => {
+            model.settings_workspace.search_query.pop();
+            model.settings_workspace.search_selected = 0;
+            model.dirty = true;
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.settings_workspace.search_query.push(character);
+            model.settings_workspace.search_selected = 0;
+            model.dirty = true;
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+fn handle_settings_choice_picker_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    match input {
+        Input { key: Key::Esc, .. } => {
+            model.settings_workspace.choice_picker_open = false;
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Up, .. } => {
+            model.settings_workspace.choice_picker_selected = model
+                .settings_workspace
+                .choice_picker_selected
+                .saturating_sub(1);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            model.settings_workspace.choice_picker_selected = model
+                .settings_workspace
+                .choice_picker_selected
+                .saturating_add(1)
+                .min(8);
+            model.dirty = true;
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => {
+            let value = [
+                ThemePreset::System,
+                ThemePreset::Light,
+                ThemePreset::Dark,
+                ThemePreset::Aurora,
+                ThemePreset::Ember,
+                ThemePreset::Midnight,
+                ThemePreset::Ocean,
+                ThemePreset::Forest,
+                ThemePreset::Rose,
+            ][model.settings_workspace.choice_picker_selected.min(8)];
+            model.settings_workspace.choice_picker_open = false;
+            dispatch_local_preference(model, LocalPreferenceChange::ThemePreset(Some(value)))
+        }
+        _ => Vec::new(),
+    }
+}
 fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
     let value = model
         .user_profile
@@ -829,36 +918,155 @@ fn commit_user_profile(model: &mut Model) -> Vec<UiEffect> {
     effects
 }
 fn move_settings_nav(model: &mut Model, direction: isize) {
-    let count = isize::try_from(SETTINGS_NAV_COUNT).unwrap_or(1);
-    let current = isize::try_from(model.settings_workspace.nav_selected).unwrap_or(0);
-    let next = (current + direction).rem_euclid(count);
-    model.settings_workspace.nav_selected = usize::try_from(next).unwrap_or(0);
+    let current = model.settings_workspace.nav_selected;
+    let last = SETTINGS_NAV_COUNT.saturating_sub(1);
+    model.settings_workspace.nav_selected = current.saturating_add_signed(direction).min(last);
+    model.settings_workspace.selected = 0;
     model.settings_workspace.display_label_editor = None;
+    model.settings_workspace.detail_open = false;
+    normalize_settings_selection(model);
     model.dirty = true;
 }
 
 fn activate_settings_nav(model: &mut Model) -> Vec<UiEffect> {
     model.settings_workspace.nav_focus = false;
+    normalize_settings_selection(model);
     model.notice = None;
     model.dirty = true;
     Vec::new()
 }
 fn selected_settings_preference(model: &Model) -> SettingsPreference {
-    SettingsPreference::at(model.settings_workspace.selected)
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    SettingsPreference::rows(category)
+        .get(model.settings_workspace.selected)
+        .copied()
+        .or_else(|| {
+            SettingsPreference::rows(category)
+                .iter()
+                .copied()
+                .find(|row| row.editable())
+        })
+        .unwrap_or(SettingsPreference::ThemePreset)
 }
 
 fn move_settings_selection(model: &mut Model, direction: isize) {
-    let current = model.settings_workspace.selected;
-    let last = SettingsPreference::ALL.len().saturating_sub(1);
-    move_settings_selection_to(model, current.saturating_add_signed(direction).min(last));
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let rows = SettingsPreference::rows(category);
+    if rows.is_empty() {
+        return;
+    }
+    let editable = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| row.editable().then_some(index))
+        .collect::<Vec<_>>();
+    let Some(position) = editable
+        .iter()
+        .position(|index| *index == model.settings_workspace.selected)
+    else {
+        normalize_settings_selection(model);
+        return;
+    };
+    let last = editable.len().saturating_sub(1);
+    let next = position.saturating_add_signed(direction).min(last);
+    move_settings_selection_to(model, editable[next]);
 }
 fn move_settings_selection_to(model: &mut Model, selected: usize) {
-    let last = SettingsPreference::ALL.len().saturating_sub(1);
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let rows = SettingsPreference::rows(category);
+    let last = rows.len().saturating_sub(1);
     model.settings_workspace.nav_focus = false;
     model.settings_workspace.selected = selected.min(last);
+    normalize_settings_selection(model);
     model.settings_workspace.scroll = 0;
     model.settings_workspace.display_label_editor = None;
     model.dirty = true;
+}
+
+fn normalize_settings_selection(model: &mut Model) {
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let rows = SettingsPreference::rows(category);
+    if rows
+        .get(model.settings_workspace.selected)
+        .is_some_and(|row| row.editable())
+    {
+        return;
+    }
+    model.settings_workspace.selected = rows
+        .iter()
+        .position(|row| row.editable())
+        .unwrap_or_default();
+}
+
+fn first_editable_settings_row(model: &Model) -> usize {
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    SettingsPreference::rows(category)
+        .iter()
+        .position(|row| row.editable())
+        .unwrap_or_default()
+}
+
+fn last_editable_settings_row(model: &Model) -> usize {
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    SettingsPreference::rows(category)
+        .iter()
+        .rposition(|row| row.editable())
+        .unwrap_or_default()
+}
+
+fn activate_selected_setting(model: &mut Model) -> Vec<UiEffect> {
+    match selected_settings_preference(model) {
+        SettingsPreference::ThemePreset => {
+            let current = *model
+                .settings()
+                .local_profile
+                .preferences()
+                .theme_preset()
+                .value();
+            model.settings_workspace.choice_picker_selected = [
+                ThemePreset::System,
+                ThemePreset::Light,
+                ThemePreset::Dark,
+                ThemePreset::Aurora,
+                ThemePreset::Ember,
+                ThemePreset::Midnight,
+                ThemePreset::Ocean,
+                ThemePreset::Forest,
+                ThemePreset::Rose,
+            ]
+            .iter()
+            .position(|candidate| *candidate == current)
+            .unwrap_or_default();
+            model.settings_workspace.choice_picker_open = true;
+            model.dirty = true;
+            Vec::new()
+        }
+        SettingsPreference::DisplayLabel => {
+            begin_display_label_edit(model);
+            Vec::new()
+        }
+        SettingsPreference::ConnectCredential => {
+            open_credential(model);
+            Vec::new()
+        }
+        SettingsPreference::ManageProviders => {
+            navigate_to_route(model, Route::Profiles);
+            Vec::new()
+        }
+        SettingsPreference::ConfigureModels => {
+            sync_model_default_selection(model);
+            model.settings_workspace.detail_open = true;
+            model.dirty = true;
+            Vec::new()
+        }
+        SettingsPreference::OpenSessions => {
+            navigate_to_route(model, Route::Sessions);
+            Vec::new()
+        }
+        SettingsPreference::ReducedMotion => change_selected_preference(model, 1),
+        preference if preference.editable() => change_selected_preference(model, 1),
+        _ => Vec::new(),
+    }
 }
 
 fn begin_display_label_edit(model: &mut Model) {
@@ -896,7 +1104,17 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
         | SettingsPreference::Mode
         | SettingsPreference::Approvals
         | SettingsPreference::Retention
-        | SettingsPreference::Logging => return Vec::new(),
+        | SettingsPreference::Logging
+        | SettingsPreference::GlyphCheck
+        | SettingsPreference::KeyboardNavigation
+        | SettingsPreference::StateIndicators
+        | SettingsPreference::Workspace
+        | SettingsPreference::ColorDepth
+        | SettingsPreference::Version
+        | SettingsPreference::ManageProviders
+        | SettingsPreference::ConnectCredential
+        | SettingsPreference::ConfigureModels
+        | SettingsPreference::OpenSessions => return Vec::new(),
         SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
             *preferences.theme_preset().value(),
             &[
@@ -990,7 +1208,17 @@ fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             | SettingsPreference::Mode
             | SettingsPreference::Approvals
             | SettingsPreference::Retention
-            | SettingsPreference::Logging => return Vec::new(),
+            | SettingsPreference::Logging
+            | SettingsPreference::GlyphCheck
+            | SettingsPreference::KeyboardNavigation
+            | SettingsPreference::StateIndicators
+            | SettingsPreference::Workspace
+            | SettingsPreference::ColorDepth
+            | SettingsPreference::Version
+            | SettingsPreference::ManageProviders
+            | SettingsPreference::ConnectCredential
+            | SettingsPreference::ConfigureModels
+            | SettingsPreference::OpenSessions => return Vec::new(),
             SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
             SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
             SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
@@ -1023,7 +1251,17 @@ fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             | SettingsPreference::Mode
             | SettingsPreference::Approvals
             | SettingsPreference::Retention
-            | SettingsPreference::Logging => return Vec::new(),
+            | SettingsPreference::Logging
+            | SettingsPreference::GlyphCheck
+            | SettingsPreference::KeyboardNavigation
+            | SettingsPreference::StateIndicators
+            | SettingsPreference::Workspace
+            | SettingsPreference::ColorDepth
+            | SettingsPreference::Version
+            | SettingsPreference::ManageProviders
+            | SettingsPreference::ConnectCredential
+            | SettingsPreference::ConfigureModels
+            | SettingsPreference::OpenSessions => return Vec::new(),
             SettingsPreference::ThemePreset => {
                 LocalPreferenceChange::ThemePreset(Some(ThemePreset::System))
             }
@@ -1151,12 +1389,23 @@ fn canonical_command_id(id: &str) -> &str {
 
 fn open_settings_tab(model: &mut Model, tab: usize) {
     navigate_to_route(model, Route::Settings);
-    model.settings_workspace.nav_selected = tab.min(SETTINGS_NAV_COUNT.saturating_sub(1));
+    let category = match tab {
+        1 => SettingsCategory::Providers,
+        2 => SettingsCategory::Profile,
+        3 => SettingsCategory::ModelsThinking,
+        _ => SettingsCategory::Appearance,
+    };
+    model.settings_workspace.nav_selected = SettingsCategory::ALL
+        .iter()
+        .position(|candidate| *candidate == category)
+        .unwrap_or_default();
     model.settings_workspace.nav_focus = false;
-    if model.settings_workspace.nav_selected == 1 {
+    normalize_settings_selection(model);
+    if category == SettingsCategory::Providers {
         model.profile_center.focus = ProfileCenterFocus::ProviderChoices;
-    } else if model.settings_workspace.nav_selected == 3 {
+    } else if category == SettingsCategory::ModelsThinking {
         sync_model_default_selection(model);
+        model.settings_workspace.detail_open = true;
     }
     model.dirty = true;
 }
@@ -1189,7 +1438,7 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             Vec::new()
         }
         "provider" => {
-            open_settings_tab(model, 1);
+            navigate_to_route(model, Route::Profiles);
             Vec::new()
         }
         "models" => {

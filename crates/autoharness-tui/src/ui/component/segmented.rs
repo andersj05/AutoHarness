@@ -1,5 +1,6 @@
 //! Choice chips that collapse below the medium breakpoint.
 
+use autoharness_settings::GlyphMode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -79,8 +80,13 @@ impl<'a> SegmentedControl<'a> {
             return;
         }
         let selected = self.options.get(self.selected).copied().unwrap_or("");
+        let (left, right) = if self.theme.icons().mode() == GlyphMode::Ascii {
+            ("<", ">")
+        } else {
+            ("‹", "›")
+        };
         let compact = format!(
-            "‹ {selected} › {}/{}",
+            "{left} {selected} {right} {}/{}",
             self.selected.saturating_add(1),
             self.options.len()
         );

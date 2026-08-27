@@ -124,7 +124,7 @@ fn providers_list_connection_choices_at_responsive_sizes() {
     let _ = update(&mut model, Message::Input(ctrl('g')));
 
     assert!(model.profile_center_open());
-    assert_eq!(model.focus, Focus::Settings);
+    assert_eq!(model.focus, Focus::Profiles);
     let wide = render_text(&model, 120, 40);
     for provider in [
         "Gemini",
@@ -234,10 +234,11 @@ fn codex_sign_in_can_be_cancelled_or_retried_after_failure() {
 fn models_tab_saves_the_active_profiles_model_and_thinking_mode() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('4')));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Right)));
-    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    for _ in 0..4 {
+        let _ = update(&mut model, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
 
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("1  MODEL"));

@@ -1,9 +1,6 @@
 use std::fmt::Write as _;
 
-use autoharness_settings::{
-    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout as PreferenceLayout,
-    PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
-};
+use autoharness_settings::{Source, TerminalTimestampStyle, ThemePreset};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
@@ -12,17 +9,22 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
     COMMANDS, CatalogProjection, Model, ModelDefaultStep, ModelSummary, MouseAction, Notice,
-    OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus, ProfileConnectionState,
-    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, Route, SettingsPreference,
+    OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus, ProfileConnectionState,
+    ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, Route, SettingsCategory,
+    SettingsPreference,
 };
 use crate::text::display_safe;
-use crate::ui::Token;
-use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation, SETTINGS_NAV};
+use crate::ui::component::{
+    KeyValue, KeyValueTable, Provenance, SearchField, SettingKind, SettingRow,
+};
+use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
     CREDENTIAL_COMPACT_WIDTH, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
-    SESSION_HELP_WIDE, SETTINGS_NAV_COMPACT_WIDTH, TWO_ROWS,
+    SESSION_HELP_WIDE, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
+    SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
 };
+use crate::ui::{Icon, Theme, Token, normalized_t};
 
 const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
     top_left: "+",
@@ -124,7 +126,7 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
             Route::Chat => crate::ui::page::render_chat(frame, &layout.regions, model),
             Route::Sessions => render_browser(frame, content, model),
             Route::Profiles => render_profile_center(frame, content, model),
-            Route::Settings => render_settings(frame, content, model),
+            Route::Settings => render_settings(frame, &layout.regions, model),
             Route::Help => render_help(frame, content, model),
         }
     }
@@ -585,148 +587,33 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
-fn settings_body_area(area: Rect) -> Rect {
-    ui_layout::settings_body_area(area)
-}
-
 /// Renders resolved runtime settings and safe provenance as a primary route.
-fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+fn render_settings(frame: &mut Frame<'_>, regions: &ui_layout::NamedRects, model: &Model) {
+    let area = regions.content;
     frame.render_widget(Clear, area);
     let block = app_block(model)
         .borders(Borders::ALL)
-        .title(" Settings & Provenance ")
+        .title(" Settings ")
         .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
+    let (Some(rail), Some(body), Some(footer)) = (
+        regions.settings_nav,
+        regions.settings_body,
+        regions.settings_footer,
+    ) else {
         return;
-    }
-
-    let nav_height = u16::from(inner.height >= 2);
-    if nav_height > 0 {
-        render_settings_nav(
-            frame,
-            Rect::new(inner.x, inner.y, inner.width, nav_height),
-            model,
-        );
-    }
-    let body = if nav_height > 0 {
-        settings_body_area(area)
-    } else {
-        inner
     };
-    match model.settings_workspace.nav_selected {
-        1 => render_profile_center(frame, body, model),
-        2 => render_settings_profile(frame, body, model),
-        3 => render_model_defaults(frame, body, model),
-        _ => {}
-    }
-    if model.settings_workspace.nav_selected != 0 {
-        return;
-    }
-
-    let header_height = if body.height >= PAGE_HEADER_TALL_MIN {
-        TWO_ROWS
+    render_settings_nav(frame, rail, model);
+    if model.settings_workspace.search_active {
+        render_settings_search(frame, body, model);
+    } else if model.settings_workspace.choice_picker_open {
+        render_settings_theme_picker(frame, body, model);
+    } else if model.settings_workspace.detail_open {
+        render_model_defaults(frame, body, model);
     } else {
-        ROW
-    };
-    let help_height = u16::from(body.height >= PAGE_HELP_MIN);
-    let page_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(help_height),
-        ])
-        .split(body);
-    render_settings_page_header(
-        frame,
-        page_rows[0],
-        model,
-        "General",
-        "Review runtime state, preferences, appearance, and terminal behavior.",
-    );
-
-    let mut lines = vec![
-        Line::styled("PROFILE DEFAULTS", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::DisplayLabel),
-        Line::from(""),
-        settings_preference_line(model, SettingsPreference::Provider),
-        settings_preference_line(model, SettingsPreference::Profile),
-        settings_preference_line(model, SettingsPreference::Credential),
-        settings_preference_line(model, SettingsPreference::Source),
-        Line::styled(
-            "API KEY  /connect or press K",
-            visual_style(model, VisualRole::Field),
-        ),
-        Line::styled(
-            "Stored provider credentials remain managed from Providers.",
-            visual_style(model, VisualRole::Muted),
-        ),
-        Line::from(""),
-        Line::styled("MODEL & THINKING", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Model),
-        settings_preference_line(model, SettingsPreference::Mode),
-        Line::styled(
-            "Read-only here: choose a model from /models; thinking follows its advertised capability.",
-            visual_style(model, VisualRole::Muted),
-        ),
-        Line::from(""),
-        Line::styled("APPROVALS", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Approvals),
-        Line::styled("RETENTION", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Retention),
-        Line::from(""),
-        Line::styled("APPEARANCE", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::ThemePreset),
-        settings_preference_line(model, SettingsPreference::ColorMode),
-        settings_preference_line(model, SettingsPreference::GlyphMode),
-        Line::styled("PROMPT BAR", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::PromptStatusDetail),
-        Line::styled("ACCESSIBILITY", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::ReducedMotion),
-        settings_preference_line(model, SettingsPreference::Density),
-        Line::styled("LOGGING", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Logging),
-        Line::styled("TERMINAL BEHAVIOR", visual_style(model, VisualRole::User)),
-        settings_preference_line(model, SettingsPreference::Layout),
-        settings_preference_line(model, SettingsPreference::TerminalTimestampStyle),
-        settings_preference_line(model, SettingsPreference::ComposerSubmitBehavior),
-        Line::from(""),
-        Line::styled("SHORTCUT REFERENCE", visual_style(model, VisualRole::User)),
-    ];
-    lines.extend(COMMANDS.iter().filter_map(|command| {
-        command.key_hint.map(|hint| {
-            Line::styled(
-                format!(" {hint:<24} /{} - {}", command.id, command.description),
-                visual_style(model, VisualRole::Muted),
-            )
-        })
-    }));
-    let content = page_rows[1];
-    let scroll = settings_scroll(
-        &lines,
-        SettingsPreference::at(model.settings_workspace.selected),
-        content,
-    );
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        content,
-    );
-    if help_height > 0 {
-        let controls = if model.settings_workspace.nav_focus {
-            "←/→ page  Down open  Esc Chat"
-        } else {
-            "↑/↓ setting  ←/→ option  Enter edit  R inherit  D reset  Up return"
-        };
-        frame.render_widget(
-            Paragraph::new(format!("{} {controls}", navigation_keys(model)))
-                .style(visual_style(model, VisualRole::Muted)),
-            page_rows[2],
-        );
+        render_settings_category(frame, body, model);
     }
+    render_settings_footer(frame, footer, model);
 }
 
 fn render_settings_page_header(
@@ -754,465 +641,548 @@ fn render_settings_page_header(
 }
 
 fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let compact = area.width < SETTINGS_NAV_COMPACT_WIDTH;
-    let mut spans = Vec::new();
-    for (index, label) in SETTINGS_NAV.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw(if compact { " " } else { "  " }));
+    let theme = model.theme();
+    let icons = theme.icons();
+    let visible = usize::from(area.height);
+    let scroll = model
+        .settings_workspace
+        .nav_selected
+        .saturating_sub(visible.saturating_sub(1));
+    for (index, category) in SettingsCategory::ALL
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(scroll)
+    {
+        let Ok(row) = u16::try_from(index.saturating_sub(scroll)) else {
+            continue;
+        };
+        if row >= area.height {
+            break;
         }
         let style = if index == model.settings_workspace.nav_selected {
             if model.settings_workspace.nav_focus {
-                visual_style(model, VisualRole::Selected)
+                theme.filled(Token::SurfaceSelected)
             } else {
-                visual_style(model, VisualRole::User)
+                theme.style(Token::Accent)
             }
         } else {
-            visual_style(model, VisualRole::Muted)
+            theme.style(Token::TextSecondary)
         };
-        spans.push(Span::styled(
-            if compact {
-                (*label).to_owned()
-            } else {
-                format!(" {label} ")
-            },
+        let icon = settings_category_icon(category);
+        let text = format!("{} {}", icons.glyph(icon), category.label());
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.x,
+            area.y.saturating_add(row),
+            area.width,
+            &text,
             style,
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn render_settings_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let header_height = if area.height >= PAGE_HEADER_TALL_MIN {
-        TWO_ROWS
-    } else {
-        ROW
-    };
-    let help_height = u16::from(area.height >= PAGE_HELP_MIN);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(1),
-            Constraint::Length(help_height),
-        ])
-        .split(area);
-    render_settings_page_header(
-        frame,
-        rows[0],
-        model,
-        "Profile",
-        "Manage the local identity and workspace defaults used across sessions.",
-    );
-    let card_height = rows[1].height.min(4);
-    render_local_profile(
-        frame,
-        Rect::new(rows[1].x, rows[1].y, rows[1].width, card_height),
-        model,
-    );
-    if help_height > 0 {
-        frame.render_widget(
-            Paragraph::new("Enter edit  Up return  Left/Right pages  Esc Settings")
-                .style(visual_style(model, VisualRole::Muted)),
-            rows[2],
         );
     }
 }
 
-fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Line<'static> {
-    let profile = &model.settings().local_profile;
-    let (label, value, source, explanation) = match preference {
-        SettingsPreference::Provider => (
-            "Provider",
-            model.settings().provider_label(),
-            "runtime",
-            "active provider adapter",
-        ),
-        SettingsPreference::Profile => (
-            "Profile",
-            model
-                .settings()
-                .provider_status
-                .active_profile
-                .as_deref()
-                .unwrap_or("none")
-                .to_owned(),
-            "runtime",
-            "active provider profile",
-        ),
-        SettingsPreference::Credential => (
-            "Credential",
-            if model.settings().provider_status.credential_connected {
-                "connected".to_owned()
-            } else {
-                "disconnected".to_owned()
-            },
-            "runtime",
-            "safe connection state",
-        ),
-        SettingsPreference::Source => (
-            "Source",
-            model
-                .settings()
-                .provider_status
-                .credential_source
-                .as_str()
-                .to_owned(),
-            "runtime",
-            "credential provenance",
-        ),
-        SettingsPreference::Model => (
-            "Model",
-            selected_model_label(model),
-            "runtime",
-            "active session model",
-        ),
-        SettingsPreference::Mode => (
-            "Thinking",
-            if model.profiles().user.default_mode.is_empty() {
-                "provider default".to_owned()
-            } else {
-                model.profiles().user.default_mode.clone()
-            },
-            "profile",
-            "new-session thinking default",
-        ),
-        SettingsPreference::Approvals => (
-            "Approvals",
-            "per-call".to_owned(),
-            "policy",
-            "exact capability decisions",
-        ),
-        SettingsPreference::Retention => (
-            "Retention",
-            "durable".to_owned(),
-            "policy",
-            "session history and deletion controls",
-        ),
-        SettingsPreference::Logging => (
-            "Logging",
-            "redacted".to_owned(),
-            "policy",
-            "credentials and content excluded",
-        ),
-        SettingsPreference::DisplayLabel => (
-            "Display label",
-            model
-                .settings_workspace
-                .display_label_editor
-                .as_ref()
-                .map_or_else(
-                    || {
-                        profile.display_label().value().as_ref().map_or_else(
-                            || "not set".to_owned(),
-                            |label| display_safe(label.as_str()),
-                        )
-                    },
-                    |value| format!("{} [editing]", display_safe(value)),
-                ),
-            profile.display_label().source().as_str(),
-            "local identity shown only in this terminal",
-        ),
-        SettingsPreference::ThemePreset => (
-            "Theme preset",
-            theme_preset_label(*profile.preferences().theme_preset().value()).to_owned(),
-            profile.preferences().theme_preset().source().as_str(),
-            "terminal palette preference",
-        ),
-        SettingsPreference::ColorMode => (
-            "Color mode",
-            color_mode_label(*profile.preferences().color_mode().value()).to_owned(),
-            profile.preferences().color_mode().source().as_str(),
-            "status and focus contrast",
-        ),
-        SettingsPreference::GlyphMode => (
-            "Glyph mode",
-            glyph_mode_label(*profile.preferences().glyph_mode().value()).to_owned(),
-            profile.preferences().glyph_mode().source().as_str(),
-            "application chrome only",
-        ),
-        SettingsPreference::PromptStatusDetail => (
-            "Prompt detail",
-            prompt_status_detail_label(*profile.preferences().prompt_status_detail().value())
-                .to_owned(),
-            profile
-                .preferences()
-                .prompt_status_detail()
-                .source()
-                .as_str(),
-            "essential, workspace, or token metrics",
-        ),
-        SettingsPreference::ReducedMotion => (
-            "Reduced motion",
-            bool_label(*profile.preferences().reduced_motion().value()).to_owned(),
-            profile.preferences().reduced_motion().source().as_str(),
-            "stops animated status indicators",
-        ),
-        SettingsPreference::Density => (
-            "Density",
-            density_label(*profile.preferences().density().value()).to_owned(),
-            profile.preferences().density().source().as_str(),
-            "spacing between terminal elements",
-        ),
-        SettingsPreference::Layout => (
-            "Layout",
-            layout_label(*profile.preferences().layout().value()).to_owned(),
-            profile.preferences().layout().source().as_str(),
-            "panel arrangement",
-        ),
-        SettingsPreference::TerminalTimestampStyle => (
-            "Timestamp style",
-            timestamp_style_label(*profile.preferences().terminal_timestamp_style().value())
-                .to_owned(),
-            profile
-                .preferences()
-                .terminal_timestamp_style()
-                .source()
-                .as_str(),
-            "terminal timestamp display",
-        ),
-        SettingsPreference::ComposerSubmitBehavior => (
-            "Composer submit",
-            composer_submit_label(*profile.preferences().composer_submit_behavior().value())
-                .to_owned(),
-            profile
-                .preferences()
-                .composer_submit_behavior()
-                .source()
-                .as_str(),
-            "prompt submission chord",
-        ),
-    };
-    let selected = !model.settings_workspace.nav_focus
-        && SettingsPreference::at(model.settings_workspace.selected) == preference;
-    let wheel = selected
-        .then(|| settings_preference_wheel(model, preference))
-        .flatten();
-    let marker = if selected {
-        selection_marker(model)
+const THEME_OPTIONS: [&str; 9] = [
+    "system", "light", "dark", "aurora", "ember", "midnight", "ocean", "forest", "rose",
+];
+const COLOR_OPTIONS: [&str; 5] = ["color", "soft", "vivid", "no color", "high contrast"];
+const GLYPH_OPTIONS: [&str; 3] = ["unicode", "Nerd Font", "ASCII"];
+const PROMPT_OPTIONS: [&str; 3] = ["essential", "workspace", "detailed"];
+const DENSITY_OPTIONS: [&str; 2] = ["comfortable", "compact"];
+const LAYOUT_OPTIONS: [&str; 2] = ["responsive", "single column"];
+const TIMESTAMP_OPTIONS: [&str; 3] = ["relative", "absolute", "hidden"];
+const SUBMIT_OPTIONS: [&str; 2] = ["Ctrl+S", "Enter"];
+
+fn settings_category_icon(category: SettingsCategory) -> Icon {
+    match category {
+        SettingsCategory::Appearance => Icon::RouteSettings,
+        SettingsCategory::ChatComposer => Icon::RouteChat,
+        SettingsCategory::Accessibility => Icon::Success,
+        SettingsCategory::Providers => Icon::RouteProviders,
+        SettingsCategory::ModelsThinking => Icon::RouteModels,
+        SettingsCategory::Profile => Icon::User,
+        SettingsCategory::SessionsData => Icon::RouteSessions,
+        SettingsCategory::Shortcuts => Icon::PromptCaret,
+        SettingsCategory::About => Icon::Info,
+    }
+}
+
+fn render_settings_category(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let title_height = if area.height >= PAGE_HEADER_TALL_MIN {
+        TWO_ROWS
     } else {
-        " "
+        ROW.min(area.height)
     };
-    let saving = model
-        .pending
-        .values()
-        .any(|pending| matches!(pending, PendingKind::UpdateLocalPreference(_)));
-    let suffix = if selected && saving { " [saving]" } else { "" };
-    let style = if selected {
-        visual_style(model, VisualRole::Selected)
-    } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    let content = wheel.map_or_else(
-        || format!("{marker} {label:<18} {value}  Source: {source}  {explanation}{suffix}"),
-        |wheel| format!("{marker} {label:<14} {wheel}{suffix}"),
+    render_settings_page_header(
+        frame,
+        Rect::new(area.x, area.y, area.width, title_height),
+        model,
+        category.label(),
+        settings_category_description(category),
     );
-    Line::styled(content, style)
+    let content = Rect::new(
+        area.x,
+        area.y.saturating_add(title_height),
+        area.width,
+        area.height.saturating_sub(title_height),
+    );
+    if category == SettingsCategory::Shortcuts {
+        render_settings_shortcuts(frame, content, model);
+        return;
+    }
+    let rows = SettingsPreference::rows(category);
+    let label_width = rows
+        .iter()
+        .map(|row| u16::try_from(row.label().len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let visible = usize::from(content.height.max(ROW));
+    let scroll = model
+        .settings_workspace
+        .selected
+        .saturating_sub(visible.saturating_div(3));
+    let mut y = content.y;
+    for (index, preference) in rows.iter().copied().enumerate().skip(scroll) {
+        if y >= content.bottom() {
+            break;
+        }
+        let focused = !model.settings_workspace.nav_focus
+            && index == model.settings_workspace.selected
+            && preference.editable();
+        let remaining = content.bottom().saturating_sub(y);
+        let used = render_typed_settings_row(
+            frame,
+            Rect::new(content.x, y, content.width, remaining),
+            model,
+            preference,
+            focused,
+            label_width,
+        );
+        y = y.saturating_add(used.max(ROW));
+    }
 }
 
-fn wheel_value<T: Copy + PartialEq>(
-    current: T,
-    values: &[T],
-    label: fn(T) -> &'static str,
-) -> String {
-    let index = values
+fn settings_category_description(category: SettingsCategory) -> &'static str {
+    match category {
+        SettingsCategory::Appearance => "Theme, density, and terminal glyph previews.",
+        SettingsCategory::ChatComposer => "Prompt metadata, timestamps, layout, and submission.",
+        SettingsCategory::Accessibility => "Motion, color treatment, and redundant state cues.",
+        SettingsCategory::Providers => "Safe connection facts and provider actions.",
+        SettingsCategory::ModelsThinking => "Active model and profile thinking defaults.",
+        SettingsCategory::Profile => "Local identity and workspace defaults.",
+        SettingsCategory::SessionsData => "Durability, redaction, and session access.",
+        SettingsCategory::Shortcuts => "Keyboard reference generated from the command table.",
+        SettingsCategory::About => "Runtime capabilities and policy facts.",
+    }
+}
+
+fn render_typed_settings_row(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    preference: SettingsPreference,
+    focused: bool,
+    label_width: u16,
+) -> u16 {
+    let value = model.settings_row_value(preference);
+    let provenance = settings_provenance(model, preference);
+    let description = settings_row_description(preference);
+    let kind = match preference {
+        SettingsPreference::ReducedMotion => SettingKind::Toggle {
+            on: *model
+                .settings()
+                .local_profile
+                .preferences()
+                .reduced_motion()
+                .value(),
+        },
+        SettingsPreference::ThemePreset => choice_kind(&THEME_OPTIONS, &value),
+        SettingsPreference::ColorMode => choice_kind(&COLOR_OPTIONS, &value),
+        SettingsPreference::GlyphMode => choice_kind(&GLYPH_OPTIONS, &value),
+        SettingsPreference::PromptStatusDetail => choice_kind(&PROMPT_OPTIONS, &value),
+        SettingsPreference::Density => choice_kind(&DENSITY_OPTIONS, &value),
+        SettingsPreference::Layout => choice_kind(&LAYOUT_OPTIONS, &value),
+        SettingsPreference::TerminalTimestampStyle => choice_kind(&TIMESTAMP_OPTIONS, &value),
+        SettingsPreference::ComposerSubmitBehavior => choice_kind(&SUBMIT_OPTIONS, &value),
+        SettingsPreference::DisplayLabel => SettingKind::Text {
+            value: &value,
+            max_len: 64,
+        },
+        SettingsPreference::ManageProviders
+        | SettingsPreference::ConnectCredential
+        | SettingsPreference::ConfigureModels
+        | SettingsPreference::OpenSessions => SettingKind::Action { label: &value },
+        _ => SettingKind::Info { value: &value },
+    };
+    let row = SettingRow::new(
+        model.theme(),
+        preference.label(),
+        kind,
+        provenance,
+        Some(if preference == SettingsPreference::ThemePreset {
+            ""
+        } else {
+            description
+        }),
+        focused,
+        label_width,
+    );
+    let used = row.measure().min(area.height);
+    row.render(
+        frame.buffer_mut(),
+        Rect::new(area.x, area.y, area.width, used),
+    );
+    if focused && preference == SettingsPreference::ThemePreset && used > ROW {
+        render_theme_preview(
+            frame.buffer_mut(),
+            Rect::new(
+                area.x.saturating_add(label_width).saturating_add(ROW),
+                area.y.saturating_add(ROW),
+                area.width.saturating_sub(label_width.saturating_add(ROW)),
+                ROW,
+            ),
+            model.theme(),
+        );
+    }
+    used
+}
+
+fn choice_kind<'a>(options: &'a [&'a str], value: &str) -> SettingKind<'a> {
+    let selected = options
         .iter()
-        .position(|candidate| *candidate == current)
+        .position(|option| option.eq_ignore_ascii_case(value))
         .unwrap_or_default();
-    let previous = values[index.checked_sub(1).unwrap_or(values.len() - 1)];
-    let next = values[(index + 1) % values.len()];
-    format!(
-        "‹{}  [{}]  {}›",
-        label(previous),
-        label(current),
-        label(next)
-    )
+    SettingKind::Choice { options, selected }
 }
 
-fn settings_preference_wheel(model: &Model, preference: SettingsPreference) -> Option<String> {
-    let preferences = model.settings().local_profile.preferences();
-    match preference {
-        SettingsPreference::ThemePreset => Some(wheel_value(
-            *preferences.theme_preset().value(),
-            &[
-                ThemePreset::System,
-                ThemePreset::Light,
-                ThemePreset::Dark,
-                ThemePreset::Aurora,
-                ThemePreset::Ember,
-                ThemePreset::Midnight,
-                ThemePreset::Ocean,
-                ThemePreset::Forest,
-                ThemePreset::Rose,
-            ],
-            theme_preset_label,
-        )),
-        SettingsPreference::ColorMode => Some(wheel_value(
-            *preferences.color_mode().value(),
-            &[
-                ColorMode::Color,
-                ColorMode::Soft,
-                ColorMode::Vivid,
-                ColorMode::NoColor,
-                ColorMode::HighContrast,
-            ],
-            color_mode_label,
-        )),
-        SettingsPreference::GlyphMode => Some(wheel_value(
-            *preferences.glyph_mode().value(),
-            &[GlyphMode::Unicode, GlyphMode::NerdFont, GlyphMode::Ascii],
-            glyph_mode_label,
-        )),
-        SettingsPreference::PromptStatusDetail => Some(wheel_value(
-            *preferences.prompt_status_detail().value(),
-            &[
-                PromptStatusDetail::Essential,
-                PromptStatusDetail::Workspace,
-                PromptStatusDetail::Detailed,
-            ],
-            prompt_status_detail_label,
-        )),
-        SettingsPreference::ReducedMotion => Some(wheel_value(
-            *preferences.reduced_motion().value(),
-            &[false, true],
-            bool_label,
-        )),
-        SettingsPreference::Density => Some(wheel_value(
-            *preferences.density().value(),
-            &[Density::Comfortable, Density::Compact],
-            density_label,
-        )),
-        SettingsPreference::Layout => Some(wheel_value(
-            *preferences.layout().value(),
-            &[PreferenceLayout::Responsive, PreferenceLayout::SingleColumn],
-            layout_label,
-        )),
-        SettingsPreference::TerminalTimestampStyle => Some(wheel_value(
-            *preferences.terminal_timestamp_style().value(),
-            &[
-                TerminalTimestampStyle::Relative,
-                TerminalTimestampStyle::Absolute,
-                TerminalTimestampStyle::Hidden,
-            ],
-            timestamp_style_label,
-        )),
-        SettingsPreference::ComposerSubmitBehavior => Some(wheel_value(
-            *preferences.composer_submit_behavior().value(),
-            &[
-                ComposerSubmitBehavior::ControlS,
-                ComposerSubmitBehavior::Enter,
-            ],
-            composer_submit_label,
-        )),
-        _ => None,
+fn render_theme_preview(buf: &mut ratatui::buffer::Buffer, area: Rect, theme: &Theme) {
+    let sample_width = area.width.min(SETTINGS_THEME_PREVIEW_CELLS);
+    for index in 0..sample_width {
+        crate::ui::component::paint::put(
+            buf,
+            area.x.saturating_add(index),
+            area.y,
+            ROW,
+            theme.icons().horizontal_rule(),
+            theme.gradient_style(normalized_t(index, sample_width.max(ROW))),
+        );
+    }
+    for (offset, token) in [
+        Token::SurfaceSunken,
+        Token::SurfaceBase,
+        Token::SurfaceRaised,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let x = area
+            .x
+            .saturating_add(sample_width)
+            .saturating_add(ROW)
+            .saturating_add(u16::try_from(offset).unwrap_or(0));
+        crate::ui::component::paint::put(buf, x, area.y, ROW, " ", theme.style(token));
     }
 }
 
-fn settings_preference_label(preference: SettingsPreference) -> &'static str {
-    match preference {
-        SettingsPreference::DisplayLabel => "Display label",
-        SettingsPreference::Provider => "Provider",
-        SettingsPreference::Profile => "Profile",
-        SettingsPreference::Credential => "Credential",
-        SettingsPreference::Source => "Source",
-        SettingsPreference::Model => "Model",
-        SettingsPreference::Mode => "Thinking",
-        SettingsPreference::ThemePreset => "Theme preset",
-        SettingsPreference::ColorMode => "Color mode",
-        SettingsPreference::GlyphMode => "Glyph mode",
-        SettingsPreference::PromptStatusDetail => "Prompt detail",
-        SettingsPreference::ReducedMotion => "Reduced motion",
-        SettingsPreference::Density => "Density",
-        SettingsPreference::Approvals => "Approvals",
-        SettingsPreference::Retention => "Retention",
-        SettingsPreference::Logging => "Logging",
-        SettingsPreference::Layout => "Layout",
-        SettingsPreference::TerminalTimestampStyle => "Timestamp style",
-        SettingsPreference::ComposerSubmitBehavior => "Composer submit",
+fn render_settings_theme_picker(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    render_settings_page_header(
+        frame,
+        Rect::new(area.x, area.y, area.width, TWO_ROWS.min(area.height)),
+        model,
+        "Choose theme",
+        "Each option previews its gradient and three surface levels.",
+    );
+    let mut y = area.y.saturating_add(TWO_ROWS);
+    for (index, preset) in [
+        ThemePreset::System,
+        ThemePreset::Light,
+        ThemePreset::Dark,
+        ThemePreset::Aurora,
+        ThemePreset::Ember,
+        ThemePreset::Midnight,
+        ThemePreset::Ocean,
+        ThemePreset::Forest,
+        ThemePreset::Rose,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if y >= area.bottom() {
+            break;
+        }
+        let selected = index == model.settings_workspace.choice_picker_selected;
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let preview_theme = Theme::from_preset_with_icons(
+            preset,
+            model.theme().mode(),
+            model.theme().depth(),
+            model.theme().icons().mode(),
+        );
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.x,
+            y,
+            SETTINGS_THEME_LABEL_WIDTH.min(area.width),
+            &format!("{marker} {}", THEME_OPTIONS[index]),
+            if selected {
+                model.theme().style(Token::FocusRing)
+            } else {
+                model.theme().style(Token::TextSecondary)
+            },
+        );
+        render_theme_preview(
+            frame.buffer_mut(),
+            Rect::new(
+                area.x.saturating_add(SETTINGS_THEME_PREVIEW_INSET),
+                y,
+                area.width.saturating_sub(SETTINGS_THEME_PREVIEW_INSET),
+                ROW,
+            ),
+            &preview_theme,
+        );
+        y = y.saturating_add(ROW);
     }
 }
 
-fn settings_scroll(lines: &[Line<'static>], selected: SettingsPreference, area: Rect) -> u16 {
-    let needle = settings_preference_label(selected);
-    let target = lines
+fn render_settings_shortcuts(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let rows = COMMANDS
         .iter()
-        .position(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-                .contains(needle)
+        .filter_map(|command| {
+            command.key_hint.map(|key| KeyValue {
+                label: key,
+                value: command.description,
+                chip: None,
+            })
         })
-        .unwrap_or_default();
-    let prefix_rows = Paragraph::new(Text::from(lines[..target].to_vec()))
-        .wrap(Wrap { trim: false })
-        .line_count(area.width);
-    let visible_rows = usize::from(area.height.max(1));
-    u16::try_from(prefix_rows.saturating_sub(visible_rows / 3)).unwrap_or(u16::MAX)
+        .collect::<Vec<_>>();
+    KeyValueTable::new(model.theme(), &rows).render(frame.buffer_mut(), area);
 }
 
-fn theme_preset_label(value: ThemePreset) -> &'static str {
-    match value {
-        ThemePreset::System => "system",
-        ThemePreset::Light => "light",
-        ThemePreset::Dark => "dark",
-        ThemePreset::Aurora => "aurora",
-        ThemePreset::Ember => "ember",
-        ThemePreset::Midnight => "midnight",
-        ThemePreset::Ocean => "ocean",
-        ThemePreset::Forest => "forest",
-        ThemePreset::Rose => "rose",
+fn settings_provenance(model: &Model, preference: SettingsPreference) -> Provenance {
+    let local = &model.settings().local_profile;
+    let source = match preference {
+        SettingsPreference::DisplayLabel => Some(local.display_label().source()),
+        SettingsPreference::ThemePreset => Some(local.preferences().theme_preset().source()),
+        SettingsPreference::ColorMode => Some(local.preferences().color_mode().source()),
+        SettingsPreference::GlyphMode => Some(local.preferences().glyph_mode().source()),
+        SettingsPreference::PromptStatusDetail => {
+            Some(local.preferences().prompt_status_detail().source())
+        }
+        SettingsPreference::ReducedMotion => Some(local.preferences().reduced_motion().source()),
+        SettingsPreference::Density => Some(local.preferences().density().source()),
+        SettingsPreference::Layout => Some(local.preferences().layout().source()),
+        SettingsPreference::TerminalTimestampStyle => {
+            Some(local.preferences().terminal_timestamp_style().source())
+        }
+        SettingsPreference::ComposerSubmitBehavior => {
+            Some(local.preferences().composer_submit_behavior().source())
+        }
+        _ => None,
+    };
+    match source {
+        Some(Source::Default) => Provenance::Default,
+        Some(Source::UserFile) => Provenance::User,
+        Some(Source::WorkspaceFile) => Provenance::Workspace,
+        Some(Source::Environment | Source::CommandLine) => Provenance::Env,
+        None => match preference {
+            SettingsPreference::Mode | SettingsPreference::Profile => Provenance::Profile,
+            SettingsPreference::Approvals
+            | SettingsPreference::Retention
+            | SettingsPreference::Logging
+            | SettingsPreference::StateIndicators => Provenance::Policy,
+            SettingsPreference::ColorDepth | SettingsPreference::Version => Provenance::System,
+            _ => Provenance::Runtime,
+        },
     }
 }
 
-fn color_mode_label(value: ColorMode) -> &'static str {
-    match value {
-        ColorMode::Color => "color",
-        ColorMode::Soft => "soft",
-        ColorMode::Vivid => "vivid",
-        ColorMode::NoColor => "no color",
-        ColorMode::HighContrast => "high contrast",
+fn settings_row_description(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::DisplayLabel => "Local identity shown only in this terminal.",
+        SettingsPreference::Provider => "Active provider adapter.",
+        SettingsPreference::Profile => "Named provider profile used by new sessions.",
+        SettingsPreference::Credential => "Safe connection state; secret material is never shown.",
+        SettingsPreference::Source => {
+            "Credential precedence is environment, vault, then session only."
+        }
+        SettingsPreference::Model => "Active session model.",
+        SettingsPreference::Mode => "Provider-native reasoning default for new sessions.",
+        SettingsPreference::ThemePreset => "Palette preview uses the resolved three-stop gradient.",
+        SettingsPreference::ColorMode => "Color treatment preserves documented contrast floors.",
+        SettingsPreference::GlyphMode => "Controls application chrome without changing content.",
+        SettingsPreference::PromptStatusDetail => {
+            "Chooses essential, workspace, or token metadata."
+        }
+        SettingsPreference::ReducedMotion => "Freezes animated status indicators.",
+        SettingsPreference::Density => "Controls spacing between terminal elements.",
+        SettingsPreference::Approvals => "Every capability decision remains explicit and per call.",
+        SettingsPreference::Retention => "Sessions remain replayable until explicitly deleted.",
+        SettingsPreference::Logging => "Credentials and prompt content stay out of diagnostics.",
+        SettingsPreference::Layout => "Responsive or forced single-column panel arrangement.",
+        SettingsPreference::TerminalTimestampStyle => {
+            "Relative, absolute, or hidden transcript times."
+        }
+        SettingsPreference::ComposerSubmitBehavior => "Selects the key that submits a prompt.",
+        SettingsPreference::GlyphCheck => "Every icon in the currently selected glyph mode.",
+        SettingsPreference::KeyboardNavigation => "No Settings action requires a mouse.",
+        SettingsPreference::StateIndicators => "Important state always uses a glyph plus fill.",
+        SettingsPreference::Workspace => "Current safe workspace label.",
+        SettingsPreference::ColorDepth => "Detected once from terminal capability variables.",
+        SettingsPreference::Version => "Running AutoHarness package version.",
+        SettingsPreference::ManageProviders => "Open the full provider profile workspace.",
+        SettingsPreference::ConnectCredential => "Open the existing zeroizing credential editor.",
+        SettingsPreference::ConfigureModels => "Choose a profile default model and thinking level.",
+        SettingsPreference::OpenSessions => "Open durable session search and lifecycle controls.",
     }
 }
 
-fn glyph_mode_label(value: GlyphMode) -> &'static str {
-    match value {
-        GlyphMode::Unicode => "unicode",
-        GlyphMode::NerdFont => "Nerd Font",
-        GlyphMode::Ascii => "ASCII",
+fn render_settings_search(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let results = model.settings_search_results();
+    let field = Rect::new(area.x, area.y, area.width, ROW.min(area.height));
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.settings_workspace.search_query,
+        model.settings_workspace.search_query.chars().count(),
+        Some(u32::try_from(results.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(frame.buffer_mut(), field);
+    let mut y = area.y.saturating_add(2).min(area.bottom());
+    let mut previous = None;
+    for (result_index, (category, _, preference)) in results.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        if previous != Some(category) {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                area.x,
+                y,
+                area.width,
+                category.label(),
+                model.theme().style(Token::Accent),
+            );
+            y = y.saturating_add(ROW);
+            previous = Some(category);
+        }
+        if y >= area.bottom() {
+            break;
+        }
+        let selected = result_index == model.settings_workspace.search_selected;
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let text = format!(
+            "{marker} {}  {}",
+            preference.label(),
+            model.settings_row_value(preference)
+        );
+        let style = if selected {
+            model.theme().filled(Token::SurfaceSelected)
+        } else {
+            model.theme().style(Token::TextSecondary)
+        };
+        crate::ui::component::paint::put(frame.buffer_mut(), area.x, y, area.width, &text, style);
+        y = y.saturating_add(ROW);
     }
 }
 
-fn prompt_status_detail_label(value: PromptStatusDetail) -> &'static str {
-    match value {
-        PromptStatusDetail::Essential => "essential",
-        PromptStatusDetail::Workspace => "workspace",
-        PromptStatusDetail::Detailed => "detailed",
+fn render_settings_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if area.height == 0 {
+        return;
     }
-}
-
-fn bool_label(value: bool) -> &'static str {
-    if value { "on" } else { "off" }
-}
-
-fn density_label(value: Density) -> &'static str {
-    match value {
-        Density::Comfortable => "comfortable",
-        Density::Compact => "compact",
+    let category = SettingsCategory::at(model.settings_workspace.nav_selected);
+    let selected = SettingsPreference::rows(category)
+        .get(model.settings_workspace.selected)
+        .copied();
+    let first = if model.settings_workspace.search_active {
+        "Search Settings by label or current value".to_owned()
+    } else if let Some(preference) = selected.filter(|row| row.editable()) {
+        format!(
+            "{}  {}  {}",
+            preference.label(),
+            model.settings_row_value(preference),
+            settings_provenance(model, preference).label()
+        )
+    } else {
+        category.label().to_owned()
+    };
+    frame.render_widget(
+        Paragraph::new(first).style(model.theme().style(Token::TextSecondary)),
+        Rect::new(area.x, area.y, area.width, ROW),
+    );
+    if area.height < TWO_ROWS {
+        return;
     }
+    let controls = settings_footer_controls(model, selected);
+    frame.render_widget(
+        Paragraph::new(controls).style(model.theme().style(Token::TextMuted)),
+        Rect::new(area.x, area.y.saturating_add(ROW), area.width, ROW),
+    );
 }
 
-fn layout_label(value: PreferenceLayout) -> &'static str {
-    match value {
-        PreferenceLayout::Responsive => "responsive",
-        PreferenceLayout::SingleColumn => "single column",
+fn settings_footer_controls(model: &Model, selected: Option<SettingsPreference>) -> String {
+    if model.settings_workspace.search_active {
+        return "Type filter  Up/Down select  Enter open  Esc close".to_owned();
     }
+    if model.settings_workspace.choice_picker_open {
+        return "Up/Down choose  Enter apply  Esc cancel".to_owned();
+    }
+    if model.settings_workspace.nav_focus {
+        return "Up/Down category  Tab/Enter rows  Ctrl+F search  Esc Chat".to_owned();
+    }
+    let Some(preference) = selected.filter(|row| row.editable()) else {
+        return "Tab categories  Ctrl+F search  Esc categories".to_owned();
+    };
+    let mut controls = match preference {
+        SettingsPreference::DisplayLabel => "Enter edit".to_owned(),
+        SettingsPreference::ManageProviders
+        | SettingsPreference::ConnectCredential
+        | SettingsPreference::ConfigureModels
+        | SettingsPreference::OpenSessions => "Enter activate".to_owned(),
+        SettingsPreference::ReducedMotion => "Left/Right or Space toggle".to_owned(),
+        _ => "Left/Right change".to_owned(),
+    };
+    let provenance = settings_provenance(model, preference);
+    if provenance == Provenance::User {
+        controls.push_str(&format!(
+            "  Backspace inherit -> {}",
+            settings_default_value(preference)
+        ));
+    }
+    if !settings_default_value(preference).is_empty() {
+        controls.push_str(&format!(
+            "  Shift+Backspace default -> {}",
+            settings_default_value(preference)
+        ));
+    }
+    controls.push_str("  Tab categories  Esc categories");
+    controls
 }
 
-fn timestamp_style_label(value: TerminalTimestampStyle) -> &'static str {
-    match value {
-        TerminalTimestampStyle::Relative => "relative",
-        TerminalTimestampStyle::Absolute => "absolute",
-        TerminalTimestampStyle::Hidden => "hidden",
+fn settings_default_value(preference: SettingsPreference) -> &'static str {
+    match preference {
+        SettingsPreference::ThemePreset => "system",
+        SettingsPreference::ColorMode => "color",
+        SettingsPreference::GlyphMode => "unicode",
+        SettingsPreference::PromptStatusDetail => "workspace",
+        SettingsPreference::ReducedMotion => "off",
+        SettingsPreference::Density => "comfortable",
+        SettingsPreference::Layout => "responsive",
+        SettingsPreference::TerminalTimestampStyle => "relative",
+        SettingsPreference::ComposerSubmitBehavior => "Ctrl+S",
+        _ => "",
     }
 }
 
@@ -1230,12 +1200,6 @@ fn session_timestamp_label(model: &Model, updated_at_ms: i64) -> Option<String> 
     }
 }
 
-fn composer_submit_label(value: ComposerSubmitBehavior) -> &'static str {
-    match value {
-        ComposerSubmitBehavior::ControlS => "Ctrl+S / Ctrl+Enter",
-        ComposerSubmitBehavior::Enter => "Enter",
-    }
-}
 /// Renders provider choices, connected profiles, and provider-specific setup.
 fn render_profile_center(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
@@ -1760,54 +1724,14 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     if help_height > 0 {
         frame.render_widget(
-            Paragraph::new("↑/↓ select  Enter continue/save  Esc Settings")
-                .style(visual_style(model, VisualRole::Muted)),
+            Paragraph::new(format!(
+                "{} select  Enter continue/save  Esc Settings",
+                navigation_keys(model)
+            ))
+            .style(visual_style(model, VisualRole::Muted)),
             rows[2],
         );
     }
-}
-
-fn render_local_profile(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let user = &model.profiles().user;
-    let label = user.display_label.as_deref().unwrap_or("Local user");
-    let default_profile = user.default_profile.as_deref().unwrap_or("session only");
-    let default_model = user.default_model.as_deref().unwrap_or("not set");
-    let default_mode = if user.default_mode.is_empty() {
-        "safe agent"
-    } else {
-        user.default_mode.as_str()
-    };
-    let workspace_value = if user.workspace.is_empty() {
-        "current workspace"
-    } else {
-        user.workspace.as_str()
-    };
-    let first = Line::from(vec![
-        Span::styled(
-            format!(" {} ", display_safe(label)),
-            visual_style(model, VisualRole::Header),
-        ),
-        Span::styled("Default ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_profile)),
-        Span::styled("  Model ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_model)),
-        Span::styled("  Thinking ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(default_mode)),
-    ]);
-    let workspace = Line::from(vec![
-        Span::styled(" Workspace ", visual_style(model, VisualRole::Muted)),
-        Span::raw(display_safe(workspace_value)),
-    ]);
-    let mut lines = vec![first];
-    if area.height >= 2 {
-        lines.push(workspace);
-    }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(app_block(model).borders(Borders::BOTTOM))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
 }
 
 fn detail_line(model: &Model, label: &'static str, value: &str) -> Line<'static> {
@@ -2116,25 +2040,6 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Paragraph::new(action_text).style(visual_style(model, VisualRole::Warning)),
         actions,
     );
-}
-
-fn selected_model_label(model: &Model) -> String {
-    model
-        .session
-        .selected_model
-        .as_ref()
-        .map(|selected| {
-            model
-                .catalog
-                .models()
-                .iter()
-                .find(|summary| &summary.model == selected)
-                .map_or_else(
-                    || selected.model_id().as_str().to_owned(),
-                    |summary| summary.display_name.clone(),
-                )
-        })
-        .unwrap_or_else(|| "no model".to_owned())
 }
 
 /// Plain text of the whole transcript for clipboard copy.

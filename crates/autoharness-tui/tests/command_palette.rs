@@ -390,8 +390,8 @@ fn provider_command_opens_provider_setup_route() {
     let mut model = empty_model();
     type_text(&mut model, "/provider");
     let _ = update(&mut model, Message::Input(enter()));
-    assert_eq!(model.route(), Route::Settings);
-    assert_eq!(model.focus, Focus::Settings);
+    assert_eq!(model.route(), Route::Profiles);
+    assert_eq!(model.focus, Focus::Profiles);
     assert!(buffer_text(&render_model(&model, 80, 24)).contains("Providers"));
 }
 
@@ -434,7 +434,8 @@ fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
 
     let rendered = buffer_text(&render_model(&model, 100, 30));
     assert!(rendered.contains("Gemini 2.5 Pro  DEFAULT"));
-    assert!(rendered.contains("Thinking  high"));
+    assert!(rendered.contains("Thinking"));
+    assert!(rendered.contains("high"));
 
     assert!(update(&mut model, Message::Input(enter())).is_empty());
     let rendered = buffer_text(&render_model(&model, 100, 30));
