@@ -77,10 +77,10 @@ fn invalid_tool_call_is_denied_and_repaired_in_the_same_terminal_attempt() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("TOOL · web_search")
+            text.contains("web_search")
                 && text.contains("denied")
                 && text.contains("recovered after invalid tool call")
-                && text.contains("AUTOHARNESS")
+                && text.contains("AutoHarness")
                 && text.contains("complete")
         },
         "invalid tool proposal should be force-denied and repaired without human authority",
@@ -143,7 +143,7 @@ fn permission_deny_and_allow_both_settle_durably() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("TOOL · fs_write")
+            text.contains("fs_write")
                 && text.contains("denied")
                 && text.contains("denied call handled")
         },
@@ -168,7 +168,7 @@ fn permission_deny_and_allow_both_settle_durably() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("TOOL · fs_write")
+            text.contains("fs_write")
                 && text.contains("completed")
                 && text.contains("allowed call handled")
         },
@@ -200,7 +200,7 @@ fn permission_deny_and_allow_both_settle_durably() {
             let text = screen.contents();
             text.contains("denied call handled")
                 && text.contains("allowed call handled")
-                && text.contains("TOOL · fs_write")
+                && text.contains("fs_write")
         },
         "permission decisions and tool settlements should replay without a credential editor",
     );
