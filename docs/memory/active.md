@@ -4,11 +4,11 @@
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
-**Status:** Settings now owns a direct Models tab for the active profile, saves model and thinking defaults together, applies them to fresh sessions without overwriting session-specific choices, and shows responsive model, thinking, workspace-path, and Git-branch metadata above the composer; the native Codex adapter now sends the current GPT-5.6 client identity and Responses Lite contract, and an opt-in live `gpt-5.6-luna` request with `high` reasoning completes through the exact AutoHarness adapter path while the full Phase 3.9 release evidence remains pending
+**Status:** Settings owns the active profile's model and thinking defaults, fresh sessions apply them without overwriting session-specific choices, the native Codex adapter completes an opt-in live `gpt-5.6-luna` request, and Chat now uses an open prompt-first workspace with one sidebar divider, a borderless scrollable transcript, compact unlabeled context, optional Nerd Font symbols, and theme-aware accent gradients while the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
-Finish validating the default-model Settings and composer-metadata flow, then preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
+Finish validating the open Chat workspace and preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
 
 ## Current repository state
 
@@ -28,8 +28,8 @@ Finish validating the default-model Settings and composer-metadata flow, then pr
 - Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; the Models tab saves a compatible model and reasoning effort as the active profile default, fresh sessions select it durably, and catalog refresh does not overwrite an intentional session-specific model.
 - The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
 - `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
-- Wide terminals show a persistent rail with local profile and runtime status; narrower terminals show compact route tabs and one prioritized status line.
-- Chat has explicit conversation roles, composer boundaries, recovery actions, and offline, loading, connection-error, no-model, and new-conversation states.
+- Wide terminals show a persistent navigation rail separated by one vertical accent rule; narrower terminals collapse the rail without introducing replacement Chat chrome.
+- Chat places an open composer at the top, renders a borderless scrollable transcript underneath, and keeps explicit conversation roles, recovery actions, and offline, loading, connection-error, no-model, and new-conversation states.
 - Sessions, Profiles, Settings, and Help are primary routes with contextual action bars; settings shows safe runtime provenance and recovery without becoming the Phase 3.8 editor.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
@@ -58,6 +58,7 @@ Finish validating the default-model Settings and composer-metadata flow, then pr
 
 ## Recently completed
 
+- On 2026-08-26, Chat moved to an open prompt-first shell with a single gradient sidebar divider, a borderless scrollable transcript, responsive unlabeled model, ASCII thinking meter, compact home-relative workspace path, Git branch symbol, an optional Nerd Font glyph mode, theme-aware RGB accent gradients, and reviewed 120x40, 80x24, 60x18, and 40x12 goldens.
 - On 2026-08-26, the native Codex adapter replaced the rejected AutoHarness package identity with the current Codex protocol identity and version, adopted GPT-5.6 Responses Lite framing, accepted the backend's headerless but bounded SSE response, and passed an opt-in live `gpt-5.6-luna` request with `high` reasoning through the stored AutoHarness profile and vault credential.
 - On 2026-08-26, Settings replaced the multi-profile Agents wizard with a direct Models tab for the active profile, preselects and marks the saved model, persists model and thinking together, applies the default only to fresh sessions, preserves per-session choices across catalog refresh, and renders responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass.
 - On 2026-08-26, Settings gained Midnight, Ocean, Forest, and Rose themes plus Soft and Vivid color treatments, focused editable values render previous, current, and next options as a responsive carousel, and focus-specific help distinguishes page navigation from option changes.
