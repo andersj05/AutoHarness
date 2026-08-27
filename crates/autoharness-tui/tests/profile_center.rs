@@ -310,7 +310,7 @@ fn provider_editor_uses_arrows_instead_of_tab() {
     let _ = update(&mut model, Message::Input(key(Key::Tab)));
     assert_eq!(render_text(&model, 80, 24), before);
     let _ = update(&mut model, Message::Input(key(Key::Down)));
-    assert!(render_text(&model, 80, 24).contains("> Provider"));
+    assert!(render_text(&model, 80, 24).contains("› Provider"));
     for expected in [
         MouseAction::ProfileEditorSubmit,
         MouseAction::ProfileEditorCancel,
