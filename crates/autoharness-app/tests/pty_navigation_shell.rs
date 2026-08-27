@@ -36,7 +36,12 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
 
     terminal.send_bytes(&ALT_3);
     terminal.wait_for(
-        |screen| screen.contents().contains("Providers & Connections"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("Providers")
+                && text.contains("Choose a provider on the left")
+                && text.contains("Add provider")
+        },
         "Alt+3 should open Providers",
     );
     terminal.send_bytes(&ALT_4);
@@ -64,7 +69,17 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Glyph mode") && text.contains("ASCII") && text.contains("user file")
+            text.contains("Glyph mode")
+                && text.contains("[Nerd Font]")
+                && !text.contains("[saving]")
+        },
+        "Settings should persist Nerd Font mode before accepting another option",
+    );
+    terminal.send_bytes(&RIGHT);
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Glyph mode") && text.contains("[ASCII]") && !text.contains("[saving]")
         },
         "Settings should persist an ASCII chrome preference without leaving the route",
     );
@@ -77,9 +92,9 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Conversation")
-                && text.contains("seeded navigation response")
+            text.contains("seeded navigation response")
                 && text.contains("Ask AutoHarness")
+                && !text.contains("Conversation")
         },
         "Alt+1 should return to replayable offline Chat",
     );
