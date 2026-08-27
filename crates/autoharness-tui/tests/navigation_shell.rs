@@ -3,10 +3,13 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, Focus, Message, Model, ModelSummary, MouseAction,
-    OverlayKind, PermissionDetailView, PermissionRequestView, RetryPolicy, Route,
-    SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey,
-    TranscriptItem, UiClock, UiFailure, UiIntent, hit_test, update, view,
+    AttemptKey, AttemptStatus, CatalogProjection, CredentialSourceLabel, Focus,
+    LocalUserProfileProjection, Message, Model, ModelSummary, MouseAction, OverlayKind,
+    PermissionDetailView, PermissionRequestView, ProfileConnectionState,
+    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileProjection,
+    RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    SettingsProjection, ToolCallKey, TranscriptItem, UiClock, UiFailure, UiIntent, hit_test,
+    update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -60,6 +63,49 @@ fn model() -> Model {
         stale: false,
     });
     Model::new(session, sessions, catalog)
+}
+
+fn provider_model() -> Model {
+    let mut model = model();
+    model.apply_profiles(Arc::new(ProfilesProjection {
+        user: LocalUserProfileProjection {
+            display_label: Some("Conformance user".to_owned()),
+            workspace: "C:/work/autoharness".to_owned(),
+            default_profile: Some("personal-gemini".to_owned()),
+            default_model: Some("gemini-shell".to_owned()),
+            default_mode: "safe agent".to_owned(),
+        },
+        profiles: vec![
+            ProviderProfileProjection {
+                id: "personal-gemini".to_owned(),
+                kind: ProviderKindLabel::Gemini,
+                active: true,
+                base_url: String::new(),
+                project: String::new(),
+                auth_header: String::new(),
+                credential_state: ProfileCredentialStateLabel::Stored,
+                credential_source: CredentialSourceLabel::CredentialVault,
+                connection: ProfileConnectionState::Ready,
+                default_model: Some("gemini-shell".to_owned()),
+                default_mode: "safe agent".to_owned(),
+            },
+            ProviderProfileProjection {
+                id: "work-router".to_owned(),
+                kind: ProviderKindLabel::Router,
+                active: false,
+                base_url: "https://router.example.test/v1/".to_owned(),
+                project: "work".to_owned(),
+                auth_header: "x-router-key".to_owned(),
+                credential_state: ProfileCredentialStateLabel::Disconnected,
+                credential_source: CredentialSourceLabel::SessionOnly,
+                connection: ProfileConnectionState::Untested,
+                default_model: None,
+                default_mode: "safe agent".to_owned(),
+            },
+        ],
+        pending_recovery: 0,
+    }));
+    model
 }
 
 fn loading_model() -> Model {
@@ -846,9 +892,35 @@ fn every_mouse_action_variant_is_produced_by_layout() {
     let _ = update(&mut permission, Message::SessionChanged(Arc::new(session)));
     collect_hit_variants(&permission, 80, 24, &mut produced);
 
-    let mut providers = model();
+    let mut providers = provider_model();
     let _ = update(&mut providers, Message::Input(ctrl('g')));
     collect_hit_variants(&providers, 120, 40, &mut produced);
+
+    let mut profile_credential = provider_model();
+    let _ = update(&mut profile_credential, Message::Input(ctrl('g')));
+    let _ = update(&mut profile_credential, Message::Input(key(Key::Down)));
+    let _ = update(
+        &mut profile_credential,
+        Message::Input(Input {
+            key: Key::Char('k'),
+            alt: true,
+            ..key(Key::Char('k'))
+        }),
+    );
+    collect_hit_variants(&profile_credential, 80, 24, &mut produced);
+
+    let mut profile_editor = provider_model();
+    let _ = update(&mut profile_editor, Message::Input(ctrl('g')));
+    let _ = update(&mut profile_editor, Message::Input(key(Key::Enter)));
+    collect_hit_variants(&profile_editor, 80, 24, &mut produced);
+
+    let mut codex_login = provider_model();
+    let _ = update(&mut codex_login, Message::Input(ctrl('g')));
+    for _ in 0..3 {
+        let _ = update(&mut codex_login, Message::Input(key(Key::Down)));
+    }
+    let _ = update(&mut codex_login, Message::Input(key(Key::Enter)));
+    collect_hit_variants(&codex_login, 80, 24, &mut produced);
 
     let mut failed = model();
     let mut failed_session = (*failed.session).clone();
@@ -879,6 +951,11 @@ fn every_mouse_action_variant_is_produced_by_layout() {
         "ChatRetry",
         "ChatFreshSession",
         "SettingsRow",
+        "ProfileCredential",
+        "ProfileTest",
+        "ProfileDefaultModel",
+        "ProfileDisconnect",
+        "ProfileDelete",
         "UserProfileSave",
         "UserProfileCancel",
         "SessionOpen",
@@ -891,9 +968,17 @@ fn every_mouse_action_variant_is_produced_by_layout() {
         "PaletteRun",
         "CredentialSubmit",
         "CredentialCancel",
+        "ProfileCredentialSubmit",
+        "ProfileCredentialCancel",
+        "OverlayCancel",
         "PermissionAllow",
         "PermissionDeny",
         "SelectProviderChoice",
+        "CodexLogin",
+        "CodexLoginCancel",
+        "ProfileEditorSubmit",
+        "ProfileEditorCancel",
+        "SelectProfile",
     ] {
         assert!(
             produced.contains(expected),
