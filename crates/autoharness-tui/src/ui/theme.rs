@@ -1,10 +1,11 @@
 //! Immutable per-frame theme resolved from preferences and terminal capability.
 
-use autoharness_settings::{ColorMode, EffectiveLocalPreferences, ThemePreset};
+use autoharness_settings::{ColorMode, EffectiveLocalPreferences, GlyphMode, ThemePreset};
 use ratatui::style::{Modifier, Style};
 
 use super::color::{ColorDepth, Rgb, clamp_contrast, quantize, reset_color};
 use super::gradient::{Gradient, gradient_style, normalized_t};
+use super::icon::IconSet;
 use super::palette::{Ramp, Seed};
 use super::tokens::{BackgroundIntent, TEXT_ON_ACCENT_FLOOR, Token, TokenPaint, paints};
 
@@ -19,22 +20,35 @@ pub struct Theme {
     preset: ThemePreset,
     mode: ColorMode,
     gradient: Gradient,
+    icons: IconSet,
 }
 
 impl Theme {
     /// Resolves tokens from preferences and detected color depth.
     #[must_use]
     pub fn resolve(preferences: &EffectiveLocalPreferences, depth: ColorDepth) -> Self {
-        Self::from_preset(
+        Self::from_preset_with_icons(
             *preferences.theme_preset().value(),
             *preferences.color_mode().value(),
             depth,
+            *preferences.glyph_mode().value(),
         )
     }
 
     /// Resolves a theme from explicit preset, mode, and depth.
     #[must_use]
     pub fn from_preset(preset: ThemePreset, mode: ColorMode, depth: ColorDepth) -> Self {
+        Self::from_preset_with_icons(preset, mode, depth, GlyphMode::Unicode)
+    }
+
+    /// Resolves a theme including the glyph set.
+    #[must_use]
+    pub fn from_preset_with_icons(
+        preset: ThemePreset,
+        mode: ColorMode,
+        depth: ColorDepth,
+        glyph_mode: GlyphMode,
+    ) -> Self {
         let seed = Seed::for_preset(preset);
         let (paints, ramp) = paints(Ramp::derive(seed), mode);
         let styles = core::array::from_fn(|index| emit(paints[index], depth, mode));
@@ -46,6 +60,7 @@ impl Theme {
             preset,
             mode,
             gradient: Gradient::from_accents(ramp.accent, ramp.accent_alt),
+            icons: IconSet::resolve(glyph_mode),
         }
     }
 
@@ -103,6 +118,12 @@ impl Theme {
     #[must_use]
     pub fn gradient_emphasis_style(&self, t: f32) -> Style {
         self.gradient_style(t).add_modifier(Modifier::BOLD)
+    }
+
+    /// Resolved icon set for this frame.
+    #[must_use]
+    pub const fn icons(&self) -> IconSet {
+        self.icons
     }
 
     /// Detected color depth used during resolution.
