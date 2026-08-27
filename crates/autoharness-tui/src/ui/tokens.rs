@@ -368,14 +368,18 @@ fn nocolor_paint(token: Token) -> TokenPaint {
     let dummy = Rgb::from_srgb8(0, 0, 0);
     let modifiers = match token {
         Token::SurfaceSelected
+        | Token::SurfaceSelectedMuted
         | Token::TextOnAccent
         | Token::FocusRing
         | Token::SurfaceRaised
         | Token::AccentSoft => Modifier::BOLD | Modifier::REVERSED,
-        Token::RoleUser | Token::RoleAssistant | Token::RoleTool | Token::Warning | Token::Info => {
-            Modifier::BOLD
+        Token::SurfaceSuccess | Token::Success | Token::SuccessSoft => Modifier::BOLD,
+        Token::SurfaceWarning | Token::Warning | Token::WarningSoft => Modifier::UNDERLINED,
+        Token::SurfaceDanger | Token::Danger | Token::DangerSoft | Token::TextOnDanger => {
+            Modifier::BOLD | Modifier::UNDERLINED
         }
-        Token::Danger | Token::TextOnDanger => Modifier::BOLD | Modifier::UNDERLINED,
+        Token::Info | Token::InfoSoft => Modifier::REVERSED,
+        Token::RoleUser | Token::RoleAssistant | Token::RoleTool => Modifier::BOLD,
         Token::TextMuted | Token::TextDisabled | Token::TextSecondary => Modifier::empty(),
         Token::TextLink => Modifier::UNDERLINED,
         _ => Modifier::empty(),

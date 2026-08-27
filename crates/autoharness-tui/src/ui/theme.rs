@@ -283,6 +283,32 @@ mod tests {
     }
 
     #[test]
+    fn no_color_semantic_states_have_distinct_modifier_signatures() {
+        let theme = Theme::from_preset(
+            ThemePreset::System,
+            ColorMode::NoColor,
+            ColorDepth::TrueColor,
+        );
+        let states = [
+            ("success", Token::SuccessSoft),
+            ("warning", Token::WarningSoft),
+            ("danger", Token::DangerSoft),
+            ("info", Token::InfoSoft),
+        ];
+        let mut signatures = std::collections::BTreeMap::new();
+        for (name, token) in states {
+            let style = theme.style(token);
+            assert_eq!(style.fg, None, "{name} foreground");
+            assert_eq!(style.bg, None, "{name} background");
+            assert!(!style.add_modifier.is_empty(), "{name} needs a modifier");
+            assert!(
+                signatures.insert(style.add_modifier.bits(), name).is_none(),
+                "{name} shares a modifier-only signature"
+            );
+        }
+    }
+
+    #[test]
     fn color_literals_only_live_in_palette_and_color_modules() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let allowed = [
