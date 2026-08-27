@@ -2,7 +2,7 @@
 
 **Reviewed:** 2026-08-27
 
-**Status:** Proposed target contract for the redesign; not yet implemented.
+**Status:** Implemented through Phase 3.10 step 9; step 10 promotion validation is in progress.
 
 **Authority:** This document is the single source of truth for terminal visual tokens, glyphs, components, and responsive rules.
 Route, overlay, focus, and intent semantics stay in `docs/architecture/OVERVIEW.md`.

@@ -178,6 +178,12 @@ The TUI follows model/update/view:
 - **Update:** pure or narrowly effectful handling of input and engine events.
 - **View:** terminal rendering from model state only.
 
+The view passes through the typed presentation layer described by [the terminal design system](../design/TUI_DESIGN_SYSTEM.md) and proposed in [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md).
+Effective local appearance preferences and the detected terminal color depth resolve once per frame into one immutable `Theme`.
+The theme owns semantic tokens, background intent, color-depth quantization, icon triples, gradients, and motion policy.
+One layout pass computes the named rectangles and ordered hit regions consumed by both painting and reverse-scan mouse dispatch.
+Route pages compose measured components that return their own action geometry, while provider, storage, model, and credential logic remain outside the render boundary.
+
 One typed `Route` is always active: Chat, Sessions, Profiles, Settings, or Help.
 Wide terminals render a persistent navigation rail; narrower terminals render compact route tabs over the same content routes.
 The shell owns the one safe status projection for local profile, provider, credential source, model, attempt, usage, and catalog state.
