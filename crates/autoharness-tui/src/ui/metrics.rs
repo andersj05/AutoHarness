@@ -193,14 +193,28 @@ pub const SESSION_DETAIL_PERCENT: u16 = 42;
 /// Session action hits land this many rows above the frame bottom.
 pub const SESSION_ACTION_FROM_BOTTOM: u16 = 2;
 
-/// Inline command palette shows at most this many rows.
-pub const INLINE_PALETTE_MAX_ROWS: u16 = 8;
+/// Inline command palette shows at most this many grouped result rows.
+pub const INLINE_PALETTE_MAX_ROWS: u16 = 10;
 /// Inline palette left inset.
 pub const INLINE_PALETTE_INSET_X: u16 = 2;
 /// Inline palette combined left and right inset.
 pub const INLINE_PALETTE_INSET_X_TOTAL: u16 = 4;
-/// Centered overlay list leaves this many chrome rows above the items.
-pub const OVERLAY_LIST_TOP_CHROME: u16 = 2;
+/// Panel border, title, and search rows around an inline palette result list.
+pub const INLINE_PALETTE_CHROME_ROWS: u16 = 4;
+/// Centered palette border, title, and search rows above its result list.
+pub const PALETTE_MODAL_LIST_TOP_CHROME: u16 = 3;
+/// Centered palette chrome above and below its result list, including buttons.
+pub const PALETTE_MODAL_CHROME_ROWS: u16 = 5;
+/// Maximum width of the command identifier column.
+pub const PALETTE_IDENTIFIER_MAX_WIDTH: u16 = 20;
+/// Maximum width of the right-aligned shortcut column.
+pub const PALETTE_KEY_MAX_WIDTH: u16 = 22;
+/// Total cells between the three command columns.
+pub const PALETTE_COLUMN_GAPS: u16 = 2;
+/// Minimum width at which all three command columns are useful.
+pub const PALETTE_THREE_COLUMN_MIN_WIDTH: u16 = 38;
+/// Minimum width reserved for the command label and description.
+pub const PALETTE_LABEL_MIN_WIDTH: u16 = 12;
 
 /// Composer metadata and editor inset below this content width.
 pub const PROMPT_INSET_MIN_WIDTH: u16 = 4;

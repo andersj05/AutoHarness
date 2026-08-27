@@ -92,6 +92,41 @@ pub fn ellipsize(text: &str, width: u16) -> String {
     out
 }
 
+/// Truncates at a whole-word boundary and appends an ASCII ellipsis.
+///
+/// This deliberately returns only the ellipsis when the first word does not
+/// fit. Palette labels must never imply a partial command or key name.
+#[must_use]
+pub fn ellipsize_words(text: &str, width: u16) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if u16::try_from(text.width()).unwrap_or(u16::MAX) <= width {
+        return text.to_owned();
+    }
+    if width <= 3 {
+        return ".".repeat(usize::from(width));
+    }
+    let budget = usize::from(width.saturating_sub(3));
+    let mut out = String::new();
+    let mut used = 0_usize;
+    for word in text.split_whitespace() {
+        let word_width = word.width();
+        let gap = usize::from(!out.is_empty());
+        if used.saturating_add(gap).saturating_add(word_width) > budget {
+            break;
+        }
+        if gap > 0 {
+            out.push(' ');
+            used = used.saturating_add(1);
+        }
+        out.push_str(word);
+        used = used.saturating_add(word_width);
+    }
+    out.push_str("...");
+    out
+}
+
 /// Wraps `text` to `width` cells without splitting mid-word when possible.
 #[must_use]
 pub fn wrap_cells(text: &str, width: u16) -> Vec<String> {

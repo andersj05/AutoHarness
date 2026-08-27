@@ -153,7 +153,9 @@ fn ctrl_o_opens_a_modal_searchable_command_palette() {
     assert_eq!(model.focus, Focus::Palette, "the palette owns the keyboard");
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("/models"));
-    assert!(!rendered.contains("Commands"));
+    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("WORKSPACE"));
+    assert!(rendered.contains("SESSION SETUP"));
     for expected in [
         "/chat",
         "/sessions",
@@ -201,8 +203,16 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('/'))));
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    assert!(rendered.contains("/profile  Profile settings"));
-    assert!(rendered.contains("/models  Default model"));
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("/profile") && line.contains("Profile settings"))
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("/models") && line.contains("Default model"))
+    );
     assert_eq!(rendered.matches("/profile").count(), 1);
     assert!(!rendered.contains("/profiles"));
 

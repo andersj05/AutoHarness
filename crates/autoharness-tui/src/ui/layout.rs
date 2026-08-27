@@ -8,9 +8,10 @@ use super::component::{Button, ButtonRow, ButtonVariant, modal_size};
 use super::metrics::{
     CODEX_ACTION_ROW_OFFSET, CODEX_AUTH_MAX_HEIGHT, COMPACT_CHAT_MIN_HEIGHT,
     COMPACT_CHAT_MIN_WIDTH, COMPOSER_MAX_HEIGHT, COMPOSER_MAX_HEIGHT_COMPACT, COMPOSER_MIN_HEIGHT,
-    CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH, INLINE_PALETTE_INSET_X,
-    INLINE_PALETTE_INSET_X_TOTAL, INLINE_PALETTE_MAX_ROWS, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH,
-    OVERLAY_LIST_TOP_CHROME, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
+    CONFIRMATION_MAX_HEIGHT, CREDENTIAL_MAX_HEIGHT, CREDENTIAL_MAX_WIDTH,
+    INLINE_PALETTE_CHROME_ROWS, INLINE_PALETTE_INSET_X, INLINE_PALETTE_INSET_X_TOTAL,
+    INLINE_PALETTE_MAX_ROWS, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN,
+    PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_MODAL_CHROME_ROWS, PALETTE_MODAL_LIST_TOP_CHROME,
     PROFILE_COMPACT_WIDTH, PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED,
     PROFILE_LIST_PERCENT, PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH,
     PROMPT_INSET_MIN_WIDTH, ROW, SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE,
@@ -21,8 +22,9 @@ use super::metrics::{
     sidebar_width_for, wide_shell, width_band,
 };
 use crate::model::{
-    CatalogProjection, Model, MouseAction, OverlayKind, PROVIDER_CHOICES, ProfileCredentialAction,
-    ProviderChoice, ProviderKindLabel, Route, SettingsCategory, SettingsPreference,
+    CatalogProjection, CommandEntry, Model, MouseAction, OverlayKind, PROVIDER_CHOICES,
+    ProfileCredentialAction, ProviderChoice, ProviderKindLabel, Route, SettingsCategory,
+    SettingsPreference,
 };
 
 /// Settings tab labels, in the same order as `SettingsTab` indices.
@@ -37,6 +39,15 @@ pub const SETTINGS_NAV: [&str; 9] = [
     "Shortcuts",
     "About",
 ];
+
+/// One planned row in either command-palette presentation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommandPaletteRow {
+    /// A category separator that introduces the following commands.
+    Category(&'static str),
+    /// An executable command.
+    Command(CommandEntry),
+}
 
 /// Compact footer labels used by both painting and hit testing.
 const FOOTER_PROFILE: &str = " Profile ";
@@ -405,9 +416,10 @@ pub fn user_profile_rect(area: Rect) -> Rect {
 #[must_use]
 pub fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
     let prompt_height = prompt_surface_height(area, model);
-    let height = u16::try_from(model.palette_entries().len())
+    let height = u16::try_from(command_palette_row_count(model).max(1))
         .unwrap_or(u16::MAX)
         .min(INLINE_PALETTE_MAX_ROWS)
+        .saturating_add(INLINE_PALETTE_CHROME_ROWS)
         .min(area.height.saturating_sub(prompt_height));
     Rect::new(
         area.x.saturating_add(INLINE_PALETTE_INSET_X),
@@ -416,6 +428,88 @@ pub fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
         area.width.saturating_sub(INLINE_PALETTE_INSET_X_TOTAL),
         height,
     )
+}
+
+/// Result-list rectangle within the anchored command palette panel.
+#[must_use]
+pub(crate) fn inline_palette_list_rect(panel: Rect) -> Rect {
+    Rect::new(
+        panel.x.saturating_add(ROW),
+        panel.y.saturating_add(PALETTE_MODAL_LIST_TOP_CHROME),
+        panel.width.saturating_sub(TWO_ROWS),
+        panel.height.saturating_sub(INLINE_PALETTE_CHROME_ROWS),
+    )
+}
+
+/// Result-list rectangle within the centered command palette modal.
+#[must_use]
+pub(crate) fn modal_palette_list_rect(popup: Rect) -> Rect {
+    Rect::new(
+        popup.x.saturating_add(ROW),
+        popup.y.saturating_add(PALETTE_MODAL_LIST_TOP_CHROME),
+        popup.width.saturating_sub(TWO_ROWS),
+        popup.height.saturating_sub(PALETTE_MODAL_CHROME_ROWS),
+    )
+}
+
+/// Returns a selected-command-centered slice shared by painting and hit tests.
+#[must_use]
+pub(crate) fn visible_command_palette_rows(model: &Model, visible: u16) -> Vec<CommandPaletteRow> {
+    let rows = command_palette_rows(model);
+    let visible = usize::from(visible);
+    if visible == 0 || rows.is_empty() {
+        return Vec::new();
+    }
+    let selected = model.palette_selection();
+    let selected_index = selected
+        .and_then(|selected| {
+            rows.iter().position(
+                |row| matches!(row, CommandPaletteRow::Command(entry) if entry.id == selected),
+            )
+        })
+        .unwrap_or(0);
+    let mut start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(rows.len().saturating_sub(visible));
+    let category_start = rows[..=selected_index]
+        .iter()
+        .rposition(|row| matches!(row, CommandPaletteRow::Category(_)))
+        .unwrap_or(start);
+    if selected_index.saturating_sub(category_start) < visible {
+        start = start.min(category_start);
+    }
+    rows.into_iter().skip(start).take(visible).collect()
+}
+
+fn command_palette_row_count(model: &Model) -> usize {
+    command_palette_rows(model).len()
+}
+
+fn command_palette_rows(model: &Model) -> Vec<CommandPaletteRow> {
+    let mut rows = Vec::new();
+    let mut previous_category = None;
+    for entry in model.palette_entries() {
+        let category = command_category(entry.id);
+        if previous_category != Some(category) {
+            rows.push(CommandPaletteRow::Category(category));
+            previous_category = Some(category);
+        }
+        rows.push(CommandPaletteRow::Command(entry));
+    }
+    rows
+}
+
+fn command_category(id: &str) -> &'static str {
+    match id {
+        "chat" | "sessions" | "profile" | "provider" | "models" | "user" => "Workspace",
+        "new" | "session-model" => "Session setup",
+        "refresh" | "connect" => "Connections",
+        "retry" | "cancel" | "search" | "tools" => "Conversation",
+        "settings" | "help" => "Navigation",
+        "copy" | "export" => "Artifacts",
+        _ => "Commands",
+    }
 }
 
 /// Provider catalog and connected-profile split.
@@ -839,7 +933,25 @@ fn push_overlay_hits(
             let content = shell_regions(area, model).content;
             push_inline_palette_hits(hits, content, model);
         }
-        OverlayKind::CommandPalette => push_palette_hits(hits, popup, model),
+        OverlayKind::CommandPalette => {
+            push_palette_hits(hits, popup, model);
+            let mut buttons = Vec::new();
+            if let Some(selected) = model.palette_selection() {
+                buttons.push(Button::new(
+                    "Run",
+                    Some("Enter".to_owned()),
+                    ButtonVariant::Primary,
+                    MouseAction::PaletteRun(selected.to_owned()),
+                ));
+            }
+            buttons.push(Button::new(
+                "Close",
+                Some("Esc".to_owned()),
+                ButtonVariant::Secondary,
+                MouseAction::OverlayCancel,
+            ));
+            push_modal_buttons(hits, popup, model, &buttons);
+        }
         OverlayKind::SessionCredential => {
             let buttons = [
                 Button::new(
@@ -943,7 +1055,7 @@ fn push_picker_hits(hits: &mut Vec<(Rect, MouseAction)>, popup: Rect, model: &Mo
     );
     let help_height = u16::from(inner_height >= PAGE_HELP_COMFORTABLE);
     let list_height = inner_height.saturating_sub(ROW + stale_height + help_height);
-    let list_start = popup.y.saturating_add(OVERLAY_LIST_TOP_CHROME);
+    let list_start = popup.y.saturating_add(PALETTE_MODAL_LIST_TOP_CHROME);
     let models = filtered_models(model);
     let selected_index = model
         .picker
@@ -966,11 +1078,8 @@ fn push_picker_hits(hits: &mut Vec<(Rect, MouseAction)>, popup: Rect, model: &Mo
 }
 
 fn push_palette_hits(hits: &mut Vec<(Rect, MouseAction)>, popup: Rect, model: &Model) {
-    let inner_height = popup.height.saturating_sub(TWO_ROWS);
-    let help_height = u16::from(inner_height >= PAGE_HELP_MIN);
-    let list_height = inner_height.saturating_sub(ROW + help_height);
-    let list_start = popup.y.saturating_add(OVERLAY_LIST_TOP_CHROME);
-    push_palette_entries(hits, popup.x, popup.width, list_start, list_height, model);
+    let list = modal_palette_list_rect(popup);
+    push_palette_entries(hits, list, model);
 }
 
 fn push_inline_palette_hits(hits: &mut Vec<(Rect, MouseAction)>, content: Rect, model: &Model) {
@@ -978,34 +1087,24 @@ fn push_inline_palette_hits(hits: &mut Vec<(Rect, MouseAction)>, content: Rect, 
     if list.width == 0 || list.height == 0 {
         return;
     }
-    push_palette_entries(hits, list.x, list.width, list.y, list.height, model);
+    let list = inline_palette_list_rect(list);
+    push_palette_entries(hits, list, model);
 }
 
-fn push_palette_entries(
-    hits: &mut Vec<(Rect, MouseAction)>,
-    x: u16,
-    width: u16,
-    list_start: u16,
-    list_height: u16,
-    model: &Model,
-) {
-    let entries = model.palette_entries();
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list_height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    for (offset, entry) in entries.iter().skip(start).take(visible).enumerate() {
-        let y = list_start.saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
-        hits.push((
-            Rect::new(x, y, width, ROW),
-            MouseAction::PaletteRun(entry.id.to_owned()),
-        ));
+fn push_palette_entries(hits: &mut Vec<(Rect, MouseAction)>, list: Rect, model: &Model) {
+    for (offset, row) in visible_command_palette_rows(model, list.height)
+        .into_iter()
+        .enumerate()
+    {
+        if let CommandPaletteRow::Command(entry) = row {
+            let y = list
+                .y
+                .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+            hits.push((
+                Rect::new(list.x, y, list.width, ROW),
+                MouseAction::PaletteRun(entry.id.to_owned()),
+            ));
+        }
     }
 }
 

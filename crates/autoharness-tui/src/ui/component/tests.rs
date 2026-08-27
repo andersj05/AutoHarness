@@ -429,3 +429,10 @@ fn representative_components_pin_style_snapshots() {
     let _ = SearchField::new(&theme, icons, "query", 2, Some(4), true).render(&mut buf, area);
     assert_symbols_and_styles("search", &buf, "query");
 }
+
+#[test]
+fn whole_word_ellipsis_never_leaks_a_partial_word() {
+    assert_eq!(paint::ellipsize_words("alpha beta gamma", 9), "alpha...");
+    assert_eq!(paint::ellipsize_words("extraordinary", 8), "...");
+    assert_eq!(paint::ellipsize_words("alpha beta", 20), "alpha beta");
+}

@@ -1,11 +1,10 @@
-use std::fmt::Write as _;
-
 use autoharness_settings::{Source, TerminalTimestampStyle, ThemePreset};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::model::{
     COMMANDS, CatalogProjection, MODEL_THINKING_LEVELS, Model, ModelDefaultStep, ModelSummary,
@@ -22,7 +21,9 @@ use crate::ui::component::{
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
-    CREDENTIAL_COMPACT_WIDTH, PAGE_HEADER_TALL_MIN, PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN,
+    CREDENTIAL_COMPACT_WIDTH, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN,
+    PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_COLUMN_GAPS, PALETTE_IDENTIFIER_MAX_WIDTH,
+    PALETTE_KEY_MAX_WIDTH, PALETTE_LABEL_MIN_WIDTH, PALETTE_THREE_COLUMN_MIN_WIDTH,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
     SESSION_DETAIL_PERCENT, SESSION_HELP_WIDE, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
     SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
@@ -388,162 +389,370 @@ fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
 }
 
 fn render_inline_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let list = inline_palette_rect(area, model);
-    if list.width == 0 || list.height == 0 {
+    let panel = inline_palette_rect(area, model);
+    if panel.width == 0 || panel.height == 0 {
         return;
     }
-    frame.render_widget(Clear, Rect::new(area.x, list.y, area.width, list.height));
-    let entries = model.palette_entries();
-    if entries.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No matching commands").style(visual_style(model, VisualRole::Muted)),
-            list,
-        );
-        return;
-    }
-    let selected_index = model
-        .palette
-        .selected
-        .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-        .unwrap_or(0);
-    let visible = usize::from(list.height);
-    let start = selected_index
-        .saturating_add(1)
-        .saturating_sub(visible)
-        .min(entries.len().saturating_sub(visible));
-    let items = entries
-        .iter()
-        .skip(start)
-        .take(visible)
-        .map(|entry| inline_palette_item(entry, model.palette.selected, model))
-        .collect::<Vec<_>>();
-    frame.render_widget(List::new(items), list);
-}
-
-fn inline_palette_item(
-    entry: &crate::model::CommandEntry,
-    selected: Option<&'static str>,
-    model: &Model,
-) -> ListItem<'static> {
-    let is_selected = selected == Some(entry.id);
-    let prefix = if is_selected {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let mut label = format!(
-        "{prefix} /{}  {} - {}",
-        entry.id,
-        display_safe(entry.label),
-        display_safe(entry.description)
+    frame.render_widget(Clear, Rect::new(area.x, panel.y, area.width, panel.height));
+    let body = Panel::new(
+        model.theme(),
+        model.theme().icons(),
+        Some(Icon::Search),
+        Some("Commands"),
+        None,
+        None,
+        true,
+    )
+    .render(frame.buffer_mut(), panel);
+    render_palette_contents(
+        frame.buffer_mut(),
+        body,
+        ui_layout::inline_palette_list_rect(panel),
+        model,
     );
-    if let Some(hint) = entry.key_hint {
-        let _ = write!(label, "  [{hint}]");
-    }
-    let style = if is_selected {
-        chat_visual_style(model, VisualRole::Assistant)
-    } else {
-        chat_visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
 }
 
 /// Renders the searchable command-palette overlay from local state only.
 fn render_palette(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let mut buttons = Vec::new();
+    if let Some(selected) = model.palette_selection() {
+        buttons.push(Button::new(
+            "Run",
+            Some("Enter".to_owned()),
+            ButtonVariant::Primary,
+            MouseAction::PaletteRun(selected.to_owned()),
+        ));
+    }
+    buttons.push(Button::new(
+        "Close",
+        Some("Esc".to_owned()),
+        ButtonVariant::Secondary,
+        MouseAction::OverlayCancel,
+    ));
+    let (body, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        "Commands",
+        Some(Icon::Search),
+        &buttons,
+    )
+    .render(frame.buffer_mut(), area, MODAL_MAX_WIDTH, MODAL_MAX_HEIGHT);
     let popup = popup_rect(area);
-    frame.render_widget(Clear, popup);
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" Commands ")
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    if inner.width == 0 || inner.height == 0 {
+    render_palette_contents(
+        frame.buffer_mut(),
+        body,
+        ui_layout::modal_palette_list_rect(popup),
+        model,
+    );
+}
+
+fn render_palette_contents(
+    buffer: &mut ratatui::buffer::Buffer,
+    body: Rect,
+    list: Rect,
+    model: &Model,
+) {
+    if body.width == 0 || body.height == 0 {
         return;
     }
-
-    let search_height = 1.min(inner.height);
-    let help_height = u16::from(inner.height >= 3);
-    let list_height = inner.height.saturating_sub(search_height + help_height);
-    let search = Rect::new(inner.x, inner.y, inner.width, search_height);
-    let list = Rect::new(inner.x, inner.y + search_height, inner.width, list_height);
-    let help = Rect::new(
-        inner.x,
-        inner.y + search_height + list_height,
-        inner.width,
-        help_height,
-    );
-
-    frame.render_widget(
-        Paragraph::new(format!("Filter: {}", display_safe(&model.palette.query)))
-            .style(visual_style(model, VisualRole::Field)),
-        search,
-    );
-
     let entries = model.palette_entries();
-    if entries.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No commands match this filter.")
-                .style(visual_style(model, VisualRole::Muted)),
-            list,
-        );
-    } else {
-        let selected = model.palette.selected;
-        let selected_index = selected
-            .and_then(|selected| entries.iter().position(|entry| entry.id == selected))
-            .unwrap_or(0);
-        let visible = usize::from(list.height);
-        let start = selected_index
-            .saturating_add(1)
-            .saturating_sub(visible)
-            .min(entries.len().saturating_sub(visible));
-        let items = entries
-            .iter()
-            .skip(start)
-            .take(visible)
-            .map(|entry| palette_item(entry, selected, model))
-            .collect::<Vec<_>>();
-        frame.render_widget(List::new(items), list);
+    let search = Rect::new(body.x, body.y, body.width, ROW.min(body.height));
+    SearchField::new(
+        model.theme(),
+        model.theme().icons(),
+        &model.palette.query,
+        model.palette.query.chars().count(),
+        Some(u32::try_from(entries.len()).unwrap_or(u32::MAX)),
+        true,
+    )
+    .render(buffer, search);
+    if list.width == 0 || list.height == 0 {
+        return;
     }
+    if entries.is_empty() {
+        crate::ui::component::paint::put(
+            buffer,
+            list.x,
+            list.y,
+            list.width,
+            "No commands match this search.",
+            model.theme().style(Token::TextMuted),
+        );
+        return;
+    }
+    let rows = ui_layout::visible_command_palette_rows(model, list.height);
+    let (identifier_width, label_width, key_width) =
+        palette_column_widths(&rows, list.width, model);
+    for (offset, row) in rows.into_iter().enumerate() {
+        let y = list
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        if y >= list.bottom() {
+            break;
+        }
+        match row {
+            ui_layout::CommandPaletteRow::Category(category) => {
+                crate::ui::component::paint::fill(
+                    buffer,
+                    Rect::new(list.x, y, list.width, ROW),
+                    model.theme().style(Token::SurfaceRaised),
+                    Some(' '),
+                );
+                crate::ui::component::paint::put(
+                    buffer,
+                    list.x,
+                    y,
+                    list.width,
+                    &category.to_ascii_uppercase(),
+                    model
+                        .theme()
+                        .style(Token::TextMuted)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            ui_layout::CommandPaletteRow::Command(entry) => render_palette_command(
+                buffer,
+                Rect::new(list.x, y, list.width, ROW),
+                entry,
+                identifier_width,
+                label_width,
+                key_width,
+                model,
+            ),
+        }
+    }
+}
 
-    if help.height > 0 {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} choose  Enter run  Esc close",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
-            help,
+fn palette_column_widths(
+    rows: &[ui_layout::CommandPaletteRow],
+    width: u16,
+    model: &Model,
+) -> (u16, u16, u16) {
+    let marker_width = model.theme().icons().width(Icon::SelectionCaret);
+    let identifier_desired = rows
+        .iter()
+        .filter_map(|row| match row {
+            ui_layout::CommandPaletteRow::Command(entry) => Some(
+                marker_width
+                    .saturating_add(2)
+                    .saturating_add(u16::try_from(entry.id.width()).unwrap_or(u16::MAX)),
+            ),
+            ui_layout::CommandPaletteRow::Category(_) => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(PALETTE_IDENTIFIER_MAX_WIDTH);
+    let gaps = if width == 0 {
+        0
+    } else if width >= PALETTE_THREE_COLUMN_MIN_WIDTH {
+        PALETTE_COLUMN_GAPS.min(width)
+    } else {
+        ROW.min(width)
+    };
+    let available = width.saturating_sub(gaps);
+    let reserved_label = PALETTE_LABEL_MIN_WIDTH.min(available / 2);
+    let identifier_width = identifier_desired.min(available.saturating_sub(reserved_label));
+    let key_width = if width >= PALETTE_THREE_COLUMN_MIN_WIDTH {
+        rows.iter()
+            .filter_map(|row| match row {
+                ui_layout::CommandPaletteRow::Command(entry) => entry.key_hint,
+                ui_layout::CommandPaletteRow::Category(_) => None,
+            })
+            .map(|hint| u16::try_from(hint.width()).unwrap_or(u16::MAX))
+            .max()
+            .unwrap_or(0)
+            .min(PALETTE_KEY_MAX_WIDTH)
+            .min(
+                available
+                    .saturating_sub(identifier_width)
+                    .saturating_sub(reserved_label),
+            )
+    } else {
+        0
+    };
+    let label_width = available
+        .saturating_sub(identifier_width)
+        .saturating_sub(key_width);
+    (identifier_width, label_width, key_width)
+}
+
+fn render_palette_command(
+    buffer: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    entry: crate::model::CommandEntry,
+    identifier_width: u16,
+    label_width: u16,
+    key_width: u16,
+    model: &Model,
+) {
+    let selected = model.palette_selection() == Some(entry.id);
+    let base_style = if selected {
+        model.theme().filled(Token::Accent)
+    } else {
+        model.theme().style(Token::TextPrimary)
+    };
+    if selected {
+        crate::ui::component::paint::fill(buffer, area, base_style, Some(' '));
+    }
+    let icons = model.theme().icons();
+    let marker = if selected {
+        icons.glyph(Icon::SelectionCaret).to_owned()
+    } else {
+        " ".repeat(usize::from(icons.width(Icon::SelectionCaret)))
+    };
+    let identifier = format!("{marker} /{}", entry.id);
+    let identifier = crate::ui::component::paint::ellipsize_words(&identifier, identifier_width);
+    let middle = format!(
+        "{} - {}",
+        display_safe(entry.label),
+        display_safe(entry.description)
+    );
+    let middle = crate::ui::component::paint::ellipsize_words(&middle, label_width);
+    let highlights = palette_highlights(entry, &model.palette.query);
+    put_highlighted(
+        buffer,
+        area.x,
+        area.y,
+        identifier_width,
+        &identifier,
+        &highlights.identifier,
+        base_style,
+    );
+    let label_x = area.x.saturating_add(identifier_width).saturating_add(ROW);
+    put_highlighted(
+        buffer,
+        label_x,
+        area.y,
+        label_width,
+        &middle,
+        &highlights.middle,
+        base_style,
+    );
+    if key_width > 0 {
+        let key = entry.key_hint.unwrap_or_default();
+        let key = crate::ui::component::paint::ellipsize_words(key, key_width);
+        let key = crate::ui::component::paint::right_align(&key, key_width);
+        crate::ui::component::paint::put(
+            buffer,
+            area.right().saturating_sub(key_width),
+            area.y,
+            key_width,
+            &key,
+            if selected {
+                base_style
+            } else {
+                model.theme().style(Token::TextMuted)
+            },
         );
     }
 }
 
-fn palette_item(
-    entry: &crate::model::CommandEntry,
-    selected: Option<&'static str>,
-    model: &Model,
-) -> ListItem<'static> {
-    let is_selected = selected == Some(entry.id);
-    let prefix = if is_selected {
-        selection_marker(model)
-    } else {
-        " "
-    };
-    let mut label = format!(
-        "{prefix} /{}  {} - {}",
-        entry.id,
-        display_safe(entry.label),
-        display_safe(entry.description)
-    );
-    if let Some(hint) = entry.key_hint {
-        let _ = write!(label, "  [{hint}]");
+#[derive(Default)]
+struct PaletteHighlights {
+    identifier: Vec<usize>,
+    middle: Vec<usize>,
+}
+
+fn palette_highlights(entry: crate::model::CommandEntry, query: &str) -> PaletteHighlights {
+    let query = query.trim_start_matches('/').trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return PaletteHighlights::default();
     }
-    let style = if is_selected {
-        visual_style(model, VisualRole::Selected)
+    let marker_offset = 3;
+    let identifier = entry.id.to_ascii_lowercase();
+    let label = entry.label.to_ascii_lowercase();
+    let description = entry.description.to_ascii_lowercase();
+    let mut highlights = PaletteHighlights::default();
+    append_occurrences(
+        &mut highlights.identifier,
+        &identifier,
+        &query,
+        marker_offset,
+    );
+    append_occurrences(&mut highlights.middle, &label, &query, 0);
+    append_occurrences(
+        &mut highlights.middle,
+        &description,
+        &query,
+        entry.label.chars().count().saturating_add(3),
+    );
+    if !highlights.identifier.is_empty() || !highlights.middle.is_empty() {
+        return highlights;
+    }
+    let id_fuzzy = fuzzy_character_positions(&identifier, &query);
+    let label_fuzzy = fuzzy_character_positions(&label, &query);
+    if id_fuzzy.len() >= label_fuzzy.len() {
+        highlights.identifier.extend(
+            id_fuzzy
+                .into_iter()
+                .map(|index| index.saturating_add(marker_offset)),
+        );
     } else {
-        visual_style(model, VisualRole::Normal)
-    };
-    ListItem::new(Line::styled(label, style))
+        highlights.middle.extend(label_fuzzy);
+    }
+    highlights
+}
+
+fn append_occurrences(target: &mut Vec<usize>, haystack: &str, needle: &str, offset: usize) {
+    let mut rest = haystack;
+    let mut byte_offset = 0_usize;
+    while let Some(found) = rest.find(needle) {
+        let start = haystack[..byte_offset.saturating_add(found)]
+            .chars()
+            .count();
+        target.extend(
+            (start..start.saturating_add(needle.chars().count()))
+                .map(|index| index.saturating_add(offset)),
+        );
+        let advance = found.saturating_add(needle.len());
+        byte_offset = byte_offset.saturating_add(advance);
+        rest = &rest[advance..];
+    }
+}
+
+fn fuzzy_character_positions(candidate: &str, query: &str) -> Vec<usize> {
+    let query = query.chars().collect::<Vec<_>>();
+    let mut query_index = 0;
+    let mut positions = Vec::new();
+    for (candidate_index, character) in candidate.chars().enumerate() {
+        if query.get(query_index) == Some(&character) {
+            positions.push(candidate_index);
+            query_index = query_index.saturating_add(1);
+        }
+    }
+    positions
+}
+
+fn put_highlighted(
+    buffer: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+    width: u16,
+    text: &str,
+    highlighted: &[usize],
+    base_style: Style,
+) {
+    let mut used = 0_u16;
+    for (index, character) in text.chars().enumerate() {
+        let character_width = u16::try_from(character.width().unwrap_or(0)).unwrap_or(0);
+        if used.saturating_add(character_width) > width {
+            break;
+        }
+        let style = if highlighted.contains(&index) {
+            base_style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            base_style
+        };
+        crate::ui::component::paint::put(
+            buffer,
+            x.saturating_add(used),
+            y,
+            character_width,
+            &character.to_string(),
+            style,
+        );
+        used = used.saturating_add(character_width);
+    }
 }
 
 /// Renders the contextual help overlay from local state only.
@@ -2981,7 +3190,7 @@ fn retry_countdown(remaining_ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{HelpRenderRow, generated_help_rows};
+    use super::{HelpRenderRow, generated_help_rows, palette_highlights};
     use crate::model::{COMMANDS, Focus};
 
     #[test]
@@ -2995,5 +3204,19 @@ mod tests {
                 .count();
             assert_eq!(count, 1, "command hint {hint} must appear exactly once");
         }
+    }
+
+    #[test]
+    fn palette_highlights_direct_and_fuzzy_matching_characters() {
+        let settings = COMMANDS
+            .iter()
+            .find(|command| command.id == "settings")
+            .copied()
+            .expect("settings command");
+        let direct = palette_highlights(settings, "ting");
+        assert_eq!(direct.identifier, vec![6, 7, 8, 9]);
+
+        let fuzzy = palette_highlights(settings, "setings");
+        assert_eq!(fuzzy.identifier, vec![3, 4, 5, 7, 8, 9, 10]);
     }
 }
