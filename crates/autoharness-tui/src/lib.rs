@@ -8,6 +8,7 @@ mod runner;
 mod snapshot;
 mod text;
 mod time;
+mod ui;
 mod update;
 mod view;
 
@@ -29,5 +30,6 @@ pub use runner::{
 pub use snapshot::style_snapshot;
 pub use text::display_safe;
 pub use time::{AgeBucket, RelativeAge, age_bucket, format_relative_age, relative_age};
+pub use ui::{ColorDepth, Theme, Token};
 pub use update::update;
 pub use view::{hit_test, view};

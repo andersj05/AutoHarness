@@ -5,6 +5,8 @@ use std::fmt::Write as _;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
+use crate::ui::color::format_color;
+
 /// Serializes every cell's symbol, colors, and modifiers into a stable text form.
 #[must_use]
 pub fn style_snapshot(buffer: &Buffer) -> String {
@@ -74,30 +76,6 @@ struct StyleRun {
 impl StyleRun {
     fn same_style(self, other: Self) -> bool {
         self.fg == other.fg && self.bg == other.bg && self.modifier == other.modifier
-    }
-}
-
-fn format_color(color: Color) -> String {
-    match color {
-        Color::Reset => "reset".to_owned(),
-        Color::Black => "black".to_owned(),
-        Color::Red => "red".to_owned(),
-        Color::Green => "green".to_owned(),
-        Color::Yellow => "yellow".to_owned(),
-        Color::Blue => "blue".to_owned(),
-        Color::Magenta => "magenta".to_owned(),
-        Color::Cyan => "cyan".to_owned(),
-        Color::Gray => "gray".to_owned(),
-        Color::DarkGray => "darkgray".to_owned(),
-        Color::LightRed => "lightred".to_owned(),
-        Color::LightGreen => "lightgreen".to_owned(),
-        Color::LightYellow => "lightyellow".to_owned(),
-        Color::LightBlue => "lightblue".to_owned(),
-        Color::LightMagenta => "lightmagenta".to_owned(),
-        Color::LightCyan => "lightcyan".to_owned(),
-        Color::White => "white".to_owned(),
-        Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
-        Color::Indexed(index) => format!("i{index}"),
     }
 }
 
