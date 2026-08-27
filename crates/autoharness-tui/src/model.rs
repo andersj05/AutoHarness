@@ -7,10 +7,12 @@ use autoharness_settings::{
     ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
     PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
 use ratatui_textarea::{TextArea, WrapMode};
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::ui::{ColorDepth, Theme, Token};
 
 const MAX_CREDENTIAL_BYTES: usize = 4_096;
 
@@ -741,26 +743,29 @@ pub struct ComposerState {
 impl Default for ComposerState {
     fn default() -> Self {
         let mut editor = TextArea::default();
-        editor.set_block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Prompt ")
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        editor.set_cursor_line_style(Style::default());
-        editor.set_cursor_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
         editor.set_placeholder_text("Ask AutoHarness...");
         editor.set_wrap_mode(WrapMode::WordOrGlyph);
-        Self { editor }
+        editor.set_cursor_line_style(Style::default());
+        let mut state = Self { editor };
+        state.apply_theme(&Theme::from_preset(
+            ThemePreset::System,
+            ColorMode::Color,
+            ColorDepth::TrueColor,
+        ));
+        state
     }
 }
 
 impl ComposerState {
+    fn apply_theme(&mut self, theme: &Theme) {
+        self.editor.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Prompt ")
+                .border_style(theme.style(Token::BorderSubtle)),
+        );
+        self.editor.set_cursor_style(theme.filled(Token::Accent));
+    }
     /// Returns exact composer content using line-feed separators.
     #[must_use]
     pub fn text(&self) -> String {
@@ -2182,6 +2187,8 @@ pub struct Model {
     pub(crate) next_request_id: u64,
     pub(crate) now: UiInstant,
     pub(crate) wall_ms: i64,
+    pub(crate) color_depth: ColorDepth,
+    pub(crate) theme: Theme,
 }
 
 const STARTUP_ANIMATION_MS: UiInstant = 400;
@@ -2290,7 +2297,10 @@ impl Model {
             next_request_id: 1,
             now: 0,
             wall_ms: 0,
+            color_depth: ColorDepth::TrueColor,
+            theme: Theme::from_preset(ThemePreset::System, ColorMode::Color, ColorDepth::TrueColor),
         };
+        model.refresh_theme();
         model.sync_retry_deadline();
         model.sync_catalog_retry_deadline();
         model.sync_browser_selection();
@@ -2376,6 +2386,25 @@ impl Model {
     /// Replaces the resolved-settings read model.
     pub fn apply_settings(&mut self, settings: Arc<SettingsProjection>) {
         self.settings = settings;
+        self.refresh_theme();
+        self.dirty = true;
+    }
+
+    fn refresh_theme(&mut self) {
+        self.theme = Theme::resolve(self.settings.local_profile.preferences(), self.color_depth);
+        self.composer.apply_theme(&self.theme);
+    }
+
+    /// Returns the resolved presentation theme.
+    #[must_use]
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Updates terminal color depth and re-resolves the theme.
+    pub fn set_color_depth(&mut self, depth: ColorDepth) {
+        self.color_depth = depth;
+        self.refresh_theme();
         self.dirty = true;
     }
     /// Replaces the safe local profile and provider-connection read model.

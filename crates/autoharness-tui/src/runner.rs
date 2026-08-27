@@ -17,6 +17,7 @@ use crate::model::{
     CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
     SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
 };
+use crate::ui::ColorDepth;
 use crate::{update, view};
 
 /// Maximum queued user intents before explicit backpressure is presented.
@@ -164,6 +165,7 @@ where
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let started = Instant::now();
+    model.set_color_depth(ColorDepth::detect());
 
     draw(terminal, &mut model)?;
     #[cfg(feature = "benchmark-instrumentation")]

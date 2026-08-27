@@ -6,7 +6,7 @@ use autoharness_settings::{
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
@@ -17,6 +17,10 @@ use crate::model::{
     RetryPolicy, Route, SettingsPreference, TranscriptItem, UsageView,
 };
 use crate::text::display_safe;
+use crate::ui::Token;
+use crate::ui::metrics::{
+    COMPACT_CHAT_MIN_HEIGHT, COMPACT_CHAT_MIN_WIDTH, SIDEBAR_WIDTH, wide_shell,
+};
 
 const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
     top_left: "+",
@@ -46,8 +50,6 @@ enum VisualRole {
 
 #[derive(Clone, Copy)]
 struct Presentation {
-    color_mode: ColorMode,
-    theme: ThemePreset,
     ascii: bool,
     nerd_font: bool,
     reduced_motion: bool,
@@ -64,8 +66,6 @@ struct ShellLayout {
 fn presentation(model: &Model) -> Presentation {
     let preferences = model.settings().local_profile.preferences();
     Presentation {
-        color_mode: *preferences.color_mode().value(),
-        theme: *preferences.theme_preset().value(),
         ascii: *preferences.glyph_mode().value() == GlyphMode::Ascii,
         nerd_font: *preferences.glyph_mode().value() == GlyphMode::NerdFont,
         reduced_motion: *preferences.reduced_motion().value(),
@@ -74,325 +74,40 @@ fn presentation(model: &Model) -> Presentation {
     }
 }
 
-fn extra_theme_style(theme: ThemePreset, role: VisualRole) -> Style {
-    let (background, normal, header, selected, user, assistant, error, tool, warning, field) =
-        match theme {
-            ThemePreset::Aurora => (
-                Color::Rgb(4, 15, 30),
-                Color::Rgb(224, 242, 254),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(129, 140, 248),
-                Color::Rgb(56, 189, 248),
-                Color::Rgb(94, 234, 212),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(167, 139, 250),
-                Color::Rgb(250, 204, 21),
-                Color::Rgb(15, 35, 60),
-            ),
-            ThemePreset::Ember => (
-                Color::Rgb(26, 10, 10),
-                Color::Rgb(255, 241, 232),
-                Color::Rgb(251, 146, 60),
-                Color::Rgb(244, 63, 94),
-                Color::Rgb(253, 186, 116),
-                Color::Rgb(251, 191, 36),
-                Color::Rgb(248, 113, 113),
-                Color::Rgb(232, 121, 249),
-                Color::Rgb(251, 146, 60),
-                Color::Rgb(62, 24, 20),
-            ),
-            ThemePreset::Midnight => (
-                Color::Rgb(3, 7, 18),
-                Color::Rgb(226, 232, 240),
-                Color::Rgb(96, 165, 250),
-                Color::Rgb(99, 102, 241),
-                Color::Rgb(147, 197, 253),
-                Color::Rgb(129, 140, 248),
-                Color::Rgb(248, 113, 113),
-                Color::Rgb(192, 132, 252),
-                Color::Rgb(250, 204, 21),
-                Color::Rgb(17, 24, 39),
-            ),
-            ThemePreset::Ocean => (
-                Color::Rgb(2, 20, 32),
-                Color::Rgb(224, 247, 250),
-                Color::Rgb(34, 211, 238),
-                Color::Rgb(14, 165, 233),
-                Color::Rgb(56, 189, 248),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(103, 232, 249),
-                Color::Rgb(253, 224, 71),
-                Color::Rgb(8, 47, 73),
-            ),
-            ThemePreset::Forest => (
-                Color::Rgb(7, 20, 13),
-                Color::Rgb(236, 253, 245),
-                Color::Rgb(74, 222, 128),
-                Color::Rgb(34, 197, 94),
-                Color::Rgb(134, 239, 172),
-                Color::Rgb(45, 212, 191),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(163, 230, 53),
-                Color::Rgb(251, 191, 36),
-                Color::Rgb(20, 48, 31),
-            ),
-            ThemePreset::Rose => (
-                Color::Rgb(29, 8, 20),
-                Color::Rgb(255, 241, 246),
-                Color::Rgb(244, 114, 182),
-                Color::Rgb(236, 72, 153),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(232, 121, 249),
-                Color::Rgb(251, 113, 133),
-                Color::Rgb(216, 180, 254),
-                Color::Rgb(253, 186, 116),
-                Color::Rgb(66, 20, 45),
-            ),
-            ThemePreset::System | ThemePreset::Light | ThemePreset::Dark => {
-                unreachable!("base themes use dedicated palettes")
-            }
-        };
+fn visual_token(role: VisualRole) -> Token {
     match role {
-        VisualRole::Normal => Style::new().fg(normal).bg(background),
-        VisualRole::Header => Style::new()
-            .fg(Color::Rgb(8, 12, 24))
-            .bg(header)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Selected => Style::new()
-            .fg(Color::Rgb(8, 12, 24))
-            .bg(selected)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Muted | VisualRole::Border => Style::new().fg(Color::Gray).bg(background),
-        VisualRole::User => Style::new()
-            .fg(user)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Assistant => Style::new()
-            .fg(assistant)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Error => Style::new()
-            .fg(error)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-        VisualRole::Tool => Style::new().fg(tool).bg(background),
-        VisualRole::Warning => Style::new().fg(warning).bg(background),
-        VisualRole::Field => Style::new().fg(Color::White).bg(field),
+        VisualRole::Normal => Token::TextPrimary,
+        VisualRole::Header => Token::Accent,
+        VisualRole::Selected => Token::SurfaceSelected,
+        VisualRole::Muted => Token::TextMuted,
+        VisualRole::User => Token::RoleUser,
+        VisualRole::Assistant => Token::RoleAssistant,
+        VisualRole::Error => Token::Danger,
+        VisualRole::Tool => Token::RoleTool,
+        VisualRole::Warning => Token::Warning,
+        VisualRole::Border => Token::BorderSubtle,
+        VisualRole::Field => Token::SurfaceRaised,
     }
 }
 
 fn visual_style(model: &Model, role: VisualRole) -> Style {
-    let presentation = presentation(model);
-    let style = match presentation.color_mode {
-        ColorMode::Color | ColorMode::Soft | ColorMode::Vivid => {
-            let style = match presentation.theme {
-                ThemePreset::System => match role {
-                    VisualRole::Normal => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Header => Style::new()
-                        .fg(Color::Rgb(5, 10, 20))
-                        .bg(Color::Rgb(34, 211, 238))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Selected => Style::new()
-                        .fg(Color::Rgb(8, 12, 24))
-                        .bg(Color::Rgb(167, 139, 250))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => Style::new()
-                        .fg(Color::Rgb(100, 116, 139))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::User => Style::new()
-                        .fg(Color::Rgb(96, 165, 250))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Rgb(45, 212, 191))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Rgb(251, 113, 133))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool => Style::new()
-                        .fg(Color::Rgb(192, 132, 252))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Warning => Style::new()
-                        .fg(Color::Rgb(251, 191, 36))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Field => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(30, 41, 59)),
-                },
-                ThemePreset::Light => match role {
-                    VisualRole::Normal => Style::new().fg(Color::Black).bg(Color::White),
-                    VisualRole::Header | VisualRole::Selected => Style::new()
-                        .fg(Color::White)
-                        .bg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => {
-                        Style::new().fg(Color::DarkGray).bg(Color::White)
-                    }
-                    VisualRole::User => Style::new()
-                        .fg(Color::Blue)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Cyan)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Red)
-                        .bg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool | VisualRole::Warning => {
-                        Style::new().fg(Color::Yellow).bg(Color::White)
-                    }
-                    VisualRole::Field => Style::new().fg(Color::Black).bg(Color::Gray),
-                },
-                ThemePreset::Dark => match role {
-                    VisualRole::Normal => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Header => Style::new()
-                        .fg(Color::Rgb(5, 10, 20))
-                        .bg(Color::Rgb(34, 211, 238))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Selected => Style::new()
-                        .fg(Color::Rgb(8, 12, 24))
-                        .bg(Color::Rgb(167, 139, 250))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Muted | VisualRole::Border => Style::new()
-                        .fg(Color::Rgb(100, 116, 139))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::User => Style::new()
-                        .fg(Color::Rgb(96, 165, 250))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Assistant => Style::new()
-                        .fg(Color::Rgb(45, 212, 191))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Error => Style::new()
-                        .fg(Color::Rgb(251, 113, 133))
-                        .bg(Color::Rgb(8, 12, 24))
-                        .add_modifier(Modifier::BOLD),
-                    VisualRole::Tool => Style::new()
-                        .fg(Color::Rgb(192, 132, 252))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Warning => Style::new()
-                        .fg(Color::Rgb(251, 191, 36))
-                        .bg(Color::Rgb(8, 12, 24)),
-                    VisualRole::Field => Style::new()
-                        .fg(Color::Rgb(226, 232, 240))
-                        .bg(Color::Rgb(30, 41, 59)),
-                },
-                ThemePreset::Aurora
-                | ThemePreset::Ember
-                | ThemePreset::Midnight
-                | ThemePreset::Ocean
-                | ThemePreset::Forest
-                | ThemePreset::Rose => extra_theme_style(presentation.theme, role),
-            };
-            match presentation.color_mode {
-                ColorMode::Soft if !matches!(role, VisualRole::Header | VisualRole::Selected) => {
-                    style.add_modifier(Modifier::DIM)
-                }
-                ColorMode::Vivid if !matches!(role, VisualRole::Muted | VisualRole::Border) => {
-                    style.add_modifier(Modifier::BOLD)
-                }
-                _ => style,
-            }
-        }
-        ColorMode::NoColor => match role {
-            VisualRole::Header | VisualRole::Selected | VisualRole::Field => {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
-            }
-            VisualRole::Muted => Style::default().add_modifier(Modifier::DIM),
-            VisualRole::User | VisualRole::Assistant | VisualRole::Tool | VisualRole::Warning => {
-                Style::default().add_modifier(Modifier::BOLD)
-            }
-            VisualRole::Error => {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            }
-            VisualRole::Normal | VisualRole::Border => Style::default(),
-        },
-        ColorMode::HighContrast => match role {
-            VisualRole::Header | VisualRole::Selected | VisualRole::Field => Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD),
-            VisualRole::Normal | VisualRole::Muted | VisualRole::Border => {
-                Style::default().fg(Color::White).bg(Color::Black)
-            }
-            VisualRole::User | VisualRole::Assistant | VisualRole::Tool => Style::default()
-                .fg(Color::LightCyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-            VisualRole::Error => Style::default()
-                .fg(Color::LightRed)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            VisualRole::Warning => Style::default()
-                .fg(Color::LightYellow)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        },
-    };
-    if matches!(role, VisualRole::Border) {
-        style.bg(Color::Reset)
-    } else {
-        style
+    let theme = model.theme();
+    match role {
+        VisualRole::Header => theme.filled(Token::Accent),
+        other => theme.style(visual_token(other)),
     }
 }
-fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
-    visual_style(model, role).bg(Color::Reset)
-}
 
-fn theme_gradient(theme: ThemePreset) -> ((u8, u8, u8), (u8, u8, u8)) {
-    match theme {
-        ThemePreset::System | ThemePreset::Dark | ThemePreset::Midnight => {
-            ((34, 211, 238), (167, 139, 250))
-        }
-        ThemePreset::Light => ((37, 99, 235), (219, 39, 119)),
-        ThemePreset::Aurora => ((45, 212, 191), (129, 140, 248)),
-        ThemePreset::Ember => ((251, 146, 60), (244, 63, 94)),
-        ThemePreset::Ocean => ((34, 211, 238), (14, 165, 233)),
-        ThemePreset::Forest => ((74, 222, 128), (250, 204, 21)),
-        ThemePreset::Rose => ((244, 114, 182), (192, 132, 252)),
+fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
+    let theme = model.theme();
+    match role {
+        VisualRole::Header => theme.filled(Token::Accent),
+        other => theme.style_transparent(visual_token(other)),
     }
 }
 
 fn gradient_style(model: &Model, index: u16, count: u16) -> Style {
-    let presentation = presentation(model);
-    if matches!(
-        presentation.color_mode,
-        ColorMode::NoColor | ColorMode::HighContrast
-    ) {
-        return chat_visual_style(model, VisualRole::Border);
-    }
-    let (start, end) = theme_gradient(presentation.theme);
-    let denominator = count.saturating_sub(1).max(1);
-    let blend = |from: u8, to: u8| {
-        let from = u32::from(from);
-        let to = u32::from(to);
-        let index = u32::from(index.min(denominator));
-        let denominator = u32::from(denominator);
-        u8::try_from((from * (denominator - index) + to * index) / denominator).unwrap_or(u8::MAX)
-    };
-    let mut style = Style::new()
-        .fg(Color::Rgb(
-            blend(start.0, end.0),
-            blend(start.1, end.1),
-            blend(start.2, end.2),
-        ))
-        .bg(Color::Reset);
-    if presentation.color_mode == ColorMode::Soft {
-        style = style.add_modifier(Modifier::DIM);
-    } else if presentation.color_mode == ColorMode::Vivid {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    style
+    model.theme().gradient_style(index, count)
 }
 
 fn gradient_text(model: &Model, value: &str) -> Line<'static> {
@@ -482,7 +197,9 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
     if content.width > 0 && content.height > 0 {
         match model.route() {
             Route::Chat => {
-                if content.width < 24 || content.height < 7 {
+                if content.width < COMPACT_CHAT_MIN_WIDTH
+                    || content.height < COMPACT_CHAT_MIN_HEIGHT
+                {
                     render_compact(frame, content, model);
                 } else {
                     render_standard(frame, content, model);
@@ -994,11 +711,11 @@ fn shell_footer_action(column: u16) -> Option<MouseAction> {
 }
 
 fn shell_layout(area: Rect, model: &Model) -> ShellLayout {
-    let wide = !presentation(model).single_column && area.width >= 100 && area.height >= 16;
+    let wide = wide_shell(area.width, area.height, presentation(model).single_column);
     if wide {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(1)])
+            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
             .split(area);
         ShellLayout {
             sidebar: Some(columns[0]),
@@ -1145,14 +862,14 @@ fn render_onboarding(lines: &mut Vec<Line<'static>>, model: &Model) {
     lines.push(Line::from(""));
     lines.push(Line::styled(
         "GET STARTED",
-        visual_style(model, VisualRole::User),
+        chat_visual_style(model, VisualRole::User),
     ));
     lines.push(Line::from("1  /settings connect a provider key"));
     lines.push(Line::from("2  /models choose a compatible model"));
     let (label, action) = onboarding_step(model);
     lines.push(Line::styled(
         format!("3  {label} · {action}"),
-        visual_style(model, VisualRole::Assistant),
+        chat_visual_style(model, VisualRole::Assistant),
     ));
 }
 
@@ -3183,8 +2900,9 @@ fn push_thinking_piece(spans: &mut Vec<Span<'static>>, model: &Model, value: &st
         let (glyph, style) = if index < filled {
             (
                 full,
-                gradient_style(model, u16::try_from(index).unwrap_or(5), 6)
-                    .add_modifier(Modifier::BOLD),
+                model
+                    .theme()
+                    .gradient_emphasis_style(u16::try_from(index).unwrap_or(5), 6),
             )
         } else {
             (empty, chat_visual_style(model, VisualRole::Muted))
@@ -3515,7 +3233,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let text = transparent_chat_text(transcript_text(model));
+    let text = transcript_text(model);
     let horizontal_inset = u16::from(area.width >= 4);
     let inner = Rect::new(
         area.x.saturating_add(horizontal_inset),
@@ -3546,14 +3264,6 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     };
     let top = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((top, 0)), inner);
-}
-fn transparent_chat_text(mut text: Text<'static>) -> Text<'static> {
-    for line in &mut text.lines {
-        for span in &mut line.spans {
-            span.style = span.style.bg(Color::Reset);
-        }
-    }
-    text
 }
 
 /// Plain text of the whole transcript for clipboard copy.
@@ -3588,60 +3298,60 @@ fn transcript_text(model: &Model) -> Text<'static> {
             CatalogProjection::CredentialRequired => {
                 lines.push(Line::styled(
                     "OFFLINE",
-                    visual_style(model, VisualRole::Warning),
+                    chat_visual_style(model, VisualRole::Warning),
                 ));
                 lines.push(Line::from("No provider credential is available."));
                 lines.push(Line::styled(
                     "Provider API key: use /settings",
-                    visual_style(model, VisualRole::Assistant),
+                    chat_visual_style(model, VisualRole::Assistant),
                 ));
                 lines.push(Line::styled(
                     "An API key is still required. Ask AutoHarness after setup.",
-                    visual_style(model, VisualRole::Muted),
+                    chat_visual_style(model, VisualRole::Muted),
                 ));
             }
             CatalogProjection::Loading => {
                 lines.push(Line::styled(
                     format!("{}  CONNECTING", spinner(model)),
-                    visual_style(model, VisualRole::Warning),
+                    chat_visual_style(model, VisualRole::Warning),
                 ));
                 lines.push(Line::from("Loading provider models..."));
             }
             CatalogProjection::Failed(failure) => {
                 lines.push(Line::styled(
                     "CONNECTION ERROR",
-                    visual_style(model, VisualRole::Error),
+                    chat_visual_style(model, VisualRole::Error),
                 ));
                 lines.push(Line::from(display_safe(&failure.message)));
                 lines.push(Line::styled(
                     "Ctrl+R retry or Alt+3 inspect provider settings",
-                    visual_style(model, VisualRole::Assistant),
+                    chat_visual_style(model, VisualRole::Assistant),
                 ));
             }
             CatalogProjection::Ready { models, .. } if models.is_empty() => {
                 lines.push(Line::styled(
                     "NO COMPATIBLE MODELS",
-                    visual_style(model, VisualRole::Warning),
+                    chat_visual_style(model, VisualRole::Warning),
                 ));
                 lines.push(Line::styled(
                     "Ctrl+R refresh the catalog",
-                    visual_style(model, VisualRole::Assistant),
+                    chat_visual_style(model, VisualRole::Assistant),
                 ));
             }
             CatalogProjection::Ready { .. } if model.session.selected_model.is_none() => {
                 lines.push(Line::styled(
                     "CHOOSE A MODEL",
-                    visual_style(model, VisualRole::User),
+                    chat_visual_style(model, VisualRole::User),
                 ));
                 lines.push(Line::styled(
                     "Ctrl+P opens the searchable model catalog",
-                    visual_style(model, VisualRole::Assistant),
+                    chat_visual_style(model, VisualRole::Assistant),
                 ));
             }
             CatalogProjection::Ready { .. } => {
                 lines.push(Line::styled(
                     "NEW CONVERSATION",
-                    visual_style(model, VisualRole::User),
+                    chat_visual_style(model, VisualRole::User),
                 ));
                 lines.push(Line::from("Write a prompt below."));
                 let send = if *model
@@ -3656,11 +3366,14 @@ fn transcript_text(model: &Model) -> Text<'static> {
                 } else {
                     "Enter sends"
                 };
-                lines.push(Line::styled(send, visual_style(model, VisualRole::Muted)));
+                lines.push(Line::styled(
+                    send,
+                    chat_visual_style(model, VisualRole::Muted),
+                ));
                 render_onboarding(&mut lines, model);
             }
         }
-        return transparent_chat_text(Text::from(lines));
+        return Text::from(lines);
     }
 
     for (index, item) in model.session.transcript.iter().enumerate() {
@@ -3669,8 +3382,15 @@ fn transcript_text(model: &Model) -> Text<'static> {
         }
         match item {
             TranscriptItem::User { text, .. } => {
-                lines.push(Line::styled("YOU", visual_style(model, VisualRole::User)));
-                push_safe_lines(&mut lines, text, visual_style(model, VisualRole::Normal));
+                lines.push(Line::styled(
+                    "YOU",
+                    chat_visual_style(model, VisualRole::User),
+                ));
+                push_safe_lines(
+                    &mut lines,
+                    text,
+                    chat_visual_style(model, VisualRole::Normal),
+                );
             }
             TranscriptItem::Tool(row) => {
                 let mut heading = format!("TOOL{}", chrome_separator(model));
@@ -3688,7 +3408,10 @@ fn transcript_text(model: &Model) -> Text<'static> {
                     heading.push_str(&display_safe(&row.resource));
                     heading.push(']');
                 }
-                lines.push(Line::styled(heading, visual_style(model, VisualRole::Tool)));
+                lines.push(Line::styled(
+                    heading,
+                    chat_visual_style(model, VisualRole::Tool),
+                ));
             }
             TranscriptItem::Assistant {
                 attempt_id,
@@ -3745,23 +3468,27 @@ fn transcript_text(model: &Model) -> Text<'static> {
                     heading.push_str("retrying");
                 }
                 let style = if matches!(status, AttemptStatus::Failed(_)) {
-                    visual_style(model, VisualRole::Error)
+                    chat_visual_style(model, VisualRole::Error)
                 } else {
-                    visual_style(model, VisualRole::Assistant)
+                    chat_visual_style(model, VisualRole::Assistant)
                 };
                 lines.push(Line::styled(heading, style));
                 if text.is_empty() && matches!(status, AttemptStatus::Streaming) {
                     lines.push(Line::styled(
                         "Waiting for the first token...",
-                        visual_style(model, VisualRole::Muted),
+                        chat_visual_style(model, VisualRole::Muted),
                     ));
                 } else {
-                    push_safe_lines(&mut lines, text, visual_style(model, VisualRole::Normal));
+                    push_safe_lines(
+                        &mut lines,
+                        text,
+                        chat_visual_style(model, VisualRole::Normal),
+                    );
                 }
                 if let AttemptStatus::Failed(failure) = status {
                     lines.push(Line::styled(
                         format!("Error: {}", display_safe(&failure.message)),
-                        visual_style(model, VisualRole::Error),
+                        chat_visual_style(model, VisualRole::Error),
                     ));
                     lines.push(Line::styled(
                         format!(
@@ -3770,7 +3497,7 @@ fn transcript_text(model: &Model) -> Text<'static> {
                             retry_label(model, attempt_id, failure.retry),
                             diagnostic_reference(attempt_id)
                         ),
-                        visual_style(model, VisualRole::Muted),
+                        chat_visual_style(model, VisualRole::Muted),
                     ));
                 }
                 if let Some(usage) = usage {
@@ -3779,13 +3506,13 @@ fn transcript_text(model: &Model) -> Text<'static> {
                             "{} input tokens · {} output tokens",
                             usage.input_tokens, usage.output_tokens
                         ),
-                        visual_style(model, VisualRole::Muted),
+                        chat_visual_style(model, VisualRole::Muted),
                     ));
                 }
             }
         }
     }
-    transparent_chat_text(Text::from(lines))
+    Text::from(lines)
 }
 
 fn push_safe_lines(lines: &mut Vec<Line<'static>>, text: &str, style: Style) {

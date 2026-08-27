@@ -786,6 +786,12 @@ fn fixed_size_views_match_reviewed_golden_buffers() {
     let cases = [
         (
             120,
+            50,
+            "golden/main-120x50.txt",
+            include_str!("golden/main-120x50.txt"),
+        ),
+        (
+            120,
             40,
             "golden/main-120x40.txt",
             include_str!("golden/main-120x40.txt"),
@@ -1110,7 +1116,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         ready_catalog(),
     );
     for (theme, expected) in [
-        ("midnight", Color::Rgb(34, 211, 238)),
+        ("midnight", Color::Rgb(96, 165, 250)),
         ("ocean", Color::Rgb(34, 211, 238)),
         ("forest", Color::Rgb(74, 222, 128)),
         ("rose", Color::Rgb(244, 114, 182)),
@@ -1141,6 +1147,24 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     apply_visual_preferences(
         &mut model,
         VisualPreferences {
+            color_mode: "color",
+            theme: "ocean",
+            glyph_mode: "unicode",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    let color_fg = render_model(&model, 120, 40)
+        .buffer()
+        .cell((27, 0))
+        .expect("ocean color anchor")
+        .fg;
+
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
             color_mode: "soft",
             theme: "ocean",
             glyph_mode: "unicode",
@@ -1151,13 +1175,12 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         },
     );
     let soft = render_model(&model, 120, 40);
-    assert!(
-        soft.buffer()
-            .cell((27, 0))
-            .expect("soft theme anchor")
-            .modifier
-            .contains(ratatui::style::Modifier::DIM)
+    let soft_cell = soft.buffer().cell((27, 0)).expect("soft theme anchor");
+    assert_ne!(
+        soft_cell.fg, color_fg,
+        "soft mode must reduce chroma instead of using DIM"
     );
+    assert!(!soft_cell.modifier.contains(ratatui::style::Modifier::DIM));
 
     apply_visual_preferences(
         &mut model,
