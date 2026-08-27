@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::model::{
-    COMMANDS, CatalogProjection, Model, ModelDefaultStep, ModelSummary, MouseAction, Notice,
-    OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus, ProfileConnectionState,
+    COMMANDS, CatalogProjection, MODEL_THINKING_LEVELS, Model, ModelDefaultStep, ModelSummary,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, ProfileCenterFocus, ProfileConnectionState,
     ProfileCredentialAction, ProfileEditorMode, ProviderKindLabel, Route, SettingsCategory,
     SettingsPreference,
 };
@@ -17,7 +17,7 @@ use crate::text::display_safe;
 use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
 use crate::ui::component::{
     Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge, ListItem as PresentationListItem,
-    ListView, Panel, Provenance, SearchField, SettingKind, SettingRow,
+    ListView, Panel, Provenance, SearchField, SegmentedControl, SettingKind, SettingRow,
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
@@ -1602,7 +1602,9 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),
+            Constraint::Length(TWO_ROWS.min(area.height)),
             Constraint::Min(1),
+            Constraint::Length(TWO_ROWS.min(area.height)),
             Constraint::Length(help_height),
         ])
         .split(area);
@@ -1613,145 +1615,223 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         "Models",
         "Choose the model and thinking mode used by every new session.",
     );
-    let inner = rows[1];
-    let step = model.model_defaults.step;
-    let step_chip = |label, candidate| {
-        Span::styled(
-            format!(" {label} "),
-            if step == candidate {
-                visual_style(model, VisualRole::Selected)
-            } else {
-                visual_style(model, VisualRole::Muted)
-            },
+    let active_profile = model
+        .profiles()
+        .profiles
+        .iter()
+        .find(|profile| profile.active);
+    let profile_label = active_profile.map_or_else(
+        || "No active provider connection".to_owned(),
+        |profile| {
+            format!(
+                "Active profile  {}   Current default  {}",
+                display_safe(&profile.id),
+                display_safe(profile.default_model.as_deref().unwrap_or("not set"))
+            )
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(profile_label).style(model.theme().style(Token::TextSecondary)),
+        rows[1],
+    );
+    render_model_cards(frame, rows[2], model, active_profile);
+
+    if rows[3].height > 0 {
+        frame.render_widget(
+            Paragraph::new("Thinking").style(
+                if model.model_defaults.step == ModelDefaultStep::Thinking {
+                    model.theme().style(Token::Accent)
+                } else {
+                    model.theme().style(Token::TextMuted)
+                },
+            ),
+            Rect::new(rows[3].x, rows[3].y, rows[3].width, ROW),
+        );
+        SegmentedControl::new(
+            model.theme(),
+            &MODEL_THINKING_LEVELS,
+            model.model_defaults.thinking_selected,
         )
-    };
-    let mut lines = vec![
-        Line::from(vec![
-            step_chip("1  MODEL", ModelDefaultStep::Model),
-            Span::raw("  "),
-            step_chip("2  THINKING", ModelDefaultStep::Thinking),
-        ]),
-        Line::from(""),
-    ];
-    match step {
-        ModelDefaultStep::Model => {
-            let active_profile = model
-                .profiles()
-                .profiles
-                .iter()
-                .find(|profile| profile.active);
-            if let Some(profile) = active_profile {
-                lines.push(Line::from(vec![
-                    Span::styled("Active profile  ", visual_style(model, VisualRole::Muted)),
-                    Span::styled(
-                        display_safe(&profile.id),
-                        visual_style(model, VisualRole::User),
-                    ),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled("Current default ", visual_style(model, VisualRole::Muted)),
-                    Span::raw(display_safe(
-                        profile.default_model.as_deref().unwrap_or("Not set"),
-                    )),
-                    Span::styled("  Thinking  ", visual_style(model, VisualRole::Muted)),
-                    Span::raw(display_safe(&profile.default_mode)),
-                ]));
-                lines.push(Line::from(""));
-            }
-            lines.push(Line::styled(
-                "Select the default model",
-                visual_style(model, VisualRole::User),
-            ));
-            let mut selectable_count = 0;
-            for (index, summary) in model
-                .catalog
-                .models()
-                .iter()
-                .filter(|summary| summary.selectable)
-                .enumerate()
-            {
-                selectable_count += 1;
-                let selected = index == model.model_defaults.model_selected;
-                let prefix = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let is_default = active_profile
-                    .and_then(|profile| profile.default_model.as_deref())
-                    == Some(summary.model.model_id().as_str());
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(
-                    format!(
-                        "{prefix} {}{}  {}",
-                        display_safe(&summary.display_name),
-                        if is_default { "  DEFAULT" } else { "" },
-                        display_safe(&summary.detail)
-                    ),
-                    style,
-                ));
-            }
-            if selectable_count == 0 {
-                lines.push(Line::styled(
-                    if active_profile.is_some() {
-                        "Waiting for the active provider's compatible model catalog."
-                    } else {
-                        "Connect and activate a provider from the Providers tab first."
-                    },
-                    visual_style(model, VisualRole::Muted),
-                ));
-            }
-        }
-        ModelDefaultStep::Thinking => {
-            lines.push(Line::styled(
-                "Thinking mode",
-                visual_style(model, VisualRole::User),
-            ));
-            for (index, effort) in [
-                "Provider default",
-                "None",
-                "Low",
-                "Medium",
-                "High",
-                "Extra high",
-                "Maximum",
-            ]
-            .iter()
-            .enumerate()
-            {
-                let selected = index == model.model_defaults.thinking_selected;
-                let marker = if selected {
-                    selection_marker(model)
-                } else {
-                    " "
-                };
-                let style = if selected {
-                    visual_style(model, VisualRole::Selected)
-                } else {
-                    visual_style(model, VisualRole::Normal)
-                };
-                lines.push(Line::styled(format!("{marker} {effort}"), style));
-            }
-            lines.push(Line::styled(
-                "Enter saves this model and thinking mode as the new-session default.",
-                visual_style(model, VisualRole::Muted),
-            ));
-        }
+        .render(
+            frame.buffer_mut(),
+            Rect::new(
+                rows[3].x,
+                rows[3].y.saturating_add(ROW),
+                rows[3].width,
+                ROW.min(rows[3].height.saturating_sub(ROW)),
+            ),
+        );
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     if help_height > 0 {
         frame.render_widget(
-            Paragraph::new(format!(
-                "{} select  Enter continue/save  Esc Settings",
-                navigation_keys(model)
-            ))
-            .style(visual_style(model, VisualRole::Muted)),
-            rows[2],
+            Paragraph::new("Up/Down model  Left/Right thinking  Enter save  Esc Settings")
+                .style(visual_style(model, VisualRole::Muted)),
+            rows[4],
         );
+    }
+}
+
+fn render_model_cards(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    active_profile: Option<&crate::model::ProviderProfileProjection>,
+) {
+    let models = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        let message = if active_profile.is_some() {
+            "Waiting for the active provider's compatible model catalog."
+        } else {
+            "Connect and activate a provider from Providers first."
+        };
+        frame.render_widget(
+            Paragraph::new(message).style(model.theme().style(Token::TextMuted)),
+            area,
+        );
+        return;
+    }
+    let visible = usize::from(area.height / TWO_ROWS).max(1);
+    let selected = model
+        .model_defaults
+        .model_selected
+        .min(models.len().saturating_sub(1));
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(models.len().saturating_sub(visible));
+    for (index, summary) in models.iter().enumerate().skip(start).take(visible) {
+        let offset = u16::try_from(index.saturating_sub(start))
+            .unwrap_or(u16::MAX)
+            .saturating_mul(TWO_ROWS);
+        let card = Rect::new(
+            area.x,
+            area.y.saturating_add(offset),
+            area.width,
+            TWO_ROWS.min(area.bottom().saturating_sub(area.y.saturating_add(offset))),
+        );
+        render_model_card(
+            frame,
+            card,
+            model,
+            summary,
+            index == selected,
+            active_profile.and_then(|profile| profile.default_model.as_deref())
+                == Some(summary.model.model_id().as_str()),
+        );
+    }
+}
+
+fn render_model_card(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    summary: &ModelSummary,
+    selected: bool,
+    is_default: bool,
+) {
+    if selected {
+        crate::ui::component::paint::fill(
+            frame.buffer_mut(),
+            area,
+            model.theme().style(Token::SurfaceSelected),
+            Some(' '),
+        );
+    }
+    let style = if selected {
+        model.theme().style(Token::TextOnAccent)
+    } else {
+        model.theme().style(Token::TextPrimary)
+    };
+    let caret = if selected {
+        model.theme().icons().glyph(Icon::SelectionCaret)
+    } else {
+        " "
+    };
+    let mut x = area.x;
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.width,
+        caret,
+        style,
+    ));
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.right().saturating_sub(x),
+        " ",
+        style,
+    ));
+    x = x.saturating_add(crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        x,
+        area.y,
+        area.right().saturating_sub(x),
+        &display_safe(&summary.display_name),
+        style,
+    ));
+    if is_default && x < area.right() {
+        x = x.saturating_add(1);
+        let chip = Chip::new(model.theme(), "Default", ChipVariant::Accent);
+        let width = chip.measure().min(area.right().saturating_sub(x));
+        chip.render(
+            frame.buffer_mut(),
+            Rect::new(x, area.y, width, ROW.min(area.height)),
+        );
+    }
+    if let Some(context) = summary.context_window_tokens {
+        let label = format_context_window(context);
+        let width = u16::try_from(label.len())
+            .unwrap_or(u16::MAX)
+            .min(area.width);
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.right().saturating_sub(width),
+            area.y,
+            width,
+            &label,
+            model.theme().style(Token::TextMuted),
+        );
+    }
+    if area.height < TWO_ROWS {
+        return;
+    }
+    let mut chip_x = area.x.saturating_add(TWO_ROWS);
+    for capability in model_capabilities(&summary.detail) {
+        let chip = Chip::new(model.theme(), capability, ChipVariant::Neutral);
+        let width = chip.measure().min(area.right().saturating_sub(chip_x));
+        if width == 0 {
+            break;
+        }
+        chip_x = chip_x.saturating_add(chip.render(
+            frame.buffer_mut(),
+            Rect::new(chip_x, area.y.saturating_add(ROW), width, ROW),
+        ));
+        chip_x = chip_x.saturating_add(1);
+    }
+}
+
+fn model_capabilities(detail: &str) -> impl Iterator<Item = &str> {
+    detail
+        .split(['|', ','])
+        .map(str::trim)
+        .filter(|capability| !capability.is_empty())
+}
+
+fn format_context_window(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{}M context", tokens / 1_000_000)
+    } else if tokens >= 1_000 {
+        format!("{}K context", tokens / 1_000)
+    } else {
+        format!("{tokens} context")
     }
 }
 

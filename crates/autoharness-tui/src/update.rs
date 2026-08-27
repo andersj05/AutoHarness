@@ -9,11 +9,11 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry, Focus,
-    LocalPreferenceChange, Message, Model, ModelDefaultStep, MouseAction, Notice, OverlayKind,
-    PROVIDER_CHOICES, PendingKind, ProfileCenterFocus, ProfileCredentialAction,
-    ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState, ProfilesProjection,
-    ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy, Route,
-    SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsCategory,
+    LocalPreferenceChange, MODEL_THINKING_LEVELS, Message, Model, ModelDefaultStep, MouseAction,
+    Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
+    ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
+    ProfilesProjection, ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
+    Route, SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsCategory,
     SettingsPreference, UiEffect, UiFailure, UiIntent, UiNotice,
 };
 use crate::text::{display_safe, editable_safe};
@@ -2553,98 +2553,86 @@ fn handle_model_defaults_input(model: &mut Model, input: Input) -> Vec<UiEffect>
             model.dirty = true;
             Vec::new()
         }
-        Input { key: Key::Tab, .. } => Vec::new(),
-        Input { key: Key::Up, .. } => match model.model_defaults.step {
-            ModelDefaultStep::Model if model.model_defaults.model_selected == 0 => {
-                model.settings_workspace.nav_focus = true;
-                model.dirty = true;
-                Vec::new()
-            }
-            ModelDefaultStep::Thinking if model.model_defaults.thinking_selected == 0 => {
-                model.model_defaults.step = ModelDefaultStep::Model;
-                model.dirty = true;
-                Vec::new()
-            }
-            _ => {
-                move_agent_selection(model, -1);
-                Vec::new()
-            }
-        },
-        Input { key: Key::Down, .. } => {
-            move_agent_selection(model, 1);
-            Vec::new()
-        }
-        Input {
-            key: Key::Enter, ..
-        } => advance_model_defaults(model),
-        _ => Vec::new(),
-    }
-}
-
-fn move_agent_selection(model: &mut Model, direction: isize) {
-    let count = match model.model_defaults.step {
-        ModelDefaultStep::Model => model
-            .catalog
-            .models()
-            .iter()
-            .filter(|summary| summary.selectable)
-            .count(),
-        ModelDefaultStep::Thinking => MODEL_THINKING_LEVELS.len(),
-    };
-    if count == 0 {
-        return;
-    }
-    let selected = match model.model_defaults.step {
-        ModelDefaultStep::Model => &mut model.model_defaults.model_selected,
-        ModelDefaultStep::Thinking => &mut model.model_defaults.thinking_selected,
-    };
-    *selected = selected
-        .saturating_add_signed(direction)
-        .min(count.saturating_sub(1));
-    model.dirty = true;
-}
-
-fn advance_model_defaults(model: &mut Model) -> Vec<UiEffect> {
-    match model.model_defaults.step {
-        ModelDefaultStep::Model => {
-            let Some(summary) = model
-                .catalog
-                .models()
-                .iter()
-                .filter(|summary| summary.selectable)
-                .nth(model.model_defaults.model_selected)
-            else {
-                return Vec::new();
-            };
-            model.model_defaults.model = Some(summary.model.clone());
-            model.model_defaults.step = if model_supports_thinking(summary) {
-                ModelDefaultStep::Thinking
-            } else {
-                return persist_model_default(model);
+        Input { key: Key::Tab, .. } => {
+            model.model_defaults.step = match model.model_defaults.step {
+                ModelDefaultStep::Model => ModelDefaultStep::Thinking,
+                ModelDefaultStep::Thinking => ModelDefaultStep::Model,
             };
             model.dirty = true;
             Vec::new()
         }
-        ModelDefaultStep::Thinking => persist_model_default(model),
+        Input { key: Key::Up, .. } => {
+            if model.model_defaults.model_selected == 0 {
+                model.settings_workspace.nav_focus = true;
+                model.dirty = true;
+            } else {
+                move_model_default_selection(model, -1);
+            }
+            Vec::new()
+        }
+        Input { key: Key::Down, .. } => {
+            move_model_default_selection(model, 1);
+            Vec::new()
+        }
+        Input { key: Key::Left, .. } => {
+            move_thinking_default_selection(model, -1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Right, ..
+        } => {
+            move_thinking_default_selection(model, 1);
+            Vec::new()
+        }
+        Input {
+            key: Key::Enter, ..
+        } => save_model_defaults(model),
+        _ => Vec::new(),
     }
 }
 
-fn model_supports_thinking(summary: &crate::model::ModelSummary) -> bool {
-    summary
-        .detail
-        .split(['|', ','])
-        .any(|detail| detail.trim().eq_ignore_ascii_case("thinking"))
+fn move_model_default_selection(model: &mut Model, direction: isize) {
+    let count = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .count();
+    if count == 0 {
+        return;
+    }
+    model.model_defaults.model_selected = model
+        .model_defaults
+        .model_selected
+        .saturating_add_signed(direction)
+        .min(count.saturating_sub(1));
+    model.model_defaults.step = ModelDefaultStep::Model;
+    model.dirty = true;
 }
 
-const MODEL_THINKING_LEVELS: [&str; 7] = [
-    "provider default",
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-];
+fn move_thinking_default_selection(model: &mut Model, direction: isize) {
+    model.model_defaults.thinking_selected = model
+        .model_defaults
+        .thinking_selected
+        .saturating_add_signed(direction)
+        .min(MODEL_THINKING_LEVELS.len().saturating_sub(1));
+    model.model_defaults.step = ModelDefaultStep::Thinking;
+    model.dirty = true;
+}
+
+fn save_model_defaults(model: &mut Model) -> Vec<UiEffect> {
+    let Some(summary) = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .nth(model.model_defaults.model_selected)
+    else {
+        return Vec::new();
+    };
+    model.model_defaults.model = Some(summary.model.clone());
+    persist_model_default(model)
+}
 
 fn sync_model_default_selection(model: &mut Model) {
     let default_model = model.profiles().user.default_model.as_deref();

@@ -13,16 +13,28 @@ use ratatui_textarea::{Input, Key};
 
 fn catalog_ready() -> Arc<CatalogProjection> {
     Arc::new(CatalogProjection::Ready {
-        models: vec![ModelSummary {
-            model: ModelRef::new(
-                ProviderId::new("google-ai-studio").expect("provider id"),
-                ModelId::new("models/gemini-2.5-pro").expect("model id"),
-            ),
-            display_name: "Gemini 2.5 Pro".to_owned(),
-            detail: "text | thinking".to_owned(),
-            context_window_tokens: Some(1_000_000),
-            selectable: true,
-        }],
+        models: vec![
+            ModelSummary {
+                model: ModelRef::new(
+                    ProviderId::new("google-ai-studio").expect("provider id"),
+                    ModelId::new("models/gemini-2.5-pro").expect("model id"),
+                ),
+                display_name: "Gemini 2.5 Pro".to_owned(),
+                detail: "text | thinking".to_owned(),
+                context_window_tokens: Some(1_000_000),
+                selectable: true,
+            },
+            ModelSummary {
+                model: ModelRef::new(
+                    ProviderId::new("openai-compatible").expect("provider id"),
+                    ModelId::new("router-reasoner").expect("model id"),
+                ),
+                display_name: "Router Reasoner".to_owned(),
+                detail: "text | tools".to_owned(),
+                context_window_tokens: Some(128_000),
+                selectable: true,
+            },
+        ],
         stale: false,
     })
 }
@@ -421,8 +433,13 @@ fn models_command_opens_the_integrated_default_model_tab() {
     assert_eq!(model.route(), Route::Settings);
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains("Models"));
-    assert!(rendered.contains("1  MODEL"));
-    assert!(rendered.contains("2  THINKING"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("Router Reasoner"));
+    assert!(rendered.contains("1M context"));
+    assert!(rendered.contains("128K context"));
+    assert!(rendered.contains("thinking"));
+    assert!(rendered.contains("tools"));
+    assert!(rendered.contains("Thinking"));
 }
 
 #[test]
@@ -433,13 +450,11 @@ fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
     let _ = update(&mut model, Message::Input(enter()));
 
     let rendered = buffer_text(&render_model(&model, 100, 30));
-    assert!(rendered.contains("Gemini 2.5 Pro  DEFAULT"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("Default"));
     assert!(rendered.contains("Thinking"));
     assert!(rendered.contains("high"));
 
-    assert!(update(&mut model, Message::Input(enter())).is_empty());
-    let rendered = buffer_text(&render_model(&model, 100, 30));
-    assert!(rendered.contains("Thinking mode"));
     let effects = update(&mut model, Message::Input(enter()));
     assert!(matches!(
         effects.as_slice(),
@@ -455,19 +470,16 @@ fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
 }
 
 #[test]
-fn thinking_mode_up_moves_between_levels_before_returning_to_models() {
+fn thinking_mode_changes_inline_before_saving_with_the_model() {
     let mut model = empty_model();
     apply_active_profile(&mut model);
     type_text(&mut model, "/models");
     let _ = update(&mut model, Message::Input(enter()));
 
-    assert!(update(&mut model, Message::Input(enter())).is_empty());
-    assert!(buffer_text(&render_model(&model, 100, 30)).contains("Thinking mode"));
-
-    let _ = update(&mut model, Message::Input(key_input(Key::Up)));
+    let _ = update(&mut model, Message::Input(key_input(Key::Left)));
     let rendered = buffer_text(&render_model(&model, 100, 30));
-    assert!(rendered.contains("Thinking mode"));
-    assert!(rendered.contains("› Medium"));
+    assert!(rendered.contains("Thinking"));
+    assert!(rendered.contains("medium"));
 
     let effects = update(&mut model, Message::Input(enter()));
     assert!(matches!(

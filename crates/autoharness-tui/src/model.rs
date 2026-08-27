@@ -1417,6 +1417,17 @@ pub(crate) enum ModelDefaultStep {
     Thinking,
 }
 
+/// Provider-neutral thinking choices persisted with a profile default.
+pub(crate) const MODEL_THINKING_LEVELS: [&str; 7] = [
+    "provider default",
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+];
+
 /// Local state for selecting the active profile's default model and thinking mode.
 #[derive(Debug, Default)]
 pub(crate) struct ModelDefaultsState {

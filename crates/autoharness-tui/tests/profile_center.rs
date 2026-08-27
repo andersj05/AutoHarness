@@ -241,13 +241,11 @@ fn models_tab_saves_the_active_profiles_model_and_thinking_mode() {
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
 
     let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("1  MODEL"));
-    assert!(rendered.contains("2  THINKING"));
+    assert!(rendered.contains("Models"));
+    assert!(rendered.contains("Thinking"));
     assert!(rendered.contains("Active profile  personal-gemini"));
-    assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
-    assert!(render_text(&model, 120, 40).contains("Thinking mode"));
     for _ in 0..4 {
-        let _ = update(&mut model, Message::Input(key(Key::Down)));
+        let _ = update(&mut model, Message::Input(key(Key::Right)));
     }
     assert!(matches!(
         update(&mut model, Message::Input(key(Key::Enter))).as_slice(),
