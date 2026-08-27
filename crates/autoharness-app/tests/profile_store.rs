@@ -7,7 +7,7 @@ use autoharness_app::profiles::{
 use autoharness_app::vault::{FakeVault, VaultError, VaultPort};
 use autoharness_settings::{
     ColorMode, CredentialReference, DisplayLabel, GlyphMode, LocalPreferences, LocalProfile,
-    ProfileId, ProviderProfile, Source,
+    ProfileId, PromptStatusDetail, ProviderProfile, Source,
 };
 use zeroize::Zeroizing;
 
@@ -240,6 +240,7 @@ fn local_preferences_persist_and_reset_to_inherited_defaults() {
     let mut preferences = LocalPreferences::new();
     preferences.set_color_mode(Some(ColorMode::NoColor));
     preferences.set_glyph_mode(Some(GlyphMode::Ascii));
+    preferences.set_prompt_status_detail(Some(PromptStatusDetail::Detailed));
     let mut local_profile = LocalProfile::new();
     local_profile.set_display_label(Some(DisplayLabel::new("Jensen").expect("label")));
     local_profile.set_preferences(preferences);
@@ -269,10 +270,27 @@ fn local_preferences_persist_and_reset_to_inherited_defaults() {
         resolved.local_profile().preferences().glyph_mode().source(),
         Source::UserFile
     );
+    assert_eq!(
+        resolved
+            .local_profile()
+            .preferences()
+            .prompt_status_detail()
+            .value(),
+        &PromptStatusDetail::Detailed
+    );
+    assert_eq!(
+        resolved
+            .local_profile()
+            .preferences()
+            .prompt_status_detail()
+            .source(),
+        Source::UserFile
+    );
 
     let mut reset = manager.local_profile().expect("stored local preferences");
     let mut reset_preferences = reset.preferences().clone();
     reset_preferences.set_glyph_mode(None);
+    reset_preferences.set_prompt_status_detail(None);
     reset.set_preferences(reset_preferences);
     manager
         .set_local_profile(reset)
@@ -291,6 +309,22 @@ fn local_preferences_persist_and_reset_to_inherited_defaults() {
     );
     assert_eq!(
         resolved.local_profile().preferences().glyph_mode().source(),
+        Source::Default
+    );
+    assert_eq!(
+        resolved
+            .local_profile()
+            .preferences()
+            .prompt_status_detail()
+            .value(),
+        &PromptStatusDetail::Workspace
+    );
+    assert_eq!(
+        resolved
+            .local_profile()
+            .preferences()
+            .prompt_status_detail()
+            .source(),
         Source::Default
     );
 }

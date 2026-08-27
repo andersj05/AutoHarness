@@ -616,6 +616,10 @@ impl Coordinator {
                 preferences.set_composer_submit_behavior(value);
                 local_profile.display_label().cloned()
             }
+            LocalPreferenceChange::PromptStatusDetail(value) => {
+                preferences.set_prompt_status_detail(value);
+                local_profile.display_label().cloned()
+            }
         };
         local_profile.set_display_label(display_label);
         local_profile.set_preferences(preferences);

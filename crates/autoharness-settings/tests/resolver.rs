@@ -1,5 +1,5 @@
 use autoharness_settings::{
-    ColorMode, Density, GlyphMode, LayerKind, Layout, ProfileId, ProviderKind,
+    ColorMode, Density, GlyphMode, LayerKind, Layout, ProfileId, PromptStatusDetail, ProviderKind,
     SETTINGS_SCHEMA_VERSION, SettingsBuilder, SettingsDocument, SettingsError, Source,
     TerminalTimestampStyle, ThemePreset,
 };
@@ -111,6 +111,7 @@ fn user_preferences_override_defaults_with_leaf_provenance() {
                     "theme_preset": "dark",
                     "color_mode": "no_color",
                     "glyph_mode": "ascii",
+                    "prompt_status_detail": "detailed",
                     "reduced_motion": true,
                     "density": "compact",
                     "layout": "single_column",
@@ -137,6 +138,14 @@ fn user_preferences_override_defaults_with_leaf_provenance() {
     assert_eq!(preferences.theme_preset().value(), &ThemePreset::Dark);
     assert_eq!(preferences.color_mode().value(), &ColorMode::NoColor);
     assert_eq!(preferences.glyph_mode().value(), &GlyphMode::Ascii);
+    assert_eq!(
+        preferences.prompt_status_detail().value(),
+        &PromptStatusDetail::Detailed
+    );
+    assert_eq!(
+        preferences.prompt_status_detail().source(),
+        Source::UserFile
+    );
     assert!(*preferences.reduced_motion().value());
     assert_eq!(preferences.density().value(), &Density::Compact);
     assert_eq!(preferences.layout().value(), &Layout::SingleColumn);

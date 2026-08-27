@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use autoharness_domain::ErrorClass;
 use autoharness_settings::{
-    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout, TerminalTimestampStyle,
-    ThemePreset,
+    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout, PromptStatusDetail,
+    TerminalTimestampStyle, ThemePreset,
 };
 use ratatui_textarea::{Input, Key};
 
@@ -912,6 +912,17 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
             &[GlyphMode::Unicode, GlyphMode::NerdFont, GlyphMode::Ascii],
             direction,
         ))),
+        SettingsPreference::PromptStatusDetail => {
+            LocalPreferenceChange::PromptStatusDetail(Some(cycle(
+                *preferences.prompt_status_detail().value(),
+                &[
+                    PromptStatusDetail::Essential,
+                    PromptStatusDetail::Workspace,
+                    PromptStatusDetail::Detailed,
+                ],
+                direction,
+            )))
+        }
         SettingsPreference::ReducedMotion => {
             LocalPreferenceChange::ReducedMotion(Some(!*preferences.reduced_motion().value()))
         }
@@ -967,6 +978,9 @@ fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
             SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
             SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
+            SettingsPreference::PromptStatusDetail => {
+                LocalPreferenceChange::PromptStatusDetail(None)
+            }
             SettingsPreference::ReducedMotion => LocalPreferenceChange::ReducedMotion(None),
             SettingsPreference::Density => LocalPreferenceChange::Density(None),
             SettingsPreference::Layout => LocalPreferenceChange::Layout(None),
@@ -1002,6 +1016,9 @@ fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             }
             SettingsPreference::GlyphMode => {
                 LocalPreferenceChange::GlyphMode(Some(GlyphMode::Unicode))
+            }
+            SettingsPreference::PromptStatusDetail => {
+                LocalPreferenceChange::PromptStatusDetail(Some(PromptStatusDetail::Workspace))
             }
             SettingsPreference::ReducedMotion => LocalPreferenceChange::ReducedMotion(Some(false)),
             SettingsPreference::Density => {

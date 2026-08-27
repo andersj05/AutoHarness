@@ -5,7 +5,7 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelRef, RetryAdvice};
 use autoharness_settings::{
     ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
-    TerminalTimestampStyle, ThemePreset,
+    PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
@@ -810,6 +810,8 @@ pub enum LocalPreferenceChange {
     TerminalTimestampStyle(Option<TerminalTimestampStyle>),
     /// Composer submission chord.
     ComposerSubmitBehavior(Option<ComposerSubmitBehavior>),
+    /// Prompt status-bar information density.
+    PromptStatusDetail(Option<PromptStatusDetail>),
 }
 
 /// Kind of request awaiting application acknowledgement.
@@ -1423,6 +1425,7 @@ pub(crate) enum SettingsPreference {
     ThemePreset,
     ColorMode,
     GlyphMode,
+    PromptStatusDetail,
     ReducedMotion,
     Density,
     Approvals,
@@ -1434,7 +1437,7 @@ pub(crate) enum SettingsPreference {
 }
 
 impl SettingsPreference {
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 19] = [
         Self::DisplayLabel,
         Self::Provider,
         Self::Profile,
@@ -1445,6 +1448,7 @@ impl SettingsPreference {
         Self::ThemePreset,
         Self::ColorMode,
         Self::GlyphMode,
+        Self::PromptStatusDetail,
         Self::ReducedMotion,
         Self::Density,
         Self::Approvals,

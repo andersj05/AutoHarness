@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use autoharness_settings::{
     ColorMode, ComposerSubmitBehavior, Density, GlyphMode, Layout as PreferenceLayout,
-    TerminalTimestampStyle, ThemePreset,
+    PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -1615,6 +1615,8 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         settings_preference_line(model, SettingsPreference::ThemePreset),
         settings_preference_line(model, SettingsPreference::ColorMode),
         settings_preference_line(model, SettingsPreference::GlyphMode),
+        Line::styled("PROMPT BAR", visual_style(model, VisualRole::User)),
+        settings_preference_line(model, SettingsPreference::PromptStatusDetail),
         Line::styled("ACCESSIBILITY", visual_style(model, VisualRole::User)),
         settings_preference_line(model, SettingsPreference::ReducedMotion),
         settings_preference_line(model, SettingsPreference::Density),
@@ -1858,6 +1860,17 @@ fn settings_preference_line(model: &Model, preference: SettingsPreference) -> Li
             profile.preferences().glyph_mode().source().as_str(),
             "application chrome only",
         ),
+        SettingsPreference::PromptStatusDetail => (
+            "Prompt detail",
+            prompt_status_detail_label(*profile.preferences().prompt_status_detail().value())
+                .to_owned(),
+            profile
+                .preferences()
+                .prompt_status_detail()
+                .source()
+                .as_str(),
+            "essential, workspace, or token metrics",
+        ),
         SettingsPreference::ReducedMotion => (
             "Reduced motion",
             bool_label(*profile.preferences().reduced_motion().value()).to_owned(),
@@ -1979,6 +1992,15 @@ fn settings_preference_wheel(model: &Model, preference: SettingsPreference) -> O
             &[GlyphMode::Unicode, GlyphMode::NerdFont, GlyphMode::Ascii],
             glyph_mode_label,
         )),
+        SettingsPreference::PromptStatusDetail => Some(wheel_value(
+            *preferences.prompt_status_detail().value(),
+            &[
+                PromptStatusDetail::Essential,
+                PromptStatusDetail::Workspace,
+                PromptStatusDetail::Detailed,
+            ],
+            prompt_status_detail_label,
+        )),
         SettingsPreference::ReducedMotion => Some(wheel_value(
             *preferences.reduced_motion().value(),
             &[false, true],
@@ -2027,6 +2049,7 @@ fn settings_preference_label(preference: SettingsPreference) -> &'static str {
         SettingsPreference::ThemePreset => "Theme preset",
         SettingsPreference::ColorMode => "Color mode",
         SettingsPreference::GlyphMode => "Glyph mode",
+        SettingsPreference::PromptStatusDetail => "Prompt detail",
         SettingsPreference::ReducedMotion => "Reduced motion",
         SettingsPreference::Density => "Density",
         SettingsPreference::Approvals => "Approvals",
@@ -2086,6 +2109,14 @@ fn glyph_mode_label(value: GlyphMode) -> &'static str {
         GlyphMode::Unicode => "unicode",
         GlyphMode::NerdFont => "Nerd Font",
         GlyphMode::Ascii => "ASCII",
+    }
+}
+
+fn prompt_status_detail_label(value: PromptStatusDetail) -> &'static str {
+    match value {
+        PromptStatusDetail::Essential => "essential",
+        PromptStatusDetail::Workspace => "workspace",
+        PromptStatusDetail::Detailed => "detailed",
     }
 }
 
