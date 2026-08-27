@@ -772,7 +772,9 @@ fn render_settings_category(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 
 fn settings_category_description(category: SettingsCategory) -> &'static str {
     match category {
-        SettingsCategory::Appearance => "Theme, density, and terminal glyph previews.",
+        SettingsCategory::Appearance => {
+            "Nerd Font needs a patched font. Diamonds mean it is missing."
+        }
         SettingsCategory::ChatComposer => "Prompt metadata, timestamps, layout, and submission.",
         SettingsCategory::Accessibility => "Motion, color treatment, and redundant state cues.",
         SettingsCategory::Providers => "Safe connection facts and provider actions.",
@@ -1021,7 +1023,7 @@ fn settings_row_description(preference: SettingsPreference) -> &'static str {
         SettingsPreference::Mode => "Provider-native reasoning default for new sessions.",
         SettingsPreference::ThemePreset => "Palette preview uses the resolved three-stop gradient.",
         SettingsPreference::ColorMode => "Color treatment preserves documented contrast floors.",
-        SettingsPreference::GlyphMode => "Controls application chrome without changing content.",
+        SettingsPreference::GlyphMode => "Nerd Font needs a patched terminal font.",
         SettingsPreference::PromptStatusDetail => {
             "Chooses essential, workspace, or token metadata."
         }

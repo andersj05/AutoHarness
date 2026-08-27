@@ -245,6 +245,21 @@ fn info_rows_are_visible_but_skipped_by_selection() {
 }
 
 #[test]
+fn appearance_explains_the_nerd_font_requirement_and_missing_glyph_signal() {
+    let mut model = settings_model();
+    open_settings(&mut model);
+    let category = buffer_text(&render(&model, 120, 40));
+    assert!(category.contains("Nerd Font needs a patched font"));
+    assert!(category.contains("Diamonds mean it is missing"));
+
+    let _ = update(&mut model, Message::Input(key(Key::Tab)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    let _ = update(&mut model, Message::Input(key(Key::Down)));
+    let focused = buffer_text(&render(&model, 120, 40));
+    assert!(focused.contains("Nerd Font needs a patched terminal font"));
+}
+
+#[test]
 fn settings_search_finds_preference_labels_and_current_values() {
     for (query, expected_category, expected_row) in [
         ("Submit prompt", "Chat & Composer", "Submit prompt"),
