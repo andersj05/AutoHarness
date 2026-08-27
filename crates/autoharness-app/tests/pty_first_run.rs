@@ -18,14 +18,16 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
     // operation and still present the full interface.
     let mut session = PtySession::start(&environment, 24, 80);
 
-    // The first draw names the offline state and directs the user to the
-    // documented credential setup path.
+    // The first draw names the offline state and directs the user through the
+    // redesigned zero-shell provider and model setup path.
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("OFFLINE")
-                && text.contains("No provider credential is available.")
-                && text.contains("Provider API key")
+            text.contains("AutoHarness")
+                && text.contains("Offline")
+                && text.contains("Connect a provider key")
+                && text.contains("Choose a compatible model")
+                && text.contains("/settings")
                 && text.contains("Ask AutoHarness")
         },
         "first draw should show the complete credential-free launch surface",
