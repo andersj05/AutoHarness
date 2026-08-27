@@ -545,7 +545,7 @@ fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, Provid
         (
             CODEX_DEFAULT_MODEL_ID,
             "Codex default",
-            "The current default model for the authenticated Codex subscription.",
+            "Legacy selection that resolves to the verified GPT-5.6 Luna fallback.",
             CapabilitySupport::Unknown,
         ),
         (
@@ -591,7 +591,10 @@ fn codex_models(provider_id: &ProviderId) -> Result<Vec<ModelDescriptor>, Provid
 fn request_model_name(model: &ModelId) -> Result<&str, ProviderError> {
     let name = model.as_str();
     if name == CODEX_DEFAULT_MODEL_ID {
-        Ok("gpt-5.6-terra")
+        // `codex/default` predates the native adapter's static catalog and is
+        // retained for persisted sessions. It is not a subscription-discovered
+        // default, so resolve it to the model verified against this transport.
+        Ok("gpt-5.6-luna")
     } else if ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].contains(&name) {
         Ok(name)
     } else {
@@ -808,7 +811,7 @@ mod tests {
     fn unknown_models_fail_closed() {
         assert_eq!(
             request_model_name(&ModelId::new(CODEX_DEFAULT_MODEL_ID).expect("model")),
-            Ok("gpt-5.6-terra")
+            Ok("gpt-5.6-luna")
         );
         assert!(request_model_name(&ModelId::new("unknown").expect("model")).is_err());
     }

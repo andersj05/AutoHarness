@@ -13,5 +13,8 @@ pub use settings::CodexSettings;
 
 /// Stable provider identity retained for settings compatibility.
 pub const CODEX_PROVIDER_ID: &str = "codex-cli";
-/// Placeholder model representing the subscription's current default.
+/// Legacy placeholder model retained for persisted session compatibility.
+///
+/// The native adapter has no subscription-scoped model-discovery endpoint, so
+/// requests for this identifier resolve to the adapter's verified fallback.
 pub const CODEX_DEFAULT_MODEL_ID: &str = "codex/default";

@@ -1,6 +1,6 @@
 # Active memory
 
-**Last reviewed:** 2026-08-26
+**Last reviewed:** 2026-08-27
 
 **Phase:** 3.9 terminal product validation - TUI navigation audit
 
@@ -59,6 +59,7 @@ Finish validating the bottom-anchored Chat workspace and model-default selector,
 
 ## Recently completed
 
+- On 2026-08-27, the persisted `codex/default` compatibility selection now resolves to the live-verified `gpt-5.6-luna` fallback instead of the unverified Terra route, preventing legacy default sessions from sending the invalid initial request; focused native Codex provider tests pass.
 - On 2026-08-26, Chat moved its open composer beneath the tail-following transcript, re-anchored inline command results above the prompt, clears transcript text beneath those results, and shows a tick-driven ASCII generation scanner with a static reduced-motion fallback; thinking-mode Up and Down now move within the thinking list and return to model selection only from its first option.
 - On 2026-08-26, the prompt status bar gained a persisted Essential, Workspace, or Detailed setting, labeled six-step thinking circles, real metric dividers, home-relative Nerd Font workspace metadata, Git branch context, provider-advertised context percentages with warning thresholds, and optional compact latest-turn input and output totals; reviewed goldens cover 120x40, 80x24, 60x18, and 40x12, and formatting, strict workspace Clippy, the full locked workspace suite, and the routed-shell Windows PTY journey pass.
 - On 2026-08-26, Chat moved to an open prompt-first shell with a single gradient sidebar divider, a borderless scrollable transcript, responsive unlabeled model, ASCII thinking meter, compact home-relative workspace path, Git branch symbol, an optional Nerd Font glyph mode, theme-aware RGB accent gradients, and reviewed 120x40, 80x24, 60x18, and 40x12 goldens.
