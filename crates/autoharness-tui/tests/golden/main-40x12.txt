@@ -1,12 +1,12 @@
-╭ Conversation ────────────────────────╮
-│partial answer\u{1b}[0m.              │
-│Error: Capacity is temporarily        │
-│exhausted; no credentials were        │
-│exposed.                              │
-│rate_limited | Ctrl+R retry | Ctrl+N  │
-│new | ref attempt-2                   │
-╭──────────────────────────────────────╮
-│model:Gemini 2.5 Pro  think:default   │
-│❯ Keep the checklist concise.         │
-╰──────────────────────────────────────╯
+ Gemini 2.5 Pro  [auto]
+ ❯ Retry with a smaller scope.
+   Keep the checklist concise.
+ ──────────────────────────────────────
+ The provider returned \u{1b}[31ma
+ partial answer\u{1b}[0m.
+ Error: Capacity is temporarily
+ exhausted; no credentials were
+ exposed.
+ rate_limited | Ctrl+R retry | Ctrl+N
+ new | ref attempt-2
  Profile  |  Settings

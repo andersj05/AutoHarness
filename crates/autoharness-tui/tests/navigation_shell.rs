@@ -243,7 +243,7 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "Conversation"),
+        ('1', "GET STARTED"),
         ('2', "Sessions"),
         ('3', "Providers"),
         ('4', "Settings & Provenance"),
@@ -348,11 +348,11 @@ fn chat_empty_state_explains_the_zero_shell_start_path() {
     let rendered = render_text(&model, 80, 24);
     assert!(rendered.contains("GET STARTED"));
     assert!(rendered.contains("/settings set a provider key"));
-    assert!(rendered.contains("Conversation · Active conversation"));
+    assert!(!rendered.contains("Conversation"));
 }
 
 #[test]
-fn ascii_glyph_mode_uses_ascii_conversation_separators() {
+fn ascii_glyph_mode_uses_a_single_sidebar_divider_without_conversation_chrome() {
     let mut model = model();
     let settings = SettingsBuilder::new()
         .with_layer(
@@ -373,8 +373,9 @@ fn ascii_glyph_mode_uses_ascii_conversation_separators() {
         ..SettingsProjection::default()
     }));
     let rendered = render_text(&model, 120, 40);
-    assert!(rendered.contains("Conversation | Active conversation"));
-    assert!(!rendered.contains("Conversation · Active conversation"));
+    assert!(rendered.lines().all(|line| !line.contains('│')));
+    assert!(rendered.lines().filter(|line| line.contains('|')).count() >= 30);
+    assert!(!rendered.contains("Conversation"));
 }
 
 #[test]
@@ -564,11 +565,11 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
         Some(MouseAction::Route(Route::Sessions))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 38),
+        hit_test(&model, 120, 40, 2, 39),
         Some(MouseAction::SettingsTab(2))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 14, 38),
+        hit_test(&model, 120, 40, 14, 39),
         Some(MouseAction::SettingsTab(0))
     );
     assert_eq!(
@@ -650,7 +651,7 @@ fn mouse_modal_rows_select_models_and_run_commands() {
 
     let mut palette = model();
     let _ = update(&mut palette, Message::Input(ctrl('/')));
-    let command = hit_test(&palette, 80, 24, 12, 14);
+    let command = hit_test(&palette, 80, 24, 12, 4);
     assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
     let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
     assert!(effects.is_empty());

@@ -909,7 +909,7 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
         ))),
         SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(Some(cycle(
             *preferences.glyph_mode().value(),
-            &[GlyphMode::Unicode, GlyphMode::Ascii],
+            &[GlyphMode::Unicode, GlyphMode::NerdFont, GlyphMode::Ascii],
             direction,
         ))),
         SettingsPreference::ReducedMotion => {

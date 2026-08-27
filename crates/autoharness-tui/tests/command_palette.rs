@@ -175,7 +175,6 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     assert!(
         filtered
             .lines()
-            .rev()
             .take(3)
             .any(|line| line.contains("/mod"))
     );
@@ -199,7 +198,7 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
 }
 
 #[test]
-fn inline_command_rows_preserve_the_chat_panel_border_at_narrow_width() {
+fn inline_command_rows_follow_the_open_prompt_at_narrow_width() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
 
@@ -208,18 +207,19 @@ fn inline_command_rows_preserve_the_chat_panel_border_at_narrow_width() {
         rendered
             .buffer()
             .cell((0, 1))
-            .expect("left transcript border")
+            .expect("open prompt margin")
             .symbol(),
-        "│"
+        " "
     );
     assert_eq!(
         rendered
             .buffer()
             .cell((1, 1))
-            .expect("first command column")
+            .expect("prompt marker")
             .symbol(),
-        "›"
+        "❯"
     );
+    assert!(buffer_text(&rendered).contains("/chat"));
 }
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {

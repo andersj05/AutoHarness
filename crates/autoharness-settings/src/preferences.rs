@@ -108,6 +108,8 @@ pub enum GlyphMode {
     /// Use Unicode box drawing and symbols.
     #[default]
     Unicode,
+    /// Use Nerd Font symbols when the active terminal font provides them.
+    NerdFont,
     /// Use ASCII-only terminal decoration.
     Ascii,
 }

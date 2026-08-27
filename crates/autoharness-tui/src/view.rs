@@ -49,6 +49,7 @@ struct Presentation {
     color_mode: ColorMode,
     theme: ThemePreset,
     ascii: bool,
+    nerd_font: bool,
     reduced_motion: bool,
     compact: bool,
     single_column: bool,
@@ -66,6 +67,7 @@ fn presentation(model: &Model) -> Presentation {
         color_mode: *preferences.color_mode().value(),
         theme: *preferences.theme_preset().value(),
         ascii: *preferences.glyph_mode().value() == GlyphMode::Ascii,
+        nerd_font: *preferences.glyph_mode().value() == GlyphMode::NerdFont,
         reduced_motion: *preferences.reduced_motion().value(),
         compact: *preferences.density().value() == Density::Compact,
         single_column: *preferences.layout().value() == PreferenceLayout::SingleColumn,
@@ -347,6 +349,92 @@ fn chat_visual_style(model: &Model, role: VisualRole) -> Style {
     visual_style(model, role).bg(Color::Reset)
 }
 
+fn theme_gradient(theme: ThemePreset) -> ((u8, u8, u8), (u8, u8, u8)) {
+    match theme {
+        ThemePreset::System | ThemePreset::Dark | ThemePreset::Midnight => {
+            ((34, 211, 238), (167, 139, 250))
+        }
+        ThemePreset::Light => ((37, 99, 235), (219, 39, 119)),
+        ThemePreset::Aurora => ((45, 212, 191), (129, 140, 248)),
+        ThemePreset::Ember => ((251, 146, 60), (244, 63, 94)),
+        ThemePreset::Ocean => ((34, 211, 238), (14, 165, 233)),
+        ThemePreset::Forest => ((74, 222, 128), (250, 204, 21)),
+        ThemePreset::Rose => ((244, 114, 182), (192, 132, 252)),
+    }
+}
+
+fn gradient_style(model: &Model, index: u16, count: u16) -> Style {
+    let presentation = presentation(model);
+    if matches!(
+        presentation.color_mode,
+        ColorMode::NoColor | ColorMode::HighContrast
+    ) {
+        return chat_visual_style(model, VisualRole::Border);
+    }
+    let (start, end) = theme_gradient(presentation.theme);
+    let denominator = count.saturating_sub(1).max(1);
+    let blend = |from: u8, to: u8| {
+        let from = u32::from(from);
+        let to = u32::from(to);
+        let index = u32::from(index.min(denominator));
+        let denominator = u32::from(denominator);
+        u8::try_from((from * (denominator - index) + to * index) / denominator).unwrap_or(u8::MAX)
+    };
+    let mut style = Style::new()
+        .fg(Color::Rgb(
+            blend(start.0, end.0),
+            blend(start.1, end.1),
+            blend(start.2, end.2),
+        ))
+        .bg(Color::Reset);
+    if presentation.color_mode == ColorMode::Soft {
+        style = style.add_modifier(Modifier::DIM);
+    } else if presentation.color_mode == ColorMode::Vivid {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    style
+}
+
+fn gradient_text(model: &Model, value: &str) -> Line<'static> {
+    let count = u16::try_from(value.chars().count()).unwrap_or(u16::MAX);
+    Line::from(
+        value
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                Span::styled(
+                    character.to_string(),
+                    gradient_style(model, u16::try_from(index).unwrap_or(u16::MAX), count),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn render_vertical_gradient(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let glyph = if presentation(model).ascii {
+        "|"
+    } else {
+        "│"
+    };
+    let lines = (0..area.height)
+        .map(|row| Line::styled(glyph, gradient_style(model, row, area.height)))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_horizontal_gradient(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let glyph = if presentation(model).ascii {
+        "-"
+    } else {
+        "─"
+    };
+    let spans = (0..area.width)
+        .map(|column| Span::styled(glyph, gradient_style(model, column, area.width)))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 fn app_block(model: &Model) -> Block<'static> {
     let block = Block::default().border_set(ratatui::symbols::border::ROUNDED);
     if presentation(model).ascii {
@@ -546,7 +634,7 @@ pub fn hit_test(
     let layout = shell_layout(area, model);
     if let Some(sidebar) = layout.sidebar {
         if column < sidebar.right() {
-            let footer_row = sidebar.bottom().saturating_sub(2);
+            let footer_row = sidebar.bottom().saturating_sub(1);
             if row == footer_row {
                 return shell_footer_action(column.saturating_sub(sidebar.x));
             }
@@ -957,8 +1045,7 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 fn sidebar_session_limit(area: Rect) -> usize {
-    let inner_height = area.height.saturating_sub(2);
-    usize::from(inner_height.saturating_sub(4)).max(1)
+    usize::from(area.height.saturating_sub(5)).max(1)
 }
 
 fn single_line_label(value: &str, width: u16) -> String {
@@ -976,13 +1063,12 @@ fn single_line_label(value: &str, width: u16) -> String {
 }
 
 fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let block = app_block(model)
-        .borders(Borders::ALL)
-        .title(" AutoHarness ")
-        .title_style(visual_style(model, VisualRole::Header))
-        .border_style(visual_style(model, VisualRole::Border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let divider = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
+    render_vertical_gradient(frame, divider, model);
+    let inner = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -990,9 +1076,19 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let footer_height = u16::from(inner.height >= 2);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(footer_height),
+        ])
         .split(inner);
-    let content = sections[0];
+    let brand = if presentation(model).nerd_font {
+        "   AutoHarness"
+    } else {
+        " AutoHarness"
+    };
+    frame.render_widget(Paragraph::new(gradient_text(model, brand)), sections[0]);
+    let content = sections[1];
     let mut lines = Vec::new();
     let session_limit = sidebar_session_limit(area);
     let session_width = content.width.saturating_sub(4);
@@ -1031,24 +1127,8 @@ fn render_navigation_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     ]);
     frame.render_widget(Paragraph::new(lines), content);
     if footer_height > 0 {
-        render_shell_footer(frame, sections[1], model);
+        render_shell_footer(frame, sections[2], model);
     }
-}
-
-fn active_session_title(model: &Model) -> Option<String> {
-    model
-        .sessions
-        .sessions
-        .iter()
-        .find(|entry| entry.active || entry.session_id == model.session.session_id)
-        .map(|entry| display_safe(&entry.title))
-}
-
-fn conversation_title(model: &Model) -> String {
-    active_session_title(model).map_or_else(
-        || " Conversation ".to_owned(),
-        |title| format!(" Conversation{}{} ", chrome_separator(model), title),
-    )
 }
 
 fn onboarding_step(model: &Model) -> (&'static str, &'static str) {
@@ -1202,11 +1282,14 @@ fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
     let height = u16::try_from(model.palette_entries().len())
         .unwrap_or(u16::MAX)
         .min(8)
-        .min(area.height.saturating_sub(5));
+        .min(
+            area.height
+                .saturating_sub(prompt_surface_height(area, model)),
+        );
     Rect::new(
-        area.x.saturating_add(1),
-        area.bottom().saturating_sub(height.saturating_add(4)),
-        area.width.saturating_sub(2),
+        area.x.saturating_add(2),
+        area.y.saturating_add(prompt_surface_height(area, model)),
+        area.width.saturating_sub(4),
         height,
     )
 }
@@ -1894,7 +1977,7 @@ fn settings_preference_wheel(model: &Model, preference: SettingsPreference) -> O
         )),
         SettingsPreference::GlyphMode => Some(wheel_value(
             *preferences.glyph_mode().value(),
-            &[GlyphMode::Unicode, GlyphMode::Ascii],
+            &[GlyphMode::Unicode, GlyphMode::NerdFont, GlyphMode::Ascii],
             glyph_mode_label,
         )),
         SettingsPreference::ReducedMotion => Some(wheel_value(
@@ -2002,6 +2085,7 @@ fn color_mode_label(value: ColorMode) -> &'static str {
 fn glyph_mode_label(value: GlyphMode) -> &'static str {
     match value {
         GlyphMode::Unicode => "unicode",
+        GlyphMode::NerdFont => "Nerd Font",
         GlyphMode::Ascii => "ASCII",
     }
 }
@@ -2953,52 +3037,131 @@ fn selected_model_name(model: &Model) -> String {
         )
 }
 
-fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut push_chip = |label: &'static str, value: String, role: VisualRole| {
-        if !spans.is_empty() {
-            spans.push(Span::styled(
-                "  ",
-                chat_visual_style(model, VisualRole::Muted),
-            ));
+fn thinking_meter(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => "[......]",
+        "minimal" => "[#.....]",
+        "low" => "[##....]",
+        "medium" => "[###...]",
+        "high" => "[####..]",
+        "xhigh" => "[#####.]",
+        "max" => "[######]",
+        _ => "[auto]",
+    }
+}
+
+fn workspace_display_path(workspace: &str) -> String {
+    let normalized = display_safe(workspace.trim()).replace('\\', "/");
+    if normalized.is_empty() {
+        return ".".to_owned();
+    }
+    let parts = normalized
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let home_suffix = if parts.len() >= 3
+        && (parts[0].eq_ignore_ascii_case("home") || parts[0].eq_ignore_ascii_case("users"))
+    {
+        Some(&parts[2..])
+    } else if parts.len() >= 4 && parts[0].ends_with(':') && parts[1].eq_ignore_ascii_case("users")
+    {
+        Some(&parts[3..])
+    } else {
+        None
+    };
+    if let Some(suffix) = home_suffix {
+        if suffix.is_empty() {
+            "~".to_owned()
+        } else {
+            format!("~/{}", suffix.join("/"))
         }
+    } else {
+        normalized
+    }
+}
+
+fn metadata_separator(model: &Model) -> &'static str {
+    if presentation(model).nerd_font {
+        "  "
+    } else {
+        "  "
+    }
+}
+
+fn path_marker(model: &Model) -> &'static str {
+    if presentation(model).nerd_font {
+        " "
+    } else {
+        ""
+    }
+}
+
+fn branch_marker(model: &Model) -> &'static str {
+    if presentation(model).nerd_font {
+        " "
+    } else if presentation(model).ascii {
+        "* "
+    } else {
+        "⑂ "
+    }
+}
+
+fn push_metadata_piece(
+    spans: &mut Vec<Span<'static>>,
+    model: &Model,
+    value: String,
+    role: VisualRole,
+) {
+    if !spans.is_empty() {
         spans.push(Span::styled(
-            format!("{label}:"),
+            metadata_separator(model),
             chat_visual_style(model, VisualRole::Muted),
         ));
-        spans.push(Span::styled(value, chat_visual_style(model, role)));
-    };
-    let model_width = if width >= 64 { 16 } else { 14 };
-    push_chip(
-        "model",
+    }
+    spans.push(Span::styled(value, chat_visual_style(model, role)));
+}
+
+fn prompt_metadata_line(model: &Model, width: u16) -> Line<'static> {
+    let mut spans = Vec::new();
+    let model_width = if width >= 64 { 22 } else { 14 };
+    push_metadata_piece(
+        &mut spans,
+        model,
         single_line_label(&selected_model_name(model), model_width),
         VisualRole::Assistant,
     );
-    if width >= 34 {
-        let mode = model.profiles().user.default_mode.trim();
-        let mode = if mode.is_empty() || mode.eq_ignore_ascii_case("provider default") {
-            "default"
-        } else {
-            mode
-        };
-        push_chip(
-            "think",
-            single_line_label(mode, if width >= 64 { 8 } else { 10 }),
+    if width >= 24 {
+        push_metadata_piece(
+            &mut spans,
+            model,
+            thinking_meter(&model.profiles().user.default_mode).to_owned(),
             VisualRole::User,
         );
     }
-    if width >= 64 {
-        let workspace = model.profiles().user.workspace.trim();
-        push_chip(
-            "path",
-            single_line_label(if workspace.is_empty() { "." } else { workspace }, 14),
+    if width >= 48 {
+        push_metadata_piece(
+            &mut spans,
+            model,
+            format!(
+                "{}{}",
+                path_marker(model),
+                single_line_label(
+                    &workspace_display_path(&model.profiles().user.workspace),
+                    if width >= 84 { 28 } else { 18 }
+                )
+            ),
             VisualRole::Normal,
         );
     }
-    if width >= 84
+    if width >= 76
         && let Some(branch) = model.settings().git_branch.as_deref()
     {
-        push_chip("git", single_line_label(branch, 14), VisualRole::Normal);
+        push_metadata_piece(
+            &mut spans,
+            model,
+            format!("{}{}", branch_marker(model), single_line_label(branch, 18)),
+            VisualRole::Tool,
+        );
     }
     Line::from(spans)
 }
@@ -3007,16 +3170,27 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let bordered = area.height >= 3 && area.width >= 12;
-    let block = bordered.then(|| {
-        app_block(model)
-            .borders(Borders::ALL)
-            .border_style(visual_style(model, VisualRole::Border))
-    });
-    let inner = block.as_ref().map_or(area, |block| block.inner(area));
-    if let Some(block) = block {
-        frame.render_widget(block, area);
-    }
+    let horizontal_inset = u16::from(area.width >= 4);
+    let surface = Rect::new(
+        area.x.saturating_add(horizontal_inset),
+        area.y,
+        area.width
+            .saturating_sub(horizontal_inset.saturating_mul(2)),
+        area.height,
+    );
+    let rule = Rect::new(
+        surface.x,
+        surface.bottom().saturating_sub(1),
+        surface.width,
+        u16::from(surface.height > 0),
+    );
+    let inner = Rect::new(
+        surface.x,
+        surface.y,
+        surface.width,
+        surface.height.saturating_sub(1),
+    );
+    render_horizontal_gradient(frame, rule, model);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -3058,15 +3232,20 @@ fn render_prompt_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     composer.set_cursor_line_style(chat_visual_style(model, VisualRole::Normal));
     composer.set_cursor_style(visual_style(model, VisualRole::Selected));
     frame.render_widget(&composer, editor_area);
-    set_composer_cursor(frame, editor_area, model, bordered);
+    set_composer_cursor(frame, editor_area, model, false);
+}
+
+fn prompt_surface_height(area: Rect, model: &Model) -> u16 {
+    u16::try_from(model.composer.lines().len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+        .clamp(3, if presentation(model).compact { 4 } else { 5 })
+        .min(area.height)
 }
 
 fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let compact = presentation(model).compact;
-    let composer_height = u16::try_from(model.composer.lines().len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(1)
-        .clamp(4, if compact { 5 } else { 6 });
+    let composer_height = prompt_surface_height(area, model);
     let notice_height = if model.notice.is_some() {
         if compact { 1 } else { 2 }
     } else {
@@ -3076,21 +3255,21 @@ fn render_standard(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),
+            Constraint::Length(composer_height),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
-            Constraint::Length(composer_height),
+            Constraint::Min(1),
         ])
         .split(area);
 
-    render_transcript(frame, chunks[0], model, true);
+    render_prompt_bar(frame, chunks[0], model);
     if notice_height > 0 {
         render_notice(frame, chunks[1], model);
     }
     if search_height > 0 {
         render_search_bar(frame, chunks[2], model);
     }
-    render_prompt_bar(frame, chunks[3], model);
+    render_transcript(frame, chunks[3], model);
 }
 
 /// Renders the one-row transcript search bar.
@@ -3105,20 +3284,20 @@ fn render_search_bar(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn render_compact(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    let composer_height = area.height.min(2);
+    let composer_height = prompt_surface_height(area, model);
     let transcript_height = area.height.saturating_sub(composer_height);
-    let transcript = Rect::new(area.x, area.y, area.width, transcript_height);
-    let composer = Rect::new(
+    let composer = Rect::new(area.x, area.y, area.width, composer_height);
+    let transcript = Rect::new(
         area.x,
-        area.y + transcript_height,
+        area.y.saturating_add(composer_height),
         area.width,
-        composer_height,
+        transcript_height,
     );
-    if transcript.height > 0 {
-        render_transcript(frame, transcript, model, false);
-    }
     if composer.height > 0 {
         render_prompt_bar(frame, composer, model);
+    }
+    if transcript.height > 0 {
+        render_transcript(frame, transcript, model);
     }
 }
 fn selected_model_label(model: &Model) -> String {
@@ -3140,21 +3319,19 @@ fn selected_model_label(model: &Model) -> String {
         .unwrap_or_else(|| "no model".to_owned())
 }
 
-fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model, bordered: bool) {
+fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let text = transparent_chat_text(transcript_text(model));
-    let block = bordered.then(|| {
-        app_block(model)
-            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-            .title(conversation_title(model))
-            .border_style(visual_style(model, VisualRole::Border))
-    });
-    let inner = block.as_ref().map_or(area, |block| block.inner(area));
-    if let Some(block) = block {
-        frame.render_widget(block, area);
-    }
+    let horizontal_inset = u16::from(area.width >= 4);
+    let inner = Rect::new(
+        area.x.saturating_add(horizontal_inset),
+        area.y,
+        area.width
+            .saturating_sub(horizontal_inset.saturating_mul(2)),
+        area.height,
+    );
     if inner.width == 0 || inner.height == 0 {
         return;
     }

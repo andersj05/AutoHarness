@@ -1019,12 +1019,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let aurora = render_model(&model, 120, 40);
     assert_eq!(
-        aurora.buffer().cell((29, 1)).expect("aurora transcript").bg,
+        aurora.buffer().cell((27, 0)).expect("aurora divider").bg,
         Color::Reset
     );
     assert_eq!(
-        aurora.buffer().cell((29, 1)).expect("aurora transcript").fg,
-        Color::Rgb(56, 189, 248)
+        aurora.buffer().cell((27, 0)).expect("aurora divider").fg,
+        Color::Rgb(45, 212, 191)
     );
 
     apply_visual_preferences(
@@ -1041,12 +1041,12 @@ fn aurora_and_ember_themes_have_distinct_color_anchors() {
     );
     let ember = render_model(&model, 120, 40);
     assert_eq!(
-        ember.buffer().cell((29, 1)).expect("ember transcript").bg,
+        ember.buffer().cell((27, 0)).expect("ember divider").bg,
         Color::Reset
     );
     assert_eq!(
-        ember.buffer().cell((29, 1)).expect("ember transcript").fg,
-        Color::Rgb(253, 186, 116)
+        ember.buffer().cell((27, 0)).expect("ember divider").fg,
+        Color::Rgb(251, 146, 60)
     );
 }
 
@@ -1058,10 +1058,10 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         ready_catalog(),
     );
     for (theme, expected) in [
-        ("midnight", Color::Rgb(147, 197, 253)),
-        ("ocean", Color::Rgb(56, 189, 248)),
-        ("forest", Color::Rgb(134, 239, 172)),
-        ("rose", Color::Rgb(251, 113, 133)),
+        ("midnight", Color::Rgb(34, 211, 238)),
+        ("ocean", Color::Rgb(34, 211, 238)),
+        ("forest", Color::Rgb(74, 222, 128)),
+        ("rose", Color::Rgb(244, 114, 182)),
     ] {
         apply_visual_preferences(
             &mut model,
@@ -1078,11 +1078,11 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
         assert_eq!(
             render_model(&model, 120, 40)
                 .buffer()
-                .cell((29, 1))
+                .cell((27, 0))
                 .expect("theme anchor")
                 .fg,
             expected,
-            "theme {theme} must keep its own user accent"
+            "theme {theme} must keep its own gradient accent"
         );
     }
 
@@ -1101,7 +1101,7 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     let soft = render_model(&model, 120, 40);
     assert!(
         soft.buffer()
-            .cell((29, 1))
+            .cell((27, 0))
             .expect("soft theme anchor")
             .modifier
             .contains(ratatui::style::Modifier::DIM)
@@ -1123,11 +1123,50 @@ fn additional_themes_and_color_treatments_have_distinct_visual_anchors() {
     assert!(
         vivid
             .buffer()
-            .cell((29, 1))
+            .cell((27, 0))
             .expect("vivid theme anchor")
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
+}
+
+#[test]
+fn nerd_font_mode_adds_optional_icons_without_changing_the_ascii_fallback() {
+    let mut model = Model::new(
+        session(16, Vec::new()),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+    apply_visual_preferences(
+        &mut model,
+        VisualPreferences {
+            color_mode: "color",
+            theme: "aurora",
+            glyph_mode: "nerd_font",
+            reduced_motion: false,
+            density: "comfortable",
+            layout: "responsive",
+            timestamp: "relative",
+        },
+    );
+    model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
+        user: autoharness_tui::LocalUserProfileProjection {
+            workspace: r"C:\Users\jense\Desktop\AutoHarness".to_owned(),
+            default_mode: "high".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    model.apply_settings(Arc::new(SettingsProjection {
+        git_branch: Some("feat/tui-polish".to_owned()),
+        ..model.settings().clone()
+    }));
+
+    let rendered = buffer_text(&render_model(&model, 120, 40));
+    assert!(rendered.contains("  AutoHarness"));
+    assert!(rendered.contains(" ~/Desktop/AutoHarness"));
+    assert!(rendered.contains(" feat/tui-polish"));
+    assert!(rendered.contains(''));
 }
 
 #[test]
@@ -1171,8 +1210,8 @@ fn prompt_bar_shows_safe_runtime_metadata() {
     );
     model.apply_profiles(Arc::new(autoharness_tui::ProfilesProjection {
         user: autoharness_tui::LocalUserProfileProjection {
-            workspace: r"C:\work\autoharness".to_owned(),
-            default_mode: "deliberate".to_owned(),
+            workspace: r"C:\Users\jense\Desktop\AutoHarness".to_owned(),
+            default_mode: "high".to_owned(),
             ..Default::default()
         },
         ..Default::default()
@@ -1182,8 +1221,11 @@ fn prompt_bar_shows_safe_runtime_metadata() {
         ..SettingsProjection::default()
     }));
     let rendered = buffer_text(&render_model(&model, 120, 40));
-    assert!(rendered.contains("model:Gemini 2.5 Pro"));
-    assert!(rendered.contains("think:deliber"));
-    assert!(rendered.contains(r"path:C:\work\autoh"));
-    assert!(rendered.contains("git:feat/prompt-b"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("[####..]"));
+    assert!(rendered.contains("~/Desktop/AutoHarness"));
+    assert!(rendered.contains("⑂ feat/prompt-bar"));
+    for prefix in ["model:", "mode:", "think:", "path:", "git:"] {
+        assert!(!rendered.contains(prefix));
+    }
 }
