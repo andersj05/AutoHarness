@@ -40,6 +40,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0013](0013-use-durable-credential-mutation-recovery.md) | Accepted | Use durable non-secret recovery records for cross-system profile and credential mutations |
 | [0014](0014-use-codex-cli-subscription-boundary.md) | Superseded by ADR-0015 | Use the official Codex CLI subscription boundary |
 | [0015](0015-use-native-codex-subscription-adapter.md) | Accepted | Use a native Codex subscription adapter |
+| [0016](0016-use-typed-tui-presentation-layer.md) | Proposed | Use a typed terminal presentation layer |
 
 ## When an ADR is not needed
 

@@ -2,13 +2,17 @@
 
 **Last reviewed:** 2026-08-27
 
-**Phase:** 3.9 terminal product validation - TUI navigation audit
+**Phase:** 3.9 terminal product validation, with Phase 3.10 terminal visual overhaul now planned
 
 **Status:** Settings owns the active profile's model and thinking defaults, thinking-level navigation stays within its list until the first option, fresh sessions apply saved defaults without overwriting session-specific choices, the native Codex adapter completes an opt-in live `gpt-5.6-luna` request, and Chat now uses an open bottom-composer workspace with one sidebar divider, a borderless tail-following transcript, an accessible ASCII generation scanner, and a configurable prompt status bar with labeled circular thinking fill, context utilization, compact workspace and Git metadata, optional Nerd Font symbols, and theme-aware gradients while the full Phase 3.9 release evidence remains pending
 
 ## Current objective
 
 Finish validating the bottom-anchored Chat workspace and model-default selector, then preserve the release-candidate evidence gates without reopening unrelated terminal contracts.
+
+Phase 3.10 is planned but not started.
+Its authoritative documents are [the audit](../design/TUI_AUDIT.md), [the design system](../design/TUI_DESIGN_SYSTEM.md), [the redesign plan](../design/TUI_REDESIGN_PLAN.md), and [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md).
+Its first two prerequisites, a wall-clock projection field and a style-aware snapshot helper, must land before any color code changes.
 
 ## Current repository state
 
@@ -59,6 +63,7 @@ Finish validating the bottom-anchored Chat workspace and model-default selector,
 
 ## Recently completed
 
+- On 2026-08-27, `feat/tui-redesign-plan` added the terminal interface audit, the terminal design system contract, the ten-step Phase 3.10 redesign plan, and proposed ADR-0016 for a typed presentation layer; the audit is backed by review-harness buffer captures plus source citations, and it establishes that the layout skeleton is sound while the layer between preferences and cells is missing.
 - On 2026-08-27, the Codex startup path now applies the active profile's saved reasoning effort just as runtime profile rebuilding does, and the opt-in live probe passes with the currently saved profile model and reasoning configuration; persisted `codex/default` selections continue to resolve to the live-verified `gpt-5.6-luna` fallback.
 - On 2026-08-26, Chat moved its open composer beneath the tail-following transcript, re-anchored inline command results above the prompt, clears transcript text beneath those results, and shows a tick-driven ASCII generation scanner with a static reduced-motion fallback; thinking-mode Up and Down now move within the thinking list and return to model selection only from its first option.
 - On 2026-08-26, the prompt status bar gained a persisted Essential, Workspace, or Detailed setting, labeled six-step thinking circles, real metric dividers, home-relative Nerd Font workspace metadata, Git branch context, provider-advertised context percentages with warning thresholds, and optional compact latest-turn input and output totals; reviewed goldens cover 120x40, 80x24, 60x18, and 40x12, and formatting, strict workspace Clippy, the full locked workspace suite, and the routed-shell Windows PTY journey pass.
@@ -131,6 +136,7 @@ Finish validating the bottom-anchored Chat workspace and model-default selector,
 3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
 4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
 5. Record and triage any cross-platform terminal rendering differences before release-candidate promotion.
+6. After that candidate, start Phase 3.10 at its prerequisites: publish a wall-clock millisecond field beside the monotonic `UiInstant`, then convert the four goldens to a style-aware snapshot helper.
 
 ## Open questions
 
@@ -144,3 +150,6 @@ Configured router access, macOS and Linux platform vault environments, an approv
 ## Handoff note
 
 The branch adds release-candidate TUI hardening and focused tests; do not promote it until the full cross-platform evidence matrix and release checklist are recorded.
+
+`feat/tui-redesign-plan` is documentation only and changes no source.
+Phase 3.10 must be implemented one step per branch in the plan's order, because steps 5 through 8 all depend on the layout contract from step 4 and on the component catalog frozen at the end of step 3.
