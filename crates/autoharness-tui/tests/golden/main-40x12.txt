@@ -17,21 +17,21 @@
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
  | 2-2 fg=#22d3ee bg=reset
- | 3-37 fg=#f2f9fc bg=#080c18
+ | 3-37 fg=#f2f9fc bg=reset
  | 38-38 fg=#2e343f bg=reset
  | 39-39 fg=#f2f9fc bg=reset
 @3
  │Capacity is temporarily exhausted;  │ 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
- | 2-37 fg=#f2f9fc bg=#080c18
+ | 2-37 fg=#f2f9fc bg=reset
  | 38-38 fg=#2e343f bg=reset
  | 39-39 fg=#f2f9fc bg=reset
 @4
  │no credentials were exposed.        │ 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
- | 2-37 fg=#f2f9fc bg=#080c18
+ | 2-37 fg=#f2f9fc bg=reset
  | 38-38 fg=#2e343f bg=reset
  | 39-39 fg=#f2f9fc bg=reset
 @5
@@ -40,7 +40,7 @@
  | 1-1 fg=#2e343f bg=reset
  | 2-15 fg=#fb7185 bg=#482937 bold
  | 16-19 fg=#0b0f19 bg=#22d3ee bold
- | 20-20 fg=#656b75 bg=#080c18
+ | 20-20 fg=#656b75 bg=reset
  | 21-37 fg=#777d86 bg=reset
  | 38-38 fg=#2e343f bg=reset
  | 39-39 fg=#f2f9fc bg=reset

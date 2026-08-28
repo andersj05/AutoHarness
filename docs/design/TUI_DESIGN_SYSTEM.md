@@ -326,8 +326,8 @@ Every component is unit-tested by rendering into a `TestBackend` at `40`, `60`, 
 
 | Component | Contract |
 | --- | --- |
-| `Panel` | Optional icon, title, subtitle, and footer hint row. Border style is `border_subtle` when unfocused and a gradient perimeter when focused. Returns the inner rect. |
-| `Scrim` | Dims a whole region by replacing every cell style with `surface_scrim` before a modal draws. Fixes audit finding O1. |
+| `Panel` | Optional icon, title, subtitle, and footer hint row. It clears content with a reset background so the terminal's native transparency remains visible. Border style is `border_subtle` when unfocused and a gradient perimeter when focused. Returns the inner rect. |
+| `Scrim` | Occludes background glyphs with blank cells while preserving a reset background, so modals stay readable without creating an opaque black rectangle. Fixes audit finding O1. |
 | `Modal` | Scrim plus `Panel` plus body plus a right-aligned `ButtonRow`. One sizing function with a single clamp table replaces the five existing helpers. |
 | `ButtonRow` | Buttons with primary, secondary, and danger variants; renders `label` plus key annotation; measures itself; exports `Vec<(Rect, MouseAction)>`. Fixes audit findings V2 and O3. |
 | `KeyValueTable` | Computes the label column from the widest label, right-aligns an optional trailing chip, and wraps values in a hanging indent. Fixes audit findings T2, H1, and V3. |

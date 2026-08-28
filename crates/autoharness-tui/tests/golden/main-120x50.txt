@@ -174,7 +174,7 @@
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
  | 28-28 fg=#22d3ee bg=reset
- | 29-117 fg=#f2f9fc bg=#080c18
+ | 29-117 fg=#f2f9fc bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @17
@@ -183,7 +183,7 @@
  | 25-25 fg=#7dc9fa bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
- | 28-117 fg=#f2f9fc bg=#080c18
+ | 28-117 fg=#f2f9fc bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @18
@@ -193,9 +193,9 @@
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
  | 28-41 fg=#fb7185 bg=#482937
- | 42-74 fg=#f2f9fc bg=#080c18
+ | 42-74 fg=#f2f9fc bg=reset
  | 75-92 fg=#0b0f19 bg=#22d3ee bold
- | 93-93 fg=#656b75 bg=#080c18
+ | 93-93 fg=#656b75 bg=reset
  | 94-117 fg=#777d86 bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset

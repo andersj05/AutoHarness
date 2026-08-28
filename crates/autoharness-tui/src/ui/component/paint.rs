@@ -50,11 +50,6 @@ pub fn fill(buf: &mut Buffer, area: Rect, style: Style, fill: Option<char>) {
     }
 }
 
-/// Fills `area` with the surface-base token.
-pub fn clear_surface(buf: &mut Buffer, area: Rect, theme: &Theme) {
-    fill(buf, area, theme.style(Token::SurfaceBase), Some(' '));
-}
-
 /// Clears `area` while preserving the terminal's own background.
 pub fn clear_transparent(buf: &mut Buffer, area: Rect, theme: &Theme) {
     fill(

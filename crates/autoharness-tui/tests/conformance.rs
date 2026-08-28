@@ -95,7 +95,7 @@ impl Surface {
 
     const fn anchor(self) -> &'static str {
         match self {
-            Self::Chat => "AutoHarness",
+            Self::Chat => "Agent",
             Self::StreamingChat => "Waiting for the first token",
             Self::Sessions => "Sessions",
             Self::Profiles => "Providers",
