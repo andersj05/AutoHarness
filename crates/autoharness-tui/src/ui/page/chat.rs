@@ -490,12 +490,32 @@ fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
     }
 }
 
+/// Clamps manual conversation scrolling to the oldest renderable viewport.
+///
+/// Input updates intentionally stay independent of terminal dimensions. The
+/// runner calls this immediately before drawing, when the actual conversation
+/// rectangle is known.
+pub(crate) fn normalize_scroll(inner: Rect, model: &mut Model) {
+    if model.transcript.follow_tail {
+        model.transcript.rows_from_bottom = 0;
+        return;
+    }
+    let maximum = maximum_scroll_offset(inner, model, prompt_surface_height(inner, model));
+    model.transcript.rows_from_bottom = model.transcript.rows_from_bottom.min(maximum);
+    if maximum == 0 {
+        model.transcript.follow_tail = true;
+    }
+}
+
 fn tail_slices(inner: Rect, model: &Model, trailing_rows: u16) -> Vec<TailSlice> {
     let viewport = usize::from(inner.height);
     let bottom = if model.transcript.follow_tail {
         0
     } else {
-        model.transcript.rows_from_bottom
+        model
+            .transcript
+            .rows_from_bottom
+            .min(maximum_scroll_offset(inner, model, trailing_rows))
     };
     let top = bottom.saturating_add(viewport);
     let mut cursor = usize::from(trailing_rows);
@@ -547,6 +567,19 @@ fn tail_slices(inner: Rect, model: &Model, trailing_rows: u16) -> Vec<TailSlice>
             .saturating_sub(content_shift);
     }
     slices
+}
+
+fn maximum_scroll_offset(inner: Rect, model: &Model, trailing_rows: u16) -> usize {
+    let content_rows =
+        model
+            .session
+            .transcript
+            .iter()
+            .fold(usize::from(trailing_rows), |rows, item| {
+                rows.saturating_add(usize::from(item_height(model, item, inner.width)))
+                    .saturating_add(1)
+            });
+    content_rows.saturating_sub(usize::from(inner.height))
 }
 
 fn render_transcript_start(buf: &mut Buffer, inner: Rect, model: &Model) {

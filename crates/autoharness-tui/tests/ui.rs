@@ -773,6 +773,32 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
 }
 
 #[test]
+fn manual_scroll_stops_at_the_oldest_viewport_without_clearing() {
+    let transcript = (0..48)
+        .map(|index| TranscriptItem::User {
+            input_id: format!("input-{index}"),
+            text: format!("message {index:02}"),
+        })
+        .collect();
+    let mut model = Model::new(
+        session(12, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+
+    for _ in 0..100 {
+        let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
+    }
+    let at_start = buffer_text(&render_model(&model, 40, 12));
+    assert!(at_start.contains("message 00"));
+    assert!(!at_start.contains("message 47"));
+    assert!(!at_start.contains('❯'));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
+    assert_eq!(at_start, buffer_text(&render_model(&model, 40, 12)));
+}
+
+#[test]
 fn tick_stores_wall_clock_beside_monotonic_time() {
     let mut model = empty_model();
     assert_eq!(model.now(), 0);

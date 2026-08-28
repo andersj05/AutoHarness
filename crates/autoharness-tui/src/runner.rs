@@ -326,7 +326,13 @@ where
     B::Error: Display,
 {
     terminal
-        .draw(|frame| view(frame, model))
+        .draw(|frame| {
+            let layout = crate::ui::layout::Layout::compute(frame.area(), model);
+            if let Some(transcript) = layout.regions.transcript {
+                crate::ui::page::chat::normalize_scroll(transcript, model);
+            }
+            view(frame, model);
+        })
         .map_err(|error| RunnerError::Draw(error.to_string()))?;
     #[cfg(feature = "benchmark-instrumentation")]
     crate::benchmark::rendered_projection(&model.session.session_id, model.session.revision);

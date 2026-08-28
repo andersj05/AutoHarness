@@ -36,19 +36,35 @@ fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
         "tail-follow should show the final response lines and composer",
     );
 
-    terminal.send_bytes(&PAGE_UP);
+    for _ in 0..20 {
+        terminal.send_bytes(&PAGE_UP);
+    }
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("restored response line") && !text.contains("Ask AutoHarness")
+            text.contains("restored long prompt")
+                && text.contains("restored response line 00")
+                && !text.contains("restored response line 47")
+                && !text.contains("Ask AutoHarness")
         },
-        "Page Up should use the full viewport for earlier conversation rows",
+        "repeated Page Up should stop at a stable, populated conversation start",
     );
 
     terminal.send_bytes(&PAGE_DOWN);
     terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            !text.contains("restored long prompt") && text.contains("restored response line")
+        },
+        "one Page Down should recover immediately from the top boundary",
+    );
+
+    for _ in 0..10 {
+        terminal.send_bytes(&PAGE_DOWN);
+    }
+    terminal.wait_for(
         |screen| screen.contents().contains("Ask AutoHarness"),
-        "Page Down should return to the conversation tail and composer",
+        "continued Page Down should return to the conversation tail and composer",
     );
 
     terminal.send_bytes(&ctrl_c());
