@@ -1,12 +1,12 @@
 # autoharness-tui style snapshot v1
 # 80x24
 @0
- ◆ AutoHarness                                                ────── generating 
+ ◆ Agent                                                      ────── generating 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
  | 2-2 fg=reset bg=reset
- | 3-13 fg=#67dbf1 bg=reset bold
- | 14-61 fg=reset bg=reset
+ | 3-7 fg=#67dbf1 bg=reset bold
+ | 8-61 fg=reset bg=reset
  | 62-62 fg=#22d3ee bg=reset
  | 63-63 fg=#5bcef4 bg=reset
  | 64-64 fg=#7bcaf9 bg=reset
@@ -123,12 +123,12 @@
  | 30-30 fg=#a2a9b0 bg=reset
  | 31-79 fg=#f2f9fc bg=reset
 @5
- ❯  Ask AutoHarness...                                                          
+ ❯  Ask Agent...                                                                
  | 0-0 fg=#f2f9fc bg=reset
  | 1-2 fg=#67dbf1 bg=reset bold
  | 3-3 fg=#f8fafc bg=#0b0f19 bold
- | 4-21 fg=darkgray bg=reset
- | 22-79 fg=#f2f9fc bg=reset
+ | 4-15 fg=darkgray bg=reset
+ | 16-79 fg=#f2f9fc bg=reset
 @6
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset

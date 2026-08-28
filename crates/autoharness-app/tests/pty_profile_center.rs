@@ -37,7 +37,7 @@ fn saved_codex_profile_without_login_keeps_recovery_ui_open() {
             let text = screen.contents();
             text.contains("AutoHarness")
                 && text.contains("no model")
-                && text.contains("Ask AutoHarness")
+                && text.contains("Ask Agent")
                 && !text.contains("Connect a provider key")
         },
         "a Codex profile without login should render a clean recoverable app state",

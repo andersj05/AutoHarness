@@ -97,12 +97,12 @@
  | 37-37 fg=#a2a9b0 bg=reset
  | 38-79 fg=#f2f9fc bg=reset
 @2
- ❯  Ask AutoHarness...                                                          
+ ❯  Ask Agent...                                                                
  | 0-0 fg=#f2f9fc bg=reset
  | 1-2 fg=#67dbf1 bg=reset bold
  | 3-3 fg=#f8fafc bg=#0b0f19 bold
- | 4-21 fg=darkgray bg=reset
- | 22-79 fg=#f2f9fc bg=reset
+ | 4-15 fg=darkgray bg=reset
+ | 16-79 fg=#f2f9fc bg=reset
 @3
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset

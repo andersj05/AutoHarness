@@ -18,12 +18,12 @@
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @3
- ◆ AutoHarness                                         complete  18 in / 41 out 
+ ◆ Agent                                               complete  18 in / 41 out 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
  | 2-2 fg=reset bg=reset
- | 3-13 fg=#67dbf1 bg=reset bold
- | 14-54 fg=reset bg=reset
+ | 3-7 fg=#67dbf1 bg=reset bold
+ | 8-54 fg=reset bg=reset
  | 55-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @4
@@ -76,12 +76,12 @@
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @12
- ◆ AutoHarness                                                    retry  failed 
+ ◆ Agent                                                          retry  failed 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
  | 2-2 fg=reset bg=reset
- | 3-13 fg=#67dbf1 bg=reset bold
- | 14-65 fg=reset bg=reset
+ | 3-7 fg=#67dbf1 bg=reset bold
+ | 8-65 fg=reset bg=reset
  | 66-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @13

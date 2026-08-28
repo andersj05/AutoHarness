@@ -31,7 +31,7 @@ fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("restored response line 47") && text.contains("Ask AutoHarness")
+            text.contains("restored response line 47") && text.contains("Ask Agent")
         },
         "tail-follow should show the final response lines and composer",
     );
@@ -45,7 +45,7 @@ fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
             text.contains("restored long prompt")
                 && text.contains("restored response line 00")
                 && !text.contains("restored response line 47")
-                && !text.contains("Ask AutoHarness")
+                && !text.contains("Ask Agent")
         },
         "repeated Page Up should stop at a stable, populated conversation start",
     );
@@ -63,7 +63,7 @@ fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
         terminal.send_bytes(&PAGE_DOWN);
     }
     terminal.wait_for(
-        |screen| screen.contents().contains("Ask AutoHarness"),
+        |screen| screen.contents().contains("Ask Agent"),
         "continued Page Down should return to the conversation tail and composer",
     );
 
@@ -163,7 +163,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
         |screen| {
             let text = screen.contents();
             text.contains("seeded navigation response")
-                && text.contains("Ask AutoHarness")
+                && text.contains("Ask Agent")
                 && !text.contains("Conversation")
         },
         "Alt+1 should return to replayable offline Chat",
@@ -221,7 +221,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
             let text = screen.contents();
             text.contains("AutoHarness")
                 && text.contains("no model")
-                && text.contains("Ask AutoHarness")
+                && text.contains("Ask Agent")
                 && !text.contains("Connect a provider key")
                 && !text.contains("Profile")
         },

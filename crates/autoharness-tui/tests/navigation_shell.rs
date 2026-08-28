@@ -292,7 +292,7 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "Ask AutoHarness"),
+        ('1', "Ask Agent"),
         ('2', "Sessions"),
         ('3', "Providers"),
         ('4', "Settings"),
@@ -344,7 +344,7 @@ fn chat_empty_states_leave_the_conversation_canvas_uncluttered() {
     );
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
-    assert!(offline.contains("Ask AutoHarness"));
+    assert!(offline.contains("Ask Agent"));
     assert!(!offline.contains("Connect a provider key"));
     assert!(!offline.contains("Choose a compatible model"));
 
@@ -353,7 +353,7 @@ fn chat_empty_states_leave_the_conversation_canvas_uncluttered() {
         Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
     );
     let loading = render_text(&model, 80, 24);
-    assert!(loading.contains("Ask AutoHarness"));
+    assert!(loading.contains("Ask Agent"));
     assert!(!loading.contains("Loading provider models"));
 
     let _ = update(
@@ -365,7 +365,7 @@ fn chat_empty_states_leave_the_conversation_canvas_uncluttered() {
         )))),
     );
     let failed = render_text(&model, 80, 24);
-    assert!(failed.contains("Ask AutoHarness"));
+    assert!(failed.contains("Ask Agent"));
     assert!(!failed.contains("Connection error"));
     assert!(!failed.contains("Ctrl+R retry"));
 }
@@ -386,7 +386,7 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
-    assert!(settled.contains("Ask AutoHarness"));
+    assert!(settled.contains("Ask Agent"));
     assert!(!settled.contains("Loading provider models..."));
 }
 
@@ -400,7 +400,7 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 
     let rendered = render_text(&model, 80, 24);
     assert!(!rendered.contains("Starting"));
-    assert!(rendered.contains("Ask AutoHarness"));
+    assert!(rendered.contains("Ask Agent"));
     assert!(!rendered.contains("Offline"));
 }
 
@@ -408,7 +408,7 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 fn a_new_conversation_is_blank_apart_from_the_composer() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
-    assert!(rendered.contains("Ask AutoHarness"));
+    assert!(rendered.contains("Ask Agent"));
     assert!(!rendered.contains("New conversation"));
     assert!(!rendered.contains("Write a prompt below"));
     assert!(!rendered.contains("Connect a provider key"));
@@ -593,7 +593,7 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("Ask AutoHarness"));
+    assert!(rendered.contains("Ask Agent"));
     assert_eq!(
         hit_test(&model, 48, 18, 2, 2),
         Some(MouseAction::FocusComposer)

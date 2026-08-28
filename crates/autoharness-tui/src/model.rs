@@ -745,7 +745,7 @@ pub struct ComposerState {
 impl Default for ComposerState {
     fn default() -> Self {
         let mut editor = TextArea::default();
-        editor.set_placeholder_text("Ask AutoHarness...");
+        editor.set_placeholder_text("Ask Agent...");
         editor.set_wrap_mode(WrapMode::WordOrGlyph);
         editor.set_cursor_line_style(Style::default());
         let mut state = Self { editor };

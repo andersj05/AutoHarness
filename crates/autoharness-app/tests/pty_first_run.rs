@@ -24,7 +24,7 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
             let text = screen.contents();
             text.contains("AutoHarness")
                 && text.contains("no model")
-                && text.contains("Ask AutoHarness")
+                && text.contains("Ask Agent")
                 && !text.contains("Connect a provider key")
                 && !text.contains("Choose a compatible model")
         },

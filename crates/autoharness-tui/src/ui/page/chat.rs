@@ -6,8 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::model::{
-    AttemptKey, AttemptStatus, Focus, Model, MouseAction, Notice, PendingKind, Route,
-    TranscriptItem,
+    AttemptKey, AttemptStatus, Model, MouseAction, Notice, PendingKind, Route, TranscriptItem,
 };
 use crate::text::display_safe;
 use crate::ui::component::paint::{self, wrap_cells};
@@ -381,7 +380,7 @@ fn item_lines(model: &Model, item: &TranscriptItem) -> Vec<String> {
             } else {
                 display_safe(text)
             };
-            let mut lines = vec![format!("AutoHarness  {meta}"), body];
+            let mut lines = vec![format!("Agent  {meta}"), body];
             if let AttemptStatus::Failed(failure) = status {
                 lines.push(display_safe(&failure.message));
                 lines.push(format!(
@@ -712,9 +711,8 @@ fn item_height(model: &Model, item: &TranscriptItem, width: u16) -> u16 {
         } => {
             let meta = assistant_heading(model, status, usage, retry_of.is_some(), attempt_id);
             let body = assistant_body(text, status);
-            let message =
-                MessageBlock::new(theme, icons, Icon::Assistant, "AutoHarness", &meta, &body)
-                    .measure(width);
+            let message = MessageBlock::new(theme, icons, Icon::Assistant, "Agent", &meta, &body)
+                .measure(width);
             if let AttemptStatus::Failed(failure) = status {
                 let lines = wrap_cells(
                     &display_safe(&failure.message),
@@ -786,9 +784,8 @@ fn render_item(buf: &mut Buffer, area: Rect, model: &Model, item: &TranscriptIte
         } => {
             let meta = assistant_heading(model, status, usage, retry_of.is_some(), attempt_id);
             let body = assistant_body(text, status);
-            let used =
-                MessageBlock::new(theme, icons, Icon::Assistant, "AutoHarness", &meta, &body)
-                    .render(buf, area);
+            let used = MessageBlock::new(theme, icons, Icon::Assistant, "Agent", &meta, &body)
+                .render(buf, area);
             if matches!(status, AttemptStatus::Streaming)
                 && icons.mode() != GlyphMode::Ascii
                 && model.motion().animating()
@@ -1050,7 +1047,6 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     composer.set_cursor_line_style(theme.style_transparent(Token::TextPrimary));
     composer.set_cursor_style(theme.filled(Token::SurfaceSelected));
     frame.render_widget(&composer, editor_area);
-    set_composer_cursor(frame, editor_area, model);
 }
 
 fn render_status(buf: &mut Buffer, area: Rect, model: &Model) {
@@ -1348,28 +1344,6 @@ fn render_search(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             &status,
             theme.style(Token::TextMuted),
         );
-    }
-}
-
-fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    if model.focus != Focus::Composer
-        || model.overlay().is_some()
-        || model
-            .pending
-            .values()
-            .any(|pending| matches!(pending, PendingKind::SubmitPrompt(_)))
-    {
-        return;
-    }
-    let cursor = model.composer.editor.screen_cursor();
-    let x = area
-        .x
-        .saturating_add(u16::try_from(cursor.col).unwrap_or(u16::MAX));
-    let y = area
-        .y
-        .saturating_add(u16::try_from(cursor.row).unwrap_or(u16::MAX));
-    if x < area.right() && y < area.bottom() {
-        frame.set_cursor_position((x, y));
     }
 }
 
