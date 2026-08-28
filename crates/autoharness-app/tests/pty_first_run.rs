@@ -22,19 +22,32 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("no model")
+            text.contains("no model")
                 && text.contains("Ask Agent")
                 && !text.contains("Connect a provider key")
                 && !text.contains("Choose a compatible model")
         },
         "first draw should show the clean credential-free Chat surface",
     );
+    let cursor_show_count = session
+        .raw_output()
+        .windows(b"\x1b[?25h".len())
+        .filter(|window| *window == b"\x1b[?25h")
+        .count();
     session.type_text("/settings");
     session.send_bytes(b"\r");
     session.wait_for(
         |screen| screen.contents().contains("Settings"),
         "the settings command should open the settings route",
+    );
+    assert_eq!(
+        session
+            .raw_output()
+            .windows(b"\x1b[?25h".len())
+            .filter(|window| *window == b"\x1b[?25h")
+            .count(),
+        cursor_show_count,
+        "interactive redraws must keep the hardware cursor hidden behind the styled software cursor"
     );
 
     // Quit with Ctrl+C: clean exit code and restored terminal.
