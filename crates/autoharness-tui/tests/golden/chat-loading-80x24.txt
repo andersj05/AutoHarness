@@ -25,35 +25,17 @@
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @8
-                                  AutoHarness                                   
- | 0-33 fg=#f2f9fc bg=reset
- | 34-34 fg=#22d3ee bg=reset
- | 35-35 fg=#4ad0f1 bg=reset
- | 36-36 fg=#62cef5 bg=reset
- | 37-37 fg=#75cbf8 bg=reset
- | 38-38 fg=#85c8fc bg=reset
- | 39-39 fg=#93c4ff bg=reset
- | 40-40 fg=#99b9fe bg=reset
- | 41-41 fg=#9daefd bg=reset
- | 42-42 fg=#a1a3fc bg=reset
- | 43-43 fg=#a497fb bg=reset
- | 44-44 fg=#a78bfa bg=reset
- | 45-79 fg=#f2f9fc bg=reset
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
 @9
-                                   Connecting                                   
- | 0-34 fg=#f2f9fc bg=reset
- | 35-44 fg=#a2a9b0 bg=reset
- | 45-79 fg=#f2f9fc bg=reset
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
 @10
-    1. Loading provider models...                                               
- | 0-2 fg=#f2f9fc bg=reset
- | 3-33 fg=#f2f9fc bg=#151926
- | 34-79 fg=#f2f9fc bg=reset
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
 @11
-                                  Please wait                                   
- | 0-32 fg=#f2f9fc bg=reset
- | 33-45 fg=#0b0f19 bg=#22d3ee bold
- | 46-79 fg=#f2f9fc bg=reset
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
 @12
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset

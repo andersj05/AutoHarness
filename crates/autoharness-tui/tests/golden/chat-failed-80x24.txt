@@ -1,20 +1,18 @@
 # autoharness-tui style snapshot v1
 # 80x24
 @0
- ◆│AutoHarness                                                           failed 
+ ◆ AutoHarness                                                           failed 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-13 fg=#67dbf1 bg=reset bold
  | 14-72 fg=reset bg=reset
  | 73-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @1
-  │                                                                             
+                                                                                
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-78 fg=reset bg=reset
+ | 1-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @2
  ╭────────────────────────────────────────────────────────────────────────────╮ 

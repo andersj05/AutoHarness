@@ -29,7 +29,7 @@ fn wait_for_chat(session: &mut PtySession) {
         |screen| {
             let text = screen.contents();
             text.contains("AutoHarness")
-                && text.contains("Offline")
+                && text.contains("no model")
                 && text.contains("Ask AutoHarness")
         },
         "the terminal-capability smoke should reach the complete Chat surface",

@@ -1,111 +1,95 @@
 # autoharness-tui style snapshot v1
 # 80x24
 @0
-  │  Plan a café launch.                                                        
+   Plan a café launch.                                                          
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-23 fg=#f2f9fc bg=reset
- | 24-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-21 fg=#f2f9fc bg=reset
+ | 22-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @1
-  │  Keep it practical.                                                         
+   Keep it practical.                                                           
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-22 fg=#f2f9fc bg=reset
- | 23-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-20 fg=#f2f9fc bg=reset
+ | 21-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @2
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @3
- ◆│AutoHarness                                         complete  18 in / 41 out 
+ ◆ AutoHarness                                         complete  18 in / 41 out 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-13 fg=#67dbf1 bg=reset bold
  | 14-54 fg=reset bg=reset
  | 55-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @4
-  │  Start with a two-week validation sprint:                                   
+   Start with a two-week validation sprint:                                     
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-44 fg=#f2f9fc bg=reset
- | 45-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-42 fg=#f2f9fc bg=reset
+ | 43-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @5
-  │  1. Interview ten customers.                                                
+   1. Interview ten customers.                                                  
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-31 fg=#f2f9fc bg=reset
- | 32-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-29 fg=#f2f9fc bg=reset
+ | 30-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @6
-  │  2. Price three menu bundles.                                               
+   2. Price three menu bundles.                                                 
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-32 fg=#f2f9fc bg=reset
- | 33-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-30 fg=#f2f9fc bg=reset
+ | 31-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @7
-  │  3. Measure repeat intent.                                                  
+   3. Measure repeat intent.                                                    
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-29 fg=#f2f9fc bg=reset
- | 30-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-27 fg=#f2f9fc bg=reset
+ | 28-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @8
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @9
- ☺│You                                                                          
+ ☺ You                                                                          
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#86bbfc bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-5 fg=#86bbfc bg=reset bold
  | 6-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @10
-  │  What could go wrong?                                                       
+   What could go wrong?                                                         
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-24 fg=#f2f9fc bg=reset
- | 25-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-22 fg=#f2f9fc bg=reset
+ | 23-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @11
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @12
- ◆│AutoHarness                                                    retry  failed 
+ ◆ AutoHarness                                                    retry  failed 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-13 fg=#67dbf1 bg=reset bold
  | 14-65 fg=reset bg=reset
  | 66-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @13
-  │  The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                 
+   The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                   
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-62 fg=#f2f9fc bg=reset
- | 63-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-60 fg=#f2f9fc bg=reset
+ | 61-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @14
  ╭────────────────────────────────────────────────────────────────────────────╮ 

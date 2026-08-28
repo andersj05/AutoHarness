@@ -254,6 +254,10 @@ fn switching_stashes_the_outgoing_draft_and_restores_the_incoming_draft() {
         other => panic!("expected open-session intent, got {other:?}"),
     }
     commit_all(&mut model, &effects);
+    assert!(
+        model.notice.is_none(),
+        "opening a session should not spend a Chat row on redundant confirmation"
+    );
 
     // Simulate the projection swap performed by application composition.
     let _ = update(&mut model, Message::SessionChanged(session("session-b")));

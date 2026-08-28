@@ -196,21 +196,12 @@ fn narrow_chat_keeps_prompt_metadata_without_status_header() {
 }
 
 #[test]
-fn prompt_follows_the_scrollable_conversation_and_stays_at_the_bottom() {
+fn prompt_is_the_only_content_in_a_new_conversation() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 80, 24));
-    let prompt = rendered.find("❯").expect("prompt marker");
-    let conversation = rendered
-        .find("New conversation")
-        .expect("conversation content");
-    assert!(conversation < prompt);
-    assert!(
-        rendered
-            .lines()
-            .rev()
-            .take(3)
-            .any(|line| line.contains("❯"))
-    );
+    assert!(rendered.contains('❯'));
+    assert!(!rendered.contains("New conversation"));
+    assert!(!rendered.contains("Connect a provider key"));
     assert!(!rendered.contains("Conversation"));
 }
 

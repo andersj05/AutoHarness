@@ -1,7 +1,7 @@
 # autoharness-tui style snapshot v1
 # 120x40
 @0
- AutoHarness             │ ☺│You                                                                                        
+ AutoHarness             │ ☺ You                                                                                        
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#4ad0f1 bg=reset
@@ -18,37 +18,33 @@
  | 25-25 fg=#22d3ee bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#86bbfc bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-31 fg=#86bbfc bg=reset bold
  | 32-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @1
-▣ Chat                   │  │  Plan a café launch.                                                                      
+▣ Chat                   │   Plan a café launch.                                                                        
  | 0-0 fg=#f8fafc bg=#0b0f19 bold
  | 1-1 fg=#f2f9fc bg=reset
  | 2-5 fg=#f8fafc bg=#0b0f19 bold
  | 6-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#30d2ef bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-49 fg=#f2f9fc bg=reset
- | 50-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-47 fg=#f2f9fc bg=reset
+ | 48-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @2
-≡ Sessions               │  │  Keep it practical.                                                                       
+≡ Sessions               │   Keep it practical.                                                                         
  | 0-0 fg=#a2a9b0 bg=reset
  | 1-1 fg=#f2f9fc bg=reset
  | 2-9 fg=#a2a9b0 bg=reset
  | 10-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#3ad2f0 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-48 fg=#f2f9fc bg=reset
- | 49-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-46 fg=#f2f9fc bg=reset
+ | 47-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @3
 ⌘ Profiles               │                                                                                              
@@ -59,7 +55,7 @@
  | 25-25 fg=#43d1f1 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @4
-⚙ Settings               │ ◆│AutoHarness                                                       complete  18 in / 41 out 
+⚙ Settings               │ ◆ AutoHarness                                                       complete  18 in / 41 out 
  | 0-0 fg=#a2a9b0 bg=reset
  | 1-1 fg=#f2f9fc bg=reset
  | 2-9 fg=#a2a9b0 bg=reset
@@ -67,61 +63,53 @@
  | 25-25 fg=#4bd0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#67dbf1 bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-39 fg=#67dbf1 bg=reset bold
  | 40-94 fg=reset bg=reset
  | 95-118 fg=#656b75 bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @5
-? Help                   │  │  Start with a two-week validation sprint:                                                 
+? Help                   │   Start with a two-week validation sprint:                                                   
  | 0-0 fg=#a2a9b0 bg=reset
  | 1-1 fg=#f2f9fc bg=reset
  | 2-5 fg=#a2a9b0 bg=reset
  | 6-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#52d0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-70 fg=#f2f9fc bg=reset
- | 71-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-68 fg=#f2f9fc bg=reset
+ | 69-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @6
-                         │  │  1. Interview ten customers.                                                              
+                         │   1. Interview ten customers.                                                                
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#58cff3 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-57 fg=#f2f9fc bg=reset
- | 58-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-55 fg=#f2f9fc bg=reset
+ | 56-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @7
- Recent                  │  │  2. Price three menu bundles.                                                             
+ Recent                  │   2. Price three menu bundles.                                                               
  | 0-0 fg=#f2f9fc bg=reset
  | 1-6 fg=#656b75 bg=reset
  | 7-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#5ecef4 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-58 fg=#f2f9fc bg=reset
- | 59-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-56 fg=#f2f9fc bg=reset
+ | 57-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @8
- Workspace               │  │  3. Measure repeat intent.                                                                
+ Workspace               │   3. Measure repeat intent.                                                                  
  | 0-0 fg=#f2f9fc bg=reset
  | 1-9 fg=#656b75 bg=reset
  | 10-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#63cdf5 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-55 fg=#f2f9fc bg=reset
- | 56-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-53 fg=#f2f9fc bg=reset
+ | 54-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @9
  workspace               │                                                                                              
@@ -129,25 +117,23 @@
  | 25-25 fg=#68cdf6 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @10
-                         │ ☺│You                                                                                        
+                         │ ☺ You                                                                                        
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#6dccf7 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#86bbfc bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-31 fg=#86bbfc bg=reset bold
  | 32-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @11
-                         │  │  What could go wrong?                                                                     
+                         │   What could go wrong?                                                                       
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#72cbf8 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-50 fg=#f2f9fc bg=reset
- | 51-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-48 fg=#f2f9fc bg=reset
+ | 49-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @12
                          │                                                                                              
@@ -155,26 +141,24 @@
  | 25-25 fg=#76caf8 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @13
-                         │ ◆│AutoHarness                                                                  retry  failed 
+                         │ ◆ AutoHarness                                                                  retry  failed 
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#7bcaf9 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#67dbf1 bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-39 fg=#67dbf1 bg=reset bold
  | 40-105 fg=reset bg=reset
  | 106-118 fg=#656b75 bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @14
-                         │  │  The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                               
+                         │   The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                                 
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#7fc9fa bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-88 fg=#f2f9fc bg=reset
- | 89-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-86 fg=#f2f9fc bg=reset
+ | 87-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @15
                          │ ╭──────────────────────────────────────────────────────────────────────────────────────────╮ 

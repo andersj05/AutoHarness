@@ -292,7 +292,7 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "New conversation"),
+        ('1', "Ask AutoHarness"),
         ('2', "Sessions"),
         ('3', "Providers"),
         ('4', "Settings"),
@@ -336,7 +336,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
 }
 
 #[test]
-fn chat_empty_states_name_one_primary_recovery_action() {
+fn chat_empty_states_leave_the_conversation_canvas_uncluttered() {
     let mut model = model();
     let _ = update(
         &mut model,
@@ -344,15 +344,17 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
-    assert!(offline.contains("Offline"));
-    assert!(offline.contains("/settings"));
+    assert!(offline.contains("Ask AutoHarness"));
+    assert!(!offline.contains("Connect a provider key"));
+    assert!(!offline.contains("Choose a compatible model"));
 
     let _ = update(
         &mut model,
         Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
     );
     let loading = render_text(&model, 80, 24);
-    assert!(loading.contains("Connecting"));
+    assert!(loading.contains("Ask AutoHarness"));
+    assert!(!loading.contains("Loading provider models"));
 
     let _ = update(
         &mut model,
@@ -363,9 +365,9 @@ fn chat_empty_states_name_one_primary_recovery_action() {
         )))),
     );
     let failed = render_text(&model, 80, 24);
-    assert!(failed.contains("Connection error"));
-
-    assert!(failed.contains("Ctrl+R retry"));
+    assert!(failed.contains("Ask AutoHarness"));
+    assert!(!failed.contains("Connection error"));
+    assert!(!failed.contains("Ctrl+R retry"));
 }
 #[test]
 fn startup_boot_surface_animates_and_exits_deterministically() {
@@ -384,8 +386,8 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
-    assert!(settled.contains("Connecting"));
-    assert!(settled.contains("Loading provider models..."));
+    assert!(settled.contains("Ask AutoHarness"));
+    assert!(!settled.contains("Loading provider models..."));
 }
 
 #[test]
@@ -398,15 +400,19 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 
     let rendered = render_text(&model, 80, 24);
     assert!(!rendered.contains("Starting"));
-    assert!(rendered.contains("Offline"));
+    assert!(rendered.contains("Ask AutoHarness"));
+    assert!(!rendered.contains("Offline"));
 }
 
 #[test]
-fn chat_empty_state_explains_the_zero_shell_start_path() {
+fn a_new_conversation_is_blank_apart_from_the_composer() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
-    assert!(rendered.contains("New conversation"));
-    assert!(rendered.contains("Write a prompt below"));
+    assert!(rendered.contains("Ask AutoHarness"));
+    assert!(!rendered.contains("New conversation"));
+    assert!(!rendered.contains("Write a prompt below"));
+    assert!(!rendered.contains("Connect a provider key"));
+    assert!(!rendered.contains("Choose a compatible model"));
     assert!(!rendered.contains("Conversation"));
 }
 
@@ -587,7 +593,7 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("New conversation"));
+    assert!(rendered.contains("Ask AutoHarness"));
     assert_eq!(
         hit_test(&model, 48, 18, 2, 17),
         Some(MouseAction::FocusComposer)

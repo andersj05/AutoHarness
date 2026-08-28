@@ -1,13 +1,11 @@
 # autoharness-tui style snapshot v1
 # 40x12
 @0
-  │  partial answer\u{1b}[0m.           
+   partial answer\u{1b}[0m.             
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-28 fg=#f2f9fc bg=reset
- | 29-38 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-26 fg=#f2f9fc bg=reset
+ | 27-38 fg=reset bg=reset
  | 39-39 fg=#f2f9fc bg=reset
 @1
  ╭────────────────────────────────────╮ 

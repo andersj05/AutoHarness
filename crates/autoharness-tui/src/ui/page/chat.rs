@@ -6,22 +6,21 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::model::{
-    AttemptKey, AttemptStatus, CatalogProjection, Focus, Model, MouseAction, Notice, PendingKind,
-    Route, TranscriptItem,
+    AttemptKey, AttemptStatus, Focus, Model, MouseAction, Notice, PendingKind, Route,
+    TranscriptItem,
 };
 use crate::text::display_safe;
 use crate::ui::component::paint::{self, wrap_cells};
 use crate::ui::component::{
-    Button, ButtonRow, ButtonVariant, Callout, Chip, ChipVariant, Hero, MessageBlock, StatusBar,
+    Button, ButtonRow, ButtonVariant, Callout, Chip, ChipVariant, MessageBlock, StatusBar,
     StatusSegment, ToolCard,
 };
 use crate::ui::icon::Icon;
 use crate::ui::layout::NamedRects;
 use crate::ui::metrics::{
-    HERO_MIN_HEIGHT, PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH,
-    SIDEBAR_BRAND_ROWS, SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET,
-    SIDEBAR_RECENT_HEADER, SIDEBAR_SESSION_CHROME, SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS,
-    TWO_ROWS,
+    PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH, SIDEBAR_BRAND_ROWS,
+    SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET, SIDEBAR_RECENT_HEADER,
+    SIDEBAR_SESSION_CHROME, SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS, TWO_ROWS,
 };
 use crate::ui::tokens::Token;
 use crate::ui::{Theme, normalized_t};
@@ -284,7 +283,7 @@ pub fn collect_hits(regions: &NamedRects, model: &Model) -> Vec<(Rect, MouseActi
 #[must_use]
 pub fn display_lines(model: &Model) -> Vec<String> {
     if model.session.transcript.is_empty() {
-        return hero_lines(model);
+        return Vec::new();
     }
     model
         .session
@@ -296,47 +295,6 @@ pub fn display_lines(model: &Model) -> Vec<String> {
 
 fn sidebar_session_limit(inner: Rect) -> usize {
     usize::from(inner.height.saturating_sub(SIDEBAR_SESSION_CHROME)).max(1)
-}
-
-fn hero_lines(model: &Model) -> Vec<String> {
-    let (headline, steps, next) = hero_copy(model);
-    let mut lines = vec!["AutoHarness".to_owned(), headline.to_owned()];
-    for (index, step) in steps.iter().enumerate() {
-        lines.push(format!("{}. {step}", index + 1));
-    }
-    lines.push(next.to_owned());
-    lines
-}
-
-fn hero_copy(model: &Model) -> (&'static str, &'static [&'static str], &'static str) {
-    match &*model.catalog {
-        CatalogProjection::CredentialRequired => (
-            "Offline",
-            &["Connect a provider key", "Choose a compatible model"],
-            "/settings",
-        ),
-        CatalogProjection::Loading => {
-            ("Connecting", &["Loading provider models..."], "Please wait")
-        }
-        CatalogProjection::Failed(_) => (
-            "Connection error",
-            &["Retry discovery", "Inspect provider settings"],
-            "Ctrl+R retry",
-        ),
-        CatalogProjection::Ready { models, .. } if models.is_empty() => (
-            "No compatible models",
-            &["Refresh the catalog"],
-            "Ctrl+R refresh",
-        ),
-        CatalogProjection::Ready { .. } if model.session.selected_model.is_none() => {
-            ("Choose a model", &["Open the catalog"], "Ctrl+P")
-        }
-        CatalogProjection::Ready { .. } => (
-            "New conversation",
-            &["Connect a provider key", "Choose a compatible model"],
-            "Write a prompt below",
-        ),
-    }
 }
 
 fn item_lines(model: &Model, item: &TranscriptItem) -> Vec<String> {
@@ -448,7 +406,6 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
     if model.session.transcript.is_empty() {
-        render_hero(buf, inner, model);
         return;
     }
     if model.search_pinned_row.is_none() || !model.search_open() {
@@ -717,14 +674,6 @@ fn assistant_body(text: &str, status: &AttemptStatus) -> String {
     } else {
         display_safe(text)
     }
-}
-
-fn render_hero(buf: &mut Buffer, area: Rect, model: &Model) {
-    let theme = model.theme();
-    let icons = theme.icons();
-    let (headline, steps, next) = hero_copy(model);
-    let _ = HERO_MIN_HEIGHT;
-    Hero::new(theme, icons, "AutoHarness", headline, steps, next).render(buf, area);
 }
 
 fn render_item(buf: &mut Buffer, area: Rect, model: &Model, item: &TranscriptItem) -> u16 {

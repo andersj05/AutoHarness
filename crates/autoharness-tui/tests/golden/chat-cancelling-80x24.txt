@@ -1,22 +1,20 @@
 # autoharness-tui style snapshot v1
 # 80x24
 @0
- ◆│AutoHarness                                           generating  cancelling 
+ ◆ AutoHarness                                           generating  cancelling 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-13 fg=#67dbf1 bg=reset bold
  | 14-56 fg=reset bg=reset
  | 57-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @1
-  │  Waiting for the first token...                                             
+   Waiting for the first token...                                               
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-34 fg=#f2f9fc bg=reset
- | 35-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-32 fg=#f2f9fc bg=reset
+ | 33-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @2
                                                                                 

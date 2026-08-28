@@ -337,10 +337,10 @@ Every component is unit-tested by rendering into a `TestBackend` at `40`, `60`, 
 | `SegmentedControl` | Renders all options as adjacent chips with the current one filled at `Md` and above; falls back to `‹ current ›` with an `n/m` position indicator below `Md`. Fixes audit finding T11. |
 | `SettingRow` | Renders one of `Toggle`, `Choice`, `Text`, `Action`, or `Info` from data, with label, control, provenance chip, and description. The variant is the single authority for whether the row is editable, which removes the render-versus-update disagreement in audit finding T3. |
 | `StatusBar` | Priority-ordered segments; measures each and drops the lowest priority until the line fits the actual remaining width. Fixes audit finding C4. |
-| `MessageBlock` | A conversation turn: two-cell role gutter with icon and rule, role name, right-aligned turn metadata, wrapped body, and optional footer callout. Fixes audit findings C5 and C6. |
+| `MessageBlock` | A conversation turn with a compact role icon gutter, role name, right-aligned turn metadata, wrapped body, and optional footer callout. The navigation rail remains the only vertical conversation-adjacent rule. Fixes audit findings C5 and C6. |
 | `ToolCard` | Status icon, tool name, target, duration, expand caret, and an indented detail body when expanded. Fixes audit finding C8. |
 | `Callout` | Bordered semantic block with icon, title, message, and an optional `ButtonRow`. Used for failures, offline state, and empty catalogs. |
-| `Hero` | Centered brand gradient, headline, numbered step chips, and a highlighted next action. Used by the onboarding and empty-conversation states. |
+| `Hero` | Centered brand gradient, headline, numbered step chips, and a highlighted next action. Reserved for explicit onboarding surfaces; a new Chat conversation stays blank apart from its composer. |
 | `SearchField` | Icon, inline query with a visible cursor, and a right-aligned match count. Replaces the inverted `Filter:` slabs in audit findings S-3 and P1. |
 
 ## Layout and hit regions

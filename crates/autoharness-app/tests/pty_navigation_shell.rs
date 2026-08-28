@@ -164,13 +164,12 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
         |screen| {
             let text = screen.contents();
             text.contains("AutoHarness")
-                && text.contains("Offline")
-                && text.contains("Connect a provider key")
-                && text.contains("/settings")
+                && text.contains("no model")
                 && text.contains("Ask AutoHarness")
+                && !text.contains("Connect a provider key")
                 && !text.contains("Profile")
         },
-        "narrow layout should retain the primary recovery path without a redundant footer",
+        "narrow layout should retain a clean composer without a redundant footer",
     );
 
     terminal.send_bytes(&ctrl_c());

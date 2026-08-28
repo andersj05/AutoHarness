@@ -3957,7 +3957,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                     }
                     PendingKind::OpenSession(_) => {
                         close_browser(model);
-                        model.notice = Some(Notice::Info("Session opened".to_owned()));
+                        model.notice = None;
                     }
                     PendingKind::ExportTranscript => {
                         model.notice = Some(Notice::Info("Transcript exported".to_owned()));

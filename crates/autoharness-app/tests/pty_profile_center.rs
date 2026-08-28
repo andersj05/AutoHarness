@@ -35,12 +35,12 @@ fn saved_codex_profile_without_login_keeps_recovery_ui_open() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("Offline")
-                && text.contains("Connect a provider key")
-                && text.contains("Choose a compatible model")
-                && text.contains("/settings")
+            text.contains("AutoHarness")
+                && text.contains("no model")
+                && text.contains("Ask AutoHarness")
+                && !text.contains("Connect a provider key")
         },
-        "a Codex profile without login should render a recoverable app state",
+        "a Codex profile without login should render a clean recoverable app state",
     );
 
     terminal.send_bytes(&CTRL_G);
