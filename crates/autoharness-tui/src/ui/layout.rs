@@ -258,6 +258,30 @@ fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
 }
 
 fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
+    fill_chat_viewport_regions(regions, model);
+    regions.composer = regions
+        .transcript
+        .and_then(|transcript| crate::ui::page::chat::composer_rect(transcript, model));
+    if let Some(composer) = regions.composer {
+        let inset = u16::from(composer.width >= PROMPT_INSET_MIN_WIDTH);
+        let surface = Rect::new(
+            composer.x.saturating_add(inset),
+            composer.y,
+            composer
+                .width
+                .saturating_sub(inset.saturating_mul(TWO_ROWS)),
+            composer.height,
+        );
+        let metadata_y = if surface.height > ROW {
+            surface.y.saturating_add(ROW)
+        } else {
+            surface.y
+        };
+        regions.composer_metadata = Some(Rect::new(surface.x, metadata_y, surface.width, ROW));
+    }
+}
+
+fn fill_chat_viewport_regions(regions: &mut NamedRects, model: &Model) {
     let content = regions.content;
     if content.width < COMPACT_CHAT_MIN_WIDTH || content.height < COMPACT_CHAT_MIN_HEIGHT {
         regions.transcript = Some(content);
@@ -284,26 +308,17 @@ fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
         regions.notice = (notice_height > 0).then_some(chunks[1]);
         regions.search = (search_height > 0).then_some(chunks[2]);
     }
-    regions.composer = regions
-        .transcript
-        .and_then(|transcript| crate::ui::page::chat::composer_rect(transcript, model));
-    if let Some(composer) = regions.composer {
-        let inset = u16::from(composer.width >= PROMPT_INSET_MIN_WIDTH);
-        let surface = Rect::new(
-            composer.x.saturating_add(inset),
-            composer.y,
-            composer
-                .width
-                .saturating_sub(inset.saturating_mul(TWO_ROWS)),
-            composer.height,
-        );
-        let metadata_y = if surface.height > ROW {
-            surface.y.saturating_add(ROW)
-        } else {
-            surface.y
-        };
-        regions.composer_metadata = Some(Rect::new(surface.x, metadata_y, surface.width, ROW));
+}
+
+/// Returns the Chat conversation viewport without constructing paint-order hits.
+#[must_use]
+pub(crate) fn chat_transcript_rect(area: Rect, model: &Model) -> Option<Rect> {
+    if model.route() != Route::Chat {
+        return None;
     }
+    let mut regions = shell_regions(area, model);
+    fill_chat_viewport_regions(&mut regions, model);
+    regions.transcript
 }
 
 fn fill_settings_regions(regions: &mut NamedRects) {

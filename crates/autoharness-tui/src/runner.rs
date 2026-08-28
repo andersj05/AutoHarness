@@ -327,8 +327,7 @@ where
 {
     terminal
         .draw(|frame| {
-            let layout = crate::ui::layout::Layout::compute(frame.area(), model);
-            if let Some(transcript) = layout.regions.transcript {
+            if let Some(transcript) = crate::ui::layout::chat_transcript_rect(frame.area(), model) {
                 crate::ui::page::chat::normalize_scroll(transcript, model);
             }
             view(frame, model);
