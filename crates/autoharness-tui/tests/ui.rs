@@ -1234,7 +1234,8 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
     let sessions = buffer_text(&render_model(&model, 120, 40));
-    assert!(sessions.contains("1700000000000 ms"));
+    assert!(sessions.contains("2023-11-14 22:13 UTC"));
+    assert!(!sessions.contains("1700000000000 ms"));
     assert!(sessions.contains("Messages"));
 
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('1'))));

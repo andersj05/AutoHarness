@@ -3404,18 +3404,29 @@ fn request_delete_selected_session(model: &mut Model) -> Vec<UiEffect> {
     let Some(entry) = selected_browser_entry(model) else {
         return Vec::new();
     };
-    if entry.active {
+    if entry.active && model.session.active_attempt().is_some() {
         model.notice = Some(Notice::Info(
-            "Switch to another session before deleting the active one".to_owned(),
+            "Cancel or finish the active response before deleting this session".to_owned(),
+        ));
+        model.dirty = true;
+        return Vec::new();
+    }
+    if entry.active
+        && !model
+            .sessions
+            .sessions
+            .iter()
+            .any(|candidate| !candidate.active && !candidate.archived)
+    {
+        model.notice = Some(Notice::Info(
+            "Create another session before deleting your only open session".to_owned(),
         ));
         model.dirty = true;
         return Vec::new();
     }
     model.browser.confirming_delete = Some(entry.session_id.clone());
     let _ = model.open_overlay(OverlayKind::Confirmation);
-    model.notice = Some(Notice::Info(
-        "Press Y again to permanently delete; N or Esc cancels".to_owned(),
-    ));
+    model.notice = None;
     model.dirty = true;
     Vec::new()
 }

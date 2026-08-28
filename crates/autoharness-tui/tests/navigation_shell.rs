@@ -692,16 +692,15 @@ fn profile_help_row_has_no_hidden_mouse_action() {
 fn mouse_session_action_bar_exposes_each_visible_action() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('2')));
-    for (column, expected) in [
-        (2, MouseAction::SessionOpen),
-        (20, MouseAction::SessionRename),
-        (40, MouseAction::SessionArchive),
-        (60, MouseAction::SessionDelete),
+    for expected in [
+        MouseAction::SessionOpen,
+        MouseAction::SessionRename,
+        MouseAction::SessionArchive,
+        MouseAction::SessionDelete,
     ] {
-        assert_eq!(
-            hit_test(&model, 80, 24, column, 22),
-            Some(expected),
-            "missing session action at column {column}"
+        assert!(
+            (0..80).any(|column| hit_test(&model, 80, 24, column, 22) == Some(expected.clone())),
+            "missing measured session action {expected:?}"
         );
     }
 }

@@ -13,7 +13,7 @@ use crate::model::{
     SettingsPreference,
 };
 use crate::text::display_safe;
-use crate::time::{AgeBucket, age_bucket, format_relative_age, relative_age};
+use crate::time::{AgeBucket, age_bucket, format_absolute_time, format_relative_age, relative_age};
 use crate::ui::component::{
     Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, ListBadge,
     ListItem as PresentationListItem, ListView, Modal, ModalIntent, Panel, Provenance, SearchField,
@@ -25,7 +25,7 @@ use crate::ui::metrics::{
     PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_COLUMN_GAPS, PALETTE_IDENTIFIER_MAX_WIDTH,
     PALETTE_KEY_MAX_WIDTH, PALETTE_LABEL_MIN_WIDTH, PALETTE_THREE_COLUMN_MIN_WIDTH,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
-    SESSION_DETAIL_PERCENT, SESSION_HELP_WIDE, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
+    SESSION_DETAIL_PERCENT, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
     SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
     SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
 };
@@ -226,10 +226,21 @@ fn render_confirmation(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             "The session remains durable and can be unarchived.",
         ))
     } else if let Some(session_id) = &model.browser.confirming_delete {
+        let target = model
+            .sessions
+            .sessions
+            .iter()
+            .find(|entry| &entry.session_id == session_id);
+        let label = target.map_or(session_id.as_str(), |entry| entry.title.as_str());
+        let consequence = if target.is_some_and(|entry| entry.active) {
+            "Its complete archive is written first, then the next conversation opens."
+        } else {
+            "Its complete provider-neutral archive is written before deletion."
+        };
         Some((
             "Delete session",
-            format!("Permanently delete session '{}'?", display_safe(session_id)),
-            "A complete provider-neutral archive is written before deletion.",
+            format!("Permanently delete '{}'?", display_safe(label)),
+            consequence,
         ))
     } else if let Some(profile_id) = &model.profile_center.confirming_disconnect {
         Some((
@@ -1506,7 +1517,25 @@ fn session_timestamp_label(model: &Model, updated_at_ms: i64) -> Option<String> 
             updated_at_ms,
             model.wall_ms(),
         ))),
-        TerminalTimestampStyle::Absolute => Some(format!("{updated_at_ms} ms")),
+        TerminalTimestampStyle::Absolute => Some(format_absolute_time(updated_at_ms)),
+        TerminalTimestampStyle::Hidden => None,
+    }
+}
+
+fn session_detail_timestamp_label(model: &Model, updated_at_ms: i64) -> Option<String> {
+    match *model
+        .settings()
+        .local_profile
+        .preferences()
+        .terminal_timestamp_style()
+        .value()
+    {
+        TerminalTimestampStyle::Relative => Some(format!(
+            "{} - {}",
+            format_relative_age(relative_age(updated_at_ms, model.wall_ms())),
+            format_absolute_time(updated_at_ms)
+        )),
+        TerminalTimestampStyle::Absolute => Some(format_absolute_time(updated_at_ms)),
         TerminalTimestampStyle::Hidden => None,
     }
 }
@@ -2615,17 +2644,32 @@ fn render_browser(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 
     if rows[2].height > 0 {
-        let hints = if model.browser.renaming {
-            "Rename session  Enter save  Esc cancel"
-        } else if rows[2].width >= SESSION_HELP_WIDE {
-            "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
+        if model.browser.renaming {
+            frame.render_widget(
+                Paragraph::new("Rename session  Enter save  Esc cancel")
+                    .style(visual_style(model, VisualRole::Muted)),
+                rows[2],
+            );
         } else {
-            "[ Open ]  [ Rename ]  [ Delete ]  Esc"
-        };
-        frame.render_widget(
-            Paragraph::new(hints).style(visual_style(model, VisualRole::Muted)),
-            rows[2],
-        );
+            let buttons = ui_layout::session_action_buttons(model, rows[2].width);
+            let button_row = ButtonRow::new(model.theme(), &buttons);
+            let button_width = button_row.measure().min(rows[2].width);
+            let hint_width = rows[2]
+                .width
+                .saturating_sub(button_width)
+                .saturating_sub(ROW);
+            if hint_width > 0 {
+                crate::ui::component::paint::put(
+                    frame.buffer_mut(),
+                    rows[2].x,
+                    rows[2].y,
+                    hint_width,
+                    &format!("{} select", navigation_keys(model)),
+                    visual_style(model, VisualRole::Muted),
+                );
+            }
+            button_row.render(frame.buffer_mut(), rows[2]);
+        }
     }
 }
 
@@ -2740,8 +2784,8 @@ fn render_session_detail(
         },
     );
     let message_count = entry.message_count.to_string();
-    let activity =
-        session_timestamp_label(model, entry.updated_at_ms).unwrap_or_else(|| "hidden".to_owned());
+    let activity = session_detail_timestamp_label(model, entry.updated_at_ms)
+        .unwrap_or_else(|| "hidden".to_owned());
     let state = if entry.archived { "archived" } else { "active" };
     let rows = [
         KeyValue {

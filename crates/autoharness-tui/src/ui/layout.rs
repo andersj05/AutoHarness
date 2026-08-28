@@ -14,7 +14,7 @@ use super::metrics::{
     PALETTE_MODAL_CHROME_ROWS, PALETTE_MODAL_LIST_TOP_CHROME, PROFILE_COMPACT_WIDTH,
     PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED, PROFILE_LIST_PERCENT,
     PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH, PROMPT_INSET_MIN_WIDTH, ROW,
-    SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE, SETTINGS_BODY_INSET_X,
+    SESSION_ACTIONS_FULL_WIDTH, SESSION_ACTIONS_MEDIUM_WIDTH, SETTINGS_BODY_INSET_X,
     SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y, SETTINGS_BODY_INSET_Y_TOTAL,
     SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE, SETTINGS_CATEGORY_RAIL_XS,
     SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT,
@@ -700,34 +700,60 @@ fn push_settings_row_hits(hits: &mut Vec<(Rect, MouseAction)>, body: Rect, model
 }
 
 fn push_session_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, model: &Model) {
-    let row_y = regions
-        .area
-        .height
-        .saturating_sub(SESSION_ACTION_FROM_BOTTOM);
-    let row = Rect::new(regions.content.x, row_y, regions.content.width, ROW);
-    let inner_width = regions.content.width.saturating_sub(TWO_ROWS);
-    let text = if model.overlay() == Some(OverlayKind::Confirmation) {
-        "[ Y Confirm ]  [ N Cancel ]"
-    } else if inner_width >= SESSION_HELP_WIDE {
-        "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
-    } else {
-        "[ Open ]  [ Rename ]  [ Delete ]  Esc"
-    };
-    for (x, width, label) in bracket_spans(text) {
-        let action = match label.as_str() {
-            "[ Open ]" => MouseAction::SessionOpen,
-            "[ Rename ]" => MouseAction::SessionRename,
-            "[ Archive ]" => MouseAction::SessionArchive,
-            "[ Delete ]" => MouseAction::SessionDelete,
-            "[ Y Confirm ]" => MouseAction::Confirm,
-            "[ N Cancel ]" => MouseAction::Cancel,
-            _ => continue,
-        };
-        hits.push((
-            Rect::new(row.x.saturating_add(x), row.y, width, ROW),
-            action,
+    let row = session_action_rect(regions.content);
+    let buttons = session_action_buttons(model, row.width);
+    hits.extend(ButtonRow::new(model.theme(), &buttons).regions(row));
+}
+
+/// Exact session footer rectangle shared by painting and hit testing.
+#[must_use]
+pub(crate) fn session_action_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(ROW),
+        area.bottom().saturating_sub(TWO_ROWS),
+        area.width.saturating_sub(TWO_ROWS),
+        ROW,
+    )
+}
+
+/// Contextual session actions that fit the available footer width.
+#[must_use]
+pub(crate) fn session_action_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
+    let archived = model.browser.selected.as_ref().is_some_and(|selected| {
+        model
+            .browser_entries()
+            .iter()
+            .any(|entry| &entry.session_id == selected && entry.archived)
+    });
+    let mut buttons = vec![Button::new(
+        "Open",
+        Some("Enter".to_owned()),
+        ButtonVariant::Primary,
+        MouseAction::SessionOpen,
+    )];
+    if width >= SESSION_ACTIONS_MEDIUM_WIDTH {
+        buttons.push(Button::new(
+            "Rename",
+            Some("Ctrl+R".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::SessionRename,
         ));
     }
+    if width >= SESSION_ACTIONS_FULL_WIDTH {
+        buttons.push(Button::new(
+            if archived { "Restore" } else { "Archive" },
+            Some("Ctrl+A".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::SessionArchive,
+        ));
+    }
+    buttons.push(Button::new(
+        "Delete",
+        Some("Ctrl+D".to_owned()),
+        ButtonVariant::Danger,
+        MouseAction::SessionDelete,
+    ));
+    buttons
 }
 
 fn push_profile_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, model: &Model) {
@@ -1183,24 +1209,6 @@ fn filtered_models(model: &Model) -> Vec<&crate::model::ModelSummary> {
                     .contains(&query)
         })
         .collect()
-}
-
-fn bracket_spans(text: &str) -> Vec<(u16, u16, String)> {
-    let mut spans = Vec::new();
-    let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find('[') {
-        let start = search_from + rel;
-        let Some(end_rel) = text[start..].find(']') else {
-            break;
-        };
-        let end = start + end_rel;
-        let label = text[start..=end].to_owned();
-        let x = u16::try_from(text[..start].width()).unwrap_or(u16::MAX);
-        let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
-        spans.push((x, width, label));
-        search_from = end.saturating_add(1);
-    }
-    spans
 }
 
 #[cfg(test)]

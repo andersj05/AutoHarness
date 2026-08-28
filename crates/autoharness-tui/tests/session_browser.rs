@@ -384,6 +384,32 @@ fn deleting_the_active_session_is_refused_locally() {
         model
             .notice
             .as_ref()
-            .is_some_and(|notice| format!("{notice:?}").contains("Switch to another"))
+            .is_some_and(|notice| format!("{notice:?}").contains("only open session"))
     );
+}
+
+#[test]
+fn deleting_the_current_session_opens_a_named_confirmation_when_another_is_available() {
+    let mut model = Model::new(
+        session("session-live"),
+        sessions(&[
+            entry("session-live", "Live work", false, true),
+            entry("session-next", "Next work", false, false),
+        ]),
+        ready_catalog(),
+    );
+    let _ = update(&mut model, Message::Input(ctrl('l')));
+
+    assert!(update(&mut model, Message::Input(ctrl('d'))).is_empty());
+    assert_eq!(model.browser_delete_confirmation(), Some("session-live"));
+    let rendered = render_text(&model, 80, 24);
+    assert!(rendered.contains("Live work"));
+    assert!(rendered.contains("next conversation"));
+
+    let effects = update(&mut model, Message::Input(char_input('y')));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::DeleteSession { session_id, .. })]
+            if session_id == "session-live"
+    ));
 }

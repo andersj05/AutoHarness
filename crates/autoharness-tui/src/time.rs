@@ -66,6 +66,21 @@ pub fn format_relative_age(age: RelativeAge) -> String {
     }
 }
 
+/// Formats a Unix-epoch millisecond instant as a compact UTC date and time.
+///
+/// UTC keeps rendering deterministic across hosts while making the timezone
+/// explicit to the reader.
+#[must_use]
+pub fn format_absolute_time(timestamp_ms: i64) -> String {
+    let seconds = timestamp_ms.div_euclid(1_000);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let hour = seconds_of_day / 3_600;
+    let minute = seconds_of_day.rem_euclid(3_600) / 60;
+    let (year, month, day) = civil_date_from_unix_days(days);
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+}
+
 /// Returns the UTC calendar bucket of `updated_at_ms` at `wall_ms`.
 #[must_use]
 pub fn age_bucket(updated_at_ms: i64, wall_ms: i64) -> AgeBucket {
@@ -83,11 +98,26 @@ fn positive_quot(delta: i64, unit: i64) -> u64 {
     u64::try_from(delta / unit).unwrap_or(0)
 }
 
+fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days.saturating_add(719_468);
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgeBucket, MS_PER_DAY, MS_PER_HOUR, MS_PER_MINUTE, MS_PER_WEEK, RelativeAge, age_bucket,
-        format_relative_age, relative_age,
+        format_absolute_time, format_relative_age, relative_age,
     };
 
     const NOON: i64 = 20_000 * MS_PER_DAY + 12 * MS_PER_HOUR;
@@ -134,6 +164,20 @@ mod tests {
         assert_eq!(format_relative_age(RelativeAge::Hours(5)), "5h ago");
         assert_eq!(format_relative_age(RelativeAge::Days(3)), "3d ago");
         assert_eq!(format_relative_age(RelativeAge::Weeks(4)), "4w ago");
+    }
+
+    #[test]
+    fn absolute_times_are_human_readable_utc_dates() {
+        assert_eq!(format_absolute_time(0), "1970-01-01 00:00 UTC");
+        assert_eq!(
+            format_absolute_time(1_700_000_000_000),
+            "2023-11-14 22:13 UTC"
+        );
+        assert_eq!(
+            format_absolute_time(1_709_164_800_000),
+            "2024-02-29 00:00 UTC"
+        );
+        assert_eq!(format_absolute_time(-60_000), "1969-12-31 23:59 UTC");
     }
 
     #[test]
