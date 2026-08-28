@@ -16,7 +16,7 @@ use crate::ui::component::{
     StatusSegment, ToolCard,
 };
 use crate::ui::icon::Icon;
-use crate::ui::layout::NamedRects;
+use crate::ui::layout::{NamedRects, prompt_surface_height};
 use crate::ui::metrics::{
     PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH, SIDEBAR_BRAND_ROWS,
     SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET, SIDEBAR_RECENT_HEADER,
@@ -293,6 +293,52 @@ pub fn display_lines(model: &Model) -> Vec<String> {
         .collect()
 }
 
+/// Visible composer rectangle within the scrollable conversation viewport.
+#[must_use]
+pub(crate) fn composer_rect(area: Rect, model: &Model) -> Option<Rect> {
+    if area.width == 0
+        || area.height == 0
+        || model.search_open() && model.search_pinned_row.is_some()
+    {
+        return None;
+    }
+    if !model.transcript.follow_tail && model.transcript.rows_from_bottom != 0 {
+        return None;
+    }
+    let composer_height = prompt_surface_height(area, model);
+    let viewport = usize::from(area.height);
+    let available = viewport.saturating_sub(usize::from(composer_height));
+    let y_offset = transcript_tail_height(model, conversation_inner_width(area), available);
+    Some(Rect::new(
+        area.x,
+        area.y
+            .saturating_add(u16::try_from(y_offset).unwrap_or(u16::MAX)),
+        area.width,
+        composer_height,
+    ))
+}
+
+fn conversation_inner_width(area: Rect) -> u16 {
+    let inset = u16::from(area.width >= PROMPT_INSET_MIN_WIDTH);
+    area.width.saturating_sub(inset.saturating_mul(TWO_ROWS))
+}
+
+fn transcript_tail_height(model: &Model, width: u16, limit: usize) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+    let mut total = 0_usize;
+    for item in model.session.transcript.iter().rev() {
+        total = total
+            .saturating_add(usize::from(item_height(model, item, width)))
+            .saturating_add(usize::from(ROW));
+        if total >= limit {
+            return limit;
+        }
+    }
+    total
+}
+
 fn sidebar_session_limit(inner: Rect) -> usize {
     usize::from(inner.height.saturating_sub(SIDEBAR_SESSION_CHROME)).max(1)
 }
@@ -424,7 +470,7 @@ struct TailSlice {
 }
 
 fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
-    let slices = tail_slices(inner, model);
+    let slices = tail_slices(inner, model, prompt_surface_height(inner, model));
     if slices.is_empty() && !model.session.transcript.is_empty() {
         render_transcript_start(buf, inner, model);
         return;
@@ -444,7 +490,7 @@ fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
     }
 }
 
-fn tail_slices(inner: Rect, model: &Model) -> Vec<TailSlice> {
+fn tail_slices(inner: Rect, model: &Model, trailing_rows: u16) -> Vec<TailSlice> {
     let viewport = usize::from(inner.height);
     let bottom = if model.transcript.follow_tail {
         0
@@ -452,7 +498,7 @@ fn tail_slices(inner: Rect, model: &Model) -> Vec<TailSlice> {
         model.transcript.rows_from_bottom
     };
     let top = bottom.saturating_add(viewport);
-    let mut cursor = 0_usize;
+    let mut cursor = usize::from(trailing_rows);
     let mut slices = Vec::with_capacity(viewport.min(model.session.transcript.len()));
     for (index, item) in model.session.transcript.iter().enumerate().rev() {
         let item_height = item_height(model, item, inner.width);
@@ -854,7 +900,7 @@ fn tail_recovery_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
     let buttons = recovery_buttons();
     let theme = model.theme();
     let mut hits = Vec::new();
-    for slice in tail_slices(area, model) {
+    for slice in tail_slices(area, model, prompt_surface_height(area, model)) {
         if !matches!(
             model.session.transcript.get(slice.index),
             Some(TranscriptItem::Assistant {

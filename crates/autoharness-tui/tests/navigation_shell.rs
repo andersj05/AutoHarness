@@ -595,7 +595,7 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     assert!(!rendered.contains("1 Chat"));
     assert!(rendered.contains("Ask AutoHarness"));
     assert_eq!(
-        hit_test(&model, 48, 18, 2, 17),
+        hit_test(&model, 48, 18, 2, 2),
         Some(MouseAction::FocusComposer)
     );
 }
@@ -661,7 +661,7 @@ fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 23),
+        hit_test(&model, 80, 24, 2, 2),
         Some(MouseAction::FocusComposer)
     );
 }
@@ -727,11 +727,19 @@ fn mouse_modal_rows_select_models_and_run_commands() {
 
     let mut palette = model();
     let _ = update(&mut palette, Message::Input(ctrl('/')));
-    let command = hit_test(&palette, 80, 24, 12, 14);
+    type_text(&mut palette, "settings");
+    let command = (0..24).find_map(|row| {
+        (0..80).find_map(|column| {
+            hit_test(&palette, 80, 24, column, row).filter(
+                |action| matches!(action, MouseAction::PaletteRun(command) if command == "settings"),
+            )
+        })
+    });
     assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
     let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
     assert!(effects.is_empty());
     assert!(!palette.palette_open());
+    assert_eq!(palette.route(), Route::Settings);
 }
 
 #[test]

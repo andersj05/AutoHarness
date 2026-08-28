@@ -212,85 +212,10 @@
  | 25-25 fg=#94c3ff bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @21
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#95c0ff bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@22
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#97bdfe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@23
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#98bafe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@24
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#99b8fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@25
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9bb5fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@26
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9cb2fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@27
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9daffd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@28
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9eacfd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@29
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9fa9fd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@30
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a0a6fd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@31
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a1a3fc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@32
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a2a0fc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@33
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a39dfc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@34
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a39afc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@35
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a497fb bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@36
                          │ ──────────────────────────────────────────────────────────────────────────────────────────── 
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a594fb bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#95c0ff bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#22d3ee bg=reset
  | 28-28 fg=#29d3ee bg=reset
  | 29-29 fg=#2ed2ef bg=reset
@@ -383,12 +308,12 @@
  | 116-116 fg=#a68efa bg=reset
  | 117-117 fg=#a78cfa bg=reset
  | 118-118 fg=#a78bfa bg=reset
- | 119-119 fg=reset bg=reset
-@37
+ | 119-119 fg=#f2f9fc bg=reset
+@22
                          │ ● Gemini 2.5 Pro · ◐ auto · ▰ ctx <0.1%                                                      
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a691fb bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#97bdfe bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#22d3ee bg=reset
  | 28-28 fg=#a2a9b0 bg=reset
  | 29-42 fg=#f2f9fc bg=reset
@@ -399,22 +324,93 @@
  | 52-54 fg=#2e343f bg=reset
  | 55-55 fg=#22d3ee bg=reset
  | 56-56 fg=#a2a9b0 bg=reset
- | 57-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
-@38
+ | 57-119 fg=#f2f9fc bg=reset
+@23
                          │ ❯ Retry with a smaller scope.                                                                
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a68efa bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#98bafe bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=#67dbf1 bg=reset bold
- | 29-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
+ | 29-119 fg=#f2f9fc bg=reset
+@24
+                         │   Keep the checklist concise.                                                                
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#99b8fe bg=reset
+ | 26-55 fg=#f2f9fc bg=reset
+ | 56-56 fg=#f8fafc bg=#0b0f19 bold
+ | 57-119 fg=#f2f9fc bg=reset
+@25
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9bb5fe bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@26
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9cb2fe bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@27
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9daffd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@28
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9eacfd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@29
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9fa9fd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@30
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a0a6fd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@31
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a1a3fc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@32
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a2a0fc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@33
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a39dfc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@34
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a39afc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@35
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a497fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@36
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a594fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@37
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a691fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@38
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a68efa bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
 @39
- Settings                │   Keep the checklist concise.                                                                
+ Settings                │                                                                                              
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#a78bfa bg=reset
- | 26-26 fg=reset bg=reset
- | 27-55 fg=#f2f9fc bg=reset
- | 56-56 fg=#f8fafc bg=#0b0f19 bold
- | 57-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
+ | 26-119 fg=#f2f9fc bg=reset

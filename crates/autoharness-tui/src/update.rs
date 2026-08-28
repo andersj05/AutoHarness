@@ -31,6 +31,17 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             model.mark_activity();
             handle_mouse(model, action)
         }
+        Message::TranscriptScroll(rows) => {
+            model.mark_activity();
+            if model.route() == Route::Chat && model.overlay().is_none() {
+                if rows > 0 {
+                    scroll_up(model, usize::from(rows.unsigned_abs()));
+                } else if rows < 0 {
+                    scroll_down(model, usize::from(rows.unsigned_abs()));
+                }
+            }
+            Vec::new()
+        }
         Message::Paste(text) => {
             model.mark_activity();
             let text = zeroize::Zeroizing::new(text);
@@ -155,7 +166,7 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
         MouseAction::FocusComposer => {
             if model.route() == Route::Chat && model.overlay().is_none() {
                 model.focus = Focus::Composer;
-                model.dirty = true;
+                follow_tail(model);
             }
             Vec::new()
         }
@@ -551,9 +562,7 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
         | Input {
-            key: Key::PageUp,
-            ctrl: true,
-            ..
+            key: Key::PageUp, ..
         } => {
             scroll_up(model, 6);
             Vec::new()
@@ -564,9 +573,7 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         }
         | Input {
-            key: Key::PageDown,
-            ctrl: true,
-            ..
+            key: Key::PageDown, ..
         } => {
             scroll_down(model, 6);
             Vec::new()
@@ -619,7 +626,7 @@ fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             if !has_pending_submission(model) && input_composer(&mut model.composer.editor, input) {
                 model.history.reset_walk();
                 model.notice = None;
-                model.dirty = true;
+                follow_tail(model);
             }
             Vec::new()
         }
@@ -1601,6 +1608,9 @@ fn open_palette(model: &mut Model) {
     model.palette.query.clear();
     model.palette.selected = None;
     normalize_palette_selection(model);
+    if model.route() == Route::Chat {
+        follow_tail(model);
+    }
 }
 
 fn close_palette(model: &mut Model) {
@@ -3531,7 +3541,7 @@ fn handle_paste(model: &mut Model, text: &str) {
             && model.composer.editor.insert_str(editable_safe(text)) =>
         {
             model.notice = None;
-            model.dirty = true;
+            follow_tail(model);
         }
         None => {}
     }
@@ -3687,7 +3697,7 @@ fn recall_history(model: &mut Model, direction: isize) -> Vec<UiEffect> {
                 .insert_str(crate::text::editable_safe(&recalled));
         }
         model.notice = None;
-        model.dirty = true;
+        follow_tail(model);
     }
     Vec::new()
 }
@@ -3705,7 +3715,7 @@ fn insert_composer_newline(model: &mut Model) -> Vec<UiEffect> {
     if !has_pending_submission(model) && model.composer.editor.insert_str("\n") {
         model.history.reset_walk();
         model.notice = None;
-        model.dirty = true;
+        follow_tail(model);
     }
     Vec::new()
 }

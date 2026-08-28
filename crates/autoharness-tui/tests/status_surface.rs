@@ -101,7 +101,7 @@ fn chat_rail_transcript_and_composer_preserve_terminal_background() {
     for (column, row, surface) in [
         (5, 30, "rail"),
         (80, 20, "transcript"),
-        (110, 38, "composer"),
+        (110, 2, "composer"),
     ] {
         assert_eq!(
             rendered.buffer()[(column, row)].bg,
@@ -200,9 +200,40 @@ fn prompt_is_the_only_content_in_a_new_conversation() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 80, 24));
     assert!(rendered.contains('❯'));
+    assert!(
+        rendered.lines().take(3).any(|line| line.contains('❯')),
+        "a blank conversation should place its composer at the top"
+    );
     assert!(!rendered.contains("New conversation"));
     assert!(!rendered.contains("Connect a provider key"));
     assert!(!rendered.contains("Conversation"));
+}
+
+#[test]
+fn prompt_follows_a_short_conversation_instead_of_sticking_to_the_viewport_bottom() {
+    let model = Model::new(
+        session(
+            2,
+            vec![TranscriptItem::User {
+                input_id: "input-1".to_owned(),
+                text: "A short question".to_owned(),
+            }],
+        ),
+        Arc::new(SessionsProjection::default()),
+        catalog_ready(),
+    );
+    let rendered = buffer_text(&render_model(&model, 80, 24));
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let body = lines
+        .iter()
+        .position(|line| line.contains("A short question"))
+        .expect("message body");
+    let prompt = lines
+        .iter()
+        .position(|line| line.contains('❯'))
+        .expect("prompt marker");
+    assert!(prompt > body);
+    assert!(prompt < 10, "the prompt should follow the text, not row 24");
 }
 
 #[test]

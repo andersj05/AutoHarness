@@ -358,6 +358,10 @@ Rendering reads `regions`; `hit_test` becomes a reverse scan of `hits`.
 No threshold literal may appear outside `ui/metrics.rs`.
 This deletes the duplicated geometry in audit finding S8 and makes the unreachable actions in audit finding S9 either wired or removed.
 
+Chat treats the transcript and composer as one scrollable flow.
+The composer starts at the top of an empty conversation, follows the final message when the conversation is shorter than the viewport, and scrolls out of view while the user browses earlier turns with Page Up, Page Down, or the mouse wheel.
+Typing, pasting, opening the inline command palette, or explicitly focusing the composer resumes tail following.
+
 ## Motion
 
 `Motion` carries the tick source and the reduced-motion flag.

@@ -177,13 +177,6 @@ fn ctrl(key: Key) -> Input {
     }
 }
 
-fn alt(key: Key) -> Input {
-    Input {
-        alt: true,
-        ..key_input(key)
-    }
-}
-
 fn render_model(model: &Model, width: u16, height: u16) -> TestBackend {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -757,10 +750,21 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
     let at_tail = buffer_text(&render_model(&model, 40, 12));
     assert!(at_tail.contains("message 9"));
 
-    let _ = update(&mut model, Message::Input(alt(Key::Up)));
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
     let scrolled = buffer_text(&render_model(&model, 40, 12));
     assert!(!model.transcript.follow_tail);
     assert!(!scrolled.contains("message 9"));
+    assert!(
+        !scrolled.contains('❯'),
+        "the composer should scroll away with the conversation tail"
+    );
+
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('x'))));
+    let resumed_by_typing = buffer_text(&render_model(&model, 40, 12));
+    assert!(model.transcript.follow_tail);
+    assert!(resumed_by_typing.contains('❯'));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
 
     let _ = update(&mut model, Message::Input(ctrl(Key::End)));
     let followed = buffer_text(&render_model(&model, 40, 12));

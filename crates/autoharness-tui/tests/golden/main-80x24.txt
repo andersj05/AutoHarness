@@ -132,7 +132,7 @@
  | 0-79 fg=#f2f9fc bg=reset
 @20
  ────────────────────────────────────────────────────────────────────────────── 
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#2ad3ee bg=reset
  | 3-3 fg=#30d2ef bg=reset
@@ -211,10 +211,10 @@
  | 76-76 fg=#a68efa bg=reset
  | 77-77 fg=#a78dfa bg=reset
  | 78-78 fg=#a78bfa bg=reset
- | 79-79 fg=reset bg=reset
+ | 79-79 fg=#f2f9fc bg=reset
 @21
  ● Gemini 2.5 Pro · ◐ auto · ▰ ctx <0.1%                                        
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#a2a9b0 bg=reset
  | 3-16 fg=#f2f9fc bg=reset
@@ -225,18 +225,14 @@
  | 26-28 fg=#2e343f bg=reset
  | 29-29 fg=#22d3ee bg=reset
  | 30-30 fg=#a2a9b0 bg=reset
- | 31-78 fg=#f2f9fc bg=reset
- | 79-79 fg=reset bg=reset
+ | 31-79 fg=#f2f9fc bg=reset
 @22
  ❯ Retry with a smaller scope.                                                  
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-2 fg=#67dbf1 bg=reset bold
- | 3-78 fg=#f2f9fc bg=reset
- | 79-79 fg=reset bg=reset
+ | 3-79 fg=#f2f9fc bg=reset
 @23
    Keep the checklist concise.                                                  
- | 0-0 fg=reset bg=reset
- | 1-29 fg=#f2f9fc bg=reset
+ | 0-29 fg=#f2f9fc bg=reset
  | 30-30 fg=#f8fafc bg=#0b0f19 bold
- | 31-78 fg=#f2f9fc bg=reset
- | 79-79 fg=reset bg=reset
+ | 31-79 fg=#f2f9fc bg=reset

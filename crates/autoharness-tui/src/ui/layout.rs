@@ -260,22 +260,8 @@ fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
 fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
     let content = regions.content;
     if content.width < COMPACT_CHAT_MIN_WIDTH || content.height < COMPACT_CHAT_MIN_HEIGHT {
-        let composer_height = prompt_surface_height(content, model);
-        let transcript_height = content.height.saturating_sub(composer_height);
-        regions.transcript = Some(Rect::new(
-            content.x,
-            content.y,
-            content.width,
-            transcript_height,
-        ));
-        regions.composer = Some(Rect::new(
-            content.x,
-            content.y.saturating_add(transcript_height),
-            content.width,
-            composer_height,
-        ));
+        regions.transcript = Some(content);
     } else {
-        let composer_height = prompt_surface_height(content, model);
         let notice_height = if model.notice.is_some() {
             if presentation(model).compact {
                 ROW
@@ -292,14 +278,15 @@ fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
                 Constraint::Min(ROW),
                 Constraint::Length(notice_height),
                 Constraint::Length(search_height),
-                Constraint::Length(composer_height),
             ])
             .split(content);
         regions.transcript = Some(chunks[0]);
         regions.notice = (notice_height > 0).then_some(chunks[1]);
         regions.search = (search_height > 0).then_some(chunks[2]);
-        regions.composer = Some(chunks[3]);
     }
+    regions.composer = regions
+        .transcript
+        .and_then(|transcript| crate::ui::page::chat::composer_rect(transcript, model));
     if let Some(composer) = regions.composer {
         let inset = u16::from(composer.width >= PROMPT_INSET_MIN_WIDTH);
         let surface = Rect::new(
@@ -425,10 +412,20 @@ pub fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
         .min(INLINE_PALETTE_MAX_ROWS)
         .saturating_add(INLINE_PALETTE_CHROME_ROWS)
         .min(area.height.saturating_sub(prompt_height));
+    let composer = crate::ui::page::chat::composer_rect(area, model).unwrap_or(Rect::new(
+        area.x,
+        area.bottom().saturating_sub(prompt_height),
+        area.width,
+        prompt_height,
+    ));
+    let y = if composer.y.saturating_sub(area.y) >= height {
+        composer.y.saturating_sub(height)
+    } else {
+        composer.bottom().min(area.bottom().saturating_sub(height))
+    };
     Rect::new(
         area.x.saturating_add(INLINE_PALETTE_INSET_X),
-        area.bottom()
-            .saturating_sub(prompt_height.saturating_add(height)),
+        y,
         area.width
             .saturating_sub(INLINE_PALETTE_INSET_X_TOTAL)
             .min(MODAL_MAX_WIDTH),
