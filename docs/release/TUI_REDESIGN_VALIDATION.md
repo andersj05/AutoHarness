@@ -1,16 +1,16 @@
 # TUI redesign validation
 
-**Reviewed:** 2026-08-27
+**Reviewed:** 2026-08-28
 
 **Phase:** 3.10 step 10
 
-**Branch:** `feat/tui-redesign-validation`
+**Branch:** `feat/tui-conversation-flow`
 
-**Implementation base:** `dev` at `0384e1e1ccf7a292d3611bf1e5640dc8c0be56e9`
+**Implementation base:** `dev` at `6cf27da9df87347d9f697a2ffbe8c24775bbb310`
 
-**Latest locally validated implementation commit:** `34b94d3`
+**Latest locally validated implementation commit:** `d125ca4`
 
-**Status:** Local Windows validation is complete, but cross-platform promotion and human terminal review remain pending.
+**Status:** Local Windows validation, including the conversation-flow follow-up, is complete, but cross-platform promotion and human terminal review remain pending.
 
 ## Scope completed locally
 
@@ -25,6 +25,11 @@ Nerd Font mode must emit a BMP private-use glyph without a replacement character
 Unicode mode must render portable route glyphs without a private-use dependency.
 Basic16 mode must report `16 colors` and emit neither truecolor nor indexed-color escape sequences.
 
+The 2026-08-28 conversation-flow follow-up makes the composer the final item in the scrollable Chat content.
+A blank conversation places the composer at the top, a short conversation places it after the final message, and a long conversation lets Page Up, Page Down, Alt-arrow input, or the mouse wheel scroll the composer out of view.
+Typing, pasting, opening command input, focusing the composer, or pressing Ctrl+End restores tail following.
+The follow-up also removes the empty-session onboarding hero, the redundant per-message vertical rule, and the `Session opened` notice.
+
 ## Local Windows evidence
 
 All commands ran from the repository root on 2026-08-27.
@@ -37,12 +42,13 @@ All commands ran from the repository root on 2026-08-27.
 | Warning-denied `cargo doc` and workspace doctests | Pass |
 | `python scripts/check_docs_links.py` | Pass |
 | Isolated benchmark workspace formatting, Clippy, and tests | Pass |
-| Explicit real-PTY matrix across eight scenario binaries and twelve tests | Pass |
+| Explicit real-PTY matrix across eight scenario binaries and twelve tests on the 2026-08-27 candidate | Pass |
+| New long-session conversation-flow real-PTY test on the 2026-08-28 candidate | Pass |
 | Release render-cost report | Pass |
 
 The release render-cost report retained constant work across transcript lengths.
-The 32-turn sample used 333 allocations and 67,444 total allocated bytes.
-The 4,096-turn sample used 333 allocations and 67,486 total allocated bytes.
+The 32-turn sample used 417 allocations and 70,624 total allocated bytes.
+The 4,096-turn sample used 417 allocations and 70,680 total allocated bytes.
 
 ## Promotion gates still open
 
@@ -63,4 +69,4 @@ It may be marked Accepted only after the same final candidate passes the cross-p
 1. Push one final candidate and collect the Windows, macOS, and Linux CI run links for that exact commit.
 2. Perform and record the three human terminal smokes against the same candidate.
 3. Complete the remaining terminal release checklist evidence and obtain independent reviewer approval.
-4. Mark ADR-0016 Accepted, reconcile repository memory once more, and promote the validated branch into `dev`.
+4. Merge the follow-up branch into `dev`, validate the resulting exact candidate, mark ADR-0016 Accepted after approval, and promote the validated `dev` branch into `main`.
