@@ -13,7 +13,47 @@ const CTRL_N: [u8; 1] = [0x0e];
 const CTRL_P: [u8; 1] = [0x10];
 const CTRL_D: [u8; 1] = [0x04];
 const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
+const PAGE_UP: [u8; 4] = [0x1b, b'[', b'5', b'~'];
+const PAGE_DOWN: [u8; 4] = [0x1b, b'[', b'6', b'~'];
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
+
+#[test]
+#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
+    let environment = ScenarioEnvironment::prepare();
+    let response = (0..48)
+        .map(|index| format!("restored response line {index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    environment.seed_completed_session("restored long prompt", &response);
+    let mut terminal = PtySession::start(&environment, 24, 80);
+
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("restored response line 47") && text.contains("Ask AutoHarness")
+        },
+        "tail-follow should show the final response lines and composer",
+    );
+
+    terminal.send_bytes(&PAGE_UP);
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("restored response line") && !text.contains("Ask AutoHarness")
+        },
+        "Page Up should use the full viewport for earlier conversation rows",
+    );
+
+    terminal.send_bytes(&PAGE_DOWN);
+    terminal.wait_for(
+        |screen| screen.contents().contains("Ask AutoHarness"),
+        "Page Down should return to the conversation tail and composer",
+    );
+
+    terminal.send_bytes(&ctrl_c());
+    assert_eq!(terminal.wait_for_exit(), 0);
+}
 
 #[test]
 #[ignore = "runs in the cross-platform terminal PTY CI gate"]
