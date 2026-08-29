@@ -4,16 +4,16 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use autoharness_domain::{
-    MemoryCausation, MemoryCommandEnvelope, MemoryCommandPayload, MemoryOperationEnvelope,
-    MemoryOperationId, MemoryOperationPayload, MemoryRevision, MemoryRevisionDraft,
-    MemoryRevisionId, MemoryRevisionStatus, MemorySequence, MemoryValidationResult,
-    MemoryValidationStatus, Sensitivity, TimestampMillis,
+    MAX_MEMORY_VALIDATION_CANDIDATES, MemoryCausation, MemoryCommandEnvelope, MemoryCommandPayload,
+    MemoryOperationEnvelope, MemoryOperationId, MemoryOperationPayload, MemoryRevision,
+    MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionStatus, MemorySequence,
+    MemoryValidationResult, MemoryValidationStatus, Sensitivity, TimestampMillis,
 };
 use autoharness_memory::{ExistingMemory, MemoryError, MemoryValidationPolicy, MemoryValidatorV1};
 use autoharness_store::{
-    ActiveMemoryHeadQuery, DEFAULT_MEMORY_PAGE_SIZE, MAX_MEMORY_SEARCH_CANDIDATES,
-    MemoryAppendBatchRequest, MemoryAppendOperation, MemoryAppendReceipt, MemoryEvidenceContent,
-    MemoryRevisionContent, MemoryStore,
+    ActiveMemoryHead, ActiveMemoryHeadQuery, DEFAULT_MEMORY_PAGE_SIZE, MemoryAppendBatchRequest,
+    MemoryAppendOperation, MemoryAppendReceipt, MemoryEvidenceContent, MemoryRevisionContent,
+    MemoryStore,
 };
 use sha2::{Digest, Sha256};
 
@@ -25,8 +25,6 @@ pub const MAX_MEMORY_COMMAND_OPERATIONS: usize = 4;
 pub struct MemoryCommandPlan {
     batch: MemoryAppendBatchRequest,
     validation: Option<MemoryValidationResult>,
-    duplicate_memory_id: Option<autoharness_domain::MemoryId>,
-    contradiction_candidates: Vec<autoharness_domain::MemoryId>,
 }
 
 impl MemoryCommandPlan {
@@ -41,18 +39,6 @@ impl MemoryCommandPlan {
     pub const fn validation(&self) -> Option<&MemoryValidationResult> {
         self.validation.as_ref()
     }
-
-    /// Returns the exact existing item that made the draft redundant, when any.
-    #[must_use]
-    pub const fn duplicate_memory_id(&self) -> Option<&autoharness_domain::MemoryId> {
-        self.duplicate_memory_id.as_ref()
-    }
-
-    /// Returns exact existing items sharing the subject but not the content.
-    #[must_use]
-    pub fn contradiction_candidates(&self) -> &[autoharness_domain::MemoryId] {
-        &self.contradiction_candidates
-    }
 }
 
 /// Durable result of one trusted atomic memory command.
@@ -60,8 +46,6 @@ impl MemoryCommandPlan {
 pub struct MemoryCommandCommit {
     receipt: MemoryAppendReceipt,
     validation: Option<MemoryValidationResult>,
-    duplicate_memory_id: Option<autoharness_domain::MemoryId>,
-    contradiction_candidates: Vec<autoharness_domain::MemoryId>,
 }
 
 impl MemoryCommandCommit {
@@ -79,14 +63,18 @@ impl MemoryCommandCommit {
 
     /// Returns the exact existing duplicate identity, when detected.
     #[must_use]
-    pub const fn duplicate_memory_id(&self) -> Option<&autoharness_domain::MemoryId> {
-        self.duplicate_memory_id.as_ref()
+    pub fn duplicate_memory_id(&self) -> Option<&autoharness_domain::MemoryId> {
+        self.validation
+            .as_ref()
+            .and_then(|validation| validation.duplicate_candidates().first())
     }
 
     /// Returns exact existing contradiction candidates.
     #[must_use]
     pub fn contradiction_candidates(&self) -> &[autoharness_domain::MemoryId] {
-        &self.contradiction_candidates
+        self.validation
+            .as_ref()
+            .map_or(&[], |validation| validation.contradiction_candidates())
     }
 }
 
@@ -155,8 +143,6 @@ pub fn execute_memory_command(
     Ok(MemoryCommandCommit {
         receipt,
         validation: plan.validation().cloned(),
-        duplicate_memory_id: plan.duplicate_memory_id().cloned(),
-        contradiction_candidates: plan.contradiction_candidates().to_vec(),
     })
 }
 
@@ -196,20 +182,30 @@ fn duplicate_candidates(
         } => (scope.clone(), *memory_kind),
         _ => item_scope_kind(operations)?,
     };
+    let candidate_limit = u32::try_from(MAX_MEMORY_VALIDATION_CANDIDATES)
+        .expect("the domain validation-candidate bound fits a store query");
     let identity_query = ActiveMemoryHeadQuery::new(
         vec![scope.clone()],
         memory_kind,
         draft.subject_key().cloned(),
-        MAX_MEMORY_SEARCH_CANDIDATES,
+        candidate_limit,
     )?;
-    let duplicate_query =
-        ActiveMemoryHeadQuery::new(vec![scope], memory_kind, draft.subject_key().cloned(), 1)?
-            .with_content_hash(draft.content_hash().clone());
-    let mut heads = store.load_active_memory_heads(&duplicate_query)?;
-    for head in store.load_active_memory_heads(&identity_query)? {
-        if !heads
-            .iter()
-            .any(|existing| existing.memory_id() == head.memory_id())
+    let duplicate_query = ActiveMemoryHeadQuery::new(
+        vec![scope],
+        memory_kind,
+        draft.subject_key().cloned(),
+        candidate_limit,
+    )?
+    .with_content_hash(draft.content_hash().clone());
+    let exact_heads = store.load_active_memory_heads(&duplicate_query)?;
+    let identity_heads = store.load_active_memory_heads(&identity_query)?;
+    let mut heads = Vec::<ActiveMemoryHead>::with_capacity(MAX_MEMORY_VALIDATION_CANDIDATES);
+    for head in exact_heads.into_iter().chain(identity_heads) {
+        if head.memory_id() != command.memory_id()
+            && heads.len() < MAX_MEMORY_VALIDATION_CANDIDATES
+            && !heads
+                .iter()
+                .any(|existing| existing.memory_id() == head.memory_id())
         {
             heads.push(head);
         }
@@ -737,18 +733,9 @@ impl<'a> BatchBuilder<'a> {
         self,
         validation: Option<autoharness_memory::MemoryValidationOutcome>,
     ) -> MemoryCommandPlan {
-        let duplicate_memory_id = validation
-            .as_ref()
-            .and_then(autoharness_memory::MemoryValidationOutcome::duplicate_memory_id)
-            .cloned();
-        let contradiction_candidates = validation.as_ref().map_or_else(Vec::new, |outcome| {
-            outcome.contradiction_candidates().to_vec()
-        });
         MemoryCommandPlan {
             batch: MemoryAppendBatchRequest::new(self.base_sequence, self.operations),
             validation: validation.map(autoharness_memory::MemoryValidationOutcome::into_result),
-            duplicate_memory_id,
-            contradiction_candidates,
         }
     }
 }
@@ -793,10 +780,11 @@ fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
 mod tests {
     use autoharness_domain::{
         CommandId, ConfidenceBasisPoints, CorrelationId, MemoryContent, MemoryId, MemoryKind,
-        MemoryOrigin, MemoryRevisionId, MemoryRevisionNumber, MemoryScope, MemoryValidity,
-        Sha256Digest, TrustClass, UserId,
+        MemoryOrigin, MemoryRelation, MemoryRelationKind, MemoryRevisionId, MemoryRevisionNumber,
+        MemoryScope, MemorySubjectKey, MemoryValidity, Sha256Digest, TrustClass, UserId,
     };
     use autoharness_memory::normalized_content_hash;
+    use autoharness_store_sqlite::SqliteStore;
 
     use super::*;
 
@@ -943,6 +931,121 @@ mod tests {
             append.operation().payload(),
             MemoryOperationPayload::RevisionActivated { .. }
         )));
+    }
+
+    #[test]
+    fn imported_revision_stays_proposed_until_a_distinct_user_revision_is_approved() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("imported-memory.sqlite3");
+        let content = MemoryContent::new("The workspace uses Rust 2024.").expect("content");
+        let subject = MemorySubjectKey::new("workspace:rust-edition").expect("subject key");
+        let contradiction_id = MemoryId::new("memory-rust-2021").expect("memory ID");
+        let imported = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-imported").expect("revision ID"),
+            MemoryRevisionNumber::FIRST,
+            Some(subject.clone()),
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("hash"),
+            MemoryOrigin::ImportedDocument,
+            TrustClass::Imported,
+            ConfidenceBasisPoints::new(8_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+            vec![MemoryRelation::new(
+                contradiction_id.clone(),
+                MemoryRelationKind::Contradicts,
+            )],
+        )
+        .expect("imported revision");
+        let create = command(
+            "command-import",
+            None,
+            MemoryCommandPayload::CreateMemory {
+                scope: scope(),
+                memory_kind: MemoryKind::Fact,
+                revision: imported.clone(),
+            },
+        );
+
+        let mut store = SqliteStore::open(&database).expect("open store");
+        let import_commit = execute_memory_command(&mut store, &create, TimestampMillis::new(10))
+            .expect("commit imported proposal");
+        assert_eq!(
+            import_commit.validation().expect("validation").status(),
+            MemoryValidationStatus::NeedsReview
+        );
+        assert_eq!(
+            import_commit.contradiction_candidates(),
+            std::slice::from_ref(&contradiction_id)
+        );
+        let imported_operations = store
+            .load_memory_operations(create.memory_id(), 0, DEFAULT_MEMORY_PAGE_SIZE)
+            .expect("load imported operations");
+        assert!(matches!(
+            imported_operations[1].payload(),
+            MemoryOperationPayload::RevisionValidated { validation, .. }
+                if validation.contradiction_candidates() == [contradiction_id.clone()]
+        ));
+        assert!(imported_operations.iter().all(|operation| !matches!(
+            operation.payload(),
+            MemoryOperationPayload::RevisionActivated { .. }
+        )));
+        assert_eq!(
+            store
+                .load_memory_revisions(create.memory_id())
+                .expect("load imported revision")[0]
+                .status(),
+            MemoryRevisionStatus::Proposed
+        );
+
+        drop(store);
+        let mut store = SqliteStore::open(&database).expect("reopen store");
+        let reopened_operations = store
+            .load_memory_operations(create.memory_id(), 0, DEFAULT_MEMORY_PAGE_SIZE)
+            .expect("load reopened operations");
+        assert!(matches!(
+            reopened_operations[1].payload(),
+            MemoryOperationPayload::RevisionValidated { validation, .. }
+                if validation.contradiction_candidates() == [contradiction_id]
+        ));
+
+        let approved = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-approved-import").expect("revision ID"),
+            MemoryRevisionNumber::new(2).expect("revision number"),
+            Some(subject),
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("hash"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(10_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("approved revision");
+        let approve = command(
+            "command-approve-import",
+            MemorySequence::new(import_commit.receipt().last_sequence()).ok(),
+            MemoryCommandPayload::ApproveProposal {
+                proposal_revision_id: imported.revision_id().clone(),
+                approved_revision: approved.clone(),
+            },
+        );
+        execute_memory_command(&mut store, &approve, TimestampMillis::new(20))
+            .expect("approve imported proposal");
+
+        let revisions = store
+            .load_memory_revisions(create.memory_id())
+            .expect("load approved revisions");
+        assert_eq!(revisions.len(), 2);
+        assert_eq!(revisions[0].status(), MemoryRevisionStatus::Superseded);
+        assert_eq!(revisions[0].origin(), MemoryOrigin::ImportedDocument);
+        assert_eq!(revisions[1].status(), MemoryRevisionStatus::Active);
+        assert_eq!(revisions[1].origin(), MemoryOrigin::ExplicitUser);
+        assert_ne!(revisions[0].revision_id(), revisions[1].revision_id());
+        assert_eq!(revisions[1].revision_id(), approved.revision_id());
     }
 
     #[test]
