@@ -500,15 +500,24 @@ fn failed_attempt_can_be_retried_and_replay_matches_live_projection() {
     );
 
     let live = engine.session(&session_id()).expect("live session").clone();
+    let completion_event = engine.events().last().expect("completion event");
+    assert!(matches!(
+        completion_event.payload(),
+        EventPayload::AttemptCompleted { attempt_id } if attempt_id == &retry
+    ));
     assert_eq!(live.attempts().len(), 2);
-    assert_eq!(
-        live.attempt(&first).expect("first attempt").status(),
-        AttemptStatus::Failed
-    );
+    let failed = live.attempt(&first).expect("first attempt");
+    assert_eq!(failed.status(), AttemptStatus::Failed);
+    assert_eq!(failed.completed_sequence(), None);
     let retried = live.attempt(&retry).expect("retry attempt");
     assert_eq!(retried.retry_of(), Some(&first));
     assert_eq!(retried.status(), AttemptStatus::Completed);
     assert_eq!(retried.response_text(), "complete 世界");
+    assert_eq!(
+        retried.completed_sequence(),
+        Some(completion_event.sequence())
+    );
+    assert_eq!(live.last_event_id(), Some(completion_event.event_id()));
 
     let serialized = serde_json::to_vec(engine.events()).expect("serialize history");
     let decoded: Vec<EventEnvelope> =
@@ -516,6 +525,18 @@ fn failed_attempt_can_be_retried_and_replay_matches_live_projection() {
     let replayed =
         InMemoryEngine::replay(CounterMetadata::new(100), decoded).expect("history should replay");
     assert_eq!(replayed.session(&session_id()), Some(&live));
+    let replayed_session = replayed.session(&session_id()).expect("replayed session");
+    assert_eq!(
+        replayed_session
+            .attempt(&retry)
+            .expect("replayed completed attempt")
+            .completed_sequence(),
+        Some(completion_event.sequence())
+    );
+    assert_eq!(
+        replayed_session.last_event_id(),
+        Some(completion_event.event_id())
+    );
 }
 
 #[test]

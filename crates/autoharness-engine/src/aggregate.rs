@@ -220,6 +220,7 @@ pub struct AttemptProjection {
     context_turn_bindings: Vec<ContextTurnBinding>,
     provider_dispatch_ready: bool,
     started_at: Option<TimestampMillis>,
+    completed_sequence: Option<SessionSequence>,
 }
 
 impl AttemptProjection {
@@ -321,6 +322,15 @@ impl AttemptProjection {
         self.started_at
     }
 
+    /// Returns the exact sequence that completed this attempt successfully.
+    ///
+    /// Failed, cancelled, unknown, and still-active attempts do not establish a
+    /// completed-history cutoff.
+    #[must_use]
+    pub const fn completed_sequence(&self) -> Option<SessionSequence> {
+        self.completed_sequence
+    }
+
     fn can_retry(&self) -> bool {
         match self.status {
             AttemptStatus::Failed => self
@@ -355,6 +365,7 @@ pub struct SessionAggregate {
     applied_event_ids: BTreeSet<EventId>,
     applied_command_ids: BTreeSet<CommandId>,
     last_sequence: Option<SessionSequence>,
+    last_event_id: Option<EventId>,
 }
 
 impl SessionAggregate {
@@ -377,6 +388,7 @@ impl SessionAggregate {
             applied_event_ids: BTreeSet::new(),
             applied_command_ids: BTreeSet::new(),
             last_sequence: None,
+            last_event_id: None,
         }
     }
 
@@ -1002,6 +1014,12 @@ impl SessionAggregate {
         self.last_sequence
     }
 
+    /// Returns the identity at the authoritative event-stream tip.
+    #[must_use]
+    pub const fn last_event_id(&self) -> Option<&EventId> {
+        self.last_event_id.as_ref()
+    }
+
     fn input(&self, input_id: &InputId) -> Option<&AdmittedInput> {
         self.admitted_inputs
             .iter()
@@ -1232,6 +1250,7 @@ impl SessionAggregate {
                     context_turn_bindings: Vec::new(),
                     provider_dispatch_ready: false,
                     started_at: None,
+                    completed_sequence: None,
                 });
                 self.attempt_indexes.insert(attempt_id.clone(), index);
             }
@@ -1289,7 +1308,10 @@ impl SessionAggregate {
                         AttemptStatus::AwaitingTools,
                         AttemptStatus::CancellationRequested,
                     ],
-                    |attempt| attempt.status = AttemptStatus::Completed,
+                    |attempt| {
+                        attempt.status = AttemptStatus::Completed;
+                        attempt.completed_sequence = Some(event.sequence());
+                    },
                 )?;
             }
             EventPayload::AttemptFailed {
@@ -1639,6 +1661,7 @@ impl SessionAggregate {
             self.applied_command_ids.insert(command_id.clone());
         }
         self.last_sequence = Some(event.sequence());
+        self.last_event_id = Some(event.event_id().clone());
         Ok(())
     }
 
