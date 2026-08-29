@@ -49,6 +49,12 @@ impl ContextStore for SqliteStore {
 
         bind_session_workspace(&transaction, request.context().turn())?;
         reconcile_unbound_turn_conflict(&transaction, request.context().turn())?;
+        if staged_turn_requires_boundary_revalidation(
+            &transaction,
+            request.context().turn().context_turn_id(),
+        )? {
+            validate_context_boundary(&transaction, request.context())?;
+        }
         let context_disposition = commit_context_in_transaction(&transaction, request.context())?;
         persist_compaction_boundary(
             &transaction,
@@ -171,6 +177,24 @@ impl ContextStore for SqliteStore {
         row.map(|(json, hash)| decode_context_json(&json, &hash))
             .transpose()
     }
+}
+
+fn staged_turn_requires_boundary_revalidation(
+    transaction: &Transaction<'_>,
+    context_turn_id: &ContextTurnId,
+) -> Result<bool, StoreError> {
+    let state = transaction
+        .query_row(
+            "SELECT b.context_turn_id IS NOT NULL \
+             FROM context_turns AS t \
+             LEFT JOIN context_turn_bindings AS b ON b.context_turn_id = t.context_turn_id \
+             WHERE t.context_turn_id = ?1",
+            params![context_turn_id.as_str()],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    Ok(matches!(state, Some(false)))
 }
 
 fn bind_session_workspace(
@@ -2411,6 +2435,94 @@ mod tests {
                 .expect("retained rendered turn")
                 .as_str(),
             "<context>workspace agents</context>"
+        );
+    }
+
+    #[test]
+    fn first_binding_revalidates_a_staged_turn_but_bound_retry_remains_idempotent() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_dispatch_ready_attempt(&mut store);
+        let epoch = epoch("epoch-staged", ContextEpochReason::NewAttempt, None);
+        let turn = turn_at("turn-staged", "epoch-staged", 1, 5, "workspace-1");
+        let context = ContextTurnCommitRequest::new(Some(epoch), turn.clone(), turn_content(&turn));
+        store
+            .commit_context_turn(&context)
+            .expect("stage unbound context");
+        let binding = session_event(
+            6,
+            EventPayload::ContextTurnBound {
+                attempt_id: turn.attempt_id().clone(),
+                run_turn: 1,
+                context_turn_id: turn.context_turn_id().clone(),
+                manifest_hash: turn.manifest_hash().clone(),
+            },
+        );
+        let request = BoundContextTurnCommitRequest::new(context, binding);
+
+        store
+            .connection
+            .execute(
+                "UPDATE memory_store_state SET generation = 1 WHERE singleton = 1",
+                [],
+            )
+            .expect("advance generation");
+        assert_eq!(
+            store.commit_context_turn_and_bind(&request),
+            Err(StoreError::ContextGenerationConflict {
+                expected: 0,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM context_turn_bindings", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("unbound count"),
+            0
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT last_sequence, workspace_id FROM sessions \
+                     WHERE session_id = 'session-context'",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .expect("unchanged session"),
+            (5, None)
+        );
+
+        store
+            .connection
+            .execute(
+                "UPDATE memory_store_state SET generation = 0 WHERE singleton = 1",
+                [],
+            )
+            .expect("restore generation");
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&request)
+                .expect("bind staged context")
+                .disposition(),
+            ContextCommitDisposition::Committed
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE memory_store_state SET generation = 1 WHERE singleton = 1",
+                [],
+            )
+            .expect("advance after binding");
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&request)
+                .expect("exact bound retry")
+                .disposition(),
+            ContextCommitDisposition::AlreadyCommitted
         );
     }
 
