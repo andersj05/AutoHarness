@@ -1,12 +1,13 @@
 //! Choice chips that collapse below the medium breakpoint.
 
-use autoharness_settings::GlyphMode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
+use super::super::Icon;
 use super::super::metrics::{WidthBand, width_band};
 use super::super::theme::Theme;
+use super::super::tokens::Token;
 use super::chip::{Chip, ChipVariant};
 use super::paint::put;
 
@@ -15,6 +16,7 @@ pub struct SegmentedControl<'a> {
     theme: &'a Theme,
     options: &'a [&'a str],
     selected: usize,
+    focused: bool,
 }
 
 impl<'a> SegmentedControl<'a> {
@@ -25,7 +27,15 @@ impl<'a> SegmentedControl<'a> {
             theme,
             options,
             selected,
+            focused: false,
         }
+    }
+
+    /// Marks the control as the active keyboard target.
+    #[must_use]
+    pub const fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
     }
 
     /// Cells required at `width`.
@@ -37,10 +47,16 @@ impl<'a> SegmentedControl<'a> {
         ) {
             self.options
                 .iter()
-                .map(|option| {
+                .enumerate()
+                .map(|(index, option)| {
                     u16::try_from((*option).width())
                         .unwrap_or(u16::MAX)
                         .saturating_add(3)
+                        .saturating_add(if index == self.selected {
+                            self.theme.icons().width(Icon::Success).saturating_add(1)
+                        } else {
+                            0
+                        })
                 })
                 .fold(0_u16, |acc, item| {
                     if acc == 0 {
@@ -54,7 +70,7 @@ impl<'a> SegmentedControl<'a> {
         }
     }
 
-    /// Renders chips at Md+ or a compact `‹ current › n/m` indicator below Md.
+    /// Renders chips at Md+ or a compact selected-value indicator below Md.
     pub fn render(&self, buf: &mut Buffer, area: Rect) {
         if area.width == 0 || area.height == 0 || self.options.is_empty() {
             return;
@@ -68,25 +84,36 @@ impl<'a> SegmentedControl<'a> {
                 if x >= area.right() {
                     break;
                 }
-                let variant = if index == self.selected {
+                let selected = index == self.selected;
+                let variant = if selected {
                     ChipVariant::Accent
                 } else {
                     ChipVariant::Neutral
                 };
-                let used = Chip::new(self.theme, option, variant)
+                let label = if selected {
+                    let marker = if self.focused {
+                        self.theme.icons().glyph(Icon::SelectionCaret)
+                    } else {
+                        self.theme.icons().glyph(Icon::Success)
+                    };
+                    format!("{marker} {option}")
+                } else {
+                    (*option).to_owned()
+                };
+                let used = Chip::new(self.theme, &label, variant)
                     .render(buf, Rect::new(x, area.y, area.right().saturating_sub(x), 1));
                 x = x.saturating_add(used).saturating_add(1);
             }
             return;
         }
         let selected = self.options.get(self.selected).copied().unwrap_or("");
-        let (left, right) = if self.theme.icons().mode() == GlyphMode::Ascii {
-            ("<", ">")
+        let marker = if self.focused {
+            self.theme.icons().glyph(Icon::SelectionCaret)
         } else {
-            ("‹", "›")
+            self.theme.icons().glyph(Icon::Success)
         };
         let compact = format!(
-            "{left} {selected} {right} {}/{}",
+            "{marker} {selected}  {}/{}",
             self.selected.saturating_add(1),
             self.options.len()
         );
@@ -96,7 +123,11 @@ impl<'a> SegmentedControl<'a> {
             area.y,
             area.width,
             &compact,
-            self.theme.style(super::super::tokens::Token::TextPrimary),
+            if self.focused {
+                self.theme.filled(Token::Accent)
+            } else {
+                self.theme.style(Token::AccentSoft)
+            },
         );
     }
 }
