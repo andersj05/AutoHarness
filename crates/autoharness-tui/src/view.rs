@@ -1721,14 +1721,16 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Provider catalog ")
-        .border_style(visual_style(
-            model,
-            if focused {
-                VisualRole::Selected
-            } else {
-                VisualRole::Border
-            },
-        ));
+        .title_style(model.theme().style(if focused {
+            Token::Accent
+        } else {
+            Token::TextSecondary
+        }))
+        .border_style(model.theme().style(if focused {
+            Token::BorderFocus
+        } else {
+            Token::BorderSubtle
+        }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -1754,11 +1756,15 @@ fn render_connected_profiles(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
         let row = Rect::new(inner.x, y, inner.width, ROW);
         let selected_row = index == selected;
-        if selected_row && focused {
+        if selected_row {
             crate::ui::component::paint::fill(
                 frame.buffer_mut(),
                 row,
-                model.theme().style(Token::SurfaceSelected),
+                model.theme().style(if focused {
+                    Token::SurfaceSelected
+                } else {
+                    Token::SurfaceSelectedMuted
+                }),
                 Some(' '),
             );
         }
@@ -1832,14 +1838,16 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let block = app_block(model)
         .borders(Borders::ALL)
         .title(" Saved connections ")
-        .border_style(visual_style(
-            model,
-            if focused {
-                VisualRole::Selected
-            } else {
-                VisualRole::Border
-            },
-        ));
+        .title_style(model.theme().style(if focused {
+            Token::Accent
+        } else {
+            Token::TextSecondary
+        }))
+        .border_style(model.theme().style(if focused {
+            Token::BorderFocus
+        } else {
+            Token::BorderSubtle
+        }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let profiles = model.filtered_profiles().collect::<Vec<_>>();
@@ -1869,11 +1877,15 @@ fn render_profile_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
         let selected = candidate.id == profile.id;
         let row = Rect::new(button_rows.body.x, y, button_rows.body.width, ROW);
-        if selected && focused {
+        if selected {
             crate::ui::component::paint::fill(
                 frame.buffer_mut(),
                 row,
-                model.theme().style(Token::SurfaceSelected),
+                model.theme().style(if focused {
+                    Token::SurfaceSelected
+                } else {
+                    Token::SurfaceSelectedMuted
+                }),
                 Some(' '),
             );
         }

@@ -161,8 +161,8 @@ pub const USER_PROFILE_MARGIN_Y: u16 = 4;
 /// Inner line index of the user-profile Save/Cancel row.
 pub const USER_PROFILE_BUTTON_LINE: u16 = 9;
 
-/// Two-pane provider list requires at least this width.
-pub const PROFILE_TWO_PANE_MIN_WIDTH: u16 = 60;
+/// Provider panes share a row at the medium breakpoint and above.
+pub const PROFILE_TWO_PANE_MIN_WIDTH: u16 = 72;
 /// Profile-center copy and layout compact below this width.
 pub const PROFILE_COMPACT_WIDTH: u16 = 72;
 /// Profile-center help uses the shortest string below this width.
@@ -176,9 +176,9 @@ pub const PROFILE_LIST_PERCENT: u16 = 52;
 /// Horizontal split for the connected-profile pane.
 pub const PROFILE_DETAIL_PERCENT: u16 = 48;
 /// Vertical split for the provider catalog pane in one column.
-pub const PROFILE_LIST_PERCENT_STACKED: u16 = 62;
+pub const PROFILE_LIST_PERCENT_STACKED: u16 = 35;
 /// Vertical split for the connected-profile pane in one column.
-pub const PROFILE_DETAIL_PERCENT_STACKED: u16 = 38;
+pub const PROFILE_DETAIL_PERCENT_STACKED: u16 = 65;
 /// Detail-pane chrome rows above the profile action buttons.
 pub const PROFILE_DETAIL_CHROME_ROWS: u16 = 9;
 

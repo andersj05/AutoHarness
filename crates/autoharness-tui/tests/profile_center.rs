@@ -148,6 +148,10 @@ fn providers_list_connection_choices_at_responsive_sizes() {
     for (width, height) in [(80, 24), (60, 18), (40, 12)] {
         assert!(render_text(&model, width, height).contains("Providers"));
     }
+    let narrow = render_text(&model, 40, 12);
+    assert!(narrow.contains("Gemini"));
+    assert!(narrow.contains("personal-gemini"));
+    assert!(narrow.contains("active"));
 }
 
 #[test]
