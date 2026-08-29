@@ -1,16 +1,17 @@
 use autoharness_domain::{
     AgentId, AttemptId, CommandId, ConfidenceBasisPoints, ContextAdmission, ContextAdmissionFactor,
-    ContextAdmissionId, ContextAdmissionReason, ContextEpochHashes, ContextEpochId,
-    ContextEpochManifest, ContextEpochReason, ContextEpochVersions, ContextObservationState,
-    ContextSection, ContextSourceKey, ContextSourceSnapshot, ContextTokenBudget, ContextTurnId,
-    ContextTurnManifest, CorrelationId, EstimatedTokens, InputId, MemoryCausation,
-    MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent, MemoryEvidence,
-    MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource,
-    MemoryGeneration, MemoryId, MemoryKind, MemoryOperationEnvelope, MemoryOperationId,
-    MemoryOperationPayload, MemoryOrigin, MemoryRelation, MemoryRelationKind, MemoryRevisionDraft,
-    MemoryRevisionId, MemoryRevisionMetadata, MemoryRevisionNumber, MemoryRevisionStatus,
-    MemoryScope, MemorySequence, MemoryValidity, ModelId, ModelRef, ProviderId, Sensitivity,
-    SessionId, SessionSequence, Sha256Digest, TimestampMillis, TrustClass, UserId, WorkspaceId,
+    ContextAdmissionId, ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility,
+    ContextEpochHashes, ContextEpochId, ContextEpochManifest, ContextEpochReason,
+    ContextEpochVersions, ContextObservationState, ContextSection, ContextSourceKey,
+    ContextSourceSnapshot, ContextTokenBudget, ContextTurnId, ContextTurnManifest, CorrelationId,
+    EstimatedTokens, InputId, MemoryCausation, MemoryCommandEnvelope, MemoryCommandPayload,
+    MemoryContent, MemoryEvidence, MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceRelation,
+    MemoryEvidenceSource, MemoryGeneration, MemoryId, MemoryKind, MemoryOperationEnvelope,
+    MemoryOperationId, MemoryOperationPayload, MemoryOrigin, MemoryRelation, MemoryRelationKind,
+    MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionMetadata, MemoryRevisionNumber,
+    MemoryRevisionStatus, MemoryScope, MemorySequence, MemoryValidity, ModelId, ModelRef,
+    ProviderId, Sensitivity, SessionId, SessionSequence, Sha256Digest, TimestampMillis, TrustClass,
+    UserId, WorkspaceId,
 };
 
 fn digest(character: char) -> Sha256Digest {
@@ -285,7 +286,19 @@ fn context_epoch_and_turn_manifest_shapes_are_stable() {
         digest('1'),
         digest('2'),
         digest('3'),
-        ContextTokenBudget::new(4_096).expect("valid budget"),
+        ContextEligibility::new(
+            UserId::new("user-1").expect("valid user ID"),
+            WorkspaceId::new("workspace-1").expect("valid workspace ID"),
+            session_id(),
+            Some(AgentId::new("agent-1").expect("valid agent ID")),
+            Sensitivity::Internal,
+        ),
+        ContextBudgetAllocation::new(
+            ContextTokenBudget::new(4_096).expect("valid budget"),
+            EstimatedTokens::new(512).expect("valid reservation"),
+            EstimatedTokens::new(2_048).expect("valid memory limit"),
+        )
+        .expect("valid allocation"),
         EstimatedTokens::new(12).expect("valid token estimate"),
         TimestampMillis::new(2_003),
         vec![source],
@@ -335,7 +348,18 @@ fn context_epoch_and_turn_manifest_shapes_are_stable() {
             "request_hash": "1111111111111111111111111111111111111111111111111111111111111111",
             "rendered_hash": "2222222222222222222222222222222222222222222222222222222222222222",
             "manifest_hash": "3333333333333333333333333333333333333333333333333333333333333333",
-            "token_budget": 4096,
+            "eligibility": {
+                "user_id": "user-1",
+                "workspace_id": "workspace-1",
+                "session_id": "session-1",
+                "agent_id": "agent-1",
+                "sensitivity_ceiling": "internal"
+            },
+            "budget": {
+                "token_budget": 4096,
+                "reserved_tokens": 512,
+                "durable_memory_limit": 2048
+            },
             "rendered_token_count": 12,
             "committed_at": 2003,
             "sources": [{

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use autoharness_domain::{
     AttemptId, ContextAdmission, ContextAdmissionFactor, ContextAdmissionId,
-    ContextAdmissionReason, ContextEpochId, ContextSection, ContextSourceKey,
-    ContextSourceSnapshot, ContextTokenBudget, ContextTurnId, ContextTurnManifest, EstimatedTokens,
-    MemoryGeneration, MemoryRevisionId, ModelRef, SessionId, SessionSequence, Sha256Digest,
-    TimestampMillis,
+    ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility, ContextEpochId,
+    ContextSection, ContextSourceKey, ContextSourceSnapshot, ContextTokenBudget, ContextTurnId,
+    ContextTurnManifest, EstimatedTokens, MemoryGeneration, MemoryRevisionId, ModelRef, SessionId,
+    SessionSequence, Sha256Digest, TimestampMillis,
 };
 
 use crate::{
@@ -268,6 +268,19 @@ impl BuiltContext {
 
     /// Seals the draft with the exact final provider-neutral request hash.
     pub fn seal(self, request_hash: Sha256Digest) -> Result<ContextTurnManifest, MemoryError> {
+        let eligibility = ContextEligibility::new(
+            self.request.retrieval_scope.user_id.clone(),
+            self.request.retrieval_scope.workspace_id.clone(),
+            self.request.retrieval_scope.session_id.clone(),
+            self.request.retrieval_scope.agent_id.clone(),
+            self.request.retrieval_scope.sensitivity_ceiling,
+        );
+        let budget = ContextBudgetAllocation::new(
+            self.request.token_budget,
+            self.request.reserved_tokens,
+            self.request.durable_memory_limit,
+        )
+        .map_err(|_| MemoryError::InvalidDomainValue)?;
         let manifest_hash = hash_manifest_material(ManifestHashMaterial {
             context_turn_id: &self.request.context_turn_id,
             epoch_id: &self.request.epoch_id,
@@ -279,7 +292,8 @@ impl BuiltContext {
             model: &self.request.model,
             request_hash: &request_hash,
             rendered_hash: &self.rendered_hash,
-            token_budget: self.request.token_budget,
+            eligibility: &eligibility,
+            budget,
             rendered_token_count: self.rendered_token_count,
             committed_at: self.request.committed_at,
             snapshots: &self.snapshots,
@@ -297,7 +311,8 @@ impl BuiltContext {
             request_hash,
             self.rendered_hash,
             manifest_hash,
-            self.request.token_budget,
+            eligibility,
+            budget,
             self.rendered_token_count,
             self.request.committed_at,
             self.snapshots,
@@ -320,7 +335,8 @@ pub fn context_manifest_hash(manifest: &ContextTurnManifest) -> Result<Sha256Dig
         model: manifest.model(),
         request_hash: manifest.request_hash(),
         rendered_hash: manifest.rendered_hash(),
-        token_budget: manifest.token_budget(),
+        eligibility: manifest.eligibility(),
+        budget: manifest.budget(),
         rendered_token_count: manifest.rendered_token_count(),
         committed_at: manifest.committed_at(),
         snapshots: manifest.sources(),
@@ -517,7 +533,8 @@ struct ManifestHashMaterial<'a> {
     model: &'a ModelRef,
     request_hash: &'a Sha256Digest,
     rendered_hash: &'a Sha256Digest,
-    token_budget: ContextTokenBudget,
+    eligibility: &'a ContextEligibility,
+    budget: ContextBudgetAllocation,
     rendered_token_count: EstimatedTokens,
     committed_at: TimestampMillis,
     snapshots: &'a [ContextSourceSnapshot],
@@ -547,7 +564,16 @@ fn hash_manifest_material(material: ManifestHashMaterial<'_>) -> Result<Sha256Di
     encoder.field("model_id", material.model.model_id().as_str().as_bytes())?;
     encoder.field("request_hash", material.request_hash.as_str().as_bytes())?;
     encoder.field("rendered_hash", material.rendered_hash.as_str().as_bytes())?;
-    encoder.integer("token_budget", material.token_budget.get())?;
+    encoder.field(
+        "eligibility",
+        &serde_json::to_vec(material.eligibility).map_err(|_| MemoryError::InvalidDomainValue)?,
+    )?;
+    encoder.integer("token_budget", material.budget.token_budget().get())?;
+    encoder.integer("reserved_tokens", material.budget.reserved_tokens().get())?;
+    encoder.integer(
+        "durable_memory_limit",
+        material.budget.durable_memory_limit().get(),
+    )?;
     encoder.integer("rendered_token_count", material.rendered_token_count.get())?;
     encoder.field("committed_at", &material.committed_at.get().to_be_bytes())?;
     encoder.field(

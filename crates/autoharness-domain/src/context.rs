@@ -2,9 +2,9 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    AttemptId, ContextAdmissionId, ContextEpochId, ContextSourceKey, ContextTurnId,
-    MemoryRevisionId, ModelRef, SessionId, SessionSequence, Sha256Digest, TimestampMillis,
-    ValueError,
+    AgentId, AttemptId, ContextAdmissionId, ContextEpochId, ContextSourceKey, ContextTurnId,
+    MemoryRevisionId, MemoryScope, ModelRef, Sensitivity, SessionId, SessionSequence, Sha256Digest,
+    TimestampMillis, UserId, ValueError, WorkspaceId,
 };
 
 /// Maximum source observations retained in one provider-turn manifest.
@@ -121,6 +121,192 @@ impl<'de> Deserialize<'de> for MemoryGeneration {
     {
         let value = u64::deserialize(deserializer)?;
         Self::new(value).map_err(D::Error::custom)
+    }
+}
+
+/// Exact scope authority and sensitivity ceiling frozen for one provider turn.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextEligibility {
+    user_id: UserId,
+    workspace_id: WorkspaceId,
+    session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    sensitivity_ceiling: Sensitivity,
+}
+
+impl ContextEligibility {
+    /// Constructs an exact provider-turn eligibility boundary.
+    #[must_use]
+    pub const fn new(
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        session_id: SessionId,
+        agent_id: Option<AgentId>,
+        sensitivity_ceiling: Sensitivity,
+    ) -> Self {
+        Self {
+            user_id,
+            workspace_id,
+            session_id,
+            agent_id,
+            sensitivity_ceiling,
+        }
+    }
+
+    /// Returns the authorized user scope identity.
+    #[must_use]
+    pub const fn user_id(&self) -> &UserId {
+        &self.user_id
+    }
+
+    /// Returns the authorized workspace scope identity.
+    #[must_use]
+    pub const fn workspace_id(&self) -> &WorkspaceId {
+        &self.workspace_id
+    }
+
+    /// Returns the authorized session scope identity.
+    #[must_use]
+    pub const fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    /// Returns the selected agent scope identity, when present.
+    #[must_use]
+    pub const fn agent_id(&self) -> Option<&AgentId> {
+        self.agent_id.as_ref()
+    }
+
+    /// Returns the highest sensitivity admitted to this provider turn.
+    #[must_use]
+    pub const fn sensitivity_ceiling(&self) -> Sensitivity {
+        self.sensitivity_ceiling
+    }
+
+    /// Returns whether an exact memory scope is authorized.
+    #[must_use]
+    pub fn permits_scope(&self, scope: &MemoryScope) -> bool {
+        match scope {
+            MemoryScope::User(id) => id == &self.user_id,
+            MemoryScope::Workspace(id) => id == &self.workspace_id,
+            MemoryScope::Session(id) => id == &self.session_id,
+            MemoryScope::Agent(id) => self.agent_id.as_ref() == Some(id),
+        }
+    }
+
+    /// Returns whether a sensitivity class is inside the frozen ceiling.
+    #[must_use]
+    pub const fn permits_sensitivity(&self, sensitivity: Sensitivity) -> bool {
+        sensitivity_rank(sensitivity) <= sensitivity_rank(self.sensitivity_ceiling)
+    }
+}
+
+#[derive(Deserialize)]
+struct RawContextEligibility {
+    user_id: UserId,
+    workspace_id: WorkspaceId,
+    session_id: SessionId,
+    agent_id: Option<AgentId>,
+    sensitivity_ceiling: Sensitivity,
+}
+
+impl<'de> Deserialize<'de> for ContextEligibility {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawContextEligibility::deserialize(deserializer)?;
+        Ok(Self::new(
+            raw.user_id,
+            raw.workspace_id,
+            raw.session_id,
+            raw.agent_id,
+            raw.sensitivity_ceiling,
+        ))
+    }
+}
+
+/// Explicit allocation of the fixed provider-turn context budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextBudgetAllocation {
+    token_budget: ContextTokenBudget,
+    reserved_tokens: EstimatedTokens,
+    durable_memory_limit: EstimatedTokens,
+}
+
+impl ContextBudgetAllocation {
+    /// Constructs an allocation whose sections cannot exceed the total.
+    pub const fn new(
+        token_budget: ContextTokenBudget,
+        reserved_tokens: EstimatedTokens,
+        durable_memory_limit: EstimatedTokens,
+    ) -> Result<Self, ValueError> {
+        if reserved_tokens.get() > token_budget.get()
+            || durable_memory_limit.get() > token_budget.get() - reserved_tokens.get()
+        {
+            return Err(ValueError::InvalidContextManifest);
+        }
+        Ok(Self {
+            token_budget,
+            reserved_tokens,
+            durable_memory_limit,
+        })
+    }
+
+    /// Returns the complete provider-turn context budget.
+    #[must_use]
+    pub const fn token_budget(self) -> ContextTokenBudget {
+        self.token_budget
+    }
+
+    /// Returns bytes or tokens reserved before registered context and memory.
+    #[must_use]
+    pub const fn reserved_tokens(self) -> EstimatedTokens {
+        self.reserved_tokens
+    }
+
+    /// Returns the maximum allocation for durable memory records.
+    #[must_use]
+    pub const fn durable_memory_limit(self) -> EstimatedTokens {
+        self.durable_memory_limit
+    }
+
+    /// Returns the remaining allocation for all rendered prelude sections.
+    #[must_use]
+    pub const fn rendered_limit(self) -> u64 {
+        self.token_budget.get() - self.reserved_tokens.get()
+    }
+}
+
+#[derive(Deserialize)]
+struct RawContextBudgetAllocation {
+    token_budget: ContextTokenBudget,
+    reserved_tokens: EstimatedTokens,
+    durable_memory_limit: EstimatedTokens,
+}
+
+impl<'de> Deserialize<'de> for ContextBudgetAllocation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawContextBudgetAllocation::deserialize(deserializer)?;
+        Self::new(
+            raw.token_budget,
+            raw.reserved_tokens,
+            raw.durable_memory_limit,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+const fn sensitivity_rank(sensitivity: Sensitivity) -> u8 {
+    match sensitivity {
+        Sensitivity::Public => 0,
+        Sensitivity::Internal => 1,
+        Sensitivity::Sensitive => 2,
+        Sensitivity::Secret => 3,
     }
 }
 
@@ -858,7 +1044,8 @@ pub struct ContextTurnManifest {
     request_hash: Sha256Digest,
     rendered_hash: Sha256Digest,
     manifest_hash: Sha256Digest,
-    token_budget: ContextTokenBudget,
+    eligibility: ContextEligibility,
+    budget: ContextBudgetAllocation,
     rendered_token_count: EstimatedTokens,
     committed_at: TimestampMillis,
     sources: Vec<ContextSourceSnapshot>,
@@ -883,7 +1070,8 @@ impl ContextTurnManifest {
         request_hash: Sha256Digest,
         rendered_hash: Sha256Digest,
         manifest_hash: Sha256Digest,
-        token_budget: ContextTokenBudget,
+        eligibility: ContextEligibility,
+        budget: ContextBudgetAllocation,
         rendered_token_count: EstimatedTokens,
         committed_at: TimestampMillis,
         sources: Vec<ContextSourceSnapshot>,
@@ -895,7 +1083,20 @@ impl ContextTurnManifest {
         if sources.len() > MAX_CONTEXT_SOURCES || admissions.len() > MAX_CONTEXT_ADMISSIONS {
             return Err(ValueError::CollectionTooLarge);
         }
-        if rendered_token_count.get() > token_budget.get()
+        let admission_token_count = admissions.iter().try_fold(0_u64, |total, admission| {
+            total.checked_add(admission.token_count.get())
+        });
+        let durable_memory_token_count = admissions
+            .iter()
+            .filter(|admission| admission.section == ContextSection::DurableMemory)
+            .try_fold(0_u64, |total, admission| {
+                total.checked_add(admission.token_count.get())
+            });
+        if eligibility.session_id() != &session_id
+            || rendered_token_count.get() > budget.rendered_limit()
+            || admission_token_count.is_none_or(|total| total > rendered_token_count.get())
+            || durable_memory_token_count
+                .is_none_or(|total| total > budget.durable_memory_limit().get())
             || !sources
                 .windows(2)
                 .all(|pair| pair[0].source_key < pair[1].source_key)
@@ -919,7 +1120,8 @@ impl ContextTurnManifest {
             request_hash,
             rendered_hash,
             manifest_hash,
-            token_budget,
+            eligibility,
+            budget,
             rendered_token_count,
             committed_at,
             sources,
@@ -996,7 +1198,19 @@ impl ContextTurnManifest {
     /// Returns the fixed provider-turn token budget.
     #[must_use]
     pub const fn token_budget(&self) -> ContextTokenBudget {
-        self.token_budget
+        self.budget.token_budget()
+    }
+
+    /// Returns the exact scope and sensitivity authority for this turn.
+    #[must_use]
+    pub const fn eligibility(&self) -> &ContextEligibility {
+        &self.eligibility
+    }
+
+    /// Returns the complete explicit context budget allocation.
+    #[must_use]
+    pub const fn budget(&self) -> ContextBudgetAllocation {
+        self.budget
     }
 
     /// Returns the conservative total rendered token estimate.
@@ -1037,7 +1251,8 @@ struct RawContextTurnManifest {
     request_hash: Sha256Digest,
     rendered_hash: Sha256Digest,
     manifest_hash: Sha256Digest,
-    token_budget: ContextTokenBudget,
+    eligibility: ContextEligibility,
+    budget: ContextBudgetAllocation,
     rendered_token_count: EstimatedTokens,
     committed_at: TimestampMillis,
     sources: Vec<ContextSourceSnapshot>,
@@ -1062,7 +1277,8 @@ impl<'de> Deserialize<'de> for ContextTurnManifest {
             raw.request_hash,
             raw.rendered_hash,
             raw.manifest_hash,
-            raw.token_budget,
+            raw.eligibility,
+            raw.budget,
             raw.rendered_token_count,
             raw.committed_at,
             raw.sources,
@@ -1135,10 +1351,11 @@ mod tests {
     #[test]
     fn turn_manifest_requires_sorted_sources_and_a_nonzero_turn() {
         let build = |run_turn, sources| {
+            let session_id = SessionId::new("session-1").expect("valid session ID");
             ContextTurnManifest::new(
                 ContextTurnId::new("turn-1").expect("valid turn ID"),
                 ContextEpochId::new("epoch-1").expect("valid epoch ID"),
-                SessionId::new("session-1").expect("valid session ID"),
+                session_id.clone(),
                 AttemptId::new("attempt-1").expect("valid attempt ID"),
                 run_turn,
                 SessionSequence::FIRST,
@@ -1150,7 +1367,19 @@ mod tests {
                 digest('c'),
                 digest('d'),
                 digest('e'),
-                ContextTokenBudget::new(1_000).expect("valid budget"),
+                ContextEligibility::new(
+                    UserId::new("user-1").expect("valid user ID"),
+                    WorkspaceId::new("workspace-1").expect("valid workspace ID"),
+                    session_id,
+                    None,
+                    Sensitivity::Internal,
+                ),
+                ContextBudgetAllocation::new(
+                    ContextTokenBudget::new(1_000).expect("valid budget"),
+                    EstimatedTokens::new(100).expect("valid reservation"),
+                    EstimatedTokens::new(500).expect("valid memory limit"),
+                )
+                .expect("valid allocation"),
                 EstimatedTokens::new(10).expect("valid estimate"),
                 TimestampMillis::new(2),
                 sources,
@@ -1177,5 +1406,33 @@ mod tests {
             r#"{"source_key":"source","observation_state":"unavailable","source_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","value_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","observed_at":1}"#
         )
         .is_err());
+        assert_eq!(
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(100).expect("budget"),
+                EstimatedTokens::new(80).expect("reservation"),
+                EstimatedTokens::new(21).expect("memory limit"),
+            ),
+            Err(ValueError::InvalidContextManifest)
+        );
+    }
+
+    #[test]
+    fn eligibility_is_exact_and_sensitivity_is_fail_closed() {
+        let eligibility = ContextEligibility::new(
+            UserId::new("user-1").expect("user ID"),
+            WorkspaceId::new("workspace-1").expect("workspace ID"),
+            SessionId::new("session-1").expect("session ID"),
+            Some(AgentId::new("agent-1").expect("agent ID")),
+            Sensitivity::Internal,
+        );
+
+        assert!(
+            eligibility.permits_scope(&MemoryScope::User(UserId::new("user-1").expect("user ID")))
+        );
+        assert!(!eligibility.permits_scope(&MemoryScope::Workspace(
+            WorkspaceId::new("workspace-2").expect("workspace ID")
+        )));
+        assert!(eligibility.permits_sensitivity(Sensitivity::Internal));
+        assert!(!eligibility.permits_sensitivity(Sensitivity::Sensitive));
     }
 }

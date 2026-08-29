@@ -11,11 +11,11 @@ mod value;
 
 pub use command::{CommandEnvelope, CommandPayload};
 pub use context::{
-    ContextAdmission, ContextAdmissionFactor, ContextAdmissionReason, ContextEpochHashes,
-    ContextEpochManifest, ContextEpochReason, ContextEpochVersions, ContextObservationState,
-    ContextSection, ContextSourceSnapshot, ContextTokenBudget, ContextTurnManifest,
-    EstimatedTokens, MAX_CONTEXT_ADMISSION_REASONS, MAX_CONTEXT_ADMISSIONS, MAX_CONTEXT_SOURCES,
-    MemoryGeneration,
+    ContextAdmission, ContextAdmissionFactor, ContextAdmissionReason, ContextBudgetAllocation,
+    ContextEligibility, ContextEpochHashes, ContextEpochManifest, ContextEpochReason,
+    ContextEpochVersions, ContextObservationState, ContextSection, ContextSourceSnapshot,
+    ContextTokenBudget, ContextTurnManifest, EstimatedTokens, MAX_CONTEXT_ADMISSION_REASONS,
+    MAX_CONTEXT_ADMISSIONS, MAX_CONTEXT_SOURCES, MemoryGeneration,
 };
 pub use error::{ClassifiedError, ErrorClass, RetryAdvice, ValueError};
 pub use event::{Causation, EVENT_SCHEMA_V1, EventEnvelope, EventPayload};
