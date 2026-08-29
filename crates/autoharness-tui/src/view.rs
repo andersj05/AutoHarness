@@ -21,7 +21,8 @@ use crate::ui::component::{
 };
 use crate::ui::layout::{self as ui_layout, Layout as UiLayout, Presentation};
 use crate::ui::metrics::{
-    CREDENTIAL_COMPACT_WIDTH, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, PAGE_HEADER_TALL_MIN,
+    CREDENTIAL_COMPACT_WIDTH, MODAL_MAX_HEIGHT, MODAL_MAX_WIDTH, MODEL_DEFAULT_SUMMARY_ROWS,
+    MODEL_DEFAULT_SUMMARY_TALL_MIN, MODEL_DEFAULT_THINKING_ROWS, PAGE_HEADER_TALL_MIN,
     PAGE_HELP_COMFORTABLE, PAGE_HELP_MIN, PALETTE_COLUMN_GAPS, PALETTE_IDENTIFIER_MAX_WIDTH,
     PALETTE_KEY_MAX_WIDTH, PALETTE_LABEL_MIN_WIDTH, PALETTE_THREE_COLUMN_MIN_WIDTH,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
@@ -1484,7 +1485,27 @@ fn render_settings_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let selected = SettingsPreference::rows(category)
         .get(model.settings_workspace.selected)
         .copied();
-    let first = if model.settings_workspace.search_active {
+    let first = if model.settings_workspace.detail_open {
+        let active_profile = model
+            .profiles()
+            .profiles
+            .iter()
+            .find(|profile| profile.active);
+        let thinking = MODEL_THINKING_LEVELS
+            .get(model.model_defaults.thinking_selected)
+            .copied()
+            .unwrap_or("provider default");
+        let state = if model_default_has_unsaved_changes(model, active_profile) {
+            "unsaved"
+        } else {
+            "saved"
+        };
+        format!(
+            "DEFAULT DRAFT  {}  {}  {state}",
+            selected_model_default_label(model),
+            thinking
+        )
+    } else if model.settings_workspace.search_active {
         "Search Settings by label or current value".to_owned()
     } else if let Some(preference) = selected.filter(|row| row.editable()) {
         format!(
@@ -1511,6 +1532,10 @@ fn render_settings_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
 }
 
 fn settings_footer_controls(model: &Model, selected: Option<SettingsPreference>) -> String {
+    if model.settings_workspace.detail_open {
+        return "Up/Down model  Left/Right thinking  Tab focus  Enter save both  Esc back"
+            .to_owned();
+    }
     if model.settings_workspace.search_active {
         return "Type filter  Up/Down select  Enter open  Esc close".to_owned();
     }
@@ -2251,14 +2276,25 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     } else {
         ROW
     };
-    let help_height = u16::from(area.height >= PAGE_HELP_MIN);
+    let help_height = 0;
+    let summary_height = if area.height >= MODEL_DEFAULT_SUMMARY_TALL_MIN {
+        MODEL_DEFAULT_SUMMARY_ROWS
+    } else {
+        ROW
+    };
+    let thinking_height = MODEL_DEFAULT_THINKING_ROWS.min(
+        area.height
+            .saturating_sub(header_height)
+            .saturating_sub(summary_height)
+            .saturating_sub(help_height),
+    );
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),
-            Constraint::Length(TWO_ROWS.min(area.height)),
+            Constraint::Length(summary_height),
             Constraint::Min(1),
-            Constraint::Length(TWO_ROWS.min(area.height)),
+            Constraint::Length(thinking_height),
             Constraint::Length(help_height),
         ])
         .split(area);
@@ -2274,31 +2310,17 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         .profiles
         .iter()
         .find(|profile| profile.active);
-    let profile_label = active_profile.map_or_else(
-        || "No active provider connection".to_owned(),
-        |profile| {
-            format!(
-                "Active profile  {}   Current default  {}",
-                display_safe(&profile.id),
-                display_safe(profile.default_model.as_deref().unwrap_or("not set"))
-            )
-        },
-    );
-    frame.render_widget(
-        Paragraph::new(profile_label).style(model.theme().style(Token::TextSecondary)),
-        rows[1],
-    );
+    render_saved_model_default(frame, rows[1], model, active_profile);
     render_model_cards(frame, rows[2], model, active_profile);
 
     if rows[3].height > 0 {
+        let thinking_focused = model.model_defaults.step == ModelDefaultStep::Thinking;
         frame.render_widget(
-            Paragraph::new("Thinking").style(
-                if model.model_defaults.step == ModelDefaultStep::Thinking {
-                    model.theme().style(Token::Accent)
-                } else {
-                    model.theme().style(Token::TextMuted)
-                },
-            ),
+            Paragraph::new("THINKING EFFORT").style(if thinking_focused {
+                model.theme().style(Token::FocusRing)
+            } else {
+                model.theme().style(Token::TextMuted)
+            }),
             Rect::new(rows[3].x, rows[3].y, rows[3].width, ROW),
         );
         SegmentedControl::new(
@@ -2306,6 +2328,7 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             &MODEL_THINKING_LEVELS,
             model.model_defaults.thinking_selected,
         )
+        .focused(thinking_focused)
         .render(
             frame.buffer_mut(),
             Rect::new(
@@ -2315,14 +2338,202 @@ fn render_model_defaults(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 ROW.min(rows[3].height.saturating_sub(ROW)),
             ),
         );
+        if rows[3].height >= MODEL_DEFAULT_THINKING_ROWS {
+            render_model_default_save_state(
+                frame,
+                Rect::new(
+                    rows[3].x,
+                    rows[3].y.saturating_add(TWO_ROWS),
+                    rows[3].width,
+                    ROW,
+                ),
+                model,
+                active_profile,
+            );
+        }
     }
-    if help_height > 0 {
+}
+
+fn render_saved_model_default(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    active_profile: Option<&crate::model::ProviderProfileProjection>,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let Some(profile) = active_profile else {
         frame.render_widget(
-            Paragraph::new("Up/Down model  Left/Right thinking  Enter save  Esc Settings")
-                .style(visual_style(model, VisualRole::Muted)),
-            rows[4],
+            Paragraph::new("No active provider connection")
+                .style(model.theme().style(Token::Warning)),
+            area,
         );
+        return;
+    };
+    let saved_model = saved_model_default_label(model, profile);
+    let saved_thinking = saved_thinking_default(profile);
+    if area.height == ROW {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "SAVED  {}  {}  {}",
+                display_safe(&profile.id),
+                saved_model,
+                saved_thinking
+            ))
+            .style(model.theme().style(Token::Success)),
+            area,
+        );
+        return;
     }
+    crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        area.x,
+        area.y,
+        area.width,
+        "SAVED DEFAULT",
+        model.theme().style(Token::Success),
+    );
+    let mut x = area.x;
+    for (label, variant) in [
+        (display_safe(&profile.id), ChipVariant::Accent),
+        (saved_model, ChipVariant::Success),
+        (saved_thinking.to_owned(), ChipVariant::Success),
+    ] {
+        if x >= area.right() {
+            break;
+        }
+        let chip = Chip::new(model.theme(), &label, variant);
+        let width = chip.measure().min(area.right().saturating_sub(x));
+        x = x
+            .saturating_add(chip.render(
+                frame.buffer_mut(),
+                Rect::new(x, area.y.saturating_add(ROW), width, ROW),
+            ))
+            .saturating_add(ROW);
+    }
+    if area.height >= MODEL_DEFAULT_SUMMARY_ROWS {
+        let rule_width = area
+            .width
+            .min(SETTINGS_THEME_PREVIEW_CELLS.saturating_mul(TWO_ROWS));
+        for index in 0..rule_width {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                area.x.saturating_add(index),
+                area.y.saturating_add(TWO_ROWS),
+                ROW,
+                model.theme().icons().horizontal_rule(),
+                model
+                    .theme()
+                    .gradient_style(normalized_t(index, rule_width)),
+            );
+        }
+    }
+}
+
+fn saved_thinking_default(profile: &crate::model::ProviderProfileProjection) -> &str {
+    MODEL_THINKING_LEVELS
+        .iter()
+        .copied()
+        .find(|effort| effort.eq_ignore_ascii_case(profile.default_mode.as_str()))
+        .unwrap_or("provider default")
+}
+
+fn same_model_default(left: &str, right: &str) -> bool {
+    left == right
+        || left.strip_prefix("models/").unwrap_or(left)
+            == right.strip_prefix("models/").unwrap_or(right)
+}
+
+fn saved_model_default_label(
+    model: &Model,
+    profile: &crate::model::ProviderProfileProjection,
+) -> String {
+    let Some(saved) = profile.default_model.as_deref() else {
+        return "not set".to_owned();
+    };
+    model
+        .catalog
+        .models()
+        .iter()
+        .find(|summary| same_model_default(summary.model.model_id().as_str(), saved))
+        .map_or_else(
+            || display_safe(saved),
+            |summary| display_safe(&summary.display_name),
+        )
+}
+
+fn selected_model_default_label(model: &Model) -> String {
+    model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .nth(model.model_defaults.model_selected)
+        .map_or_else(
+            || "no model".to_owned(),
+            |summary| display_safe(&summary.display_name),
+        )
+}
+
+fn model_default_has_unsaved_changes(
+    model: &Model,
+    active_profile: Option<&crate::model::ProviderProfileProjection>,
+) -> bool {
+    let Some(profile) = active_profile else {
+        return false;
+    };
+    let selected_model = model
+        .catalog
+        .models()
+        .iter()
+        .filter(|summary| summary.selectable)
+        .nth(model.model_defaults.model_selected)
+        .map(|summary| summary.model.model_id().as_str());
+    let selected_thinking = MODEL_THINKING_LEVELS
+        .get(model.model_defaults.thinking_selected)
+        .copied()
+        .unwrap_or("provider default");
+    !matches!(
+        (selected_model, profile.default_model.as_deref()),
+        (Some(selected), Some(saved)) if same_model_default(selected, saved)
+    ) || !selected_thinking.eq_ignore_ascii_case(saved_thinking_default(profile))
+}
+
+fn render_model_default_save_state(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &Model,
+    active_profile: Option<&crate::model::ProviderProfileProjection>,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let changed = model_default_has_unsaved_changes(model, active_profile);
+    let (label, variant, detail) = if changed {
+        (
+            "Unsaved selection",
+            ChipVariant::Warning,
+            "Enter saves both values",
+        )
+    } else {
+        (
+            "Saved default",
+            ChipVariant::Success,
+            "Matches active profile",
+        )
+    };
+    let chip = Chip::new(model.theme(), label, variant);
+    let width = chip.measure().min(area.width);
+    let used = chip.render(frame.buffer_mut(), Rect::new(area.x, area.y, width, ROW));
+    crate::ui::component::paint::put(
+        frame.buffer_mut(),
+        area.x.saturating_add(used).saturating_add(ROW),
+        area.y,
+        area.width.saturating_sub(used.saturating_add(ROW)),
+        detail,
+        model.theme().style(Token::TextMuted),
+    );
 }
 
 fn render_model_cards(
@@ -2374,6 +2585,7 @@ fn render_model_cards(
             model,
             summary,
             index == selected,
+            model.model_defaults.step == ModelDefaultStep::Model,
             active_profile.and_then(|profile| profile.default_model.as_deref())
                 == Some(summary.model.model_id().as_str()),
         );
@@ -2386,17 +2598,22 @@ fn render_model_card(
     model: &Model,
     summary: &ModelSummary,
     selected: bool,
+    focused: bool,
     is_default: bool,
 ) {
     if selected {
         crate::ui::component::paint::fill(
             frame.buffer_mut(),
             area,
-            model.theme().style(Token::SurfaceSelected),
+            model.theme().style(if focused {
+                Token::SurfaceSelected
+            } else {
+                Token::SurfaceSelectedMuted
+            }),
             Some(' '),
         );
     }
-    let style = if selected {
+    let style = if selected && focused {
         model.theme().style(Token::TextOnAccent)
     } else {
         model.theme().style(Token::TextPrimary)
@@ -2433,26 +2650,36 @@ fn render_model_card(
     ));
     if is_default && x < area.right() {
         x = x.saturating_add(1);
-        let chip = Chip::new(model.theme(), "Default", ChipVariant::Accent);
+        let chip = Chip::new(model.theme(), "Saved default", ChipVariant::Success);
         let width = chip.measure().min(area.right().saturating_sub(x));
-        chip.render(
+        x = x.saturating_add(chip.render(
             frame.buffer_mut(),
             Rect::new(x, area.y, width, ROW.min(area.height)),
-        );
+        ));
+    } else if selected && x < area.right() {
+        x = x.saturating_add(1);
+        let chip = Chip::new(model.theme(), "Selected", ChipVariant::Accent);
+        let width = chip.measure().min(area.right().saturating_sub(x));
+        x = x.saturating_add(chip.render(
+            frame.buffer_mut(),
+            Rect::new(x, area.y, width, ROW.min(area.height)),
+        ));
     }
     if let Some(context) = summary.context_window_tokens {
         let label = format_context_window(context);
         let width = u16::try_from(label.len())
             .unwrap_or(u16::MAX)
             .min(area.width);
-        crate::ui::component::paint::put(
-            frame.buffer_mut(),
-            area.right().saturating_sub(width),
-            area.y,
-            width,
-            &label,
-            model.theme().style(Token::TextMuted),
-        );
+        if area.right().saturating_sub(x) > width {
+            crate::ui::component::paint::put(
+                frame.buffer_mut(),
+                area.right().saturating_sub(width),
+                area.y,
+                width,
+                &label,
+                model.theme().style(Token::TextMuted),
+            );
+        }
     }
     if area.height < TWO_ROWS {
         return;

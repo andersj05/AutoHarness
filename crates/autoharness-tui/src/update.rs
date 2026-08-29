@@ -2653,7 +2653,20 @@ fn save_model_defaults(model: &mut Model) -> Vec<UiEffect> {
 }
 
 fn sync_model_default_selection(model: &mut Model) {
-    let default_model = model.profiles().user.default_model.as_deref();
+    let active_profile = model
+        .profiles()
+        .profiles
+        .iter()
+        .find(|profile| profile.active);
+    let default_model = active_profile
+        .and_then(|profile| profile.default_model.as_deref())
+        .or(model.profiles().user.default_model.as_deref())
+        .map(str::to_owned);
+    let default_thinking = active_profile
+        .map(|profile| profile.default_mode.as_str())
+        .filter(|effort| !effort.is_empty())
+        .unwrap_or(model.profiles().user.default_mode.as_str())
+        .to_owned();
     let selectable = model
         .catalog
         .models()
@@ -2661,6 +2674,7 @@ fn sync_model_default_selection(model: &mut Model) {
         .filter(|summary| summary.selectable)
         .collect::<Vec<_>>();
     let selected = default_model
+        .as_deref()
         .and_then(|model_id| {
             selectable
                 .iter()
@@ -2674,7 +2688,7 @@ fn sync_model_default_selection(model: &mut Model) {
         .map(|summary| summary.model.clone());
     model.model_defaults.thinking_selected = MODEL_THINKING_LEVELS
         .iter()
-        .position(|effort| effort.eq_ignore_ascii_case(model.profiles().user.default_mode.as_str()))
+        .position(|effort| effort.eq_ignore_ascii_case(default_thinking.as_str()))
         .unwrap_or(0);
 }
 

@@ -288,6 +288,13 @@ pub const SETTINGS_THEME_LABEL_WIDTH: u16 = 11;
 /// Theme picker preview inset including the label gap.
 pub const SETTINGS_THEME_PREVIEW_INSET: u16 = 12;
 
+/// Model defaults show the full saved-state summary at this height.
+pub const MODEL_DEFAULT_SUMMARY_TALL_MIN: u16 = 14;
+/// Saved model, thinking, and structural accent rows.
+pub const MODEL_DEFAULT_SUMMARY_ROWS: u16 = 3;
+/// Thinking label, segmented control, and save-state rows.
+pub const MODEL_DEFAULT_THINKING_ROWS: u16 = 3;
+
 /// Returns the width band for a column count.
 #[must_use]
 pub const fn width_band(width: u16) -> WidthBand {
