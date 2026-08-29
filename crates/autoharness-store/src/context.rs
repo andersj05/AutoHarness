@@ -2,8 +2,8 @@ use std::fmt::{self, Debug, Formatter};
 
 use autoharness_domain::{
     AttemptId, ContextAdmission, ContextAdmissionId, ContextEpochId, ContextEpochManifest,
-    ContextTurnId, ContextTurnManifest, EventEnvelope, MemoryGeneration, MemoryRevisionId,
-    SessionId, SessionSequence, Sha256Digest, TimestampMillis,
+    ContextEpochReason, ContextTurnId, ContextTurnManifest, EventEnvelope, MemoryGeneration,
+    MemoryRevisionId, SessionId, SessionSequence, Sha256Digest, TimestampMillis,
 };
 
 use crate::StoreError;
@@ -271,6 +271,147 @@ impl ContextCompactionBoundary {
     }
 }
 
+/// One consistent canonical-facts read for a prospective compaction turn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompactionFactsSnapshot {
+    epoch_id: ContextEpochId,
+    session_id: SessionId,
+    expected_session_sequence: SessionSequence,
+    memory_generation: MemoryGeneration,
+    facts_version: u16,
+    facts_hash: Sha256Digest,
+    memory_fact_count: u32,
+    pending_session_fact_count: u32,
+}
+
+impl CompactionFactsSnapshot {
+    /// Constructs one contentless optimistic compaction proof snapshot.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        epoch_id: ContextEpochId,
+        session_id: SessionId,
+        expected_session_sequence: SessionSequence,
+        memory_generation: MemoryGeneration,
+        facts_version: u16,
+        facts_hash: Sha256Digest,
+        memory_fact_count: u32,
+        pending_session_fact_count: u32,
+    ) -> Self {
+        Self {
+            epoch_id,
+            session_id,
+            expected_session_sequence,
+            memory_generation,
+            facts_version,
+            facts_hash,
+            memory_fact_count,
+            pending_session_fact_count,
+        }
+    }
+
+    /// Returns the prospective compaction epoch.
+    #[must_use]
+    pub const fn epoch_id(&self) -> &ContextEpochId {
+        &self.epoch_id
+    }
+
+    /// Returns the owning session.
+    #[must_use]
+    pub const fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    /// Returns the exact optimistic session prefix hashed.
+    #[must_use]
+    pub const fn expected_session_sequence(&self) -> SessionSequence {
+        self.expected_session_sequence
+    }
+
+    /// Returns the exact optimistic memory eligibility generation hashed.
+    #[must_use]
+    pub const fn memory_generation(&self) -> MemoryGeneration {
+        self.memory_generation
+    }
+
+    /// Returns the canonical facts contract version.
+    #[must_use]
+    pub const fn facts_version(&self) -> u16 {
+        self.facts_version
+    }
+
+    /// Returns the canonical effective durable-facts digest.
+    #[must_use]
+    pub const fn facts_hash(&self) -> &Sha256Digest {
+        &self.facts_hash
+    }
+
+    /// Returns the number of eligible active retained memory facts hashed.
+    #[must_use]
+    pub const fn memory_fact_count(&self) -> u32 {
+        self.memory_fact_count
+    }
+
+    /// Returns the number of unsettled session facts hashed.
+    #[must_use]
+    pub const fn pending_session_fact_count(&self) -> u32 {
+        self.pending_session_fact_count
+    }
+}
+
+/// Latest verified compaction boundary with its exact immutable baseline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextCompactionCheckpoint {
+    boundary: ContextCompactionBoundary,
+    epoch: ContextEpochManifest,
+    baseline_turn: ContextTurnManifest,
+}
+
+impl ContextCompactionCheckpoint {
+    /// Constructs a checkpoint only when all three records name one exact baseline.
+    pub fn new(
+        boundary: ContextCompactionBoundary,
+        epoch: ContextEpochManifest,
+        baseline_turn: ContextTurnManifest,
+    ) -> Result<Self, StoreError> {
+        if epoch.reason() != ContextEpochReason::Compaction
+            || boundary.epoch_id() != epoch.epoch_id()
+            || Some(boundary.predecessor_epoch_id()) != epoch.predecessor_epoch_id()
+            || boundary.session_id() != epoch.session_id()
+            || baseline_turn.epoch_id() != epoch.epoch_id()
+            || baseline_turn.session_id() != epoch.session_id()
+            || boundary.expected_session_sequence() != baseline_turn.expected_session_sequence()
+            || boundary.memory_generation() != epoch.memory_generation()
+            || boundary.memory_generation() != baseline_turn.memory_generation()
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+        Ok(Self {
+            boundary,
+            epoch,
+            baseline_turn,
+        })
+    }
+
+    /// Returns the verified canonical-facts boundary.
+    #[must_use]
+    pub const fn boundary(&self) -> &ContextCompactionBoundary {
+        &self.boundary
+    }
+
+    /// Returns the immutable compaction epoch.
+    #[must_use]
+    pub const fn epoch(&self) -> &ContextEpochManifest {
+        &self.epoch
+    }
+
+    /// Returns the first bound turn that established the compaction epoch.
+    #[must_use]
+    pub const fn baseline_turn(&self) -> &ContextTurnManifest {
+        &self.baseline_turn
+    }
+}
+
 /// One atomic commit of context metadata, exact rendered bytes, and its session binding event.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundContextTurnCommitRequest {
@@ -375,6 +516,21 @@ pub trait ContextStore {
         epoch_id: &ContextEpochId,
     ) -> Result<Option<ContextCompactionBoundary>, StoreError>;
 
+    /// Loads the newest verified compaction checkpoint for one session.
+    fn load_latest_compaction_checkpoint(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<ContextCompactionCheckpoint>, StoreError>;
+
+    /// Computes a consistent optimistic canonical-facts snapshot for a prospective epoch.
+    ///
+    /// The later atomic bind must independently recompute this proof before persisting it.
+    fn load_compaction_facts_snapshot(
+        &mut self,
+        epoch: &ContextEpochManifest,
+        turn: &ContextTurnManifest,
+    ) -> Result<CompactionFactsSnapshot, StoreError>;
+
     /// Loads one exact persisted context turn.
     fn load_context_turn(
         &self,
@@ -404,5 +560,11 @@ pub trait ContextStore {
         &self,
         attempt_id: &AttemptId,
         turn: u32,
+    ) -> Result<Option<ContextTurnManifest>, StoreError>;
+
+    /// Loads the first bound provider turn that established one exact epoch.
+    fn load_context_epoch_baseline(
+        &self,
+        epoch_id: &ContextEpochId,
     ) -> Result<Option<ContextTurnManifest>, StoreError>;
 }

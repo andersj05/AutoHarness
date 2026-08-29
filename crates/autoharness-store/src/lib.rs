@@ -7,9 +7,10 @@ mod port;
 mod read_model;
 
 pub use context::{
-    BoundContextTurnCommitReceipt, BoundContextTurnCommitRequest, ContextAdmissionContent,
-    ContextCommitDisposition, ContextCompactionBoundary, ContextStore, ContextTurnCommitRequest,
-    ContextTurnContent, MAX_RENDERED_CONTEXT_BYTES, RenderedContextText,
+    BoundContextTurnCommitReceipt, BoundContextTurnCommitRequest, CompactionFactsSnapshot,
+    ContextAdmissionContent, ContextCommitDisposition, ContextCompactionBoundary,
+    ContextCompactionCheckpoint, ContextStore, ContextTurnCommitRequest, ContextTurnContent,
+    MAX_RENDERED_CONTEXT_BYTES, RenderedContextText,
 };
 pub use error::{CorruptionArea, IdentityKind, StoreError};
 pub use memory::{
