@@ -17,8 +17,9 @@ use autoharness_store::{
     MemoryAdmissionRecord, MemoryAppendBatchRequest, MemoryAppendDisposition,
     MemoryAppendOperation, MemoryAppendReceipt, MemoryAppendRequest, MemoryCandidateBatch,
     MemoryContentState, MemoryEvidenceExcerptState, MemoryInspectionPage, MemoryInspectionQuery,
-    MemoryInspectionRecord, MemoryMutationGeneration, MemorySearchCandidate, MemorySearchQuery,
-    MemoryStore, StoreError, StoredMemoryCandidate, StoredMemoryEvidenceContent,
+    MemoryInspectionRecord, MemoryInspectionStatus, MemoryMutationGeneration,
+    MemorySearchCandidate, MemorySearchQuery, MemoryStore, StoreError, StoredMemoryCandidate,
+    StoredMemoryEvidenceContent,
 };
 use rusqlite::types::Value;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter};
@@ -566,6 +567,7 @@ impl MemoryStore for SqliteStore {
             }
             sql.push(')');
         }
+        append_effective_status_filter(&mut sql, &mut values, query)?;
         if let Some(memory_kind) = query.memory_kind() {
             values.push(Value::Text(encode_memory_kind(memory_kind).to_owned()));
             sql.push_str(" AND i.kind = ?");
@@ -3393,6 +3395,71 @@ fn load_latest_revision_validation(
     Ok(latest)
 }
 
+fn append_effective_status_filter(
+    sql: &mut String,
+    values: &mut Vec<Value>,
+    query: &MemoryInspectionQuery,
+) -> Result<(), StoreError> {
+    if query.effective_statuses().is_empty() {
+        return Ok(());
+    }
+    let as_of = query.as_of().ok_or(StoreError::Backend)?;
+    values.push(Value::Integer(as_of.get()));
+    let as_of_parameter = values.len();
+    let valid = format!(
+        "((r.valid_from_ms IS NULL OR r.valid_from_ms <= ?{as_of_parameter}) AND \
+          (r.valid_until_ms IS NULL OR r.valid_until_ms > ?{as_of_parameter}))"
+    );
+    let conflicting = "(instr(CAST(r.metadata_json AS TEXT), '\"kind\":\"contradicts\"') > 0 OR \
+         COALESCE(instr(CAST(( \
+             SELECT v.validation_json FROM memory_validations AS v \
+             JOIN memory_operations AS vo ON vo.operation_id = v.operation_id \
+             WHERE v.revision_id = r.revision_id \
+             ORDER BY vo.sequence DESC LIMIT 1 \
+         ) AS TEXT), '\"contradiction\"'), 0) > 0)";
+
+    sql.push_str(" AND (");
+    for (index, status) in query.effective_statuses().iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        match status {
+            MemoryInspectionStatus::Active => {
+                sql.push_str("(i.lifecycle = 'active' AND ");
+                sql.push_str(&valid);
+                sql.push_str(" AND NOT ");
+                sql.push_str(conflicting);
+                sql.push(')');
+            }
+            MemoryInspectionStatus::Proposed => {
+                sql.push_str("(i.lifecycle = 'proposed' AND ");
+                sql.push_str(&valid);
+                sql.push_str(" AND NOT ");
+                sql.push_str(conflicting);
+                sql.push(')');
+            }
+            MemoryInspectionStatus::Conflicting => {
+                sql.push_str("(i.lifecycle IN ('active', 'proposed') AND ");
+                sql.push_str(conflicting);
+                sql.push(')');
+            }
+            MemoryInspectionStatus::Expired => {
+                sql.push_str("(i.lifecycle IN ('active', 'proposed') AND NOT ");
+                sql.push_str(conflicting);
+                sql.push_str(" AND NOT ");
+                sql.push_str(&valid);
+                sql.push(')');
+            }
+            MemoryInspectionStatus::Superseded => sql.push_str("i.lifecycle = 'superseded'"),
+            MemoryInspectionStatus::Rejected => sql.push_str("i.lifecycle = 'rejected'"),
+            MemoryInspectionStatus::Retracted => sql.push_str("i.lifecycle = 'retracted'"),
+            MemoryInspectionStatus::Deleted => sql.push_str("i.lifecycle = 'deleted'"),
+        }
+    }
+    sql.push(')');
+    Ok(())
+}
+
 fn decode_json<T: serde::de::DeserializeOwned>(
     json: &[u8],
     hash: &[u8],
@@ -3737,6 +3804,31 @@ mod tests {
         evidence: Vec<MemoryEvidence>,
         relations: Vec<MemoryRelation>,
     ) -> (MemoryRevision, MemoryRevisionContent) {
+        revision_with_validity(
+            revision_id,
+            revision_number,
+            content,
+            status,
+            subject_key,
+            sensitivity,
+            MemoryValidity::Indefinite,
+            evidence,
+            relations,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn revision_with_validity(
+        revision_id: &str,
+        revision_number: u64,
+        content: &str,
+        status: MemoryRevisionStatus,
+        subject_key: Option<&str>,
+        sensitivity: Sensitivity,
+        validity: MemoryValidity,
+        evidence: Vec<MemoryEvidence>,
+        relations: Vec<MemoryRelation>,
+    ) -> (MemoryRevision, MemoryRevisionContent) {
         let content = MemoryContent::new(content).expect("valid content");
         let draft = MemoryRevisionDraft::new(
             MemoryRevisionId::new(revision_id).expect("revision ID"),
@@ -3748,7 +3840,7 @@ mod tests {
             TrustClass::UserApproved,
             ConfidenceBasisPoints::new(9_000).expect("confidence"),
             sensitivity,
-            MemoryValidity::Indefinite,
+            validity,
             evidence,
             relations,
         )
@@ -4097,6 +4189,153 @@ mod tests {
                 area: CorruptionArea::MemoryProjection
             })
         ));
+    }
+
+    #[test]
+    fn effective_status_filters_conflicts_and_expiry_before_the_page_limit() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let scope = MemoryScope::User(UserId::new("user-1").expect("user ID"));
+        let as_of = TimestampMillis::new(20);
+
+        let (conflicting_revision, conflicting_sidecar) = revision(
+            "revision-effective-conflicting",
+            1,
+            "Older contradictory proposal remains discoverable.",
+            MemoryRevisionStatus::Proposed,
+        );
+        let conflicting_create = create_operation(
+            "memory-effective-conflicting",
+            "operation-effective-conflicting-create",
+            conflicting_revision.clone(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                conflicting_create.clone(),
+                Some(conflicting_sidecar),
+            ))
+            .expect("append conflicting proposal");
+        let contradiction = MemoryValidationResult::new(
+            1,
+            conflicting_revision.content_hash().clone(),
+            MemoryValidationStatus::NeedsReview,
+            vec![MemoryValidationIssue::Contradiction],
+        )
+        .expect("contradiction validation");
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                1,
+                MemoryOperationEnvelope::new_v1(
+                    MemoryOperationId::new("operation-effective-conflicting-validation")
+                        .expect("operation ID"),
+                    conflicting_create.memory_id().clone(),
+                    MemorySequence::new(2).expect("sequence"),
+                    TimestampMillis::new(11),
+                    MemoryCausation::Operation(conflicting_create.operation_id().clone()),
+                    conflicting_create.correlation_id().clone(),
+                    MemoryOperationPayload::RevisionValidated {
+                        revision_id: conflicting_revision.revision_id().clone(),
+                        validation: contradiction,
+                    },
+                ),
+                None,
+            ))
+            .expect("append contradiction validation");
+
+        let (expired_revision, expired_sidecar) = revision_with_validity(
+            "revision-effective-expired",
+            1,
+            "Older expired fact remains discoverable.",
+            MemoryRevisionStatus::Active,
+            None,
+            Sensitivity::Internal,
+            MemoryValidity::Until { valid_until: as_of },
+            Vec::new(),
+            Vec::new(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-effective-expired",
+                    "operation-effective-expired",
+                    expired_revision,
+                ),
+                Some(expired_sidecar),
+            ))
+            .expect("append expired memory");
+
+        for index in 0..4 {
+            let (revision, sidecar) = revision(
+                &format!("revision-effective-active-{index}"),
+                1,
+                &format!("Newer active distraction {index}"),
+                MemoryRevisionStatus::Active,
+            );
+            store
+                .append_memory(&MemoryAppendRequest::new(
+                    0,
+                    create_operation(
+                        &format!("memory-effective-active-{index}"),
+                        &format!("operation-effective-active-{index}"),
+                        revision,
+                    ),
+                    Some(sidecar),
+                ))
+                .expect("append active distractor");
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE memory_items SET updated_at_ms = CASE memory_id \
+                     WHEN 'memory-effective-conflicting' THEN 2 \
+                     WHEN 'memory-effective-expired' THEN 1 \
+                     ELSE 100 END",
+                [],
+            )
+            .expect("establish physical order");
+
+        let conflicting = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(vec![scope.clone()], Vec::new(), None, 1)
+                    .expect("conflicting query")
+                    .with_effective_statuses(vec![MemoryInspectionStatus::Conflicting], as_of),
+            )
+            .expect("inspect conflicting state");
+        assert_eq!(conflicting.records().len(), 1);
+        assert_eq!(
+            conflicting.records()[0].memory_id().as_str(),
+            "memory-effective-conflicting"
+        );
+
+        let expired = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(vec![scope.clone()], Vec::new(), None, 1)
+                    .expect("expired query")
+                    .with_effective_statuses(vec![MemoryInspectionStatus::Expired], as_of),
+            )
+            .expect("inspect expired state");
+        assert_eq!(expired.records().len(), 1);
+        assert_eq!(
+            expired.records()[0].memory_id().as_str(),
+            "memory-effective-expired"
+        );
+
+        let active = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(vec![scope], Vec::new(), None, 8)
+                    .expect("active query")
+                    .with_effective_statuses(vec![MemoryInspectionStatus::Active], as_of),
+            )
+            .expect("inspect eligible active state");
+        assert_eq!(active.records().len(), 4);
+        assert!(active.records().iter().all(|record| {
+            record
+                .memory_id()
+                .as_str()
+                .starts_with("memory-effective-active-")
+        }));
     }
 
     #[test]

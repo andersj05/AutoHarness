@@ -758,6 +758,8 @@ impl MemoryInspectionCursor {
 pub struct MemoryInspectionQuery {
     eligible_scopes: Vec<MemoryScope>,
     statuses: Vec<MemoryRevisionStatus>,
+    effective_statuses: Vec<MemoryInspectionStatus>,
+    as_of: Option<TimestampMillis>,
     memory_kind: Option<MemoryKind>,
     subject_key: Option<MemorySubjectKey>,
     literal_search: Option<MemoryContent>,
@@ -780,6 +782,8 @@ impl MemoryInspectionQuery {
         Ok(Self {
             eligible_scopes,
             statuses,
+            effective_statuses: Vec::new(),
+            as_of: None,
             memory_kind: None,
             subject_key: None,
             literal_search: None,
@@ -819,6 +823,22 @@ impl MemoryInspectionQuery {
         self
     }
 
+    /// Restricts inspection to statuses derived at one explicit wall-clock boundary.
+    ///
+    /// Derived conflict and validity filtering is applied authoritatively before the row limit.
+    #[must_use]
+    pub fn with_effective_statuses(
+        mut self,
+        mut effective_statuses: Vec<MemoryInspectionStatus>,
+        as_of: TimestampMillis,
+    ) -> Self {
+        effective_statuses.sort_unstable();
+        effective_statuses.dedup();
+        self.effective_statuses = effective_statuses;
+        self.as_of = Some(as_of);
+        self
+    }
+
     /// Returns exact authorized scopes.
     #[must_use]
     pub fn eligible_scopes(&self) -> &[MemoryScope] {
@@ -829,6 +849,18 @@ impl MemoryInspectionQuery {
     #[must_use]
     pub fn statuses(&self) -> &[MemoryRevisionStatus] {
         &self.statuses
+    }
+
+    /// Returns statuses derived from lifecycle, validity, relations, and validation.
+    #[must_use]
+    pub fn effective_statuses(&self) -> &[MemoryInspectionStatus] {
+        &self.effective_statuses
+    }
+
+    /// Returns the explicit clock boundary used for effective-status filtering.
+    #[must_use]
+    pub const fn as_of(&self) -> Option<TimestampMillis> {
+        self.as_of
     }
 
     /// Returns the optional semantic-kind filter.
@@ -866,6 +898,19 @@ impl MemoryInspectionQuery {
     pub const fn limit(&self) -> u32 {
         self.limit
     }
+}
+
+/// User-visible memory state derived from durable lifecycle and revision metadata.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryInspectionStatus {
+    Active,
+    Proposed,
+    Conflicting,
+    Superseded,
+    Rejected,
+    Retracted,
+    Expired,
+    Deleted,
 }
 
 /// One bounded newest-first Memory workspace page.
