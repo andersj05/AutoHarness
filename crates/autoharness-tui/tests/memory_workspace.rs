@@ -508,12 +508,14 @@ fn conflicting_and_expired_memories_have_deliberate_states_and_safe_actions() {
             MemorySensitivity::Internal,
             vec![],
             vec![],
-            vec![MemoryValidationFinding::new(
-                MemoryFindingKind::Contradiction,
-                "memory-existing",
-                "Conflicts with an active preference",
-            )
-            .expect("finding")],
+            vec![
+                MemoryValidationFinding::new(
+                    MemoryFindingKind::Contradiction,
+                    "memory-existing",
+                    "Conflicts with an active preference",
+                )
+                .expect("finding"),
+            ],
         )
         .expect("conflicting context"),
     );
