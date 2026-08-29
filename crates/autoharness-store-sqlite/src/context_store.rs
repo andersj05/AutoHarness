@@ -1,13 +1,14 @@
 use autoharness_domain::{
     AgentId, Causation, ContextAdmission, ContextAdmissionFactor, ContextEpochId,
     ContextEpochManifest, ContextEpochReason, ContextObservationState, ContextSection,
-    ContextTurnId, ContextTurnManifest, EVENT_SCHEMA_V1, EventEnvelope, EventPayload, MemoryId,
-    MemoryRevision, MemoryRevisionStatus, MemoryScope, MemoryValidity, Sensitivity, SessionId,
-    SessionSequence, Sha256Digest, UserId, WorkspaceId,
+    ContextTurnId, ContextTurnManifest, EVENT_SCHEMA_V1, EventEnvelope, EventPayload,
+    MemoryContent, MemoryId, MemoryKind, MemoryRelationKind, MemoryRevisionStatus, MemoryScope,
+    MemoryValidity, Sensitivity, SessionId, SessionSequence, Sha256Digest, UserId, WorkspaceId,
 };
 use autoharness_memory::{
-    COMPACTION_FACTS_VERSION, verify_admission_rendered_hash, verify_context_manifest_hash,
-    verify_rendered_context_hash,
+    COMPACTION_FACTS_VERSION, EffectiveDurableFactsFingerprint, MemoryCandidate, RetrievalScope,
+    effective_durable_facts, normalized_content_hash, pending_session_facts_from_events,
+    verify_admission_rendered_hash, verify_context_manifest_hash, verify_rendered_context_hash,
 };
 use autoharness_store::{
     BoundContextTurnCommitReceipt, BoundContextTurnCommitRequest, ContextCommitDisposition,
@@ -18,7 +19,9 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
 use crate::memory_store::decode_projected_revision;
-use crate::sqlite_store::{SqliteStore, map_sqlite_error, to_sql_sequence};
+use crate::sqlite_store::{
+    SqliteStore, load_session_events_through, map_sqlite_error, to_sql_sequence,
+};
 
 impl ContextStore for SqliteStore {
     fn commit_context_turn(
@@ -350,27 +353,6 @@ fn persist_compaction_boundary(
         return Err(StoreError::InvalidContextTransition);
     }
 
-    if let Some(summary_revision_id) = boundary.summary_revision_id() {
-        let row = transaction
-            .query_row(
-                "SELECT metadata_json, metadata_sha256 FROM memory_revisions \
-                 WHERE revision_id = ?1",
-                params![summary_revision_id.as_str()],
-                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
-            )
-            .optional()
-            .map_err(map_sqlite_error)?;
-        let Some((json, hash)) = row else {
-            return Err(StoreError::InvalidContextTransition);
-        };
-        let revision: MemoryRevision = decode_context_json(&json, &hash)?;
-        if revision.origin() != autoharness_domain::MemoryOrigin::Compaction
-            || revision.status() != MemoryRevisionStatus::Proposed
-        {
-            return Err(StoreError::InvalidContextTransition);
-        }
-    }
-
     if let Some(existing) = load_compaction_boundary_record(transaction, boundary.epoch_id())? {
         return if &existing == boundary {
             Ok(())
@@ -379,6 +361,41 @@ fn persist_compaction_boundary(
                 kind: IdentityKind::ContextEpoch,
             })
         };
+    }
+
+    if let Some(summary_revision_id) = boundary.summary_revision_id() {
+        let row = transaction
+            .query_row(
+                "SELECT state, metadata_json, metadata_sha256 FROM memory_revisions \
+                 WHERE revision_id = ?1",
+                params![summary_revision_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((state, json, hash)) = row else {
+            return Err(StoreError::InvalidContextTransition);
+        };
+        let revision = decode_projected_revision(&state, &json, &hash)?;
+        if revision.origin() != autoharness_domain::MemoryOrigin::Compaction
+            || revision.status() != MemoryRevisionStatus::Proposed
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+
+    let fingerprint = compute_compaction_fingerprint(transaction, &epoch, turn)?;
+    if fingerprint.hash() != boundary.facts_hash()
+        || fingerprint.memory_fact_count() != boundary.memory_fact_count()
+        || fingerprint.pending_session_fact_count() != boundary.pending_session_fact_count()
+    {
+        return Err(StoreError::InvalidContextTransition);
     }
     transaction
         .execute(
@@ -403,6 +420,161 @@ fn persist_compaction_boundary(
         )
         .map_err(|error| map_context_identity_error(error, IdentityKind::ContextEpoch))?;
     Ok(())
+}
+
+fn compute_compaction_fingerprint(
+    transaction: &Transaction<'_>,
+    epoch: &ContextEpochManifest,
+    turn: &ContextTurnManifest,
+) -> Result<EffectiveDurableFactsFingerprint, StoreError> {
+    let events = load_session_events_through(
+        transaction,
+        turn.session_id(),
+        turn.expected_session_sequence(),
+    )?;
+    let pending = pending_session_facts_from_events(
+        turn.session_id(),
+        turn.expected_session_sequence(),
+        &events,
+    )
+    .map_err(|_| corrupt_context())?;
+    let candidates = load_compaction_memory_candidates(transaction, turn)?;
+    let eligibility = turn.eligibility();
+    let scope = RetrievalScope {
+        user_id: eligibility.user_id().clone(),
+        workspace_id: eligibility.workspace_id().clone(),
+        session_id: eligibility.session_id().clone(),
+        agent_id: eligibility.agent_id().cloned(),
+        as_of: epoch.started_at(),
+        sensitivity_ceiling: eligibility.sensitivity_ceiling(),
+    };
+    effective_durable_facts(&scope, &candidates, &pending).map_err(|_| corrupt_context())
+}
+
+fn load_compaction_memory_candidates(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+) -> Result<Vec<MemoryCandidate>, StoreError> {
+    let eligibility = turn.eligibility();
+    let mut statement = transaction
+        .prepare(
+            "SELECT i.memory_id, i.scope_type, i.scope_id, i.kind, \
+                    r.state, r.metadata_json, r.metadata_sha256, r.content_id, \
+                    r.content_hash_sha256, b.content_utf8, b.content_sha256 \
+             FROM memory_items AS i \
+             JOIN memory_revisions AS r ON r.revision_id = i.active_revision_id \
+             LEFT JOIN memory_content_blobs AS b ON b.content_id = r.content_id \
+             WHERE i.lifecycle = 'active' AND r.state = 'active' AND (\
+                    (i.scope_type = 'user' AND i.scope_id = ?1) OR \
+                    (i.scope_type = 'workspace' AND i.scope_id = ?2) OR \
+                    (i.scope_type = 'session' AND i.scope_id = ?3) OR \
+                    (?4 IS NOT NULL AND i.scope_type = 'agent' AND i.scope_id = ?4)\
+             ) ORDER BY i.memory_id ASC, r.revision_id ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(
+            params![
+                eligibility.user_id().as_str(),
+                eligibility.workspace_id().as_str(),
+                eligibility.session_id().as_str(),
+                eligibility.agent_id().map(AgentId::as_str),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(9)?,
+                    row.get::<_, Option<Vec<u8>>>(10)?,
+                ))
+            },
+        )
+        .map_err(map_sqlite_error)?;
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (
+            memory_id,
+            scope_type,
+            scope_id,
+            memory_kind,
+            state,
+            metadata_json,
+            metadata_hash,
+            content_id,
+            indexed_content_hash,
+            content_bytes,
+            content_hash,
+        ) = row.map_err(map_sqlite_error)?;
+        let revision = decode_projected_revision(&state, &metadata_json, &metadata_hash)?;
+        let (Some(_), Some(content_bytes), Some(content_hash)) =
+            (content_id, content_bytes, content_hash)
+        else {
+            return Err(compaction_memory_corruption());
+        };
+        if revision.status() != MemoryRevisionStatus::Active
+            || Sha256::digest(&content_bytes).as_slice() != content_hash.as_slice()
+            || decode_digest(revision.content_hash().as_str())?.as_slice()
+                != indexed_content_hash.as_slice()
+        {
+            return Err(compaction_memory_corruption());
+        }
+        let content_text =
+            String::from_utf8(content_bytes).map_err(|_| compaction_memory_corruption())?;
+        if normalized_content_hash(&content_text).map_err(|_| compaction_memory_corruption())?
+            != *revision.content_hash()
+        {
+            return Err(compaction_memory_corruption());
+        }
+        let conflicted = revision
+            .relations()
+            .iter()
+            .any(|relation| relation.kind() == MemoryRelationKind::Contradicts);
+        candidates.push(MemoryCandidate {
+            memory_id: MemoryId::new(memory_id).map_err(|_| compaction_memory_corruption())?,
+            revision_id: revision.revision_id().clone(),
+            status: revision.status(),
+            scope: decode_scope(&scope_type, scope_id)
+                .map_err(|_| compaction_memory_corruption())?,
+            kind: decode_compaction_memory_kind(&memory_kind)?,
+            trust: revision.trust_class(),
+            confidence: revision.confidence(),
+            sensitivity: revision.sensitivity(),
+            validity: revision.validity(),
+            content: MemoryContent::new(content_text)
+                .map_err(|_| compaction_memory_corruption())?,
+            content_hash: revision.content_hash().clone(),
+            created_at: revision.created_at(),
+            exact_match: false,
+            lexical_basis_points: 0,
+            conflicted,
+        });
+    }
+    Ok(candidates)
+}
+
+fn decode_compaction_memory_kind(value: &str) -> Result<MemoryKind, StoreError> {
+    match value {
+        "fact" => Ok(MemoryKind::Fact),
+        "preference" => Ok(MemoryKind::Preference),
+        "constraint" => Ok(MemoryKind::Constraint),
+        "lesson" => Ok(MemoryKind::Lesson),
+        "procedure" => Ok(MemoryKind::Procedure),
+        _ => Err(compaction_memory_corruption()),
+    }
+}
+
+const fn compaction_memory_corruption() -> StoreError {
+    StoreError::CorruptData {
+        area: CorruptionArea::MemoryProjection,
+    }
 }
 
 fn load_compaction_boundary_record(
@@ -1916,15 +2088,17 @@ const fn corrupt_context() -> StoreError {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        AttemptId, Causation, CommandId, ConfidenceBasisPoints, ContextAdmissionId,
-        ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility, ContextEpochHashes,
-        ContextEpochVersions, ContextSourceKey, ContextSourceSnapshot, ContextTokenBudget,
-        CorrelationId, DeliveryMode, EstimatedTokens, EventEnvelope, EventId, EventPayload,
-        InputId, MemoryContent, MemoryGeneration, MemoryId, MemoryKind, MemoryOperationEnvelope,
-        MemoryOperationId, MemoryOperationPayload, MemoryOrigin, MemoryRevisionDraft,
-        MemoryRevisionId, MemoryRevisionNumber, MemoryScope, MemorySequence, MemoryValidity,
-        ModelId, ModelRef, PromptText, ProviderId, SessionId, SessionSequence, Sha256Digest,
-        TimestampMillis, TrustClass, UserId, WorkspaceId,
+        AttemptId, CapabilityKind, CapabilityRequest, Causation, CommandId, ConfidenceBasisPoints,
+        ContextAdmissionId, ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility,
+        ContextEpochHashes, ContextEpochVersions, ContextSourceKey, ContextSourceSnapshot,
+        ContextTokenBudget, CorrelationId, DeliveryMode, EstimatedTokens, EventEnvelope, EventId,
+        EventPayload, InputId, MemoryContent, MemoryGeneration, MemoryId, MemoryKind,
+        MemoryOperationEnvelope, MemoryOperationId, MemoryOperationPayload, MemoryOrigin,
+        MemoryRelation, MemoryRelationKind, MemoryRevision, MemoryRevisionDraft, MemoryRevisionId,
+        MemoryRevisionNumber, MemoryScope, MemorySequence, MemoryValidity, ModelId, ModelRef,
+        PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ProviderCallId,
+        ProviderId, ResourceRef, SessionId, SessionSequence, Sha256Digest, TimestampMillis,
+        ToolArguments, ToolCallId, ToolCallSpec, ToolName, TrustClass, UserId, WorkspaceId,
     };
     use autoharness_memory::{
         COMPACTION_FACTS_VERSION, CONTEXT_RENDERER_VERSION, CanonicalEncoder, MEMORY_RENDERER_V1,
@@ -2060,6 +2234,65 @@ mod tests {
                 )),
             ))
             .expect("append expiring memory");
+        (memory_id, revision)
+    }
+
+    fn seed_active_memory(
+        store: &mut SqliteStore,
+        memory_id: &str,
+        revision_id: &str,
+        content_text: &str,
+        relations: Vec<MemoryRelation>,
+    ) -> (MemoryId, MemoryRevision) {
+        let memory_id = MemoryId::new(memory_id).expect("memory ID");
+        let content = MemoryContent::new(content_text).expect("content");
+        let draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new(revision_id).expect("revision ID"),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(9_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+            relations,
+        )
+        .expect("revision draft");
+        let revision = MemoryRevision::from_draft(
+            MemoryRevisionStatus::Active,
+            &draft,
+            TimestampMillis::new(3),
+            None,
+        );
+        let operation = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new(format!("operation-{memory_id}")).expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::FIRST,
+            TimestampMillis::new(3),
+            autoharness_domain::MemoryCausation::Command(
+                CommandId::new(format!("command-{memory_id}")).expect("command ID"),
+            ),
+            CorrelationId::new(format!("correlation-{memory_id}")).expect("correlation ID"),
+            MemoryOperationPayload::MemoryCreated {
+                scope: MemoryScope::User(UserId::new("user-1").expect("user ID")),
+                memory_kind: MemoryKind::Fact,
+                revision: revision.clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                operation,
+                Some(MemoryRevisionContent::new(
+                    draft.revision_id().clone(),
+                    content,
+                    Vec::new(),
+                )),
+            ))
+            .expect("append active memory");
         (memory_id, revision)
     }
 
@@ -2399,6 +2632,218 @@ mod tests {
                 EstimatedTokens::new(2_048).expect("memory limit"),
             )
             .expect("budget allocation"),
+        )
+    }
+
+    fn turn_at_generation(
+        turn_id: &str,
+        epoch_id: &str,
+        run_turn: u32,
+        expected_sequence: u64,
+        generation: MemoryGeneration,
+    ) -> ContextTurnManifest {
+        let original = turn_at(
+            turn_id,
+            epoch_id,
+            run_turn,
+            expected_sequence,
+            "workspace-1",
+        );
+        let placeholder = ContextTurnManifest::new(
+            original.context_turn_id().clone(),
+            original.epoch_id().clone(),
+            original.session_id().clone(),
+            original.attempt_id().clone(),
+            original.run_turn(),
+            original.expected_session_sequence(),
+            generation,
+            original.model().clone(),
+            original.request_hash().clone(),
+            original.rendered_hash().clone(),
+            digest('0'),
+            original.eligibility().clone(),
+            original.budget(),
+            original.rendered_token_count(),
+            original.committed_at(),
+            original.sources().to_vec(),
+            original.admissions().to_vec(),
+        )
+        .expect("turn placeholder with generation");
+        ContextTurnManifest::new(
+            placeholder.context_turn_id().clone(),
+            placeholder.epoch_id().clone(),
+            placeholder.session_id().clone(),
+            placeholder.attempt_id().clone(),
+            placeholder.run_turn(),
+            placeholder.expected_session_sequence(),
+            placeholder.memory_generation(),
+            placeholder.model().clone(),
+            placeholder.request_hash().clone(),
+            placeholder.rendered_hash().clone(),
+            context_manifest_hash(&placeholder).expect("manifest hash"),
+            placeholder.eligibility().clone(),
+            placeholder.budget(),
+            placeholder.rendered_token_count(),
+            placeholder.committed_at(),
+            placeholder.sources().to_vec(),
+            placeholder.admissions().to_vec(),
+        )
+        .expect("turn with generation")
+    }
+
+    struct CompactionFixture {
+        predecessor: ContextEpochManifest,
+        epoch: ContextEpochManifest,
+        turn: ContextTurnManifest,
+        context: ContextTurnCommitRequest,
+        binding: EventEnvelope,
+    }
+
+    fn seed_compaction_fixture(
+        store: &mut SqliteStore,
+        generation: MemoryGeneration,
+    ) -> CompactionFixture {
+        seed_dispatch_ready_attempt(store);
+        let predecessor = epoch_at(
+            "epoch-proof-predecessor",
+            ContextEpochReason::NewAttempt,
+            None,
+            generation,
+            3,
+        );
+        let first_turn = turn_at_generation(
+            "turn-proof-predecessor",
+            predecessor.epoch_id().as_str(),
+            1,
+            5,
+            generation,
+        );
+        let first_binding = session_event(
+            6,
+            EventPayload::ContextTurnBound {
+                attempt_id: first_turn.attempt_id().clone(),
+                run_turn: first_turn.run_turn(),
+                context_turn_id: first_turn.context_turn_id().clone(),
+                manifest_hash: first_turn.manifest_hash().clone(),
+            },
+        );
+        store
+            .commit_context_turn_and_bind(&BoundContextTurnCommitRequest::new(
+                ContextTurnCommitRequest::new(
+                    Some(predecessor.clone()),
+                    first_turn.clone(),
+                    turn_content(&first_turn),
+                ),
+                first_binding,
+            ))
+            .expect("bind predecessor context");
+        store
+            .append(&AppendRequest::new(
+                first_turn.session_id().clone(),
+                6,
+                vec![
+                    session_event(
+                        7,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: first_turn.attempt_id().clone(),
+                            turn: 1,
+                        },
+                    ),
+                    session_event(
+                        8,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        9,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("advance to compaction boundary");
+
+        let epoch = epoch_at(
+            "epoch-proof-compaction",
+            ContextEpochReason::Compaction,
+            Some(predecessor.epoch_id().as_str()),
+            generation,
+            9,
+        );
+        let turn = turn_at_generation(
+            "turn-proof-compaction",
+            epoch.epoch_id().as_str(),
+            2,
+            9,
+            generation,
+        );
+        let context =
+            ContextTurnCommitRequest::new(Some(epoch.clone()), turn.clone(), turn_content(&turn));
+        let binding = session_event(
+            10,
+            EventPayload::ContextTurnBound {
+                attempt_id: turn.attempt_id().clone(),
+                run_turn: turn.run_turn(),
+                context_turn_id: turn.context_turn_id().clone(),
+                manifest_hash: turn.manifest_hash().clone(),
+            },
+        );
+        CompactionFixture {
+            predecessor,
+            epoch,
+            turn,
+            context,
+            binding,
+        }
+    }
+
+    fn compaction_fingerprint(
+        store: &mut SqliteStore,
+        fixture: &CompactionFixture,
+    ) -> EffectiveDurableFactsFingerprint {
+        let transaction = store
+            .connection
+            .transaction()
+            .expect("open proof transaction");
+        let fingerprint =
+            compute_compaction_fingerprint(&transaction, &fixture.epoch, &fixture.turn)
+                .expect("compute compaction fingerprint");
+        transaction.rollback().expect("roll back proof transaction");
+        fingerprint
+    }
+
+    fn compaction_boundary(
+        fixture: &CompactionFixture,
+        fingerprint: &EffectiveDurableFactsFingerprint,
+    ) -> ContextCompactionBoundary {
+        compaction_boundary_with_claims(
+            fixture,
+            fingerprint.hash().clone(),
+            fingerprint.memory_fact_count(),
+            fingerprint.pending_session_fact_count(),
+        )
+    }
+
+    fn compaction_boundary_with_claims(
+        fixture: &CompactionFixture,
+        facts_hash: Sha256Digest,
+        memory_fact_count: u32,
+        pending_session_fact_count: u32,
+    ) -> ContextCompactionBoundary {
+        ContextCompactionBoundary::new(
+            fixture.epoch.epoch_id().clone(),
+            fixture.predecessor.epoch_id().clone(),
+            fixture.turn.session_id().clone(),
+            fixture.turn.expected_session_sequence(),
+            fixture.turn.memory_generation(),
+            COMPACTION_FACTS_VERSION,
+            facts_hash,
+            memory_fact_count,
+            pending_session_fact_count,
+            None,
+            TimestampMillis::new(9),
         )
     }
 
@@ -2821,6 +3266,456 @@ mod tests {
     }
 
     #[test]
+    fn compaction_bind_rejects_forged_hash_and_counts_without_partial_writes() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let fixture = seed_compaction_fixture(&mut store, MemoryGeneration::INITIAL);
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        assert_eq!(fingerprint.memory_fact_count(), 0);
+        assert_eq!(fingerprint.pending_session_fact_count(), 0);
+
+        let forged_boundaries = [
+            compaction_boundary_with_claims(
+                &fixture,
+                digest('9'),
+                fingerprint.memory_fact_count(),
+                fingerprint.pending_session_fact_count(),
+            ),
+            compaction_boundary_with_claims(
+                &fixture,
+                fingerprint.hash().clone(),
+                fingerprint.memory_fact_count() + 1,
+                fingerprint.pending_session_fact_count(),
+            ),
+            compaction_boundary_with_claims(
+                &fixture,
+                fingerprint.hash().clone(),
+                fingerprint.memory_fact_count(),
+                fingerprint.pending_session_fact_count() + 1,
+            ),
+        ];
+        for forged in forged_boundaries {
+            let request = BoundContextTurnCommitRequest::new(
+                fixture.context.clone(),
+                fixture.binding.clone(),
+            )
+            .with_compaction_boundary(forged);
+            assert_eq!(
+                store.commit_context_turn_and_bind(&request),
+                Err(StoreError::InvalidContextTransition)
+            );
+            assert!(
+                store
+                    .load_context_turn(fixture.turn.context_turn_id())
+                    .expect("load rejected turn")
+                    .is_none()
+            );
+            assert!(
+                store
+                    .load_compaction_boundary(fixture.epoch.epoch_id())
+                    .expect("load rejected boundary")
+                    .is_none()
+            );
+            assert_eq!(
+                store
+                    .connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM session_events WHERE sequence = 10",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("binding event count"),
+                0
+            );
+        }
+
+        let valid =
+            BoundContextTurnCommitRequest::new(fixture.context.clone(), fixture.binding.clone())
+                .with_compaction_boundary(compaction_boundary(&fixture, &fingerprint));
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&valid)
+                .expect("retry with the verified proof")
+                .disposition(),
+            ContextCommitDisposition::Committed
+        );
+    }
+
+    #[test]
+    fn compaction_retry_survives_restart_and_later_authoritative_mutation() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let fixture = seed_compaction_fixture(&mut store, MemoryGeneration::INITIAL);
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        let boundary = compaction_boundary(&fixture, &fingerprint);
+        let request =
+            BoundContextTurnCommitRequest::new(fixture.context.clone(), fixture.binding.clone())
+                .with_compaction_boundary(boundary.clone());
+        store
+            .commit_context_turn_and_bind(&request)
+            .expect("commit verified compaction");
+
+        seed_active_memory(
+            &mut store,
+            "memory-after-compaction",
+            "revision-after-compaction",
+            "This mutation happened after the frozen proof",
+            Vec::new(),
+        );
+        drop(store);
+
+        let mut reopened = database.open();
+        assert_eq!(
+            reopened
+                .commit_context_turn_and_bind(&request)
+                .expect("retry exact committed proof after restart and mutation")
+                .disposition(),
+            ContextCommitDisposition::AlreadyCommitted
+        );
+        assert_eq!(
+            reopened
+                .load_compaction_boundary(fixture.epoch.epoch_id())
+                .expect("load immutable proof"),
+            Some(boundary)
+        );
+    }
+
+    #[test]
+    fn compaction_bind_rejects_memory_mutation_after_the_caller_snapshot() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_active_memory(
+            &mut store,
+            "memory-before-snapshot",
+            "revision-before-snapshot",
+            "Fact present in the caller snapshot",
+            Vec::new(),
+        );
+        let fixture = seed_compaction_fixture(
+            &mut store,
+            MemoryGeneration::new(1).expect("memory generation"),
+        );
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        let request =
+            BoundContextTurnCommitRequest::new(fixture.context.clone(), fixture.binding.clone())
+                .with_compaction_boundary(compaction_boundary(&fixture, &fingerprint));
+
+        seed_active_memory(
+            &mut store,
+            "memory-raced-snapshot",
+            "revision-raced-snapshot",
+            "Fact committed before the atomic bind began",
+            Vec::new(),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(&request),
+            Err(StoreError::ContextGenerationConflict {
+                expected: 1,
+                actual: 2,
+            })
+        );
+        assert!(
+            store
+                .load_context_turn(fixture.turn.context_turn_id())
+                .expect("load raced turn")
+                .is_none()
+        );
+        assert!(
+            store
+                .load_compaction_boundary(fixture.epoch.epoch_id())
+                .expect("load raced boundary")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn compaction_proof_is_order_independent_and_excludes_conflicted_active_heads() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_active_memory(
+            &mut store,
+            "memory-zeta",
+            "revision-zeta",
+            "Zeta fact inserted first",
+            Vec::new(),
+        );
+        seed_active_memory(
+            &mut store,
+            "memory-conflicted",
+            "revision-conflicted",
+            "Conflicted active head must not survive compaction",
+            vec![MemoryRelation::new(
+                MemoryId::new("memory-contradiction-target").expect("relation target"),
+                MemoryRelationKind::Contradicts,
+            )],
+        );
+        seed_active_memory(
+            &mut store,
+            "memory-alpha",
+            "revision-alpha",
+            "Alpha fact inserted last",
+            Vec::new(),
+        );
+        let fixture = seed_compaction_fixture(
+            &mut store,
+            MemoryGeneration::new(3).expect("memory generation"),
+        );
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        assert_eq!(fingerprint.memory_fact_count(), 2);
+
+        let transaction = store
+            .connection
+            .transaction()
+            .expect("open ordering transaction");
+        let mut candidates = load_compaction_memory_candidates(&transaction, &fixture.turn)
+            .expect("load candidates");
+        assert_eq!(candidates.len(), 3);
+        assert!(
+            candidates
+                .iter()
+                .find(|candidate| candidate.memory_id.as_str() == "memory-conflicted")
+                .is_some_and(|candidate| candidate.conflicted)
+        );
+        candidates.reverse();
+        let events = load_session_events_through(
+            &transaction,
+            fixture.turn.session_id(),
+            fixture.turn.expected_session_sequence(),
+        )
+        .expect("load event prefix");
+        let pending = pending_session_facts_from_events(
+            fixture.turn.session_id(),
+            fixture.turn.expected_session_sequence(),
+            &events,
+        )
+        .expect("derive pending facts");
+        let eligibility = fixture.turn.eligibility();
+        let reordered = effective_durable_facts(
+            &RetrievalScope {
+                user_id: eligibility.user_id().clone(),
+                workspace_id: eligibility.workspace_id().clone(),
+                session_id: eligibility.session_id().clone(),
+                agent_id: eligibility.agent_id().cloned(),
+                as_of: fixture.epoch.started_at(),
+                sensitivity_ceiling: eligibility.sensitivity_ceiling(),
+            },
+            &candidates,
+            &pending,
+        )
+        .expect("hash reordered candidates");
+        transaction
+            .rollback()
+            .expect("roll back ordering transaction");
+        assert_eq!(reordered, fingerprint);
+    }
+
+    #[test]
+    fn compaction_bind_fails_closed_when_eligible_content_was_erased() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let (_, revision) = seed_active_memory(
+            &mut store,
+            "memory-erased-proof",
+            "revision-erased-proof",
+            "Eligible content that must be independently verified",
+            Vec::new(),
+        );
+        let fixture = seed_compaction_fixture(
+            &mut store,
+            MemoryGeneration::new(1).expect("memory generation"),
+        );
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        assert_eq!(fingerprint.memory_fact_count(), 1);
+        let request =
+            BoundContextTurnCommitRequest::new(fixture.context.clone(), fixture.binding.clone())
+                .with_compaction_boundary(compaction_boundary(&fixture, &fingerprint));
+
+        store
+            .connection
+            .execute(
+                "DELETE FROM memory_content_blobs WHERE content_id = (\
+                    SELECT content_id FROM memory_revisions WHERE revision_id = ?1\
+                 )",
+                [revision.revision_id().as_str()],
+            )
+            .expect("erase eligible content sidecar");
+        assert_eq!(
+            store.commit_context_turn_and_bind(&request),
+            Err(StoreError::CorruptData {
+                area: CorruptionArea::MemoryProjection,
+            })
+        );
+        assert!(
+            store
+                .load_context_turn(fixture.turn.context_turn_id())
+                .expect("load rejected turn")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn compaction_proof_tracks_unpromoted_input_and_permission_state_changes() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let fixture = seed_compaction_fixture(&mut store, MemoryGeneration::INITIAL);
+        let tool_call_id = ToolCallId::new("tool-proof-pending").expect("tool call ID");
+        let decision_id = PermissionDecisionId::new("decision-proof-pending").expect("decision ID");
+        let call = ToolCallSpec {
+            tool_call_id: tool_call_id.clone(),
+            provider_call_id: ProviderCallId::new("provider-call-proof-pending")
+                .expect("provider call ID"),
+            tool_name: ToolName::new("read_file").expect("tool name"),
+            schema_version: 1,
+            arguments: ToolArguments::new(serde_json::json!({"path": "notes.txt"}))
+                .expect("tool arguments"),
+            capability: CapabilityRequest {
+                kind: CapabilityKind::FilesystemRead,
+                resource: ResourceRef::new("notes.txt").expect("resource"),
+            },
+        };
+        store
+            .append(&AppendRequest::new(
+                fixture.turn.session_id().clone(),
+                9,
+                vec![
+                    session_event(
+                        10,
+                        EventPayload::InputAdmitted {
+                            input_id: InputId::new("input-proof-pending")
+                                .expect("pending input ID"),
+                            prompt: PromptText::new("Keep this queued input exact")
+                                .expect("pending prompt"),
+                            delivery_mode: DeliveryMode::NextTurn,
+                        },
+                    ),
+                    session_event(
+                        11,
+                        EventPayload::ToolCallProposed {
+                            attempt_id: fixture.turn.attempt_id().clone(),
+                            call,
+                        },
+                    ),
+                    session_event(
+                        12,
+                        EventPayload::ToolPermissionRecorded {
+                            tool_call_id: tool_call_id.clone(),
+                            decision_id: decision_id.clone(),
+                            outcome: PermissionOutcome::Ask,
+                        },
+                    ),
+                ],
+            ))
+            .expect("append pending input and permission");
+
+        let pending_turn = turn_at_generation(
+            "turn-proof-pending",
+            fixture.epoch.epoch_id().as_str(),
+            2,
+            12,
+            MemoryGeneration::INITIAL,
+        );
+        let pending_fixture = CompactionFixture {
+            predecessor: fixture.predecessor.clone(),
+            epoch: fixture.epoch.clone(),
+            context: ContextTurnCommitRequest::new(
+                Some(fixture.epoch.clone()),
+                pending_turn.clone(),
+                turn_content(&pending_turn),
+            ),
+            binding: session_event(
+                13,
+                EventPayload::ContextTurnBound {
+                    attempt_id: pending_turn.attempt_id().clone(),
+                    run_turn: pending_turn.run_turn(),
+                    context_turn_id: pending_turn.context_turn_id().clone(),
+                    manifest_hash: pending_turn.manifest_hash().clone(),
+                },
+            ),
+            turn: pending_turn,
+        };
+        let before_answer = compaction_fingerprint(&mut store, &pending_fixture);
+        assert_eq!(before_answer.memory_fact_count(), 0);
+        assert_eq!(before_answer.pending_session_fact_count(), 3);
+
+        store
+            .append(&AppendRequest::new(
+                pending_fixture.turn.session_id().clone(),
+                12,
+                vec![session_event(
+                    13,
+                    EventPayload::ToolPermissionAnswered {
+                        tool_call_id,
+                        decision_id,
+                        answer: PermissionAnswer::AllowOnce,
+                    },
+                )],
+            ))
+            .expect("answer pending permission");
+        let answered_turn = turn_at_generation(
+            "turn-proof-answered",
+            fixture.epoch.epoch_id().as_str(),
+            2,
+            13,
+            MemoryGeneration::INITIAL,
+        );
+        let answered_fixture = CompactionFixture {
+            predecessor: fixture.predecessor,
+            epoch: fixture.epoch,
+            context: ContextTurnCommitRequest::new(
+                Some(pending_fixture.epoch.clone()),
+                answered_turn.clone(),
+                turn_content(&answered_turn),
+            ),
+            binding: session_event(
+                14,
+                EventPayload::ContextTurnBound {
+                    attempt_id: answered_turn.attempt_id().clone(),
+                    run_turn: answered_turn.run_turn(),
+                    context_turn_id: answered_turn.context_turn_id().clone(),
+                    manifest_hash: answered_turn.manifest_hash().clone(),
+                },
+            ),
+            turn: answered_turn,
+        };
+        let stale_claim = compaction_boundary_with_claims(
+            &answered_fixture,
+            before_answer.hash().clone(),
+            before_answer.memory_fact_count(),
+            before_answer.pending_session_fact_count(),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(
+                &BoundContextTurnCommitRequest::new(
+                    answered_fixture.context.clone(),
+                    answered_fixture.binding.clone(),
+                )
+                .with_compaction_boundary(stale_claim),
+            ),
+            Err(StoreError::InvalidContextTransition)
+        );
+
+        let after_answer = compaction_fingerprint(&mut store, &answered_fixture);
+        assert_eq!(after_answer.pending_session_fact_count(), 2);
+        assert_ne!(after_answer.hash(), before_answer.hash());
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(
+                    &BoundContextTurnCommitRequest::new(
+                        answered_fixture.context.clone(),
+                        answered_fixture.binding.clone(),
+                    )
+                    .with_compaction_boundary(compaction_boundary(
+                        &answered_fixture,
+                        &after_answer,
+                    )),
+                )
+                .expect("bind current pending-state proof")
+                .disposition(),
+            ContextCommitDisposition::Committed
+        );
+    }
+
+    #[test]
     fn atomic_binding_freezes_workspace_and_persists_verified_compaction_boundary() {
         let database = TestDatabase::new();
         let mut store = database.open();
@@ -2971,6 +3866,17 @@ mod tests {
                 .is_none()
         );
 
+        let fingerprint = {
+            let transaction = store
+                .connection
+                .transaction()
+                .expect("open proof transaction");
+            let fingerprint =
+                compute_compaction_fingerprint(&transaction, &compacted_epoch, &compacted_turn)
+                    .expect("compute independent compaction proof");
+            transaction.rollback().expect("roll back proof transaction");
+            fingerprint
+        };
         let boundary = ContextCompactionBoundary::new(
             compacted_epoch.epoch_id().clone(),
             first_epoch.epoch_id().clone(),
@@ -2978,9 +3884,9 @@ mod tests {
             compacted_turn.expected_session_sequence(),
             compacted_turn.memory_generation(),
             COMPACTION_FACTS_VERSION,
-            digest('9'),
-            0,
-            2,
+            fingerprint.hash().clone(),
+            fingerprint.memory_fact_count(),
+            fingerprint.pending_session_fact_count(),
             None,
             TimestampMillis::new(9),
         );

@@ -1766,6 +1766,55 @@ fn load_all_stored_event_rows(
         .map_err(map_sqlite_error)
 }
 
+pub(crate) fn load_session_events_through(
+    transaction: &Transaction<'_>,
+    session_id: &SessionId,
+    expected_last_sequence: SessionSequence,
+) -> Result<Vec<EventEnvelope>, StoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT \
+                e.event_id, e.session_id, e.sequence, e.schema_version, e.occurred_at_ms, \
+                e.caused_by_command_id, e.caused_by_event_id, e.correlation_id, \
+                e.event_kind, e.envelope_json, cause.sequence \
+             FROM session_events AS e \
+             LEFT JOIN session_events AS cause \
+               ON cause.session_id = e.session_id AND cause.event_id = e.caused_by_event_id \
+             WHERE e.session_id = ?1 AND e.sequence <= ?2 \
+             ORDER BY e.sequence ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(
+            params![
+                session_id.as_str(),
+                to_sql_sequence(expected_last_sequence.get())?
+            ],
+            StoredEventRow::from_row,
+        )
+        .map_err(map_sqlite_error)?;
+    let mut events = Vec::new();
+    for (index, row) in rows.enumerate() {
+        let event = row.map_err(map_sqlite_error)?.validate()?;
+        let expected = u64::try_from(index)
+            .map_err(|_| StoreError::SequenceOutOfRange)?
+            .checked_add(1)
+            .ok_or(StoreError::SequenceOutOfRange)?;
+        if event.sequence().get() != expected {
+            return Err(StoreError::CorruptData {
+                area: CorruptionArea::EventSequence,
+            });
+        }
+        events.push(event);
+    }
+    if u64::try_from(events.len()).ok() != Some(expected_last_sequence.get()) {
+        return Err(StoreError::CorruptData {
+            area: CorruptionArea::EventSequence,
+        });
+    }
+    Ok(events)
+}
+
 #[derive(Debug)]
 struct SessionProjectionRow {
     session_id: String,
