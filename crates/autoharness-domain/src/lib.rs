@@ -22,8 +22,8 @@ pub use event::{Causation, EVENT_SCHEMA_V1, EventEnvelope, EventPayload};
 pub use id::{
     AgentId, ArtifactId, AttemptId, CommandId, ContextAdmissionId, ContextEpochId,
     ContextSourceKey, ContextTurnId, CorrelationId, ErrorCode, EventId, InputId, MemoryEvidenceId,
-    MemoryId, MemoryOperationId, MemoryRevisionId, ModelId, PermissionDecisionId, ProviderCallId,
-    ProviderId, SessionId, ToolCallId, ToolName, UserId, WorkspaceId,
+    MemoryId, MemoryOperationId, MemoryRevisionId, MemorySubjectKey, ModelId, PermissionDecisionId,
+    ProviderCallId, ProviderId, SessionId, ToolCallId, ToolName, UserId, WorkspaceId,
 };
 pub use memory::{
     ConfidenceBasisPoints, MAX_MEMORY_EVIDENCE, MAX_MEMORY_RELATIONS, MAX_MEMORY_VALIDATION_ISSUES,

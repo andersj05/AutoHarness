@@ -31,5 +31,6 @@ pub use source::{
     RetainedContextSource,
 };
 pub use validate::{
-    ExistingMemory, MemoryValidationPolicy, MemoryValidatorV1, normalized_content_hash,
+    ExistingMemory, MemoryValidationOutcome, MemoryValidationPolicy, MemoryValidatorV1,
+    normalized_content_hash,
 };

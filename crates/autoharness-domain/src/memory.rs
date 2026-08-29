@@ -5,8 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     AgentId, CommandId, ContextSourceKey, CorrelationId, EventId, InputId, MemoryEvidenceId,
-    MemoryId, MemoryOperationId, MemoryRevisionId, SessionId, TimestampMillis, ToolCallId, UserId,
-    ValueError, WorkspaceId,
+    MemoryId, MemoryOperationId, MemoryRevisionId, MemorySubjectKey, SessionId, TimestampMillis,
+    ToolCallId, UserId, ValueError, WorkspaceId,
 };
 
 /// The only memory-ledger schema emitted by the Phase 4 domain contract.
@@ -805,6 +805,8 @@ impl MemoryValidationResult {
 pub struct MemoryRevisionDraft {
     revision_id: MemoryRevisionId,
     revision: MemoryRevisionNumber,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subject_key: Option<MemorySubjectKey>,
     content: MemoryContent,
     content_hash: Sha256Digest,
     origin: MemoryOrigin,
@@ -820,6 +822,8 @@ pub struct MemoryRevisionDraft {
 struct RawMemoryRevisionDraft {
     revision_id: MemoryRevisionId,
     revision: MemoryRevisionNumber,
+    #[serde(default)]
+    subject_key: Option<MemorySubjectKey>,
     content: MemoryContent,
     content_hash: Sha256Digest,
     origin: MemoryOrigin,
@@ -840,6 +844,7 @@ impl<'de> Deserialize<'de> for MemoryRevisionDraft {
         Self::new(
             raw.revision_id,
             raw.revision,
+            raw.subject_key,
             raw.content,
             raw.content_hash,
             raw.origin,
@@ -860,6 +865,7 @@ impl MemoryRevisionDraft {
     pub fn new(
         revision_id: MemoryRevisionId,
         revision: MemoryRevisionNumber,
+        subject_key: Option<MemorySubjectKey>,
         content: MemoryContent,
         content_hash: Sha256Digest,
         origin: MemoryOrigin,
@@ -877,6 +883,7 @@ impl MemoryRevisionDraft {
         Ok(Self {
             revision_id,
             revision,
+            subject_key,
             content,
             content_hash,
             origin,
@@ -899,6 +906,12 @@ impl MemoryRevisionDraft {
     #[must_use]
     pub const fn revision(&self) -> MemoryRevisionNumber {
         self.revision
+    }
+
+    /// Returns the optional semantic identity used for deterministic conflict grouping.
+    #[must_use]
+    pub const fn subject_key(&self) -> Option<&MemorySubjectKey> {
+        self.subject_key.as_ref()
     }
 
     /// Returns the exact bounded memory content.
@@ -962,6 +975,8 @@ pub struct MemoryRevisionMetadata {
     status: MemoryRevisionStatus,
     revision_id: MemoryRevisionId,
     revision: MemoryRevisionNumber,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subject_key: Option<MemorySubjectKey>,
     content_hash: Sha256Digest,
     origin: MemoryOrigin,
     trust_class: TrustClass,
@@ -982,6 +997,7 @@ impl MemoryRevisionMetadata {
         status: MemoryRevisionStatus,
         revision_id: MemoryRevisionId,
         revision: MemoryRevisionNumber,
+        subject_key: Option<MemorySubjectKey>,
         content_hash: Sha256Digest,
         origin: MemoryOrigin,
         trust_class: TrustClass,
@@ -1001,6 +1017,7 @@ impl MemoryRevisionMetadata {
             status,
             revision_id,
             revision,
+            subject_key,
             content_hash,
             origin,
             trust_class,
@@ -1026,6 +1043,7 @@ impl MemoryRevisionMetadata {
             status,
             revision_id: draft.revision_id.clone(),
             revision: draft.revision,
+            subject_key: draft.subject_key.clone(),
             content_hash: draft.content_hash.clone(),
             origin: draft.origin,
             trust_class: draft.trust_class,
@@ -1066,6 +1084,12 @@ impl MemoryRevisionMetadata {
     #[must_use]
     pub const fn revision(&self) -> MemoryRevisionNumber {
         self.revision
+    }
+
+    /// Returns the optional semantic identity retained after content erasure.
+    #[must_use]
+    pub const fn subject_key(&self) -> Option<&MemorySubjectKey> {
+        self.subject_key.as_ref()
     }
 
     /// Returns the digest used to verify an erasable content sidecar.
@@ -1134,6 +1158,8 @@ struct RawMemoryRevisionMetadata {
     status: MemoryRevisionStatus,
     revision_id: MemoryRevisionId,
     revision: MemoryRevisionNumber,
+    #[serde(default)]
+    subject_key: Option<MemorySubjectKey>,
     content_hash: Sha256Digest,
     origin: MemoryOrigin,
     trust_class: TrustClass,
@@ -1156,6 +1182,7 @@ impl<'de> Deserialize<'de> for MemoryRevisionMetadata {
             raw.status,
             raw.revision_id,
             raw.revision,
+            raw.subject_key,
             raw.content_hash,
             raw.origin,
             raw.trust_class,
@@ -1538,6 +1565,7 @@ mod tests {
         MemoryRevisionDraft::new(
             MemoryRevisionId::new("revision-1").expect("valid revision ID"),
             MemoryRevisionNumber::FIRST,
+            None,
             MemoryContent::new("Use compact terminal explanations.").expect("valid content"),
             digest('a'),
             MemoryOrigin::ExplicitUser,

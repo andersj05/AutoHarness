@@ -9,9 +9,9 @@ use autoharness_domain::{
     MemoryEvidenceSource, MemoryGeneration, MemoryId, MemoryKind, MemoryOperationEnvelope,
     MemoryOperationId, MemoryOperationPayload, MemoryOrigin, MemoryRelation, MemoryRelationKind,
     MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionMetadata, MemoryRevisionNumber,
-    MemoryRevisionStatus, MemoryScope, MemorySequence, MemoryValidity, ModelId, ModelRef,
-    ProviderId, Sensitivity, SessionId, SessionSequence, Sha256Digest, TimestampMillis, TrustClass,
-    UserId, WorkspaceId,
+    MemoryRevisionStatus, MemoryScope, MemorySequence, MemorySubjectKey, MemoryValidity, ModelId,
+    ModelRef, ProviderId, Sensitivity, SessionId, SessionSequence, Sha256Digest, TimestampMillis,
+    TrustClass, UserId, WorkspaceId,
 };
 
 fn digest(character: char) -> Sha256Digest {
@@ -38,6 +38,7 @@ fn revision_draft() -> MemoryRevisionDraft {
     MemoryRevisionDraft::new(
         MemoryRevisionId::new("revision-1").expect("valid revision ID"),
         MemoryRevisionNumber::FIRST,
+        Some(MemorySubjectKey::new("preference:terminal-explanations").expect("valid subject key")),
         MemoryContent::new("Use compact terminal explanations.").expect("valid content"),
         digest('a'),
         MemoryOrigin::ExplicitUser,
@@ -105,6 +106,7 @@ fn memory_command_and_contentless_operation_shapes_are_stable() {
                     "revision": {
                         "revision_id": "revision-1",
                         "revision": 1,
+                        "subject_key": "preference:terminal-explanations",
                         "content": "Use compact terminal explanations.",
                         "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "origin": "explicit_user",
@@ -153,6 +155,7 @@ fn memory_command_and_contentless_operation_shapes_are_stable() {
                         "status": "active",
                         "revision_id": "revision-1",
                         "revision": 1,
+                        "subject_key": "preference:terminal-explanations",
                         "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "origin": "explicit_user",
                         "trust_class": "user_approved",

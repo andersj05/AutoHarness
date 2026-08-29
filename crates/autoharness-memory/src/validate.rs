@@ -1,7 +1,7 @@
 use autoharness_domain::{
-    MemoryKind, MemoryOrigin, MemoryRelationKind, MemoryRevisionDraft, MemoryScope,
-    MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus, Sensitivity,
-    Sha256Digest, TrustClass,
+    MemoryId, MemoryKind, MemoryOrigin, MemoryRelationKind, MemoryRevisionDraft, MemoryScope,
+    MemorySubjectKey, MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus,
+    Sensitivity, Sha256Digest, TrustClass,
 };
 
 use crate::{CanonicalEncoder, MemoryError};
@@ -18,12 +18,50 @@ pub struct MemoryValidationPolicy<'a> {
 /// Existing immutable head used by deterministic duplicate checks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExistingMemory {
+    /// Stable identity of the existing memory item.
+    pub memory_id: MemoryId,
     /// Exact owning scope.
     pub scope: MemoryScope,
     /// Semantic memory kind.
     pub kind: MemoryKind,
+    /// Optional semantic identity used to group exact conflicts.
+    pub subject_key: Option<MemorySubjectKey>,
     /// Canonical content digest.
     pub content_hash: Sha256Digest,
+}
+
+/// Deterministic validation plus the exact existing items that caused identity findings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryValidationOutcome {
+    result: MemoryValidationResult,
+    duplicate_memory_id: Option<MemoryId>,
+    contradiction_candidates: Vec<MemoryId>,
+}
+
+impl MemoryValidationOutcome {
+    /// Returns the durable validation result.
+    #[must_use]
+    pub const fn result(&self) -> &MemoryValidationResult {
+        &self.result
+    }
+
+    /// Returns the stable existing item that made this proposal redundant, when any.
+    #[must_use]
+    pub const fn duplicate_memory_id(&self) -> Option<&MemoryId> {
+        self.duplicate_memory_id.as_ref()
+    }
+
+    /// Returns stable existing items with the same non-empty subject and different content.
+    #[must_use]
+    pub fn contradiction_candidates(&self) -> &[MemoryId] {
+        &self.contradiction_candidates
+    }
+
+    /// Consumes the transient candidate details and returns the durable validation result.
+    #[must_use]
+    pub fn into_result(self) -> MemoryValidationResult {
+        self.result
+    }
 }
 
 /// Version 1 deterministic memory validator.
@@ -43,8 +81,55 @@ impl MemoryValidatorV1 {
         draft: &MemoryRevisionDraft,
         existing: &[ExistingMemory],
     ) -> Result<MemoryValidationResult, MemoryError> {
+        self.analyze(policy, scope, kind, draft, existing)
+            .map(MemoryValidationOutcome::into_result)
+    }
+
+    /// Validates content and identifies the exact existing items behind identity findings.
+    pub fn analyze(
+        &self,
+        policy: MemoryValidationPolicy<'_>,
+        scope: &MemoryScope,
+        kind: MemoryKind,
+        draft: &MemoryRevisionDraft,
+        existing: &[ExistingMemory],
+    ) -> Result<MemoryValidationOutcome, MemoryError> {
         let content_hash = normalized_content_hash(draft.content().as_str())?;
         let mut issues = Vec::new();
+
+        let mut duplicate_candidates = existing
+            .iter()
+            .filter(|candidate| {
+                candidate.scope == *scope
+                    && candidate.kind == kind
+                    && candidate.subject_key.as_ref() == draft.subject_key()
+                    && candidate.content_hash == content_hash
+            })
+            .map(|candidate| candidate.memory_id.clone())
+            .collect::<Vec<_>>();
+        duplicate_candidates.sort();
+        duplicate_candidates.dedup();
+
+        let mut contradiction_candidates = existing
+            .iter()
+            .filter(|candidate| {
+                draft.subject_key().is_some()
+                    && candidate.scope == *scope
+                    && candidate.kind == kind
+                    && candidate.subject_key.as_ref() == draft.subject_key()
+                    && candidate.content_hash != content_hash
+            })
+            .map(|candidate| candidate.memory_id.clone())
+            .chain(
+                draft
+                    .relations()
+                    .iter()
+                    .filter(|relation| relation.kind() == MemoryRelationKind::Contradicts)
+                    .map(|relation| relation.memory_id().clone()),
+            )
+            .collect::<Vec<_>>();
+        contradiction_candidates.sort();
+        contradiction_candidates.dedup();
 
         if !policy.authorized_scopes.contains(scope) {
             issues.push(MemoryValidationIssue::UnsupportedScope);
@@ -63,18 +148,10 @@ impl MemoryValidatorV1 {
         if !origin_trust_is_valid(draft.origin(), draft.trust_class()) {
             issues.push(MemoryValidationIssue::PolicyConflict);
         }
-        if existing.iter().any(|candidate| {
-            candidate.scope == *scope
-                && candidate.kind == kind
-                && candidate.content_hash == content_hash
-        }) {
+        if !duplicate_candidates.is_empty() {
             issues.push(MemoryValidationIssue::Duplicate);
         }
-        if draft
-            .relations()
-            .iter()
-            .any(|relation| relation.kind() == MemoryRelationKind::Contradicts)
-        {
+        if !contradiction_candidates.is_empty() {
             issues.push(MemoryValidationIssue::Contradiction);
         }
         if looks_like_instruction_injection(draft.content().as_str()) {
@@ -91,8 +168,13 @@ impl MemoryValidatorV1 {
         issues.sort_by_key(issue_order);
         issues.dedup();
         let status = validation_status(draft.origin(), &issues);
-        MemoryValidationResult::new(Self::VERSION, content_hash, status, issues)
-            .map_err(|_| MemoryError::InvalidDomainValue)
+        let result = MemoryValidationResult::new(Self::VERSION, content_hash, status, issues)
+            .map_err(|_| MemoryError::InvalidDomainValue)?;
+        Ok(MemoryValidationOutcome {
+            result,
+            duplicate_memory_id: duplicate_candidates.into_iter().next(),
+            contradiction_candidates,
+        })
     }
 }
 
@@ -198,7 +280,8 @@ const fn issue_order(issue: &MemoryValidationIssue) -> u8 {
 mod tests {
     use autoharness_domain::{
         ConfidenceBasisPoints, MemoryContent, MemoryId, MemoryRelation, MemoryRevisionId,
-        MemoryRevisionNumber, MemoryValidationStatus, MemoryValidity, UserId, WorkspaceId,
+        MemoryRevisionNumber, MemorySubjectKey, MemoryValidationStatus, MemoryValidity, UserId,
+        WorkspaceId,
     };
 
     use super::*;
@@ -225,6 +308,7 @@ mod tests {
         MemoryRevisionDraft::new(
             MemoryRevisionId::new("revision-1").expect("revision ID"),
             MemoryRevisionNumber::FIRST,
+            Some(MemorySubjectKey::new("workspace:rust-edition").expect("subject key")),
             MemoryContent::new(content).expect("content"),
             content_hash,
             origin,
@@ -284,8 +368,10 @@ mod tests {
             Vec::new(),
         );
         let existing = ExistingMemory {
+            memory_id: MemoryId::new("memory-existing").expect("memory ID"),
             scope: scope.clone(),
             kind: MemoryKind::Fact,
+            subject_key: value.subject_key().cloned(),
             content_hash: value.content_hash().clone(),
         };
         let result = MemoryValidatorV1
@@ -299,6 +385,48 @@ mod tests {
                 .contains(&MemoryValidationIssue::UnsupportedScope)
         );
         assert!(result.issues().contains(&MemoryValidationIssue::Duplicate));
+    }
+
+    #[test]
+    fn same_subject_with_different_content_reports_exact_conflict_candidate() {
+        let scope = user_scope();
+        let value = draft(
+            "The workspace uses Rust 2024.",
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            Sensitivity::Internal,
+            Vec::new(),
+        );
+        let conflicting_id = MemoryId::new("memory-conflicting").expect("memory ID");
+        let existing = ExistingMemory {
+            memory_id: conflicting_id.clone(),
+            scope: scope.clone(),
+            kind: MemoryKind::Fact,
+            subject_key: value.subject_key().cloned(),
+            content_hash: normalized_content_hash("The workspace uses Rust 2021.").expect("hash"),
+        };
+
+        let outcome = MemoryValidatorV1
+            .analyze(
+                policy(std::slice::from_ref(&scope)),
+                &scope,
+                MemoryKind::Fact,
+                &value,
+                &[existing],
+            )
+            .expect("analyze");
+
+        assert_eq!(
+            outcome.result().status(),
+            MemoryValidationStatus::NeedsReview
+        );
+        assert_eq!(outcome.contradiction_candidates(), &[conflicting_id]);
+        assert!(
+            outcome
+                .result()
+                .issues()
+                .contains(&MemoryValidationIssue::Contradiction)
+        );
     }
 
     #[test]

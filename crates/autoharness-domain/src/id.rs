@@ -94,6 +94,10 @@ identifier!(ProviderId, "Stable provider adapter identity.");
 identifier!(ModelId, "Provider-owned model identity.");
 identifier!(MemoryId, "Stable identity for one durable memory item.");
 identifier!(
+    MemorySubjectKey,
+    "Optional stable semantic key used for exact memory contradiction grouping."
+);
+identifier!(
     MemoryRevisionId,
     "Stable identity for one immutable memory revision."
 );
