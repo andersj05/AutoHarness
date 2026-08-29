@@ -3668,6 +3668,125 @@ mod tests {
     }
 
     #[test]
+    fn latest_checkpoint_uses_session_sequence_not_timestamp_or_epoch_identity() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let first = seed_compaction_fixture(&mut store, MemoryGeneration::INITIAL);
+        let first_fingerprint = compaction_fingerprint(&mut store, &first);
+        store
+            .commit_context_turn_and_bind(
+                &BoundContextTurnCommitRequest::new(first.context.clone(), first.binding.clone())
+                    .with_compaction_boundary(compaction_boundary(&first, &first_fingerprint)),
+            )
+            .expect("commit first compaction");
+        store
+            .append(&AppendRequest::new(
+                first.turn.session_id().clone(),
+                10,
+                vec![
+                    session_event(
+                        11,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: first.turn.attempt_id().clone(),
+                            turn: 2,
+                        },
+                    ),
+                    session_event(
+                        12,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: first.turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        13,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: first.turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("prepare another compaction turn");
+
+        let second_epoch = epoch_at(
+            "epoch-proof-compaction-a-sorts-before-first",
+            ContextEpochReason::Compaction,
+            Some(first.epoch.epoch_id().as_str()),
+            MemoryGeneration::INITIAL,
+            13,
+        );
+        let second_turn = turn_at_generation(
+            "turn-proof-compaction-second",
+            second_epoch.epoch_id().as_str(),
+            3,
+            13,
+            MemoryGeneration::INITIAL,
+        );
+        let second = CompactionFixture {
+            predecessor: first.epoch.clone(),
+            epoch: second_epoch.clone(),
+            context: ContextTurnCommitRequest::new(
+                Some(second_epoch),
+                second_turn.clone(),
+                turn_content(&second_turn),
+            ),
+            binding: session_event(
+                14,
+                EventPayload::ContextTurnBound {
+                    attempt_id: second_turn.attempt_id().clone(),
+                    run_turn: second_turn.run_turn(),
+                    context_turn_id: second_turn.context_turn_id().clone(),
+                    manifest_hash: second_turn.manifest_hash().clone(),
+                },
+            ),
+            turn: second_turn,
+        };
+        let second_fingerprint = compaction_fingerprint(&mut store, &second);
+        store
+            .commit_context_turn_and_bind(
+                &BoundContextTurnCommitRequest::new(second.context.clone(), second.binding.clone())
+                    .with_compaction_boundary(compaction_boundary(&second, &second_fingerprint)),
+            )
+            .expect("commit second compaction");
+
+        let tied = store
+            .load_latest_compaction_checkpoint(second.turn.session_id())
+            .expect("load timestamp-tied checkpoint")
+            .expect("latest tied checkpoint");
+        assert_eq!(tied.epoch(), &second.epoch);
+        assert_eq!(tied.baseline_turn(), &second.turn);
+
+        store
+            .connection
+            .execute(
+                "UPDATE context_compaction_boundaries SET verified_at_ms = 999999 \
+                 WHERE epoch_id = ?1",
+                [first.epoch.epoch_id().as_str()],
+            )
+            .expect("make older boundary wall-clock-newer");
+        let timestamp_inverted = store
+            .load_latest_compaction_checkpoint(second.turn.session_id())
+            .expect("load timestamp-inverted checkpoint")
+            .expect("latest sequence checkpoint");
+        assert_eq!(timestamp_inverted.epoch(), &second.epoch);
+        assert_eq!(
+            timestamp_inverted.boundary().expected_session_sequence(),
+            SessionSequence::new(13).expect("second cutoff")
+        );
+        assert_eq!(
+            store
+                .load_context_epoch_baseline(first.epoch.epoch_id())
+                .expect("load first compaction baseline"),
+            Some(first.turn)
+        );
+        assert_eq!(
+            store
+                .load_context_epoch_baseline(second.epoch.epoch_id())
+                .expect("load second compaction baseline"),
+            Some(second.turn)
+        );
+    }
+
+    #[test]
     fn checkpoint_and_baseline_reads_fail_closed_on_manifest_corruption() {
         let database = TestDatabase::new();
         let mut store = database.open();
