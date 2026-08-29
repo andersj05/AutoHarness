@@ -21,6 +21,8 @@ pub enum AppError {
     Provider(ProviderError),
     /// Deterministic context or memory policy failed safely.
     Memory(MemoryError),
+    /// Saved credentials could not be loaded for a required redaction boundary.
+    CredentialRedactionUnavailable,
     /// A trusted memory lifecycle command was rejected.
     MemoryCommand(crate::memory_runtime::MemoryCommandError),
     /// Terminal initialization, input, drawing, or restoration failed.
@@ -42,6 +44,9 @@ impl Display for AppError {
             Self::Engine(source) => Display::fmt(source, formatter),
             Self::Provider(source) => Display::fmt(source, formatter),
             Self::Memory(source) => Display::fmt(source, formatter),
+            Self::CredentialRedactionUnavailable => {
+                formatter.write_str("saved credentials are unavailable for redaction")
+            }
             Self::MemoryCommand(source) => Display::fmt(source, formatter),
             Self::Terminal => formatter.write_str("terminal operation failed"),
             Self::WorkerStopped => formatter.write_str("an application worker stopped"),
@@ -59,6 +64,7 @@ impl Error for AppError {
             Self::Memory(source) => Some(source),
             Self::MemoryCommand(source) => Some(source),
             Self::FileSystem
+            | Self::CredentialRedactionUnavailable
             | Self::WriterAlreadyRunning
             | Self::Terminal
             | Self::WorkerStopped

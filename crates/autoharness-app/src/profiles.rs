@@ -649,7 +649,11 @@ impl ProfileManager {
     pub fn configured_credentials_for_redaction(
         &self,
     ) -> Result<Vec<Zeroizing<String>>, ProfileManagementError> {
-        let mut profiles = self.snapshot()?.profiles;
+        let snapshot = self.snapshot()?;
+        if snapshot.pending_recovery != 0 {
+            return Err(ProfileManagementError::RecoveryPending);
+        }
+        let mut profiles = snapshot.profiles;
         profiles.sort_by(|left, right| left.id.cmp(&right.id));
         profiles
             .into_iter()

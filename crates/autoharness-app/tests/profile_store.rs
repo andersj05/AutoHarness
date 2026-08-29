@@ -440,6 +440,10 @@ fn interrupted_save_is_rolled_back_from_durable_recovery_record() {
             .pending_recovery,
         1
     );
+    assert_eq!(
+        manager.configured_credentials_for_redaction(),
+        Err(ProfileManagementError::RecoveryPending)
+    );
     assert!(
         !store
             .read_document()

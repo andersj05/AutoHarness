@@ -6,6 +6,7 @@ mod engine_actor;
 mod error;
 mod export;
 mod ids;
+mod import_runtime;
 mod memory_runtime;
 mod projection;
 mod proposal_runtime;

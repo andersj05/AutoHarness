@@ -5,14 +5,14 @@ use std::sync::Arc;
 use autoharness_domain::{
     AttemptFailure, AttemptId, ClassifiedError, CommandId, CommandPayload, ConfidenceBasisPoints,
     ContextEpochId, ContextTokenBudget, CorrelationId, DeliveryMode, ErrorClass, ErrorCode,
-    EstimatedTokens, MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent, MemoryEvidence,
-    MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource, MemoryId, MemoryKind,
-    MemoryOrigin, MemoryRejectionReason, MemoryRelationKind, MemoryRevision, MemoryRevisionDraft,
-    MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus, MemoryScope as DomainMemoryScope,
-    MemorySequence, MemoryValidity, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage,
-    ResponseText, RetryAdvice, RunLimits, Sensitivity, SessionId, SessionSequence, SessionTitle,
-    Sha256Digest, TimestampMillis, ToolCallId, ToolOutput, TrustClass,
-    UsageSnapshot as DomainUsage,
+    EstimatedTokens, EventPayload, MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent,
+    MemoryEvidence, MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource, MemoryId,
+    MemoryKind, MemoryOrigin, MemoryRejectionReason, MemoryRelationKind, MemoryRevision,
+    MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus,
+    MemoryScope as DomainMemoryScope, MemorySequence, MemoryValidity, PermissionAnswer,
+    PermissionOutcome, PromptText, PublicMessage, ResponseText, RetryAdvice, RunLimits,
+    Sensitivity, SessionId, SessionSequence, SessionTitle, Sha256Digest, TimestampMillis,
+    ToolCallId, ToolOutput, TrustClass, UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
@@ -25,6 +25,7 @@ use autoharness_provider::{
     CancellationToken, CatalogFreshness, CatalogRequest, ChatContent, ChatMessage, ChatRequest,
     ChatRole, ContextPrelude, ModelCatalog, ModelDescriptor, Provider, ProviderError,
     ProviderErrorKind, ProviderStreamEvent, ProviderToolCall, ProviderToolDefinition,
+    SecretAccumulator,
 };
 use autoharness_provider_codex_cli::{CodexAuthProgress, login_with_browser};
 #[cfg(test)]
@@ -61,6 +62,7 @@ use crate::context_runtime::{
 };
 use crate::engine_actor::EngineHandle;
 use crate::error::AppError;
+use crate::import_runtime::{ImportDocumentError, build_workspace_document_import};
 use crate::{ids, projection, telemetry};
 use autoharness_app::profiles::{
     ProfileManagementError, ProfileManager, ProfileStoreError, StoredCredentialState,
@@ -205,6 +207,74 @@ struct ActiveAttempt {
     cancellation: CancellationToken,
     budget: RunBudget,
     usage_base: DomainUsage,
+    credential_ingress: Option<CredentialIngressGuard>,
+}
+
+struct CredentialIngressGuard {
+    credentials: Vec<Zeroizing<String>>,
+    all_provider_values: SecretAccumulator,
+    provider_text: SecretAccumulator,
+    tool_values: SecretAccumulator,
+}
+
+impl CredentialIngressGuard {
+    fn new(credentials: Vec<Zeroizing<String>>) -> Self {
+        Self {
+            credentials,
+            all_provider_values: SecretAccumulator::new(),
+            provider_text: SecretAccumulator::new(),
+            tool_values: SecretAccumulator::new(),
+        }
+    }
+
+    fn observe_provider_text(&mut self, value: &str) -> bool {
+        let credentials = self
+            .credentials
+            .iter()
+            .map(|credential| credential.as_str())
+            .collect::<Vec<_>>();
+        self.all_provider_values.observe_text(value, &credentials)
+            || self.provider_text.observe_text(value, &credentials)
+    }
+
+    fn observe_tool_value(&mut self, value: &str) -> bool {
+        let credentials = self
+            .credentials
+            .iter()
+            .map(|credential| credential.as_str())
+            .collect::<Vec<_>>();
+        self.all_provider_values.observe_text(value, &credentials)
+            || self.tool_values.observe_text(value, &credentials)
+    }
+
+    fn observe_tool_arguments(&mut self, value: &serde_json::Value) -> bool {
+        if json_value_contains_exact_credential(value, &self.credentials) {
+            return true;
+        }
+        let credentials = self
+            .credentials
+            .iter()
+            .map(|credential| credential.as_str())
+            .collect::<Vec<_>>();
+        self.all_provider_values
+            .observe_structured(value, &credentials)
+            || self.tool_values.observe_structured(value, &credentials)
+    }
+
+    fn observe_tool_call(
+        &mut self,
+        provider_call_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> bool {
+        self.observe_tool_value(provider_call_id)
+            || self.observe_tool_value(tool_name)
+            || self.observe_tool_arguments(arguments)
+    }
+
+    fn contains_tool_output(&self, value: &str) -> bool {
+        value_contains_exact_credential(value, &self.credentials)
+    }
 }
 
 enum StartAttemptError {
@@ -629,6 +699,9 @@ impl Coordinator {
                 self.remember_memory(request_id, content.into_string())
                     .await?;
             }
+            UiIntent::ImportMemory { request_id, path } => {
+                self.import_memory(request_id, path.into_string()).await?;
+            }
             UiIntent::ReviseMemory {
                 request_id,
                 memory_id,
@@ -877,6 +950,30 @@ impl Coordinator {
         self.commit_memory_command(request_id, command).await
     }
 
+    async fn import_memory(
+        &mut self,
+        request_id: RequestId,
+        relative_path: String,
+    ) -> Result<(), AppError> {
+        if !self.memory_mutation_ready(request_id).await? {
+            return Ok(());
+        }
+        let workspace_id = self.context_scope()?.workspace_id().clone();
+        let command = match build_workspace_document_import(
+            &self.workspace,
+            std::path::Path::new(&relative_path),
+            workspace_id,
+        ) {
+            Ok(command) => command,
+            Err(error) => {
+                self.reject(request_id, memory_import_failure(error))
+                    .await?;
+                return Ok(());
+            }
+        };
+        self.commit_memory_command(request_id, command).await
+    }
+
     async fn revise_memory(
         &mut self,
         request_id: RequestId,
@@ -1103,6 +1200,26 @@ impl Coordinator {
         Ok(false)
     }
 
+    async fn provider_configuration_mutation_ready(
+        &self,
+        request_id: RequestId,
+    ) -> Result<bool, AppError> {
+        if self.active.is_none() {
+            return Ok(true);
+        }
+        self.reject(
+            request_id,
+            UiFailure::new(
+                ErrorClass::Conflict,
+                "Finish or cancel the active response before changing provider settings or saved credentials",
+                RetryPolicy::Now,
+            )
+            .with_code("credential_change_active"),
+        )
+        .await?;
+        Ok(false)
+    }
+
     async fn parse_memory_target(
         &self,
         request_id: RequestId,
@@ -1123,18 +1240,26 @@ impl Coordinator {
         request_id: RequestId,
         command: autoharness_domain::MemoryCommandEnvelope,
     ) -> Result<(), AppError> {
-        if self.memory_command_contains_configured_secret(&command) {
-            self.reject(
-                request_id,
-                UiFailure::new(
-                    ErrorClass::Validation,
-                    "Configured provider credentials cannot be stored as durable memory",
-                    RetryPolicy::Never,
+        match self.memory_command_contains_configured_secret(&command) {
+            Ok(false) => {}
+            Ok(true) => {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Validation,
+                        "Configured provider credentials cannot be stored as durable memory",
+                        RetryPolicy::Never,
+                    )
+                    .with_code("memory_secret"),
                 )
-                .with_code("memory_secret"),
-            )
-            .await?;
-            return Ok(());
+                .await?;
+                return Ok(());
+            }
+            Err(_) => {
+                self.reject(request_id, memory_redaction_unavailable_failure())
+                    .await?;
+                return Ok(());
+            }
         }
         match self.engine.execute_memory_command(command).await {
             Ok(commit) => {
@@ -1155,30 +1280,19 @@ impl Coordinator {
     fn memory_command_contains_configured_secret(
         &self,
         command: &autoharness_domain::MemoryCommandEnvelope,
-    ) -> bool {
+    ) -> Result<bool, ProfileManagementError> {
         let Some(draft) = memory_command_draft(command.payload()) else {
-            return false;
+            return Ok(false);
         };
-        let contains_configured_secret = |value: &str| {
-            self.provider
-                .as_ref()
-                .is_some_and(|provider| provider.redact_secrets(value) != value)
-                || self.profiles.as_ref().is_some_and(|profiles| {
-                    [
-                        profiles.environment.gemini.as_deref(),
-                        profiles.environment.router.as_deref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|secret| !secret.is_empty() && value.contains(secret))
-                })
-        };
-        contains_configured_secret(draft.content().as_str())
-            || draft.evidence().iter().any(|evidence| {
-                evidence
-                    .excerpt()
-                    .is_some_and(|excerpt| contains_configured_secret(excerpt.as_str()))
-            })
+        let credentials = self.configured_credential_sentinels()?;
+        Ok(
+            self.value_contains_configured_secret(draft.content().as_str(), &credentials)
+                || draft.evidence().iter().any(|evidence| {
+                    evidence.excerpt().is_some_and(|excerpt| {
+                        self.value_contains_configured_secret(excerpt.as_str(), &credentials)
+                    })
+                }),
+        )
     }
 
     async fn update_local_preference(
@@ -1386,6 +1500,12 @@ impl Coordinator {
         request_id: RequestId,
         draft: ProviderProfileDraft,
     ) -> Result<(), AppError> {
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let id = match ProfileId::new(&draft.id) {
             Ok(id) => id,
             Err(reason) => {
@@ -1540,6 +1660,12 @@ impl Coordinator {
         credential: ApiCredential,
         replace: bool,
     ) -> Result<(), AppError> {
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let id = match ProfileId::new(profile_id) {
             Ok(id) => id,
             Err(reason) => {
@@ -1692,6 +1818,12 @@ impl Coordinator {
         selected_model: autoharness_domain::ModelRef,
         reasoning_effort: Option<String>,
     ) -> Result<(), AppError> {
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let id = match ProfileId::new(profile_id) {
             Ok(id) => id,
             Err(reason) => {
@@ -1760,6 +1892,12 @@ impl Coordinator {
         request_id: RequestId,
         profile_id: String,
     ) -> Result<(), AppError> {
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let id = match ProfileId::new(profile_id) {
             Ok(id) => id,
             Err(reason) => {
@@ -1813,6 +1951,12 @@ impl Coordinator {
         request_id: RequestId,
         profile_id: String,
     ) -> Result<(), AppError> {
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let id = match ProfileId::new(profile_id) {
             Ok(id) => id,
             Err(reason) => {
@@ -2471,6 +2615,12 @@ impl Coordinator {
                 return Ok(());
             }
         };
+        if !self
+            .provider_configuration_mutation_ready(request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let Some(manager) = self
             .profiles
             .as_ref()
@@ -2561,11 +2711,15 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
-        let redacted_prompt = self
-            .provider
-            .as_ref()
-            .expect("provider presence checked before prompt admission")
-            .redact_secrets(&prompt);
+        let credentials = match self.configured_credential_sentinels() {
+            Ok(credentials) => credentials,
+            Err(_) => {
+                self.reject(request_id, prompt_redaction_unavailable_failure())
+                    .await?;
+                return Ok(());
+            }
+        };
+        let redacted_prompt = self.redact_configured_secrets(&prompt, &credentials);
         let prompt = match PromptText::new(redacted_prompt) {
             Ok(prompt) => prompt,
             Err(error) => {
@@ -2858,6 +3012,15 @@ impl Coordinator {
                 return Err(StartAttemptError::Context(error));
             }
         };
+        let credential_ingress = match self.credential_ingress_guard(&attempt_id).await {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.fail_context_preparation(&attempt_id)
+                    .await
+                    .map_err(StartAttemptError::Engine)?;
+                return Err(StartAttemptError::Context(error));
+            }
+        };
         if let Err(error) = self
             .execute(CommandPayload::StartRunTurn {
                 session_id: self.session_id.clone(),
@@ -2883,6 +3046,7 @@ impl Coordinator {
             cancellation,
             budget,
             usage_base: DomainUsage::default(),
+            credential_ingress: Some(credential_ingress),
         });
         Ok(())
     }
@@ -2897,6 +3061,7 @@ impl Coordinator {
                 .prepare_context_snapshot(attempt_id, advertise_tools)
                 .await?;
             let prepared = &snapshot.turn;
+            self.ensure_provider_request_is_credential_free(prepared.request())?;
             let binding = ids::command(CommandPayload::BindContextTurn {
                 session_id: self.session_id.clone(),
                 attempt_id: attempt_id.clone(),
@@ -3017,6 +3182,7 @@ impl Coordinator {
             advertise_tools,
             compacted_through,
         )?;
+        self.ensure_provider_request_is_credential_free(&request)?;
         let frozen = if run_turn > 1 {
             Some(
                 self.load_frozen_context_baseline(attempt_id, run_turn)
@@ -3254,7 +3420,15 @@ impl Coordinator {
             .candidates()
             .iter()
             .map(|candidate| memory_candidate(candidate, &memory_query))
-            .collect();
+            .collect::<Vec<_>>();
+        let credential_sentinels = self
+            .configured_credential_sentinels()
+            .map_err(|_| AppError::CredentialRedactionUnavailable)?;
+        if candidates.iter().any(|candidate| {
+            self.value_contains_configured_secret(candidate.content.as_str(), &credential_sentinels)
+        }) {
+            return Err(AppError::Configuration);
+        }
         let compatibility = EpochCompatibility::new(
             &request,
             descriptor,
@@ -3263,11 +3437,14 @@ impl Coordinator {
             durable_memory_limit,
         )?;
         let retained_sources = self.retained_workspace_agents(attempt_id).await?;
-        let environment_secrets = self.environment_credential_sentinels();
+        let configured_secrets = credential_sentinels
+            .iter()
+            .map(|secret| secret.as_str())
+            .collect::<Vec<_>>();
         let mut observed_sources = observe_workspace_agents(
             &self.workspace,
             self.provider.as_deref(),
-            &environment_secrets,
+            &configured_secrets,
             committed_at,
             retained_sources,
         )?;
@@ -3275,7 +3452,7 @@ impl Coordinator {
             observed_sources.push(observe_compacted_history(
                 history,
                 self.provider.as_deref(),
-                &environment_secrets,
+                &configured_secrets,
                 committed_at,
             )?);
         }
@@ -3518,7 +3695,10 @@ impl Coordinator {
         &self,
         command: &MemoryCommandEnvelope,
     ) -> Result<(), AppError> {
-        if self.memory_command_contains_configured_secret(command) {
+        if self
+            .memory_command_contains_configured_secret(command)
+            .map_err(|_| AppError::CredentialRedactionUnavailable)?
+        {
             return Err(AppError::Configuration);
         }
         if let Err(error) = self.engine.execute_memory_command(command.clone()).await
@@ -3571,7 +3751,18 @@ impl Coordinator {
                 rendered,
             ));
         }
-        Ok(ContextTurnContent::new(prelude, contents))
+        let content = ContextTurnContent::new(prelude, contents);
+        let credentials = self
+            .configured_credential_sentinels()
+            .map_err(|_| AppError::CredentialRedactionUnavailable)?;
+        if content.prelude().is_some_and(|prelude| {
+            self.value_contains_configured_secret(prelude.as_str(), &credentials)
+        }) || content.admissions().iter().any(|admission| {
+            self.value_contains_configured_secret(admission.rendered().as_str(), &credentials)
+        }) {
+            return Err(AppError::Configuration);
+        }
+        Ok(content)
     }
 
     async fn retained_workspace_agents(
@@ -3619,27 +3810,188 @@ impl Coordinator {
         Ok(Vec::new())
     }
 
-    fn environment_credential_sentinels(&self) -> Vec<&str> {
-        self.profiles
+    fn configured_credential_sentinels(
+        &self,
+    ) -> Result<Vec<Zeroizing<String>>, ProfileManagementError> {
+        let Some(profiles) = &self.profiles else {
+            return Ok(Vec::new());
+        };
+        let mut credentials = [
+            profiles.environment.gemini.clone(),
+            profiles.environment.router.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        credentials.extend(profiles.manager.configured_credentials_for_redaction()?);
+        Ok(credentials)
+    }
+
+    async fn credential_ingress_guard(
+        &self,
+        attempt_id: &AttemptId,
+    ) -> Result<CredentialIngressGuard, AppError> {
+        let credentials = self
+            .configured_credential_sentinels()
+            .map_err(|_| AppError::CredentialRedactionUnavailable)?;
+        let mut guard = CredentialIngressGuard::new(credentials);
+        let events = self.engine.load_events(self.session_id.clone()).await?;
+        let mut attempt_prepared = false;
+        for event in events {
+            match event.payload() {
+                EventPayload::AttemptPrepared {
+                    attempt_id: prepared,
+                    ..
+                } if prepared == attempt_id => attempt_prepared = true,
+                EventPayload::AttemptTextAppended {
+                    attempt_id: appended,
+                    text,
+                } if appended == attempt_id => {
+                    if self.provider_value_contains_secret(text.as_str())
+                        || guard.observe_provider_text(text.as_str())
+                    {
+                        return Err(AppError::Configuration);
+                    }
+                }
+                EventPayload::ToolCallProposed {
+                    attempt_id: proposed,
+                    call,
+                } if proposed == attempt_id => {
+                    let arguments = call.arguments.to_value();
+                    if self.provider_value_contains_secret(call.provider_call_id.as_str())
+                        || self.provider_value_contains_secret(call.tool_name.as_str())
+                        || self.json_value_contains_provider_secret(&arguments)
+                        || guard.observe_tool_call(
+                            call.provider_call_id.as_str(),
+                            call.tool_name.as_str(),
+                            &arguments,
+                        )
+                    {
+                        return Err(AppError::Configuration);
+                    }
+                }
+                EventPayload::ToolCallCompleted {
+                    tool_call_id,
+                    output,
+                } if self
+                    .session
+                    .tool_call(tool_call_id)
+                    .is_some_and(|call| call.attempt_id() == attempt_id) =>
+                {
+                    if self.provider_value_contains_secret(output.content())
+                        || guard.contains_tool_output(output.content())
+                    {
+                        return Err(AppError::Configuration);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !attempt_prepared {
+            return Err(AppError::Configuration);
+        }
+        Ok(guard)
+    }
+
+    fn value_contains_configured_secret(
+        &self,
+        value: &str,
+        credentials: &[Zeroizing<String>],
+    ) -> bool {
+        value_contains_exact_credential(value, credentials)
+            || self.provider_value_contains_secret(value)
+    }
+
+    fn provider_value_contains_secret(&self, value: &str) -> bool {
+        self.provider
             .as_ref()
-            .into_iter()
-            .flat_map(|profiles| {
-                [
-                    profiles
-                        .environment
-                        .gemini
-                        .as_ref()
-                        .map(|secret| secret.as_str()),
-                    profiles
-                        .environment
-                        .router
-                        .as_ref()
-                        .map(|secret| secret.as_str()),
-                ]
-                .into_iter()
-                .flatten()
+            .is_some_and(|provider| provider.redact_secrets(value) != value)
+    }
+
+    fn json_value_contains_provider_secret(&self, value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(value) => self.provider_value_contains_secret(value),
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|value| self.json_value_contains_provider_secret(value)),
+            serde_json::Value::Object(values) => values.iter().any(|(key, value)| {
+                self.provider_value_contains_secret(key)
+                    || self.json_value_contains_provider_secret(value)
+            }),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                false
+            }
+        }
+    }
+
+    fn redact_configured_secrets(&self, value: &str, credentials: &[Zeroizing<String>]) -> String {
+        let mut ranges = credentials
+            .iter()
+            .filter(|secret| !secret.is_empty())
+            .flat_map(|secret| {
+                value
+                    .match_indices(secret.as_str())
+                    .map(move |(start, _)| (start, start + secret.len()))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            match merged.last_mut() {
+                Some((_, prior_end)) if start <= *prior_end => {
+                    *prior_end = (*prior_end).max(end);
+                }
+                _ => merged.push((start, end)),
+            }
+        }
+        let mut redacted = String::with_capacity(value.len());
+        let mut cursor = 0;
+        for (start, end) in merged {
+            redacted.push_str(&value[cursor..start]);
+            redacted.push_str("[REDACTED]");
+            cursor = end;
+        }
+        redacted.push_str(&value[cursor..]);
+        match &self.provider {
+            Some(provider) => provider.redact_secrets(&redacted),
+            None => redacted,
+        }
+    }
+
+    fn ensure_provider_request_is_credential_free(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<(), AppError> {
+        let credentials = self
+            .configured_credential_sentinels()
+            .map_err(|_| AppError::CredentialRedactionUnavailable)?;
+        let request = serde_json::to_value(request)?;
+        if self.json_value_contains_configured_secret(&request, &credentials) {
+            return Err(AppError::Configuration);
+        }
+        Ok(())
+    }
+
+    fn json_value_contains_configured_secret(
+        &self,
+        value: &serde_json::Value,
+        credentials: &[Zeroizing<String>],
+    ) -> bool {
+        match value {
+            serde_json::Value::String(value) => {
+                self.value_contains_configured_secret(value, credentials)
+            }
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|value| self.json_value_contains_configured_secret(value, credentials)),
+            serde_json::Value::Object(values) => values.iter().any(|(key, value)| {
+                self.value_contains_configured_secret(key, credentials)
+                    || self.json_value_contains_configured_secret(value, credentials)
+            }),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                false
+            }
+        }
     }
 
     async fn fail_context_preparation(
@@ -3914,6 +4266,7 @@ impl Coordinator {
             advertise_tools,
             compacted_through,
         )?;
+        self.ensure_provider_request_is_credential_free(&request)?;
         let retrieval_scope = self
             .context_scope()?
             .retrieval_scope(self.session_id.clone(), epoch.started_at());
@@ -3941,6 +4294,7 @@ impl Coordinator {
             }
             None => request,
         };
+        self.ensure_provider_request_is_credential_free(&request)?;
         if exact_provider_request_hash(&request)? != *manifest.request_hash() {
             return Err(AppError::Configuration);
         }
@@ -3955,6 +4309,7 @@ impl Coordinator {
             .start_turn()
             .map_err(|error| AppError::Provider(tool_provider_error(&error)))?;
         let usage_base = attempt.usage().unwrap_or_default();
+        let credential_ingress = self.credential_ingress_guard(&attempt_id).await?;
         let reply = self
             .engine
             .start_recovered_run_turn(request.clone(), manifest)
@@ -3973,6 +4328,7 @@ impl Coordinator {
             cancellation,
             budget,
             usage_base,
+            credential_ingress: Some(credential_ingress),
         });
         Ok(())
     }
@@ -3993,16 +4349,39 @@ impl Coordinator {
         })
     }
 
+    async fn fail_provider_credential_ingress(
+        &mut self,
+        attempt_id: AttemptId,
+    ) -> Result<(), AppError> {
+        if let Some(active) = &self.active
+            && active.attempt_id == attempt_id
+        {
+            active.cancellation.cancel();
+        }
+        self.settle_attempt_tools_conservatively(&attempt_id)
+            .await?;
+        self.execute(CommandPayload::FailAttempt {
+            session_id: self.session_id.clone(),
+            attempt_id,
+            failure: credential_ingress_failure(),
+        })
+        .await?;
+        self.active = None;
+        telemetry::attempt_settled("failed", None);
+        Ok(())
+    }
+
     async fn handle_stream(
         &mut self,
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
         _benchmark_chunk_sequence: Option<u64>,
     ) -> Result<(), AppError> {
-        let Some(active) = &self.active else {
-            return Ok(());
-        };
-        if active.attempt_id != attempt_id {
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|active| active.attempt_id != attempt_id)
+        {
             return Ok(());
         }
         let cancellation_requested = self
@@ -4013,6 +4392,16 @@ impl Coordinator {
         match result {
             Ok(ProviderStreamEvent::Started) => {}
             Ok(ProviderStreamEvent::TextDelta(delta)) => {
+                let blocked = self.provider_value_contains_secret(delta.as_str())
+                    || self
+                        .active
+                        .as_mut()
+                        .and_then(|active| active.credential_ingress.as_mut())
+                        .is_none_or(|guard| guard.observe_provider_text(delta.as_str()));
+                if blocked {
+                    self.fail_provider_credential_ingress(attempt_id).await?;
+                    return Ok(());
+                }
                 let bytes = delta.as_str().len();
                 if let Err(error) = self.add_run_output(bytes) {
                     self.fail_run_budget(attempt_id, error).await?;
@@ -4051,6 +4440,27 @@ impl Coordinator {
             }
             Ok(ProviderStreamEvent::ToolCall(call)) => {
                 if !cancellation_requested {
+                    let arguments = call.arguments.to_value();
+                    let provider_blocked = self
+                        .provider_value_contains_secret(call.provider_call_id.as_str())
+                        || self.provider_value_contains_secret(call.tool_name.as_str())
+                        || self.json_value_contains_provider_secret(&arguments);
+                    let blocked = provider_blocked
+                        || self
+                            .active
+                            .as_mut()
+                            .and_then(|active| active.credential_ingress.as_mut())
+                            .is_none_or(|guard| {
+                                guard.observe_tool_call(
+                                    call.provider_call_id.as_str(),
+                                    call.tool_name.as_str(),
+                                    &arguments,
+                                )
+                            });
+                    if blocked {
+                        self.fail_provider_credential_ingress(attempt_id).await?;
+                        return Ok(());
+                    }
                     self.handle_provider_tool_call(attempt_id, call).await?;
                 }
             }
@@ -4326,10 +4736,18 @@ impl Coordinator {
         let command = self
             .build_memory_proposal_command(call, proposal)
             .map_err(|error| MemoryProposalPersistenceError::Safe(error.into_tool_error()))?;
-        if self.memory_command_contains_configured_secret(&command) {
-            return Err(MemoryProposalPersistenceError::Safe(
-                memory_proposal_invalid(),
-            ));
+        match self.memory_command_contains_configured_secret(&command) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(MemoryProposalPersistenceError::Safe(
+                    memory_proposal_invalid(),
+                ));
+            }
+            Err(_) => {
+                return Err(MemoryProposalPersistenceError::Safe(
+                    memory_proposal_internal(),
+                ));
+            }
         }
         if let Err(error) = self.engine.execute_memory_command(command.clone()).await {
             match self.exact_memory_proposal_committed(&command).await {
@@ -4421,6 +4839,25 @@ impl Coordinator {
         }
         match result {
             Ok(output) => {
+                let blocked = self.provider_value_contains_secret(output.content())
+                    || self
+                        .active
+                        .as_ref()
+                        .and_then(|active| active.credential_ingress.as_ref())
+                        .is_none_or(|guard| guard.contains_tool_output(output.content()));
+                if blocked {
+                    tracing::warn!(
+                        tool_call_id = %tool_call_id,
+                        "local tool output was suppressed by the credential ingress boundary"
+                    );
+                    self.execute(CommandPayload::MarkToolCallUnknown {
+                        session_id: self.session_id.clone(),
+                        tool_call_id,
+                    })
+                    .await?;
+                    self.maybe_resume_after_tools().await?;
+                    return Ok(());
+                }
                 let bytes = usize::try_from(output.original_bytes()).unwrap_or(usize::MAX);
                 if let Err(error) = self.add_run_output(bytes) {
                     self.execute(CommandPayload::MarkToolCallUnknown {
@@ -4529,13 +4966,38 @@ impl Coordinator {
             return Ok(());
         };
         let attempt_id = active.attempt_id.clone();
-        if self.provider.is_none()
-            || self
-                .session
-                .attempt(&attempt_id)
-                .is_none_or(|attempt| attempt.status() != EngineAttemptStatus::AwaitingTools)
-            || !self.active_tool_calls_settled()
+        if self
+            .session
+            .attempt(&attempt_id)
+            .is_none_or(|attempt| attempt.status() != EngineAttemptStatus::AwaitingTools)
         {
+            return Ok(());
+        }
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|active| active.credential_ingress.is_none())
+        {
+            let guard = match self.credential_ingress_guard(&attempt_id).await {
+                Ok(guard) => guard,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "provider continuation credential ingress preparation failed closed"
+                    );
+                    self.settle_attempt_tools_conservatively(&attempt_id)
+                        .await?;
+                    self.fail_context_preparation(&attempt_id).await?;
+                    self.active = None;
+                    return Ok(());
+                }
+            };
+            self.active
+                .as_mut()
+                .expect("active checked")
+                .credential_ingress = Some(guard);
+        }
+        if self.provider.is_none() || !self.active_tool_calls_settled() {
             return Ok(());
         }
         if let Err(error) = self
@@ -4906,6 +5368,31 @@ impl Coordinator {
     }
 }
 
+fn value_contains_exact_credential(value: &str, credentials: &[Zeroizing<String>]) -> bool {
+    credentials
+        .iter()
+        .any(|credential| !credential.is_empty() && value.contains(credential.as_str()))
+}
+
+fn json_value_contains_exact_credential(
+    value: &serde_json::Value,
+    credentials: &[Zeroizing<String>],
+) -> bool {
+    match value {
+        serde_json::Value::String(value) => value_contains_exact_credential(value, credentials),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_contains_exact_credential(value, credentials)),
+        serde_json::Value::Object(values) => values.iter().any(|(key, value)| {
+            value_contains_exact_credential(key, credentials)
+                || json_value_contains_exact_credential(value, credentials)
+        }),
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            false
+        }
+    }
+}
+
 fn attempt_memory_query(
     session: &SessionAggregate,
     attempt_id: &AttemptId,
@@ -5260,6 +5747,7 @@ fn recover_active_attempt(
         cancellation: shutdown.child_token(),
         budget,
         usage_base: attempt.usage().unwrap_or_default(),
+        credential_ingress: None,
     })
 }
 
@@ -5446,6 +5934,19 @@ fn context_preparation_failure() -> AttemptFailure {
         )
         .expect("static context failure message is valid"),
         RetryAdvice::Immediate,
+    )
+}
+
+fn credential_ingress_failure() -> AttemptFailure {
+    AttemptFailure::new(
+        ErrorClass::Protocol,
+        ErrorCode::new("credential_in_provider_data")
+            .expect("static credential ingress code is valid"),
+        PublicMessage::new(
+            "The provider response was stopped before protected credential material was saved",
+        )
+        .expect("static credential ingress message is valid"),
+        RetryAdvice::Never,
     )
 }
 
@@ -5704,6 +6205,11 @@ fn context_failure(error: &AppError) -> UiFailure {
             "The request did not fit the deterministic context policy",
             RetryPolicy::Never,
         ),
+        AppError::CredentialRedactionUnavailable => (
+            ErrorClass::Unavailable,
+            "Saved credentials could not be checked, so the provider request was not prepared",
+            RetryPolicy::Now,
+        ),
         AppError::Engine(_)
         | AppError::Provider(_)
         | AppError::MemoryCommand(_)
@@ -5783,6 +6289,59 @@ fn memory_view_failure() -> UiFailure {
     .with_code("memory_query")
 }
 
+fn memory_import_failure(error: ImportDocumentError) -> UiFailure {
+    match error {
+        ImportDocumentError::InvalidRelativePath | ImportDocumentError::PathEscapesWorkspace => {
+            UiFailure::new(
+                ErrorClass::Validation,
+                "Choose a document path inside the current workspace without traversal",
+                RetryPolicy::Never,
+            )
+            .with_code("memory_import_path")
+        }
+        ImportDocumentError::DocumentNotFound => UiFailure::new(
+            ErrorClass::Validation,
+            "That workspace document does not exist",
+            RetryPolicy::Never,
+        )
+        .with_code("memory_import_missing"),
+        ImportDocumentError::NotRegularFile => UiFailure::new(
+            ErrorClass::Validation,
+            "Choose a regular UTF-8 text file to import",
+            RetryPolicy::Never,
+        )
+        .with_code("memory_import_file"),
+        ImportDocumentError::DocumentTooLarge => UiFailure::new(
+            ErrorClass::Validation,
+            "The workspace document exceeds the 16 KiB memory import limit",
+            RetryPolicy::Never,
+        )
+        .with_code("memory_import_size"),
+        ImportDocumentError::InvalidUtf8 | ImportDocumentError::UnsafeControlCharacter => {
+            UiFailure::new(
+                ErrorClass::Validation,
+                "The workspace document must contain safe UTF-8 text",
+                RetryPolicy::Never,
+            )
+            .with_code("memory_import_text")
+        }
+        ImportDocumentError::InvalidDomainValue => UiFailure::new(
+            ErrorClass::Validation,
+            "The workspace document could not become a bounded memory proposal",
+            RetryPolicy::Never,
+        )
+        .with_code("memory_import_policy"),
+        ImportDocumentError::WorkspaceUnavailable | ImportDocumentError::DocumentUnavailable => {
+            UiFailure::new(
+                ErrorClass::Storage,
+                "The workspace document could not be read",
+                RetryPolicy::Now,
+            )
+            .with_code("memory_import_storage")
+        }
+    }
+}
+
 fn stale_memory_failure() -> UiFailure {
     UiFailure::new(
         ErrorClass::Conflict,
@@ -5790,6 +6349,24 @@ fn stale_memory_failure() -> UiFailure {
         RetryPolicy::Now,
     )
     .with_code("stale_memory")
+}
+
+fn memory_redaction_unavailable_failure() -> UiFailure {
+    UiFailure::new(
+        ErrorClass::Unavailable,
+        "Saved credentials could not be checked, so durable memory was not changed",
+        RetryPolicy::Now,
+    )
+    .with_code("memory_redaction_unavailable")
+}
+
+fn prompt_redaction_unavailable_failure() -> UiFailure {
+    UiFailure::new(
+        ErrorClass::Unavailable,
+        "Saved credentials could not be checked, so the prompt was not sent or saved",
+        RetryPolicy::Now,
+    )
+    .with_code("prompt_redaction_unavailable")
 }
 
 fn memory_failure(error: &AppError) -> UiFailure {
@@ -5832,19 +6409,21 @@ fn memory_failure(error: &AppError) -> UiFailure {
             RetryPolicy::Now,
         )
         .with_code("memory_storage"),
-        AppError::Provider(_) | AppError::Terminal => UiFailure::new(
-            ErrorClass::Unavailable,
-            "The durable memory operation is temporarily unavailable",
-            RetryPolicy::Now,
-        )
-        .with_code("memory_unavailable"),
+        AppError::Provider(_) | AppError::Terminal | AppError::CredentialRedactionUnavailable => {
+            UiFailure::new(
+                ErrorClass::Unavailable,
+                "The durable memory operation is temporarily unavailable",
+                RetryPolicy::Now,
+            )
+            .with_code("memory_unavailable")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
 
@@ -5858,7 +6437,7 @@ mod tests {
     use autoharness_provider::{
         CapabilitySupport, Catalog, CatalogFreshness, CatalogRequest, Chat, CompletionReason,
         ModelCapabilities, ModelCatalog, ProviderAvailability, ProviderEventStream,
-        ProviderMetadata, TextDelta, UsageSnapshot as ProviderUsage,
+        ProviderMetadata, SecretRedactor as _, TextDelta, UsageSnapshot as ProviderUsage,
     };
     use autoharness_provider_openai::{OpenAiRouterProvider, RouterCredential, RouterSettings};
     use autoharness_settings::CredentialReference;
@@ -6050,7 +6629,7 @@ mod tests {
 
     impl autoharness_provider::SecretRedactor for ToolLoopProvider {
         fn redact_secrets(&self, value: &str) -> String {
-            value.to_owned()
+            value.replace("test-api-secret", "[REDACTED]")
         }
     }
 
@@ -6124,6 +6703,7 @@ mod tests {
     struct CompactionProvider {
         responses: Mutex<VecDeque<String>>,
         requests: Mutex<Vec<ChatRequest>>,
+        protect_configured_secret: AtomicBool,
     }
 
     impl CompactionProvider {
@@ -6131,7 +6711,17 @@ mod tests {
             Self {
                 responses: Mutex::new(responses.into_iter().collect()),
                 requests: Mutex::new(Vec::new()),
+                protect_configured_secret: AtomicBool::new(true),
             }
+        }
+
+        fn allow_unprotected_seed(&self) {
+            self.protect_configured_secret
+                .store(false, Ordering::SeqCst);
+        }
+
+        fn protect_configured_secret(&self) {
+            self.protect_configured_secret.store(true, Ordering::SeqCst);
         }
     }
 
@@ -6177,7 +6767,11 @@ mod tests {
 
     impl autoharness_provider::SecretRedactor for CompactionProvider {
         fn redact_secrets(&self, value: &str) -> String {
-            value.replace("configured-secret", "[REDACTED]")
+            if self.protect_configured_secret.load(Ordering::SeqCst) {
+                value.replace("configured-secret", "[REDACTED]")
+            } else {
+                value.to_owned()
+            }
         }
     }
 
@@ -6195,6 +6789,11 @@ mod tests {
         Tools(Vec<ProviderToolCall>),
         Complete(&'static str),
         CompleteOwned(String),
+        TextFragments(Vec<String>),
+        TextAndTools {
+            text: String,
+            calls: Vec<ProviderToolCall>,
+        },
     }
 
     struct ProposalProvider {
@@ -6265,6 +6864,29 @@ mod tests {
                     )));
                     events.push(Ok(ProviderStreamEvent::Completed {
                         reason: CompletionReason::Stop,
+                    }));
+                }
+                ProposalProviderTurn::TextFragments(fragments) => {
+                    events.extend(fragments.into_iter().map(|text| {
+                        Ok::<_, ProviderError>(ProviderStreamEvent::TextDelta(
+                            TextDelta::new(text).expect("scripted text fragment"),
+                        ))
+                    }));
+                    events.push(Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::Stop,
+                    }));
+                }
+                ProposalProviderTurn::TextAndTools { text, calls } => {
+                    events.push(Ok(ProviderStreamEvent::TextDelta(
+                        TextDelta::new(text).expect("scripted text"),
+                    )));
+                    events.extend(
+                        calls.into_iter().map(|call| {
+                            Ok::<_, ProviderError>(ProviderStreamEvent::ToolCall(call))
+                        }),
+                    );
+                    events.push(Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::ToolCalls,
                     }));
                 }
             }
@@ -7024,6 +7646,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workspace_document_import_is_review_only_until_distinct_user_approval() {
+        const IMPORTED: &str = "Imported decision: keep provider evidence attached to each fact.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("decision.txt"), IMPORTED).expect("import document");
+        let database = directory.path().join("memory-import.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator =
+            Coordinator::new(session_id, session, handle.clone(), None, app, shutdown);
+        coordinator.workspace = workspace;
+        coordinator
+            .initialize_context_scope()
+            .await
+            .expect("context scope");
+        let workspace_id = coordinator
+            .context_scope()
+            .expect("initialized scope")
+            .workspace_id()
+            .clone();
+
+        let import_request = RequestId::new(1);
+        coordinator
+            .import_memory(import_request, "decision.txt".to_owned())
+            .await
+            .expect("import memory");
+        expect_commit(&mut ui, import_request).await;
+        let proposal_page = handle
+            .inspect_memories(
+                MemoryInspectionQuery::new(
+                    vec![DomainMemoryScope::Workspace(workspace_id)],
+                    vec![MemoryRevisionStatus::Proposed],
+                    None,
+                    10,
+                )
+                .expect("proposal query"),
+            )
+            .await
+            .expect("proposal page");
+        assert_eq!(proposal_page.records().len(), 1);
+        let proposal = &proposal_page.records()[0];
+        assert_eq!(
+            proposal.content().expect("retained content").as_str(),
+            IMPORTED
+        );
+        assert_eq!(proposal.lifecycle(), MemoryRevisionStatus::Proposed);
+        assert!(proposal.active_revision_id().is_none());
+        assert_eq!(
+            proposal.latest_revision().origin(),
+            MemoryOrigin::ImportedDocument
+        );
+        assert_eq!(
+            proposal.latest_revision().trust_class(),
+            TrustClass::Imported
+        );
+        assert!(matches!(
+            proposal.latest_revision().evidence()[0].source(),
+            MemoryEvidenceSource::ImportedDocument { .. }
+        ));
+        assert_eq!(
+            proposal
+                .latest_validation()
+                .expect("deterministic validation")
+                .status(),
+            autoharness_domain::MemoryValidationStatus::NeedsReview
+        );
+        let memory_id = proposal.memory_id().clone();
+        let proposal_revision_id = proposal.latest_revision().revision_id().clone();
+        let expected_last_sequence = proposal.last_sequence();
+
+        let approval_request = RequestId::new(2);
+        coordinator
+            .approve_memory_proposal(
+                approval_request,
+                memory_id.as_str().to_owned(),
+                expected_last_sequence,
+                proposal_revision_id.as_str().to_owned(),
+            )
+            .await
+            .expect("approve imported proposal");
+        expect_commit(&mut ui, approval_request).await;
+        let revisions = handle
+            .load_memory_revisions(memory_id)
+            .await
+            .expect("approved revisions");
+        assert_eq!(revisions.len(), 2);
+        assert_eq!(revisions[0].revision_id(), &proposal_revision_id);
+        assert_eq!(revisions[0].status(), MemoryRevisionStatus::Superseded);
+        assert_ne!(revisions[1].revision_id(), &proposal_revision_id);
+        assert_eq!(revisions[1].status(), MemoryRevisionStatus::Active);
+        assert_eq!(revisions[1].origin(), MemoryOrigin::ExplicitUser);
+        assert_eq!(revisions[1].trust_class(), TrustClass::UserApproved);
+
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
     async fn configured_credential_is_rejected_before_any_memory_durable_surface() {
         const SENTINEL: &str = "test-api-secret";
 
@@ -7204,6 +7932,1270 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn inactive_saved_profile_credential_blocks_memory_and_workspace_context() {
+        const SENTINEL: &str = "inactive-profile-redaction-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("credential-import.txt"), SENTINEL)
+            .expect("credential import fixture");
+        let database = directory.path().join("inactive-credential.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        assert_eq!(provider.redact_secrets(SENTINEL), SENTINEL);
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+
+        let memory_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::RememberMemory {
+                request_id: memory_request,
+                content: autoharness_tui::MemoryContent::new(SENTINEL).expect("memory content"),
+            })
+            .await
+            .expect("remember intent");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("memory notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == memory_request && failure.code == "memory_secret"
+        ));
+        assert_eq!(
+            handle
+                .memory_mutation_generation()
+                .await
+                .expect("memory generation")
+                .get(),
+            0
+        );
+
+        let import_request = RequestId::new(10);
+        ui.intents
+            .send(UiIntent::ImportMemory {
+                request_id: import_request,
+                path: autoharness_tui::MemoryImportPath::new("credential-import.txt")
+                    .expect("import path"),
+            })
+            .await
+            .expect("import intent");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("import notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == import_request && failure.code == "memory_secret"
+        ));
+        assert_eq!(
+            handle
+                .memory_mutation_generation()
+                .await
+                .expect("memory generation after import")
+                .get(),
+            0
+        );
+
+        let select_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        submit_and_wait_for_completion(
+            &mut ui,
+            RequestId::new(3),
+            &format!("redact this configured value: {SENTINEL}"),
+            1,
+        )
+        .await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            let serialized = serde_json::to_string(&requests[0]).expect("serialize request");
+            assert!(!serialized.contains(SENTINEL));
+            assert!(serialized.contains("[REDACTED]"));
+        }
+
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            format!("Never persist {SENTINEL} from this workspace source."),
+        )
+        .expect("secret-bearing workspace source");
+        let submit_request = RequestId::new(4);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "read the workspace instructions".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("context notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == submit_request && failure.code == "context_not_committed"
+        ));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.requests.lock().expect("request lock").len(), 1);
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload(), EventPayload::ContextTurnBound { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(SENTINEL)
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+        for entry in std::fs::read_dir(directory.path()).expect("state directory") {
+            let entry = entry.expect("state entry");
+            if entry.file_type().expect("file type").is_file() {
+                let bytes = std::fs::read(entry.path()).expect("durable state file");
+                assert!(
+                    !bytes
+                        .windows(SENTINEL.len())
+                        .any(|window| window == SENTINEL.as_bytes()),
+                    "inactive credential must not reach durable application state"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_split_across_provider_deltas_never_completes_durably() {
+        const SENTINEL: &str = "inactive-provider-output-secret";
+        const PREFIX: &str = "inactive-provider-output-";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("provider-output-secret.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::TextFragments(vec![PREFIX.to_owned(), "secret".to_owned()]),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "emit protected output".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if text == PREFIX && code == "credential_in_provider_data"
+                )
+            })
+        })
+        .await;
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(SENTINEL)
+        );
+        assert_eq!(provider.requests.lock().expect("request lock").len(), 1);
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_split_across_tool_arguments_is_never_proposed() {
+        const SENTINEL: &str = "argument-half-secret-half";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("tool-argument-secret.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![ProposalProviderTurn::Tools(
+            vec![scripted_tool_call(
+                "call-secret-arguments",
+                "fs_write",
+                serde_json::json!({
+                    "path": "argument-half-",
+                    "content": "secret-half"
+                }),
+            )],
+        )]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "attempt unsafe tool arguments".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if code == "credential_in_provider_data"
+                )
+            })
+        })
+        .await;
+        let recovered = handle
+            .load_session(session_id.clone())
+            .await
+            .expect("load session")
+            .expect("session");
+        assert!(recovered.tool_calls().is_empty());
+        assert!(!workspace.join("argument-half-").exists());
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            !events
+                .iter()
+                .any(|event| { matches!(event.payload(), EventPayload::ToolCallProposed { .. }) })
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_in_provider_call_identity_is_never_proposed() {
+        const SENTINEL: &str = "inactive_identity_secret";
+
+        assert_inactive_provider_tool_ingress_blocked(
+            SENTINEL,
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                SENTINEL,
+                "fs_read",
+                serde_json::json!({"path":"safe.txt"}),
+            )]),
+            "",
+            0,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_split_across_text_and_identities_is_never_proposed() {
+        const SENTINEL: &str = "identity-prefix_identity";
+        const PREFIX: &str = "identity-";
+
+        assert_inactive_provider_tool_ingress_blocked(
+            SENTINEL,
+            ProposalProviderTurn::TextAndTools {
+                text: PREFIX.to_owned(),
+                calls: vec![scripted_tool_call(
+                    "prefix_",
+                    "identity",
+                    serde_json::json!({"path":"safe.txt"}),
+                )],
+            },
+            PREFIX,
+            0,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_split_across_argument_key_and_value_is_never_proposed() {
+        const SENTINEL: &str = "key-fragmentvalue-fragment";
+
+        assert_inactive_provider_tool_ingress_blocked(
+            SENTINEL,
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "key-value-call",
+                "fs_write",
+                serde_json::json!({"key-fragment":"value-fragment"}),
+            )]),
+            "",
+            0,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_split_across_tool_calls_is_never_completed_durably() {
+        const SENTINEL: &str = "call-prefixcall-suffix";
+
+        assert_inactive_provider_tool_ingress_blocked(
+            SENTINEL,
+            ProposalProviderTurn::Tools(vec![
+                scripted_tool_call(
+                    "first-safe-call",
+                    "fs_read",
+                    serde_json::json!({"path":"call-prefix"}),
+                ),
+                scripted_tool_call(
+                    "call-suffix",
+                    "fs_read",
+                    serde_json::json!({"path":"safe.txt"}),
+                ),
+            ]),
+            "",
+            1,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn inactive_saved_credential_in_local_tool_output_is_never_saved_or_redispatched() {
+        const SENTINEL: &str = "inactive-local-tool-output-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join(".env"), SENTINEL).expect("tool output fixture");
+        let database = directory.path().join("tool-output-secret.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ToolLoopProvider::reading());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "read protected workspace output".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        assert_eq!(permission.tool_name, "fs_read");
+        let allow_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: allow_request,
+                tool_call_id: permission.tool_call_id,
+                allow: true,
+            })
+            .await
+            .expect("allow permission");
+        expect_commit(&mut ui, allow_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        ..
+                    } if text == "tool complete"
+                )
+            })
+        })
+        .await;
+
+        let recovered = handle
+            .load_session(session_id.clone())
+            .await
+            .expect("load session")
+            .expect("session");
+        assert_eq!(recovered.tool_calls().len(), 1);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Unknown
+        );
+        assert!(recovered.tool_calls()[0].output().is_none());
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.payload(), EventPayload::ToolCallMarkedUnknown { .. }))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload(), EventPayload::ToolCallCompleted { .. }))
+        );
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(SENTINEL)
+        );
+        let requests = provider.requests.lock().expect("request lock");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            !serde_json::to_string(&*requests)
+                .expect("serialize requests")
+                .contains(SENTINEL)
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn recovered_tool_continuation_seeds_split_provider_credential_guard() {
+        const SENTINEL: &str = "recovered-provider-output-secret";
+        const PREFIX: &str = "recovered-provider-output-";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("ordinary.txt"), "ordinary tool output")
+            .expect("ordinary tool fixture");
+        let database = directory.path().join("recovered-output-secret.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::TextAndTools {
+                text: PREFIX.to_owned(),
+                calls: vec![scripted_tool_call(
+                    "recovery-read",
+                    "fs_read",
+                    serde_json::json!({"path":"ordinary.txt"}),
+                )],
+            },
+            ProposalProviderTurn::CompleteOwned("secret".to_owned()),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "resume a protected provider response".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        shutdown.cancel();
+        task.await
+            .expect("first coordinator join")
+            .expect("first coordinator shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("first actor shutdown");
+        drop(ui);
+
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(
+            recovered.attempts().last().expect("attempt").status(),
+            EngineAttemptStatus::AwaitingTools
+        );
+        let reopened_handle = reopened.handle();
+        let (mut resumed_ui, resumed_app) = bounded_ports(
+            Arc::new(projection::session(&recovered)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let resumed_profiles = ProfileRuntime::new(
+            manager,
+            Arc::new(|_, _, _| Ok(Arc::new(RecordingProvider::default()) as Arc<dyn Provider>)),
+            EnvironmentCredentials {
+                gemini: None,
+                router: None,
+            },
+            workspace.to_string_lossy().into_owned(),
+        );
+        let resumed_shutdown = CancellationToken::new();
+        let resumed = Coordinator::with_runtime(
+            session_id.clone(),
+            recovered,
+            reopened_handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(resumed_profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            resumed_app,
+            resumed_shutdown.clone(),
+        );
+        let resumed_task = tokio::spawn(resumed.run());
+        wait_for_catalog(&mut resumed_ui).await;
+        let recovered_permission = wait_for_session(&mut resumed_ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        assert_eq!(
+            recovered_permission.permission_requests[0].tool_call_id,
+            permission.tool_call_id
+        );
+        let allow_request = RequestId::new(3);
+        resumed_ui
+            .intents
+            .send(UiIntent::AnswerPermission {
+                request_id: allow_request,
+                tool_call_id: permission.tool_call_id,
+                allow: true,
+            })
+            .await
+            .expect("allow permission");
+        expect_commit(&mut resumed_ui, allow_request).await;
+        wait_for_session(&mut resumed_ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if text == PREFIX && code == "credential_in_provider_data"
+                )
+            })
+        })
+        .await;
+
+        let recovered = reopened_handle
+            .load_session(session_id.clone())
+            .await
+            .expect("load session")
+            .expect("session");
+        assert_eq!(recovered.tool_calls().len(), 1);
+        assert_eq!(
+            recovered.tool_calls()[0].status(),
+            autoharness_engine::ToolCallStatus::Completed
+        );
+        assert_eq!(
+            recovered.tool_calls()[0]
+                .output()
+                .expect("safe output")
+                .content(),
+            "ordinary tool output"
+        );
+        let events = reopened_handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(SENTINEL)
+        );
+        let requests = provider.requests.lock().expect("request lock");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            !serde_json::to_string(&*requests)
+                .expect("serialize requests")
+                .contains(SENTINEL)
+        );
+
+        resumed_shutdown.cancel();
+        resumed_task
+            .await
+            .expect("resumed coordinator join")
+            .expect("resumed coordinator shutdown");
+        drop(reopened_handle);
+        reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn provider_configuration_mutations_are_rejected_while_attempt_is_active() {
+        const SENTINEL: &str = "credential-before-active-attempt";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("active-credential-mutation.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, manager, vault, reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let provider = Arc::new(FakeProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id,
+            session,
+            actor.handle(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "keep this attempt active".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Streaming,
+                        ..
+                    } if text == "partial"
+                )
+            })
+        })
+        .await;
+
+        let mutation_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::ReplaceProfileCredential {
+                request_id: mutation_request,
+                profile_id: "inactive-redaction-profile".to_owned(),
+                credential: ApiCredential::new("replacement-during-active".to_owned())
+                    .expect("replacement credential"),
+            })
+            .await
+            .expect("replace credential");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("mutation notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == mutation_request && failure.code == "credential_change_active"
+        ));
+        assert_eq!(
+            vault.load(&reference).expect("saved credential").as_str(),
+            SENTINEL
+        );
+
+        let profile_request = RequestId::new(4);
+        ui.intents
+            .send(UiIntent::UpsertProfile {
+                request_id: profile_request,
+                profile: ProviderProfileDraft {
+                    id: "active-mutation-codex".to_owned(),
+                    kind: ProviderKindLabel::CodexCli,
+                    base_url: String::new(),
+                    project: String::new(),
+                    auth_header: String::new(),
+                },
+            })
+            .await
+            .expect("upsert profile");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("profile notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == profile_request && failure.code == "credential_change_active"
+        ));
+        assert!(
+            manager
+                .snapshot()
+                .expect("profile snapshot")
+                .profiles
+                .iter()
+                .all(|profile| profile.id.as_str() != "active-mutation-codex")
+        );
+
+        let default_request = RequestId::new(5);
+        ui.intents
+            .send(UiIntent::SetProfileDefault {
+                request_id: default_request,
+                profile_id: "inactive-redaction-profile".to_owned(),
+                model: fixture_model(),
+                reasoning_effort: Some("high".to_owned()),
+            })
+            .await
+            .expect("set profile default");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("default notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == default_request && failure.code == "credential_change_active"
+        ));
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn missing_saved_credential_blocks_prompt_and_memory_before_persistence() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory
+            .path()
+            .join("missing-redaction-credential.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, vault, reference) =
+            inactive_profile_runtime(&profile_path, &workspace, "missing-vault-secret");
+        vault.delete(&reference).expect("remove saved credential");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        assert_eq!(
+            coordinator.redact_configured_secrets(
+                "token=overlapping-secret",
+                &[
+                    Zeroizing::new("overlapping".to_owned()),
+                    Zeroizing::new("overlapping-secret".to_owned()),
+                ],
+            ),
+            "token=[REDACTED]"
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+
+        let memory_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::RememberMemory {
+                request_id: memory_request,
+                content: autoharness_tui::MemoryContent::new("ordinary safe memory")
+                    .expect("memory content"),
+            })
+            .await
+            .expect("remember intent");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("memory notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == memory_request
+                    && failure.code == "memory_redaction_unavailable"
+        ));
+        assert_eq!(
+            handle
+                .memory_mutation_generation()
+                .await
+                .expect("memory generation")
+                .get(),
+            0
+        );
+
+        let select_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "ordinary safe prompt".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("prompt notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == submit_request
+                    && failure.code == "prompt_redaction_unavailable"
+        ));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !handle
+                .load_events(session_id)
+                .await
+                .expect("session events")
+                .iter()
+                .any(|event| matches!(event.payload(), EventPayload::AttemptPrepared { .. }))
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn later_configured_credential_blocks_existing_memory_admission() {
+        const SENTINEL: &str = "credential-configured-after-memory";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("later-credential.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        seed_workspace_memory(
+            &handle,
+            &workspace,
+            &format!("needle-existing-memory {SENTINEL}"),
+        )
+        .await;
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "needle-existing-memory".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("context notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == submit_request && failure.code == "context_not_committed"
+        ));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !handle
+                .load_events(session_id)
+                .await
+                .expect("session events")
+                .iter()
+                .any(|event| matches!(event.payload(), EventPayload::ContextTurnBound { .. }))
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn newly_configured_credential_blocks_recovered_bound_request() {
+        const SENTINEL: &str = "credential-configured-after-context-binding";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            format!("Treat {SENTINEL} as ordinary text for the initial binding."),
+        )
+        .expect("workspace source");
+        let database = directory.path().join("recovered-credential.sqlite3");
+        let (session_id, attempt_id, _request) =
+            seed_pending_bound_turn(database.clone(), &workspace).await;
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&recovered)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            recovered,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(provider.requests.lock().expect("request lock").is_empty());
+        let recovered = handle
+            .load_session(session_id.clone())
+            .await
+            .expect("load session")
+            .expect("recovered session");
+        let attempt = recovered.attempt(&attempt_id).expect("pending attempt");
+        assert!(attempt.is_provider_dispatch_ready());
+        assert_eq!(attempt.turns_started(), 0);
+        assert!(
+            !handle
+                .load_events(session_id)
+                .await
+                .expect("session events")
+                .iter()
+                .any(|event| matches!(event.payload(), EventPayload::RunTurnStarted { .. }))
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
     fn all_file_bytes(root: &std::path::Path) -> Vec<Vec<u8>> {
         let mut files = Vec::new();
         let mut pending = vec![root.to_path_buf()];
@@ -7219,6 +9211,160 @@ mod tests {
             }
         }
         files
+    }
+
+    fn inactive_profile_runtime(
+        profile_path: &std::path::Path,
+        workspace: &std::path::Path,
+        secret: &str,
+    ) -> (
+        ProfileRuntime,
+        Arc<ProfileManager>,
+        Arc<FakeVault>,
+        CredentialReference,
+    ) {
+        let store = ProfileStore::open(profile_path).expect("profile store");
+        let vault = Arc::new(FakeVault::new());
+        let manager = Arc::new(ProfileManager::new(store, vault.clone()));
+        let inactive = ProfileId::new("inactive-redaction-profile").expect("profile ID");
+        manager
+            .upsert(&inactive, &ProviderProfile::gemini())
+            .expect("inactive profile");
+        let reference = manager
+            .save_credential(&inactive, secret)
+            .expect("inactive credential");
+        assert!(
+            manager
+                .snapshot()
+                .expect("profile snapshot")
+                .profiles
+                .iter()
+                .any(|profile| profile.id == inactive && !profile.active)
+        );
+        let factory: ProfileProviderFactory =
+            Arc::new(|_, _, _| Ok(Arc::new(RecordingProvider::default()) as Arc<dyn Provider>));
+        (
+            ProfileRuntime::new(
+                Arc::clone(&manager),
+                factory,
+                EnvironmentCredentials {
+                    gemini: None,
+                    router: None,
+                },
+                workspace.to_string_lossy().into_owned(),
+            ),
+            manager,
+            vault,
+            reference,
+        )
+    }
+
+    async fn assert_inactive_provider_tool_ingress_blocked(
+        sentinel: &str,
+        turn: ProposalProviderTurn,
+        expected_text: &str,
+        expected_tool_calls: usize,
+    ) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("provider-tool-ingress.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, sentinel);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![turn]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "attempt protected provider tool data".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if text == expected_text && code == "credential_in_provider_data"
+                )
+            })
+        })
+        .await;
+
+        let recovered = handle
+            .load_session(session_id.clone())
+            .await
+            .expect("load session")
+            .expect("session");
+        assert_eq!(recovered.tool_calls().len(), expected_tool_calls);
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload(), EventPayload::ToolCallProposed { .. }))
+                .count(),
+            expected_tool_calls
+        );
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(sentinel)
+        );
+        assert_eq!(provider.requests.lock().expect("request lock").len(), 1);
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     async fn wait_for_profiles(
@@ -7639,7 +9785,7 @@ mod tests {
         let summaries = store.list_sessions().expect("session summaries");
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].session_id(), &first_id);
-        let archive_prefix = format!("autoharness-session-{}.export.v2-", second.session_id);
+        let archive_prefix = format!("autoharness-session-{}.export.v3-", second.session_id);
         assert!(
             std::fs::read_dir(directory.path())
                 .expect("archive directory")
@@ -9039,6 +11185,7 @@ mod tests {
             "{SENTINEL}-{}",
             "history".repeat(1_200)
         )]));
+        provider.allow_unprotected_seed();
         let (mut ui, app) = bounded_ports(
             Arc::new(projection::session(&session)),
             Arc::new(SessionsProjection::default()),
@@ -9050,7 +11197,7 @@ mod tests {
             session,
             handle.clone(),
             ProviderComposition {
-                initial: Some(provider),
+                initial: Some(provider.clone()),
                 factory: Arc::new(|_| {
                     Err(ProviderError::new(
                         ProviderErrorKind::MissingCredential,
@@ -9082,6 +11229,7 @@ mod tests {
             1,
         )
         .await;
+        provider.protect_configured_secret();
         let compact_request = RequestId::new(3);
         ui.intents
             .send(UiIntent::SubmitPrompt {
@@ -9490,34 +11638,51 @@ mod tests {
                     .expect("turn"),
             );
         }
-        assert_eq!(turns[0].sources().len(), 1);
-        assert_eq!(turns[1].sources().len(), 1);
-        assert_eq!(turns[2].sources().len(), 1);
+        let workspace_sources = turns
+            .iter()
+            .map(|turn| {
+                assert_eq!(turn.sources().len(), 3);
+                assert_eq!(
+                    turn.sources()
+                        .iter()
+                        .filter(|source| {
+                            source.visibility()
+                                == autoharness_domain::ContextSourceVisibility::AuditOnly
+                        })
+                        .count(),
+                    2
+                );
+                turn.sources()
+                    .iter()
+                    .find(|source| source.source_key().as_str() == "workspace:agents-md:v1")
+                    .expect("workspace AGENTS source")
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            turns[0].sources()[0].observation_state(),
+            workspace_sources[0].observation_state(),
             autoharness_domain::ContextObservationState::Available
         );
         assert_eq!(
-            turns[1].sources()[0].observation_state(),
+            workspace_sources[1].observation_state(),
             autoharness_domain::ContextObservationState::RetainedStale
         );
         assert_eq!(
-            turns[2].sources()[0].observation_state(),
+            workspace_sources[2].observation_state(),
             autoharness_domain::ContextObservationState::ObservedAbsent
         );
         assert_eq!(
-            turns[3].sources()[0].observation_state(),
+            workspace_sources[3].observation_state(),
             autoharness_domain::ContextObservationState::RetainedStale
         );
         assert_eq!(
-            turns[0].sources()[0].source_revision(),
-            turns[1].sources()[0].source_revision()
+            workspace_sources[0].source_revision(),
+            workspace_sources[1].source_revision()
         );
         assert_eq!(
-            turns[0].sources()[0].source_revision(),
-            turns[3].sources()[0].source_revision()
+            workspace_sources[0].source_revision(),
+            workspace_sources[3].source_revision()
         );
-        assert!(turns[2].sources()[0].source_revision().is_none());
+        assert!(workspace_sources[2].source_revision().is_none());
         assert_eq!(turns[0].admissions().len(), 1);
         assert_eq!(turns[1].admissions().len(), 1);
         assert!(turns[2].admissions().is_empty());
@@ -9765,7 +11930,42 @@ mod tests {
             first_turn.memory_generation(),
             second_turn.memory_generation()
         );
-        assert_eq!(first_turn.sources(), second_turn.sources());
+        let prelude_sources = |turn: &autoharness_domain::ContextTurnManifest| {
+            turn.sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility()
+                        == autoharness_domain::ContextSourceVisibility::PreludeEligible
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(prelude_sources(&first_turn), prelude_sources(&second_turn));
+        let audit_sources = |turn: &autoharness_domain::ContextTurnManifest| {
+            turn.sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == autoharness_domain::ContextSourceVisibility::AuditOnly
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let first_audit = audit_sources(&first_turn);
+        let second_audit = audit_sources(&second_turn);
+        assert_eq!(first_audit.len(), 2);
+        assert_eq!(
+            first_audit
+                .iter()
+                .map(|source| source.source_key())
+                .collect::<Vec<_>>(),
+            second_audit
+                .iter()
+                .map(|source| source.source_key())
+                .collect::<Vec<_>>()
+        );
+        for (first, second) in first_audit.iter().zip(second_audit) {
+            assert_ne!(first.source_revision(), second.source_revision());
+        }
         assert_eq!(first_turn.rendered_hash(), second_turn.rendered_hash());
         assert_ne!(first_turn.request_hash(), second_turn.request_hash());
         assert_eq!(
@@ -10343,30 +12543,15 @@ mod tests {
             .await
             .expect("submit prompt");
         expect_commit(&mut ui, submit_request).await;
-        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
-            projection.permission_requests.len() == 1
-        })
-        .await;
-        let permission = awaiting_permission.permission_requests[0].clone();
-        let deny_request = RequestId::new(3);
-        ui.intents
-            .send(UiIntent::AnswerPermission {
-                request_id: deny_request,
-                tool_call_id: permission.tool_call_id,
-                allow: false,
-            })
-            .await
-            .expect("deny incomplete source call");
-        expect_commit(&mut ui, deny_request).await;
         wait_for_session(&mut ui.sessions, |projection| {
             projection.transcript.iter().any(|item| {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
                         text,
                         ..
-                    } if text == "invalid proposals settled"
+                    } if text.is_empty() && code == "credential_in_provider_data"
                 )
             })
         })
@@ -10388,7 +12573,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(proposal_calls.len(), 3);
+        assert_eq!(proposal_calls.len(), 2);
         for call in proposal_calls {
             let memory_id = ids::memory_proposal_memory_id(&call.tool_call_id);
             assert!(
@@ -10405,12 +12590,17 @@ mod tests {
                     .expect("memory revisions")
                     .is_empty()
             );
-            assert!(events.iter().any(|event| matches!(
-                event.payload(),
-                EventPayload::ToolCallFailed { tool_call_id, .. }
-                    if tool_call_id == &call.tool_call_id
-            )));
         }
+        assert!(!events.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::ToolCallProposed { call, .. }
+                if call.provider_call_id.as_str() == "proposal-secret"
+        )));
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize durable events")
+                .contains(SENTINEL)
+        );
         assert_eq!(
             handle
                 .memory_mutation_generation()
@@ -10421,17 +12611,12 @@ mod tests {
         );
         {
             let requests = provider.requests.lock().expect("request lock");
-            assert_eq!(requests.len(), 2);
-            let results = requests[1]
-                .messages
-                .iter()
-                .filter_map(|message| match message {
-                    ChatMessage::ToolResult { content, .. } => Some(content.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(results.len(), 4);
-            assert!(results.iter().all(|result| !result.contains(SENTINEL)));
+            assert_eq!(requests.len(), 1);
+            assert!(
+                !serde_json::to_string(&*requests)
+                    .expect("serialize provider requests")
+                    .contains(SENTINEL)
+            );
         }
 
         shutdown.cancel();
