@@ -4,8 +4,9 @@ use autoharness_domain::{
     AgentId, ContextAdmission, ContextTurnManifest, MEMORY_SCHEMA_V1, MemoryCausation,
     MemoryContent, MemoryEvidenceExcerpt, MemoryEvidenceSource, MemoryGeneration, MemoryId,
     MemoryKind, MemoryOperationEnvelope, MemoryOperationPayload, MemoryOrigin, MemoryRevision,
-    MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidationStatus, MemoryValidity,
-    Sensitivity, SessionId, TrustClass, UserId, WorkspaceId,
+    MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidationResult,
+    MemoryValidationStatus, MemoryValidity, Sensitivity, SessionId, TrustClass, UserId,
+    WorkspaceId,
 };
 use autoharness_memory::{
     normalized_content_hash, verify_admission_rendered_hash, verify_context_manifest_hash,
@@ -652,6 +653,14 @@ impl MemoryStore for SqliteStore {
                 if lifecycle != MemoryRevisionStatus::Deleted && content.is_none() {
                     return Err(corrupt_memory_projection());
                 }
+                let evidence_content = self
+                    .load_memory_evidence_content(latest_revision.revision_id())?
+                    .ok_or_else(corrupt_memory_projection)?;
+                let latest_validation = load_latest_revision_validation(
+                    &self.connection,
+                    &MemoryId::new(memory_id.clone()).map_err(|_| corrupt_memory_projection())?,
+                    &latest_revision,
+                )?;
                 Ok(MemoryInspectionRecord::new(
                     MemoryId::new(memory_id).map_err(|_| corrupt_memory_projection())?,
                     decode_scope(&scope_type, scope_id)?,
@@ -659,6 +668,8 @@ impl MemoryStore for SqliteStore {
                     lifecycle,
                     latest_revision,
                     content,
+                    evidence_content,
+                    latest_validation,
                     active_revision_id
                         .map(MemoryRevisionId::new)
                         .transpose()
@@ -3245,6 +3256,143 @@ fn decode_optional_content(
     }
 }
 
+fn load_latest_revision_validation(
+    connection: &rusqlite::Connection,
+    memory_id: &MemoryId,
+    revision: &MemoryRevision,
+) -> Result<Option<MemoryValidationResult>, StoreError> {
+    struct ValidationRow {
+        sequence: i64,
+        operation_id: String,
+        envelope_json: Vec<u8>,
+        operation_hash: Vec<u8>,
+        projected_operation_id: Option<String>,
+        projected_revision_id: Option<String>,
+        validator_version: Option<i64>,
+        content_hash: Option<Vec<u8>>,
+        outcome: Option<String>,
+        validation_json: Option<Vec<u8>>,
+        created_at_ms: Option<i64>,
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT o.sequence, o.operation_id, o.envelope_json, o.operation_sha256, \
+                    v.operation_id, v.revision_id, v.validator_version, v.content_sha256, \
+                    v.outcome, v.validation_json, v.created_at_ms \
+             FROM memory_operations AS o \
+             LEFT JOIN memory_validations AS v ON v.operation_id = o.operation_id \
+             WHERE o.memory_id = ?1 AND o.revision_id = ?2 \
+                   AND o.operation_kind = 'validated' \
+             ORDER BY o.sequence ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(
+            params![memory_id.as_str(), revision.revision_id().as_str()],
+            |row| {
+                Ok(ValidationRow {
+                    sequence: row.get(0)?,
+                    operation_id: row.get(1)?,
+                    envelope_json: row.get(2)?,
+                    operation_hash: row.get(3)?,
+                    projected_operation_id: row.get(4)?,
+                    projected_revision_id: row.get(5)?,
+                    validator_version: row.get(6)?,
+                    content_hash: row.get(7)?,
+                    outcome: row.get(8)?,
+                    validation_json: row.get(9)?,
+                    created_at_ms: row.get(10)?,
+                })
+            },
+        )
+        .map_err(map_sqlite_error)?;
+
+    let mut latest = None;
+    let mut authoritative_count = 0_usize;
+    for row in rows {
+        let row = row.map_err(map_sqlite_error)?;
+        if Sha256::digest(&row.envelope_json).as_slice() != row.operation_hash.as_slice() {
+            return Err(corrupt_memory_ledger());
+        }
+        let operation: MemoryOperationEnvelope =
+            serde_json::from_slice(&row.envelope_json).map_err(|_| corrupt_memory_ledger())?;
+        let sequence = u64::try_from(row.sequence).map_err(|_| corrupt_memory_ledger())?;
+        let MemoryOperationPayload::RevisionValidated {
+            revision_id,
+            validation,
+        } = operation.payload()
+        else {
+            return Err(corrupt_memory_ledger());
+        };
+        if operation.operation_id().as_str() != row.operation_id
+            || operation.memory_id() != memory_id
+            || operation.sequence().get() != sequence
+            || operation.schema_version() != MEMORY_SCHEMA_V1
+            || revision_id != revision.revision_id()
+            || validation.content_hash() != revision.content_hash()
+        {
+            return Err(corrupt_memory_ledger());
+        }
+
+        let (
+            Some(projected_operation_id),
+            Some(projected_revision_id),
+            Some(validator_version),
+            Some(content_hash),
+            Some(outcome),
+            Some(validation_json),
+            Some(created_at_ms),
+        ) = (
+            row.projected_operation_id,
+            row.projected_revision_id,
+            row.validator_version,
+            row.content_hash,
+            row.outcome,
+            row.validation_json,
+            row.created_at_ms,
+        )
+        else {
+            return Err(corrupt_memory_projection());
+        };
+        let projected: MemoryValidationResult =
+            serde_json::from_slice(&validation_json).map_err(|_| corrupt_memory_projection())?;
+        let expected_json = serde_json::to_vec(validation).map_err(|_| StoreError::Backend)?;
+        if projected_operation_id != row.operation_id
+            || projected_revision_id != revision.revision_id().as_str()
+            || validator_version != i64::from(validation.validator_version())
+            || content_hash.as_slice()
+                != digest_bytes(validation.content_hash().as_str())?.as_slice()
+            || outcome != encode_validation_status(validation.status())
+            || validation_json != expected_json
+            || created_at_ms != operation.occurred_at().get()
+            || projected != *validation
+        {
+            return Err(corrupt_memory_projection());
+        }
+        latest = Some(projected);
+        authoritative_count = authoritative_count
+            .checked_add(1)
+            .ok_or(StoreError::LimitExceeded)?;
+    }
+    drop(statement);
+
+    let projected_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM memory_validations WHERE revision_id = ?1",
+            params![revision.revision_id().as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    if usize::try_from(projected_count).map_err(|_| corrupt_memory_projection())?
+        != authoritative_count
+    {
+        return Err(corrupt_memory_projection());
+    }
+
+    Ok(latest)
+}
+
 fn decode_json<T: serde::de::DeserializeOwned>(
     json: &[u8],
     hash: &[u8],
@@ -3505,8 +3653,8 @@ mod tests {
         MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource,
         MemoryId, MemoryOperationId, MemoryOrigin, MemoryRelation, MemoryRelationKind,
         MemoryRevisionDraft, MemoryRevisionNumber, MemorySequence, MemorySubjectKey,
-        MemoryValidationResult, MemoryValidationStatus, SessionId, Sha256Digest, TimestampMillis,
-        TrustClass, UserId,
+        MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus, SessionId,
+        Sha256Digest, TimestampMillis, TrustClass, UserId,
     };
     use autoharness_store::{
         DeletionDisposition, MemoryContentState, MemoryEvidenceContent, MemoryRevisionContent,
@@ -3794,6 +3942,21 @@ mod tests {
         );
         assert_eq!(retained[1].excerpt(), &MemoryEvidenceExcerptState::Absent);
         assert!(!format!("{retained:?}").contains(SECRET_SENTINEL));
+        let inspection_query = MemoryInspectionQuery::new(
+            vec![MemoryScope::User(UserId::new("user-1").expect("user ID"))],
+            Vec::new(),
+            None,
+            8,
+        )
+        .expect("inspection query");
+        let inspected = store
+            .inspect_memory_page(&inspection_query)
+            .expect("inspect retained evidence");
+        assert_eq!(inspected.records().len(), 1);
+        assert_eq!(inspected.records()[0].evidence_content(), retained);
+        let inspected_debug = format!("{:?}", inspected.records()[0]);
+        assert!(!inspected_debug.contains(SECRET_SENTINEL));
+        assert!(!inspected_debug.contains("Evidence read models do not follow"));
         assert!(
             store
                 .load_memory_evidence_content(
@@ -3825,6 +3988,115 @@ mod tests {
             .expect("known tombstone");
         assert_eq!(erased[0].excerpt(), &MemoryEvidenceExcerptState::Erased);
         assert_eq!(erased[1].excerpt(), &MemoryEvidenceExcerptState::Absent);
+        let inspected = store
+            .inspect_memory_page(&inspection_query)
+            .expect("inspect erased evidence");
+        assert_eq!(inspected.records()[0].evidence_content(), erased);
+    }
+
+    #[test]
+    fn inspection_reads_latest_validation_from_the_ledger_and_fails_closed_on_damage() {
+        const CONTENT_SENTINEL: &str = "private validation projection sentinel";
+
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let (revision, sidecar) = revision(
+            "revision-inspection-validation",
+            1,
+            CONTENT_SENTINEL,
+            MemoryRevisionStatus::Active,
+        );
+        let create = create_operation(
+            "memory-inspection-validation",
+            "operation-inspection-validation-create",
+            revision.clone(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(0, create.clone(), Some(sidecar)))
+            .expect("append validated memory");
+        let validation = MemoryValidationResult::new(
+            9,
+            revision.content_hash().clone(),
+            MemoryValidationStatus::NeedsReview,
+            vec![
+                MemoryValidationIssue::Contradiction,
+                MemoryValidationIssue::InjectionPattern,
+            ],
+        )
+        .expect("validation result");
+        let validation_operation = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-inspection-validation-result").expect("operation ID"),
+            create.memory_id().clone(),
+            MemorySequence::new(2).expect("sequence"),
+            TimestampMillis::new(11),
+            MemoryCausation::Operation(create.operation_id().clone()),
+            create.correlation_id().clone(),
+            MemoryOperationPayload::RevisionValidated {
+                revision_id: revision.revision_id().clone(),
+                validation: validation.clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(1, validation_operation, None))
+            .expect("append validation");
+        let query = MemoryInspectionQuery::new(
+            vec![MemoryScope::User(UserId::new("user-1").expect("user ID"))],
+            Vec::new(),
+            None,
+            8,
+        )
+        .expect("inspection query");
+
+        let inspected = store
+            .inspect_memory_page(&query)
+            .expect("inspect validation");
+        assert_eq!(
+            inspected.records()[0].latest_validation(),
+            Some(&validation)
+        );
+        assert!(!format!("{:?}", inspected.records()[0]).contains(CONTENT_SENTINEL));
+
+        store
+            .connection
+            .execute(
+                "DELETE FROM memory_validations \
+                 WHERE operation_id = 'operation-inspection-validation-result'",
+                [],
+            )
+            .expect("remove validation projection");
+        assert!(matches!(
+            store.inspect_memory_page(&query),
+            Err(StoreError::CorruptData {
+                area: CorruptionArea::MemoryProjection
+            })
+        ));
+
+        store
+            .rebuild_memory_projections()
+            .expect("rebuild validation projection");
+        assert_eq!(
+            store
+                .inspect_memory_page(&query)
+                .expect("inspect rebuilt validation")
+                .records()[0]
+                .latest_validation(),
+            Some(&validation)
+        );
+
+        store
+            .connection
+            .execute(
+                "UPDATE memory_validations SET validation_json = x'7b7d' \
+                 WHERE operation_id = 'operation-inspection-validation-result'",
+                [],
+            )
+            .expect("damage validation JSON");
+        assert!(matches!(
+            store.inspect_memory_page(&query),
+            Err(StoreError::CorruptData {
+                area: CorruptionArea::MemoryProjection
+            })
+        ));
     }
 
     #[test]

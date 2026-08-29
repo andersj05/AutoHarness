@@ -2,8 +2,8 @@ use autoharness_domain::{
     AttemptId, ContextAdmissionId, ContextAdmissionReason, ContextEpochId, ContextTurnId,
     EstimatedTokens, MemoryContent, MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryGeneration,
     MemoryId, MemoryKind, MemoryOperationEnvelope, MemoryRevision, MemoryRevisionId,
-    MemoryRevisionStatus, MemoryScope, MemorySubjectKey, ModelRef, Sensitivity, SessionId,
-    TimestampMillis,
+    MemoryRevisionStatus, MemoryScope, MemorySubjectKey, MemoryValidationResult, ModelRef,
+    Sensitivity, SessionId, TimestampMillis,
 };
 
 use crate::StoreError;
@@ -910,6 +910,8 @@ pub struct MemoryInspectionRecord {
     lifecycle: MemoryRevisionStatus,
     latest_revision: MemoryRevision,
     content: Option<MemoryContent>,
+    evidence_content: Vec<StoredMemoryEvidenceContent>,
+    latest_validation: Option<MemoryValidationResult>,
     active_revision_id: Option<MemoryRevisionId>,
     last_sequence: u64,
     created_at: TimestampMillis,
@@ -927,6 +929,8 @@ impl MemoryInspectionRecord {
         lifecycle: MemoryRevisionStatus,
         latest_revision: MemoryRevision,
         content: Option<MemoryContent>,
+        evidence_content: Vec<StoredMemoryEvidenceContent>,
+        latest_validation: Option<MemoryValidationResult>,
         active_revision_id: Option<MemoryRevisionId>,
         last_sequence: u64,
         created_at: TimestampMillis,
@@ -939,6 +943,8 @@ impl MemoryInspectionRecord {
             lifecycle,
             latest_revision,
             content,
+            evidence_content,
+            latest_validation,
             active_revision_id,
             last_sequence,
             created_at,
@@ -980,6 +986,20 @@ impl MemoryInspectionRecord {
     #[must_use]
     pub const fn content(&self) -> Option<&MemoryContent> {
         self.content.as_ref()
+    }
+
+    /// Returns exact excerpt availability for the latest revision in metadata order.
+    ///
+    /// Retained bytes remain redacted from this record's debug representation.
+    #[must_use]
+    pub fn evidence_content(&self) -> &[StoredMemoryEvidenceContent] {
+        &self.evidence_content
+    }
+
+    /// Returns the latest durable deterministic validation for the latest revision.
+    #[must_use]
+    pub const fn latest_validation(&self) -> Option<&MemoryValidationResult> {
+        self.latest_validation.as_ref()
     }
 
     /// Returns the currently eligible revision, when any.
