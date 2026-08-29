@@ -17,8 +17,9 @@ pub use builder::{
 };
 pub use canonical::CanonicalEncoder;
 pub use compaction::{
-    COMPACTION_FACTS_VERSION, PendingSessionFact, PendingSessionFactKind,
-    effective_durable_facts_hash, verify_effective_durable_facts_hash,
+    COMPACTION_FACTS_VERSION, EffectiveDurableFactsFingerprint, PendingSessionFact,
+    PendingSessionFactKind, effective_durable_facts, effective_durable_facts_hash,
+    pending_session_facts_from_events, verify_effective_durable_facts_hash,
 };
 pub use error::MemoryError;
 pub use rank::{

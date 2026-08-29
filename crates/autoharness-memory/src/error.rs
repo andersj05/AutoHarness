@@ -15,6 +15,8 @@ pub enum MemoryError {
     DuplicateCompactionFact,
     /// Compaction fact metadata did not match its exact content or active state.
     InvalidCompactionFact,
+    /// Ordered session events could not produce one authoritative pending-fact snapshot.
+    InvalidCompactionEventStream,
     /// A required source could not provide a usable current or retained value.
     RequiredSourceUnavailable(ContextSourceKey),
     /// A context source returned a section that its authority cannot populate.
@@ -44,6 +46,9 @@ impl Display for MemoryError {
             }
             Self::InvalidCompactionFact => {
                 "compaction received memory facts with invalid active content"
+            }
+            Self::InvalidCompactionEventStream => {
+                "compaction received an invalid authoritative session event stream"
             }
             Self::RequiredSourceUnavailable(_) => {
                 "a required context source had no usable current or retained value"
