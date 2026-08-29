@@ -15,6 +15,14 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::ui::{ColorDepth, Theme, Token};
 
 const MAX_CREDENTIAL_BYTES: usize = 4_096;
+const MAX_MEMORY_ID_CHARS: usize = 128;
+const MAX_MEMORY_PREVIEW_CHARS: usize = 240;
+const MAX_MEMORY_CONTENT_CHARS: usize = 16_384;
+const MAX_MEMORY_SOURCE_CHARS: usize = 512;
+const MAX_MEMORY_ADMISSION_TEXT_CHARS: usize = 256;
+const MAX_MEMORY_SUMMARIES: usize = 100;
+const MAX_MEMORY_DETAILS: usize = 100;
+const MAX_MEMORY_ADMISSIONS: usize = 64;
 
 /// Monotonic, process-local identity used to correlate a UI request.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -443,6 +451,8 @@ pub enum Focus {
     Confirmation,
     /// The transcript search bar owns key input.
     Search,
+    /// The Memory inspection workspace owns key input.
+    Memory,
 }
 /// One primary destination in the terminal application shell.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -458,16 +468,19 @@ pub enum Route {
     Settings,
     /// Contextual keyboard and workflow guidance.
     Help,
+    /// Searchable, provenance-aware memory inspection.
+    Memory,
 }
 
 impl Route {
     /// Stable ordered route table used by navigation and rendering.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Chat,
         Self::Sessions,
         Self::Profiles,
         Self::Settings,
         Self::Help,
+        Self::Memory,
     ];
 
     /// Returns the visible route label.
@@ -479,6 +492,7 @@ impl Route {
             Self::Profiles => "Profiles",
             Self::Settings => "Settings",
             Self::Help => "Help",
+            Self::Memory => "Memory",
         }
     }
 
@@ -491,6 +505,7 @@ impl Route {
             Self::Profiles => "Alt+3",
             Self::Settings => "Alt+4",
             Self::Help => "Alt+5",
+            Self::Memory => "Alt+6",
         }
     }
 
@@ -503,6 +518,7 @@ impl Route {
             Self::Profiles => Focus::Profiles,
             Self::Settings => Focus::Settings,
             Self::Help => Focus::Help,
+            Self::Memory => Focus::Memory,
         }
     }
 }
@@ -612,6 +628,546 @@ impl Debug for ProviderProfileDraft {
 pub struct SessionsProjection {
     /// Sessions in deterministic recent-first order.
     pub sessions: Vec<SessionBrowserEntry>,
+}
+
+/// Durable memory lifecycle shown by the inspection workspace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryStatus {
+    Active,
+    Proposed,
+    Superseded,
+    Rejected,
+    Retracted,
+    Deleted,
+}
+
+impl MemoryStatus {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Proposed => "proposed",
+            Self::Superseded => "superseded",
+            Self::Rejected => "rejected",
+            Self::Retracted => "retracted",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+/// Boundary at which a memory may be admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryScope {
+    User,
+    Workspace,
+    Session,
+    Agent,
+}
+
+impl MemoryScope {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+            Self::Agent => "agent",
+        }
+    }
+}
+
+/// Provenance class attached to one admitted memory revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryTrust {
+    UserApproved,
+    VerifiedObservation,
+    Imported,
+    UntrustedProposal,
+}
+
+impl MemoryTrust {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::UserApproved => "user approved",
+            Self::VerifiedObservation => "verified observation",
+            Self::Imported => "imported",
+            Self::UntrustedProposal => "untrusted proposal",
+        }
+    }
+}
+
+/// One bounded, display-safe row in the Memory index.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemorySummary {
+    id: String,
+    preview: String,
+    status: MemoryStatus,
+    scope: MemoryScope,
+    updated_at_ms: i64,
+    confidence_bps: Option<u16>,
+    admission_count: u32,
+}
+
+impl MemorySummary {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: impl Into<String>,
+        preview: impl Into<String>,
+        status: MemoryStatus,
+        scope: MemoryScope,
+        updated_at_ms: i64,
+        confidence_bps: Option<u16>,
+        admission_count: u32,
+    ) -> Result<Self, &'static str> {
+        let id = bounded_single_line(id.into(), MAX_MEMORY_ID_CHARS, "memory identity")?;
+        let preview =
+            bounded_single_line(preview.into(), MAX_MEMORY_PREVIEW_CHARS, "memory preview")?;
+        if confidence_bps.is_some_and(|value| value > 10_000) {
+            return Err("memory confidence must be at most 10000 basis points");
+        }
+        Ok(Self {
+            id,
+            preview,
+            status,
+            scope,
+            updated_at_ms,
+            confidence_bps,
+            admission_count,
+        })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn preview(&self) -> &str {
+        &self.preview
+    }
+
+    #[must_use]
+    pub const fn status(&self) -> MemoryStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub const fn scope(&self) -> MemoryScope {
+        self.scope
+    }
+
+    #[must_use]
+    pub const fn updated_at_ms(&self) -> i64 {
+        self.updated_at_ms
+    }
+
+    #[must_use]
+    pub const fn confidence_bps(&self) -> Option<u16> {
+        self.confidence_bps
+    }
+
+    #[must_use]
+    pub const fn admission_count(&self) -> u32 {
+        self.admission_count
+    }
+}
+
+impl Debug for MemorySummary {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemorySummary")
+            .field("id", &"[REDACTED]")
+            .field("preview", &"[REDACTED]")
+            .field("status", &self.status)
+            .field("scope", &self.scope)
+            .field("updated_at_ms", &self.updated_at_ms)
+            .field("confidence_bps", &self.confidence_bps)
+            .field("admission_count", &self.admission_count)
+            .finish()
+    }
+}
+
+/// One bounded provenance record explaining a memory admission.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryAdmission {
+    session: String,
+    model: String,
+    reason: String,
+    admitted_at_ms: i64,
+    rank: u32,
+}
+
+impl MemoryAdmission {
+    pub fn new(
+        session: impl Into<String>,
+        model: impl Into<String>,
+        reason: impl Into<String>,
+        admitted_at_ms: i64,
+        rank: u32,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            session: bounded_single_line(
+                session.into(),
+                MAX_MEMORY_ADMISSION_TEXT_CHARS,
+                "admission session",
+            )?,
+            model: bounded_single_line(
+                model.into(),
+                MAX_MEMORY_ADMISSION_TEXT_CHARS,
+                "admission model",
+            )?,
+            reason: bounded_single_line(
+                reason.into(),
+                MAX_MEMORY_ADMISSION_TEXT_CHARS,
+                "admission reason",
+            )?,
+            admitted_at_ms,
+            rank,
+        })
+    }
+
+    #[must_use]
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    #[must_use]
+    pub const fn admitted_at_ms(&self) -> i64 {
+        self.admitted_at_ms
+    }
+
+    #[must_use]
+    pub const fn rank(&self) -> u32 {
+        self.rank
+    }
+}
+
+impl Debug for MemoryAdmission {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryAdmission")
+            .field("session", &"[REDACTED]")
+            .field("model", &"[REDACTED]")
+            .field("reason", &"[REDACTED]")
+            .field("admitted_at_ms", &self.admitted_at_ms)
+            .field("rank", &self.rank)
+            .finish()
+    }
+}
+
+/// Bounded content and provenance for one memory revision.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryDetail {
+    memory_id: String,
+    revision: u32,
+    content: String,
+    source: String,
+    trust: MemoryTrust,
+    created_at_ms: i64,
+    valid_until_ms: Option<i64>,
+    admissions: Vec<MemoryAdmission>,
+}
+
+impl MemoryDetail {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        memory_id: impl Into<String>,
+        revision: u32,
+        content: impl Into<String>,
+        source: impl Into<String>,
+        trust: MemoryTrust,
+        created_at_ms: i64,
+        valid_until_ms: Option<i64>,
+        admissions: Vec<MemoryAdmission>,
+    ) -> Result<Self, &'static str> {
+        let memory_id =
+            bounded_single_line(memory_id.into(), MAX_MEMORY_ID_CHARS, "memory identity")?;
+        let content = bounded_text(content.into(), MAX_MEMORY_CONTENT_CHARS, "memory content")?;
+        let source = bounded_single_line(source.into(), MAX_MEMORY_SOURCE_CHARS, "memory source")?;
+        if admissions.len() > MAX_MEMORY_ADMISSIONS {
+            return Err("too many memory admissions");
+        }
+        Ok(Self {
+            memory_id,
+            revision,
+            content,
+            source,
+            trust,
+            created_at_ms,
+            valid_until_ms,
+            admissions,
+        })
+    }
+
+    #[must_use]
+    pub fn memory_id(&self) -> &str {
+        &self.memory_id
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> u32 {
+        self.revision
+    }
+
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[must_use]
+    pub const fn trust(&self) -> MemoryTrust {
+        self.trust
+    }
+
+    #[must_use]
+    pub const fn created_at_ms(&self) -> i64 {
+        self.created_at_ms
+    }
+
+    #[must_use]
+    pub const fn valid_until_ms(&self) -> Option<i64> {
+        self.valid_until_ms
+    }
+
+    #[must_use]
+    pub fn admissions(&self) -> &[MemoryAdmission] {
+        &self.admissions
+    }
+}
+
+impl Debug for MemoryDetail {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryDetail")
+            .field("memory_id", &"[REDACTED]")
+            .field("revision", &self.revision)
+            .field("content", &"[REDACTED]")
+            .field("source", &"[REDACTED]")
+            .field("trust", &self.trust)
+            .field("created_at_ms", &self.created_at_ms)
+            .field("valid_until_ms", &self.valid_until_ms)
+            .field("admission_count", &self.admissions.len())
+            .finish()
+    }
+}
+
+/// Loading state for the bounded Memory projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryLoadState {
+    Loading,
+    Ready,
+    Failed(UiFailure),
+}
+
+/// Bounded read model consumed by the read-only Memory workspace.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryProjection {
+    generation: u64,
+    state: MemoryLoadState,
+    summaries: Vec<MemorySummary>,
+    details: Vec<MemoryDetail>,
+    total: u32,
+    stale: bool,
+}
+
+impl MemoryProjection {
+    #[must_use]
+    pub const fn loading(generation: u64) -> Self {
+        Self {
+            generation,
+            state: MemoryLoadState::Loading,
+            summaries: Vec::new(),
+            details: Vec::new(),
+            total: 0,
+            stale: false,
+        }
+    }
+
+    #[must_use]
+    pub fn failed(generation: u64, failure: UiFailure) -> Self {
+        Self {
+            generation,
+            state: MemoryLoadState::Failed(failure),
+            summaries: Vec::new(),
+            details: Vec::new(),
+            total: 0,
+            stale: false,
+        }
+    }
+
+    pub fn ready(
+        generation: u64,
+        summaries: Vec<MemorySummary>,
+        details: Vec<MemoryDetail>,
+        total: u32,
+        stale: bool,
+    ) -> Result<Self, &'static str> {
+        if summaries.len() > MAX_MEMORY_SUMMARIES {
+            return Err("too many memory summaries");
+        }
+        if details.len() > MAX_MEMORY_DETAILS {
+            return Err("too many memory details");
+        }
+        if usize::try_from(total).unwrap_or(usize::MAX) < summaries.len() {
+            return Err("memory total cannot be smaller than the bounded page");
+        }
+        let summary_ids = summaries
+            .iter()
+            .map(MemorySummary::id)
+            .collect::<BTreeSet<_>>();
+        if summary_ids.len() != summaries.len() {
+            return Err("memory summary identities must be unique");
+        }
+        let detail_ids = details
+            .iter()
+            .map(MemoryDetail::memory_id)
+            .collect::<BTreeSet<_>>();
+        if detail_ids.len() != details.len() {
+            return Err("memory detail identities must be unique");
+        }
+        if details
+            .iter()
+            .any(|detail| !summary_ids.contains(detail.memory_id()))
+        {
+            return Err("memory detail has no matching summary");
+        }
+        Ok(Self {
+            generation,
+            state: MemoryLoadState::Ready,
+            summaries,
+            details,
+            total,
+            stale,
+        })
+    }
+
+    #[must_use]
+    pub fn summaries(&self) -> &[MemorySummary] {
+        &self.summaries
+    }
+
+    #[must_use]
+    pub fn detail(&self, memory_id: &str) -> Option<&MemoryDetail> {
+        self.details
+            .iter()
+            .find(|detail| detail.memory_id() == memory_id)
+    }
+
+    #[must_use]
+    pub const fn total(&self) -> u32 {
+        self.total
+    }
+
+    /// Monotonic ledger generation used to reject stale projections.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn stale(&self) -> bool {
+        self.stale
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> &MemoryLoadState {
+        &self.state
+    }
+
+    #[must_use]
+    pub fn failure(&self) -> Option<&UiFailure> {
+        match &self.state {
+            MemoryLoadState::Failed(failure) => Some(failure),
+            MemoryLoadState::Loading | MemoryLoadState::Ready => None,
+        }
+    }
+}
+
+impl Default for MemoryProjection {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            state: MemoryLoadState::Ready,
+            summaries: Vec::new(),
+            details: Vec::new(),
+            total: 0,
+            stale: false,
+        }
+    }
+}
+
+impl Debug for MemoryProjection {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryProjection")
+            .field("generation", &self.generation)
+            .field("state", &self.state)
+            .field("summary_count", &self.summaries.len())
+            .field("detail_count", &self.details.len())
+            .field("total", &self.total)
+            .field("stale", &self.stale)
+            .finish()
+    }
+}
+
+fn bounded_single_line(
+    value: String,
+    max_chars: usize,
+    field: &'static str,
+) -> Result<String, &'static str> {
+    if value.is_empty() {
+        return Err(match field {
+            "memory identity" => "memory identity must not be empty",
+            "memory preview" => "memory preview must not be empty",
+            "memory source" => "memory source must not be empty",
+            "admission session" => "admission session must not be empty",
+            "admission model" => "admission model must not be empty",
+            _ => "admission reason must not be empty",
+        });
+    }
+    if value.chars().count() > max_chars {
+        return Err("memory presentation text is too long");
+    }
+    if value.chars().any(char::is_control) {
+        return Err("memory presentation text must be one safe line");
+    }
+    Ok(value)
+}
+
+fn bounded_text(
+    value: String,
+    max_chars: usize,
+    _field: &'static str,
+) -> Result<String, &'static str> {
+    if value.is_empty() {
+        return Err("memory content must not be empty");
+    }
+    if value.chars().count() > max_chars {
+        return Err("memory content is too long");
+    }
+    if value
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err("memory content contains unsafe control characters");
+    }
+    Ok(value)
 }
 
 /// A provider credential transferred from the TUI without persistence or serialization.
@@ -1151,6 +1707,22 @@ pub enum MouseAction {
     OverlayCancel,
     PermissionAllow,
     PermissionDeny,
+    /// Focus the Memory search field.
+    MemoryFocusSearch,
+    /// Select one visible memory by stable identity.
+    MemorySelect(String),
+    /// Select one visible admission by bounded index.
+    MemorySelectAdmission(usize),
+    /// Cycle the status filter.
+    MemoryCycleStatus,
+    /// Cycle the scope filter.
+    MemoryCycleScope,
+    /// Open the selected memory detail on a compact layout.
+    MemoryOpen,
+    /// Return to the preceding compact Memory pane.
+    MemoryBack,
+    /// Inspect admissions for the selected memory.
+    MemoryAdmissions,
 }
 
 /// Input to the deterministic update function.
@@ -1173,6 +1745,8 @@ pub enum Message {
     ProfilesChanged(Arc<ProfilesProjection>),
     /// Newest resolved settings and provenance projection.
     SettingsChanged(Arc<SettingsProjection>),
+    /// Newest bounded memory inspection projection.
+    MemoryChanged(Arc<MemoryProjection>),
     /// Application acknowledgement.
     Notice(UiNotice),
     /// Clock sample with monotonic time for animation and wall time for display.
@@ -1213,6 +1787,10 @@ impl Debug for Message {
                 .debug_tuple("SettingsChanged")
                 .field(settings)
                 .finish(),
+            Self::MemoryChanged(memory) => formatter
+                .debug_tuple("MemoryChanged")
+                .field(memory)
+                .finish(),
             Self::Notice(notice) => formatter.debug_tuple("Notice").field(notice).finish(),
             Self::Tick(clock) => formatter.debug_tuple("Tick").field(clock).finish(),
             Self::Resize => formatter.write_str("Resize"),
@@ -1234,6 +1812,132 @@ pub(crate) struct BrowserState {
     pub confirming_delete: Option<String>,
     /// When set, archiving this identity is awaiting explicit confirmation.
     pub confirming_archive: Option<String>,
+}
+
+/// Coarse status filter applied locally to the bounded Memory page.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MemoryStatusFilter {
+    #[default]
+    Eligible,
+    All,
+    Active,
+    Proposed,
+    Inactive,
+}
+
+impl MemoryStatusFilter {
+    pub const ALL: [Self; 5] = [
+        Self::Eligible,
+        Self::All,
+        Self::Active,
+        Self::Proposed,
+        Self::Inactive,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Eligible => "eligible",
+            Self::All => "all states",
+            Self::Active => "active",
+            Self::Proposed => "proposed",
+            Self::Inactive => "inactive",
+        }
+    }
+
+    #[must_use]
+    pub fn includes(self, status: MemoryStatus) -> bool {
+        match self {
+            Self::Eligible => status == MemoryStatus::Active,
+            Self::All => true,
+            Self::Active => status == MemoryStatus::Active,
+            Self::Proposed => status == MemoryStatus::Proposed,
+            Self::Inactive => {
+                matches!(
+                    status,
+                    MemoryStatus::Superseded
+                        | MemoryStatus::Rejected
+                        | MemoryStatus::Retracted
+                        | MemoryStatus::Deleted
+                )
+            }
+        }
+    }
+}
+
+/// Scope filter applied locally to the bounded Memory page.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MemoryScopeFilter {
+    #[default]
+    All,
+    User,
+    Workspace,
+    Session,
+    Agent,
+}
+
+impl MemoryScopeFilter {
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::User,
+        Self::Workspace,
+        Self::Session,
+        Self::Agent,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "all scopes",
+            Self::User => "user",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+            Self::Agent => "agent",
+        }
+    }
+
+    #[must_use]
+    pub fn includes(self, scope: MemoryScope) -> bool {
+        match self {
+            Self::All => true,
+            Self::User => scope == MemoryScope::User,
+            Self::Workspace => scope == MemoryScope::Workspace,
+            Self::Session => scope == MemoryScope::Session,
+            Self::Agent => scope == MemoryScope::Agent,
+        }
+    }
+}
+
+/// Compact-page drill-down destination.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MemoryPane {
+    #[default]
+    List,
+    Detail,
+    Admissions,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum MemoryWorkspaceFocus {
+    Search,
+    Status,
+    Scope,
+    #[default]
+    List,
+    Detail,
+    Admissions,
+}
+
+/// Deterministic local state for Memory search, filters, selection, and drill-down.
+#[derive(Debug, Default)]
+pub(crate) struct MemoryState {
+    pub query: String,
+    pub selected: Option<String>,
+    pub status: MemoryStatusFilter,
+    pub scope: MemoryScopeFilter,
+    pub pane: MemoryPane,
+    pub focus: MemoryWorkspaceFocus,
+    pub admission_selected: usize,
 }
 
 /// Profile editor operation currently shown inside the profile center.
@@ -1710,8 +2414,8 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         title: "Global",
         rows: &[
             (
-                "Alt+1..5",
-                "switch Chat, Sessions, Profiles, Settings, Help",
+                "Alt+1..6",
+                "switch Chat, Sessions, Profiles, Settings, Help, Memory",
             ),
             (
                 "Ctrl+S",
@@ -1797,6 +2501,17 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
         ],
     },
     HelpSection {
+        title: "Memory",
+        rows: &[
+            ("/", "focus memory search"),
+            ("Tab / Shift+Tab", "move between search, filters, and panes"),
+            ("Up/Down", "choose a memory or admission"),
+            ("Left/Right", "change the focused filter"),
+            ("Enter", "open details or admission history"),
+            ("Esc", "step back, clear search, or return to Chat"),
+        ],
+    },
+    HelpSection {
         title: "User profile",
         rows: &[
             ("Type", "edit the local display name"),
@@ -1825,6 +2540,7 @@ impl HelpSection {
             "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
             "Settings" => focus == Focus::Settings,
+            "Memory" => focus == Focus::Memory,
             "User profile" => focus == Focus::UserProfile,
             "Permission" => focus == Focus::Permission,
             _ => false,
@@ -1955,6 +2671,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Help",
         description: "Show keybindings and guidance for the current focus",
         key_hint: Some("Alt+5"),
+    },
+    CommandEntry {
+        id: "memory",
+        label: "Memory",
+        description: "Inspect admitted memories, provenance, and usage",
+        key_hint: Some("Alt+6"),
     },
     CommandEntry {
         id: "copy",
@@ -2319,6 +3041,8 @@ pub struct Model {
     pub(crate) settings: Arc<SettingsProjection>,
     /// Newest safe local profile and provider-connection read model.
     pub(crate) profiles: Arc<ProfilesProjection>,
+    /// Newest bounded memory inspection read model.
+    pub(crate) memory: Arc<MemoryProjection>,
     /// Single source of truth for the active shell route and modal layer.
     pub(crate) navigation: NavigationState,
     /// Multiline prompt composer.
@@ -2351,6 +3075,8 @@ pub struct Model {
     pub(crate) history: ComposerHistory,
     /// Active transcript search state.
     pub(crate) search: SearchState,
+    /// Local Memory workspace search, filter, and drill-down state.
+    pub(crate) memory_workspace: MemoryState,
     /// Whether transcript tool rows render expanded with resources.
     pub(crate) tools_expanded: bool,
     /// Wrapped transcript row pinned into view by an active search jump.
@@ -2459,6 +3185,7 @@ impl Model {
             sessions,
             settings: Arc::new(SettingsProjection::default()),
             profiles: Arc::new(ProfilesProjection::default()),
+            memory: Arc::new(MemoryProjection::default()),
             navigation,
             composer: ComposerState::default(),
             transcript: TranscriptState::new(),
@@ -2482,6 +3209,7 @@ impl Model {
             user_profile: UserProfileState::default(),
             history: ComposerHistory::default(),
             search: SearchState::default(),
+            memory_workspace: MemoryState::default(),
             tools_expanded: false,
             search_pinned_row: None,
             undoable: None,
@@ -2587,6 +3315,103 @@ impl Model {
         self.settings = settings;
         self.refresh_theme();
         self.dirty = true;
+    }
+
+    /// Replaces the bounded read-only Memory projection.
+    pub fn apply_memory(&mut self, memory: Arc<MemoryProjection>) {
+        if memory.generation() < self.memory.generation() {
+            return;
+        }
+        self.memory = memory;
+        self.sync_memory_selection();
+        self.dirty = true;
+    }
+
+    /// Returns the latest bounded Memory projection.
+    #[must_use]
+    pub fn memory(&self) -> &MemoryProjection {
+        &self.memory
+    }
+
+    /// Returns whether the Memory route is active.
+    #[must_use]
+    pub const fn memory_open(&self) -> bool {
+        matches!(self.navigation.route, Route::Memory)
+    }
+
+    /// Returns the local Memory search query.
+    #[must_use]
+    pub fn memory_query(&self) -> &str {
+        &self.memory_workspace.query
+    }
+
+    /// Returns the selected stable memory identity.
+    #[must_use]
+    pub fn memory_selection(&self) -> Option<&str> {
+        self.memory_workspace.selected.as_deref()
+    }
+
+    /// Returns the active local Memory status filter.
+    #[must_use]
+    pub const fn memory_status_filter(&self) -> MemoryStatusFilter {
+        self.memory_workspace.status
+    }
+
+    /// Returns the active local Memory scope filter.
+    #[must_use]
+    pub const fn memory_scope_filter(&self) -> MemoryScopeFilter {
+        self.memory_workspace.scope
+    }
+
+    /// Returns the active compact Memory drill-down pane.
+    #[must_use]
+    pub const fn memory_pane(&self) -> MemoryPane {
+        self.memory_workspace.pane
+    }
+
+    /// Returns locally filtered memories in projection order.
+    #[must_use]
+    pub fn memory_entries(&self) -> Vec<&MemorySummary> {
+        let query = self.memory_workspace.query.to_lowercase();
+        self.memory
+            .summaries()
+            .iter()
+            .filter(|summary| {
+                self.memory_workspace.status.includes(summary.status())
+                    && self.memory_workspace.scope.includes(summary.scope())
+                    && (query.is_empty()
+                        || summary.preview().to_lowercase().contains(&query)
+                        || summary.id().to_lowercase().contains(&query)
+                        || summary.status().label().contains(&query)
+                        || summary.scope().label().contains(&query))
+            })
+            .collect()
+    }
+
+    pub(crate) fn selected_memory(&self) -> Option<(&MemorySummary, Option<&MemoryDetail>)> {
+        let selected = self.memory_workspace.selected.as_deref()?;
+        let summary = self
+            .memory
+            .summaries()
+            .iter()
+            .find(|summary| summary.id() == selected)?;
+        Some((summary, self.memory.detail(selected)))
+    }
+
+    pub(crate) fn sync_memory_selection(&mut self) {
+        let selected = self.memory_workspace.selected.clone();
+        let valid = self
+            .memory_entries()
+            .iter()
+            .any(|summary| Some(summary.id()) == selected.as_deref());
+        if !valid {
+            self.memory_workspace.selected = self
+                .memory_entries()
+                .first()
+                .map(|summary| summary.id().to_owned());
+            self.memory_workspace.pane = MemoryPane::List;
+            self.memory_workspace.admission_selected = 0;
+        }
     }
 
     fn refresh_theme(&mut self) {

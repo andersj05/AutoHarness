@@ -15,13 +15,14 @@ mod view;
 pub use model::{
     ApiCredential, AttemptKey, AttemptStatus, COMMANDS, CatalogProjection, CommandEntry,
     ComposerState, CredentialSourceLabel, Focus, LocalPreferenceChange, LocalUserProfileProjection,
-    Message, Model, ModelSummary, MouseAction, Notice, OverlayKind, PendingKind,
-    PermissionDetailView, PermissionRequestView, ProfileConnectionState,
-    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
-    ProviderProfileProjection, ProviderStatusProjection, RequestId, RetryPolicy, Route,
-    SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey,
-    ToolRowView, TranscriptItem, TranscriptState, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
-    UsageView,
+    MemoryAdmission, MemoryDetail, MemoryLoadState, MemoryPane, MemoryProjection, MemoryScope,
+    MemoryScopeFilter, MemoryStatus, MemoryStatusFilter, MemorySummary, MemoryTrust, Message,
+    Model, ModelSummary, MouseAction, Notice, OverlayKind, PendingKind, PermissionDetailView,
+    PermissionRequestView, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
+    ProviderKindLabel, ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection,
+    RequestId, RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiClock,
+    UiEffect, UiFailure, UiIntent, UiNotice, UsageView,
 };
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,

@@ -9,7 +9,8 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry, Focus,
-    LocalPreferenceChange, MODEL_THINKING_LEVELS, Message, Model, ModelDefaultStep, MouseAction,
+    LocalPreferenceChange, MODEL_THINKING_LEVELS, MemoryPane, MemoryScopeFilter,
+    MemoryStatusFilter, MemoryWorkspaceFocus, Message, Model, ModelDefaultStep, MouseAction,
     Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
     ProfilesProjection, ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
@@ -66,6 +67,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
         }
         Message::SettingsChanged(settings) => {
             model.apply_settings(settings);
+            Vec::new()
+        }
+        Message::MemoryChanged(memory) => {
+            model.apply_memory(memory);
             Vec::new()
         }
         Message::Notice(notice) => {
@@ -262,6 +267,66 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
         }
         MouseAction::PermissionAllow => answer_permission(model, true),
         MouseAction::PermissionDeny => answer_permission(model, false),
+        MouseAction::MemoryFocusSearch => {
+            if model.route() == Route::Memory {
+                model.memory_workspace.focus = MemoryWorkspaceFocus::Search;
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        MouseAction::MemorySelect(memory_id) => {
+            if model.route() == Route::Memory
+                && model
+                    .memory_entries()
+                    .iter()
+                    .any(|summary| summary.id() == memory_id)
+            {
+                model.memory_workspace.selected = Some(memory_id);
+                model.memory_workspace.focus = MemoryWorkspaceFocus::List;
+                model.memory_workspace.admission_selected = 0;
+                model.dirty = true;
+            }
+            Vec::new()
+        }
+        MouseAction::MemorySelectAdmission(index) => {
+            if model.route() == Route::Memory {
+                let count = model
+                    .selected_memory()
+                    .and_then(|(_, detail)| detail)
+                    .map_or(0, |detail| detail.admissions().len());
+                if index < count {
+                    model.memory_workspace.admission_selected = index;
+                    model.memory_workspace.focus = MemoryWorkspaceFocus::Admissions;
+                    model.memory_workspace.pane = MemoryPane::Admissions;
+                    model.dirty = true;
+                }
+            }
+            Vec::new()
+        }
+        MouseAction::MemoryCycleStatus => {
+            if model.route() == Route::Memory {
+                cycle_memory_status(model, 1);
+            }
+            Vec::new()
+        }
+        MouseAction::MemoryCycleScope => {
+            if model.route() == Route::Memory {
+                cycle_memory_scope(model, 1);
+            }
+            Vec::new()
+        }
+        MouseAction::MemoryOpen => {
+            open_memory_detail(model);
+            Vec::new()
+        }
+        MouseAction::MemoryBack => {
+            memory_back(model);
+            Vec::new()
+        }
+        MouseAction::MemoryAdmissions => {
+            open_memory_admissions(model);
+            Vec::new()
+        }
         MouseAction::PickerSelect(selection) => {
             if model
                 .catalog
@@ -308,7 +373,7 @@ fn confirm_mouse_action(model: &mut Model) -> Vec<UiEffect> {
             }
         }
         Route::Sessions => Vec::new(),
-        Route::Chat | Route::Settings | Route::Help => Vec::new(),
+        Route::Chat | Route::Settings | Route::Help | Route::Memory => Vec::new(),
     }
 }
 
@@ -473,7 +538,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
                 Route::Settings if model.settings_workspace.nav_selected == 1 => {
                     handle_profile_input(model, input)
                 }
-                Route::Chat | Route::Settings | Route::Help => Vec::new(),
+                Route::Chat | Route::Settings | Route::Help | Route::Memory => Vec::new(),
             },
         };
     }
@@ -483,6 +548,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         Route::Profiles => handle_profile_input(model, input),
         Route::Settings => handle_settings_input(model, input),
         Route::Help => handle_help_input(model, input),
+        Route::Memory => handle_memory_input(model, input),
     }
 }
 
@@ -496,8 +562,223 @@ fn direct_route(input: &Input) -> Option<Route> {
         Key::Char('3') => Some(Route::Profiles),
         Key::Char('4') => Some(Route::Settings),
         Key::Char('5') => Some(Route::Help),
+        Key::Char('6') => Some(Route::Memory),
         _ => None,
     }
+}
+
+fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    if matches!(
+        input,
+        Input {
+            key: Key::Char('c' | 'C'),
+            ctrl: true,
+            ..
+        }
+    ) {
+        model.should_quit = true;
+        return vec![UiEffect::Quit];
+    }
+    match input {
+        Input {
+            key: Key::Char('/'),
+            ctrl: false,
+            alt: false,
+            ..
+        } => {
+            model.memory_workspace.focus = MemoryWorkspaceFocus::Search;
+            model.dirty = true;
+        }
+        Input {
+            key: Key::Tab,
+            shift: true,
+            ..
+        } => cycle_memory_focus(model, -1),
+        Input { key: Key::Tab, .. } => cycle_memory_focus(model, 1),
+        Input { key: Key::Esc, .. } => {
+            if model.memory_workspace.focus == MemoryWorkspaceFocus::Search
+                && !model.memory_workspace.query.is_empty()
+            {
+                model.memory_workspace.query.clear();
+                model.sync_memory_selection();
+                model.dirty = true;
+            } else if model.memory_workspace.pane != MemoryPane::List {
+                memory_back(model);
+            } else {
+                navigate_to_route(model, Route::Chat);
+            }
+        }
+        Input {
+            key: Key::Enter, ..
+        } => match model.memory_workspace.focus {
+            MemoryWorkspaceFocus::Status => cycle_memory_status(model, 1),
+            MemoryWorkspaceFocus::Scope => cycle_memory_scope(model, 1),
+            MemoryWorkspaceFocus::Admissions => {
+                model.memory_workspace.pane = MemoryPane::Detail;
+                model.memory_workspace.focus = MemoryWorkspaceFocus::Detail;
+                model.dirty = true;
+            }
+            MemoryWorkspaceFocus::Detail => open_memory_admissions(model),
+            MemoryWorkspaceFocus::Search | MemoryWorkspaceFocus::List => open_memory_detail(model),
+        },
+        Input { key: Key::Up, .. } => move_memory_selection(model, -1),
+        Input { key: Key::Down, .. } => move_memory_selection(model, 1),
+        Input { key: Key::Left, .. } => match model.memory_workspace.focus {
+            MemoryWorkspaceFocus::Status => cycle_memory_status(model, -1),
+            MemoryWorkspaceFocus::Scope => cycle_memory_scope(model, -1),
+            _ => {}
+        },
+        Input {
+            key: Key::Right, ..
+        } => match model.memory_workspace.focus {
+            MemoryWorkspaceFocus::Status => cycle_memory_status(model, 1),
+            MemoryWorkspaceFocus::Scope => cycle_memory_scope(model, 1),
+            _ => {}
+        },
+        Input {
+            key: Key::Backspace,
+            ..
+        } if model.memory_workspace.focus == MemoryWorkspaceFocus::Search => {
+            model.memory_workspace.query.pop();
+            model.sync_memory_selection();
+            model.dirty = true;
+        }
+        Input {
+            key: Key::Char(character),
+            ctrl: false,
+            alt: false,
+            ..
+        } if !character.is_control() => {
+            model.memory_workspace.focus = MemoryWorkspaceFocus::Search;
+            model.memory_workspace.query.push(character);
+            model.sync_memory_selection();
+            model.dirty = true;
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+fn cycle_memory_focus(model: &mut Model, direction: i32) {
+    const FOCI: [MemoryWorkspaceFocus; 6] = [
+        MemoryWorkspaceFocus::Search,
+        MemoryWorkspaceFocus::Status,
+        MemoryWorkspaceFocus::Scope,
+        MemoryWorkspaceFocus::List,
+        MemoryWorkspaceFocus::Detail,
+        MemoryWorkspaceFocus::Admissions,
+    ];
+    let current = FOCI
+        .iter()
+        .position(|focus| *focus == model.memory_workspace.focus)
+        .unwrap_or_default();
+    let next = (i32::try_from(current).unwrap_or(0) + direction)
+        .rem_euclid(i32::try_from(FOCI.len()).unwrap_or(1));
+    model.memory_workspace.focus = FOCI[usize::try_from(next).unwrap_or_default()];
+    model.memory_workspace.pane = match model.memory_workspace.focus {
+        MemoryWorkspaceFocus::Admissions => MemoryPane::Admissions,
+        MemoryWorkspaceFocus::Detail => MemoryPane::Detail,
+        _ => model.memory_workspace.pane,
+    };
+    model.dirty = true;
+}
+
+fn cycle_memory_status(model: &mut Model, direction: i32) {
+    let current = MemoryStatusFilter::ALL
+        .iter()
+        .position(|filter| *filter == model.memory_workspace.status)
+        .unwrap_or_default();
+    let next = (i32::try_from(current).unwrap_or(0) + direction)
+        .rem_euclid(i32::try_from(MemoryStatusFilter::ALL.len()).unwrap_or(1));
+    model.memory_workspace.status =
+        MemoryStatusFilter::ALL[usize::try_from(next).unwrap_or_default()];
+    model.memory_workspace.focus = MemoryWorkspaceFocus::Status;
+    model.sync_memory_selection();
+    model.dirty = true;
+}
+
+fn cycle_memory_scope(model: &mut Model, direction: i32) {
+    let current = MemoryScopeFilter::ALL
+        .iter()
+        .position(|filter| *filter == model.memory_workspace.scope)
+        .unwrap_or_default();
+    let next = (i32::try_from(current).unwrap_or(0) + direction)
+        .rem_euclid(i32::try_from(MemoryScopeFilter::ALL.len()).unwrap_or(1));
+    model.memory_workspace.scope =
+        MemoryScopeFilter::ALL[usize::try_from(next).unwrap_or_default()];
+    model.memory_workspace.focus = MemoryWorkspaceFocus::Scope;
+    model.sync_memory_selection();
+    model.dirty = true;
+}
+
+fn move_memory_selection(model: &mut Model, direction: i32) {
+    if model.memory_workspace.focus == MemoryWorkspaceFocus::Admissions {
+        let count = model
+            .selected_memory()
+            .and_then(|(_, detail)| detail)
+            .map_or(0, |detail| detail.admissions().len());
+        if count > 0 {
+            let current = i32::try_from(model.memory_workspace.admission_selected).unwrap_or(0);
+            let last = i32::try_from(count.saturating_sub(1)).unwrap_or(0);
+            model.memory_workspace.admission_selected =
+                usize::try_from((current + direction).clamp(0, last)).unwrap_or_default();
+            model.dirty = true;
+        }
+        return;
+    }
+    model.memory_workspace.focus = MemoryWorkspaceFocus::List;
+    let entries = model
+        .memory_entries()
+        .iter()
+        .map(|summary| summary.id().to_owned())
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        model.memory_workspace.selected = None;
+        return;
+    }
+    let current = model
+        .memory_workspace
+        .selected
+        .as_ref()
+        .and_then(|selected| entries.iter().position(|candidate| candidate == selected))
+        .unwrap_or_default();
+    let last = i32::try_from(entries.len().saturating_sub(1)).unwrap_or(0);
+    let next = (i32::try_from(current).unwrap_or(0) + direction).clamp(0, last);
+    model.memory_workspace.selected = entries
+        .get(usize::try_from(next).unwrap_or_default())
+        .cloned();
+    model.memory_workspace.admission_selected = 0;
+    model.dirty = true;
+}
+
+fn open_memory_detail(model: &mut Model) {
+    if model.route() == Route::Memory && model.memory_workspace.selected.is_some() {
+        model.memory_workspace.pane = MemoryPane::Detail;
+        model.memory_workspace.focus = MemoryWorkspaceFocus::Detail;
+        model.dirty = true;
+    }
+}
+
+fn open_memory_admissions(model: &mut Model) {
+    if model.route() == Route::Memory && model.memory_workspace.selected.is_some() {
+        model.memory_workspace.pane = MemoryPane::Admissions;
+        model.memory_workspace.focus = MemoryWorkspaceFocus::Admissions;
+        model.dirty = true;
+    }
+}
+
+fn memory_back(model: &mut Model) {
+    match model.memory_workspace.pane {
+        MemoryPane::Admissions => {
+            model.memory_workspace.pane = MemoryPane::Detail;
+            model.memory_workspace.focus = MemoryWorkspaceFocus::Detail;
+        }
+        MemoryPane::Detail | MemoryPane::List => {
+            model.memory_workspace.pane = MemoryPane::List;
+            model.memory_workspace.focus = MemoryWorkspaceFocus::List;
+        }
+    }
+    model.dirty = true;
 }
 
 fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -1461,6 +1742,10 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
             navigate_to_route(model, Route::Sessions);
             Vec::new()
         }
+        "memory" => {
+            navigate_to_route(model, Route::Memory);
+            Vec::new()
+        }
         "profile" => {
             open_settings_tab(model, 2);
             Vec::new()
@@ -2159,6 +2444,7 @@ fn navigate_to_route(model: &mut Model, route: Route) {
         Route::Sessions => model.sync_browser_selection(),
         Route::Profiles => model.sync_profile_selection(),
         Route::Help => model.help.scroll = 0,
+        Route::Memory => model.sync_memory_selection(),
     }
     model.notice = None;
 }

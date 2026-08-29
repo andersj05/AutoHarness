@@ -110,6 +110,7 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
             Route::Profiles => render_profile_center(frame, content, model),
             Route::Settings => render_settings(frame, &layout.regions, model),
             Route::Help => render_help(frame, content, model),
+            Route::Memory => crate::ui::page::render_memory(frame, content, model),
         }
     }
 

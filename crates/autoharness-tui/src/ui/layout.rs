@@ -253,7 +253,7 @@ fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
     match model.route() {
         Route::Chat => fill_chat_regions(regions, model),
         Route::Settings => fill_settings_regions(regions),
-        Route::Sessions | Route::Profiles | Route::Help => {}
+        Route::Sessions | Route::Profiles | Route::Help | Route::Memory => {}
     }
 }
 
@@ -524,7 +524,7 @@ fn command_category(id: &str) -> &'static str {
         "new" | "session-model" => "Session setup",
         "refresh" | "connect" => "Connections",
         "retry" | "cancel" | "search" | "tools" => "Conversation",
-        "settings" | "help" => "Navigation",
+        "settings" | "help" | "memory" => "Navigation",
         "copy" | "export" => "Artifacts",
         _ => "Commands",
     }
@@ -621,6 +621,7 @@ fn push_route_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, mo
         Route::Sessions => push_session_hits(hits, regions, model),
         Route::Profiles => push_profile_hits(hits, regions.content, model),
         Route::Help => {}
+        Route::Memory => hits.extend(crate::ui::page::memory_hits(regions.content, model)),
     }
 }
 

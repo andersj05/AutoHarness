@@ -96,8 +96,12 @@
  | 56-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @7
-                         │   2. Price three menu bundles.                                                               
- | 0-24 fg=#f2f9fc bg=reset
+  ◇ Memory               │   2. Price three menu bundles.                                                               
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-9 fg=#a2a9b0 bg=reset
+ | 10-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#5ecef4 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset

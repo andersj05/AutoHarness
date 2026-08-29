@@ -25,12 +25,13 @@ use crate::ui::tokens::Token;
 use crate::ui::{Theme, normalized_t};
 
 /// Primary rail destinations with their icons.
-pub const RAIL_ROUTES: [(Route, Icon); 5] = [
+pub const RAIL_ROUTES: [(Route, Icon); 6] = [
     (Route::Chat, Icon::RouteChat),
     (Route::Sessions, Icon::RouteSessions),
     (Route::Profiles, Icon::RouteProviders),
     (Route::Settings, Icon::RouteSettings),
     (Route::Help, Icon::RouteHelp),
+    (Route::Memory, Icon::RouteMemory),
 ];
 
 /// Renders Chat transcript, notices, search, and the composer.
