@@ -18,7 +18,7 @@ pub use memory::{
     MemoryAdmissionCursor, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryAdmissionRecord,
     MemoryAppendBatchRequest, MemoryAppendDisposition, MemoryAppendOperation, MemoryAppendReceipt,
     MemoryAppendRequest, MemoryCandidateBatch, MemoryContentState, MemoryEvidenceContent,
-    MemoryInspectionCursor, MemoryInspectionQuery, MemoryInspectionRecord,
+    MemoryInspectionCursor, MemoryInspectionPage, MemoryInspectionQuery, MemoryInspectionRecord,
     MemoryMutationGeneration, MemoryRevisionContent, MemorySearchCandidate, MemorySearchQuery,
     MemoryStore, StoredMemoryCandidate,
 };

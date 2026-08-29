@@ -15,8 +15,9 @@ use autoharness_store::{
     IdentityKind, MAX_MEMORY_SEARCH_CANDIDATES, MemoryAdmissionKey, MemoryAdmissionQuery,
     MemoryAdmissionRecord, MemoryAppendBatchRequest, MemoryAppendDisposition,
     MemoryAppendOperation, MemoryAppendReceipt, MemoryAppendRequest, MemoryCandidateBatch,
-    MemoryContentState, MemoryInspectionQuery, MemoryInspectionRecord, MemoryMutationGeneration,
-    MemorySearchCandidate, MemorySearchQuery, MemoryStore, StoreError, StoredMemoryCandidate,
+    MemoryContentState, MemoryInspectionPage, MemoryInspectionQuery, MemoryInspectionRecord,
+    MemoryMutationGeneration, MemorySearchCandidate, MemorySearchQuery, MemoryStore, StoreError,
+    StoredMemoryCandidate,
 };
 use rusqlite::types::Value;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter};
@@ -381,10 +382,10 @@ impl MemoryStore for SqliteStore {
         )))
     }
 
-    fn inspect_memories(
+    fn inspect_memory_page(
         &self,
         query: &MemoryInspectionQuery,
-    ) -> Result<Vec<MemoryInspectionRecord>, StoreError> {
+    ) -> Result<MemoryInspectionPage, StoreError> {
         let mut sql = String::from(
             "SELECT i.memory_id, i.scope_type, i.scope_id, i.kind, i.lifecycle, \
                     i.active_revision_id, i.last_sequence, i.created_at_ms, i.updated_at_ms, \
@@ -430,6 +431,23 @@ impl MemoryStore for SqliteStore {
             sql.push_str(" AND r.subject_key = ?");
             sql.push_str(&values.len().to_string());
         }
+        values.push(Value::Integer(sensitivity_rank(
+            query.sensitivity_ceiling(),
+        )));
+        sql.push_str(
+            " AND CASE r.sensitivity \
+                WHEN 'public' THEN 0 WHEN 'internal' THEN 1 \
+                WHEN 'sensitive' THEN 2 WHEN 'secret' THEN 3 ELSE 4 END <= ?",
+        );
+        sql.push_str(&values.len().to_string());
+        if let Some(literal_search) = query.literal_search() {
+            values.push(Value::Text(literal_search.as_str().to_owned()));
+            sql.push_str(" AND (instr(i.memory_id, ?");
+            sql.push_str(&values.len().to_string());
+            sql.push_str(") > 0 OR instr(CAST(b.content_utf8 AS TEXT), ?");
+            sql.push_str(&values.len().to_string());
+            sql.push_str(") > 0)");
+        }
         if let Some(before) = query.before() {
             let time_parameter = values.len() + 1;
             values.push(Value::Integer(before.updated_at().get()));
@@ -442,7 +460,7 @@ impl MemoryStore for SqliteStore {
         }
         sql.push_str(" ORDER BY i.updated_at_ms DESC, i.memory_id DESC LIMIT ?");
         sql.push_str(&(values.len() + 1).to_string());
-        values.push(Value::Integer(i64::from(query.limit())));
+        values.push(Value::Integer(i64::from(query.limit()) + 1));
 
         let mut statement = self.connection.prepare(&sql).map_err(map_sqlite_error)?;
         let rows = statement
@@ -465,47 +483,54 @@ impl MemoryStore for SqliteStore {
                 ))
             })
             .map_err(map_sqlite_error)?;
-        rows.map(|row| {
-            let (
-                memory_id,
-                scope_type,
-                scope_id,
-                memory_kind,
-                lifecycle,
-                active_revision_id,
-                last_sequence,
-                created_at_ms,
-                updated_at_ms,
-                revision_state,
-                metadata_json,
-                metadata_hash,
-                content,
-                content_hash,
-            ) = row.map_err(map_sqlite_error)?;
-            let latest_revision =
-                decode_projected_revision(&revision_state, &metadata_json, &metadata_hash)?;
-            let content = decode_optional_content(&latest_revision, content, content_hash)?;
-            let lifecycle = decode_revision_status(&lifecycle)?;
-            if lifecycle != MemoryRevisionStatus::Deleted && content.is_none() {
-                return Err(corrupt_memory_projection());
-            }
-            Ok(MemoryInspectionRecord::new(
-                MemoryId::new(memory_id).map_err(|_| corrupt_memory_projection())?,
-                decode_scope(&scope_type, scope_id)?,
-                decode_memory_kind(&memory_kind)?,
-                lifecycle,
-                latest_revision,
-                content,
-                active_revision_id
-                    .map(MemoryRevisionId::new)
-                    .transpose()
-                    .map_err(|_| corrupt_memory_projection())?,
-                u64::try_from(last_sequence).map_err(|_| corrupt_memory_projection())?,
-                autoharness_domain::TimestampMillis::new(created_at_ms),
-                autoharness_domain::TimestampMillis::new(updated_at_ms),
-            ))
-        })
-        .collect()
+        let mut records = rows
+            .map(|row| {
+                let (
+                    memory_id,
+                    scope_type,
+                    scope_id,
+                    memory_kind,
+                    lifecycle,
+                    active_revision_id,
+                    last_sequence,
+                    created_at_ms,
+                    updated_at_ms,
+                    revision_state,
+                    metadata_json,
+                    metadata_hash,
+                    content,
+                    content_hash,
+                ) = row.map_err(map_sqlite_error)?;
+                let latest_revision =
+                    decode_projected_revision(&revision_state, &metadata_json, &metadata_hash)?;
+                let content = decode_optional_content(&latest_revision, content, content_hash)?;
+                let lifecycle = decode_revision_status(&lifecycle)?;
+                if lifecycle != MemoryRevisionStatus::Deleted && content.is_none() {
+                    return Err(corrupt_memory_projection());
+                }
+                Ok(MemoryInspectionRecord::new(
+                    MemoryId::new(memory_id).map_err(|_| corrupt_memory_projection())?,
+                    decode_scope(&scope_type, scope_id)?,
+                    decode_memory_kind(&memory_kind)?,
+                    lifecycle,
+                    latest_revision,
+                    content,
+                    active_revision_id
+                        .map(MemoryRevisionId::new)
+                        .transpose()
+                        .map_err(|_| corrupt_memory_projection())?,
+                    u64::try_from(last_sequence).map_err(|_| corrupt_memory_projection())?,
+                    autoharness_domain::TimestampMillis::new(created_at_ms),
+                    autoharness_domain::TimestampMillis::new(updated_at_ms),
+                ))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let has_more = records.len()
+            > usize::try_from(query.limit()).map_err(|_| StoreError::LimitExceeded)?;
+        if has_more {
+            records.pop();
+        }
+        Ok(MemoryInspectionPage::new(records, has_more))
     }
 
     fn load_memory_admissions(
@@ -3139,6 +3164,273 @@ mod tests {
             batch.candidates()[0].memory_id(),
             &MemoryId::new("memory-z-public").expect("memory ID")
         );
+    }
+
+    #[test]
+    fn workspace_inspection_searches_literal_content_and_ids_before_pagination() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let literal = "needle '\" OR NOT * Ω <system>\n-- %_ [x]";
+        let (matching, matching_sidecar) = revision(
+            "revision-old-literal-match",
+            1,
+            &format!("older exact content: {literal}"),
+            MemoryRevisionStatus::Active,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-old-literal-match",
+                    "operation-old-literal-match",
+                    matching,
+                ),
+                Some(matching_sidecar),
+            ))
+            .expect("append older match");
+        store
+            .connection
+            .execute(
+                "UPDATE memory_items SET updated_at_ms = 1 \
+                 WHERE memory_id = 'memory-old-literal-match'",
+                [],
+            )
+            .expect("age matching item");
+
+        for index in 0..=autoharness_store::MAX_MEMORY_INSPECTION_PAGE_SIZE {
+            let revision_id = format!("revision-newer-distractor-{index:03}");
+            let memory_id = format!("memory-newer-distractor-{index:03}");
+            let operation_id = format!("operation-newer-distractor-{index:03}");
+            let (revision, sidecar) = revision(
+                &revision_id,
+                1,
+                &format!("ordinary newer distractor {index}"),
+                MemoryRevisionStatus::Active,
+            );
+            store
+                .append_memory(&MemoryAppendRequest::new(
+                    0,
+                    create_operation(&memory_id, &operation_id, revision),
+                    Some(sidecar),
+                ))
+                .expect("append distractor");
+            store
+                .connection
+                .execute(
+                    "UPDATE memory_items SET updated_at_ms = ?2 WHERE memory_id = ?1",
+                    params![memory_id, i64::from(index) + 100],
+                )
+                .expect("order distractor");
+        }
+
+        let (sensitive, sensitive_sidecar) = revision_with(
+            "revision-sensitive-inspection",
+            1,
+            literal,
+            MemoryRevisionStatus::Active,
+            None,
+            Sensitivity::Sensitive,
+            Vec::new(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-sensitive-inspection",
+                    "operation-sensitive-inspection",
+                    sensitive,
+                ),
+                Some(sensitive_sidecar),
+            ))
+            .expect("append sensitive literal match");
+
+        let proposed_literal = "untrusted proposal literal Ω";
+        let (proposed, proposed_sidecar) = revision(
+            "revision-proposed-inspection",
+            1,
+            proposed_literal,
+            MemoryRevisionStatus::Proposed,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-proposed-inspection",
+                    "operation-proposed-inspection",
+                    proposed,
+                ),
+                Some(proposed_sidecar),
+            ))
+            .expect("append proposed literal match");
+
+        let scope = MemoryScope::User(UserId::new("user-1").expect("user ID"));
+        let query = MemoryInspectionQuery::new(
+            vec![scope.clone()],
+            vec![MemoryRevisionStatus::Active],
+            None,
+            8,
+        )
+        .expect("inspection query")
+        .with_memory_kind(MemoryKind::Fact)
+        .with_sensitivity_ceiling(Sensitivity::Internal)
+        .with_literal_search(MemoryContent::new(literal).expect("literal search"));
+        let page = store
+            .inspect_memory_page(&query)
+            .expect("literal inspection page");
+        assert!(!page.has_more());
+        assert_eq!(page.records().len(), 1);
+        assert_eq!(
+            page.records()[0].memory_id(),
+            &MemoryId::new("memory-old-literal-match").expect("memory ID")
+        );
+
+        let id_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(
+                    vec![scope.clone()],
+                    vec![MemoryRevisionStatus::Active],
+                    None,
+                    4,
+                )
+                .expect("ID query")
+                .with_literal_search(MemoryContent::new("old-literal-match").expect("ID literal")),
+            )
+            .expect("ID inspection page");
+        assert_eq!(id_page.records().len(), 1);
+        assert_eq!(
+            id_page.records()[0].memory_id().as_str(),
+            "memory-old-literal-match"
+        );
+
+        let proposed_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(
+                    vec![scope.clone()],
+                    vec![MemoryRevisionStatus::Proposed],
+                    None,
+                    4,
+                )
+                .expect("proposal query")
+                .with_literal_search(
+                    MemoryContent::new(proposed_literal).expect("proposal literal"),
+                ),
+            )
+            .expect("proposed inspection page");
+        assert_eq!(proposed_page.records().len(), 1);
+        assert_eq!(
+            proposed_page.records()[0].lifecycle(),
+            MemoryRevisionStatus::Proposed
+        );
+        assert_eq!(
+            proposed_page.records()[0]
+                .content()
+                .expect("retained proposal")
+                .as_str(),
+            proposed_literal
+        );
+
+        let first_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(
+                    vec![scope.clone()],
+                    vec![MemoryRevisionStatus::Active],
+                    None,
+                    8,
+                )
+                .expect("first page query")
+                .with_sensitivity_ceiling(Sensitivity::Internal),
+            )
+            .expect("first page");
+        assert_eq!(first_page.records().len(), 8);
+        assert!(first_page.has_more());
+        let last = first_page.records().last().expect("last first-page row");
+        let cursor = autoharness_store::MemoryInspectionCursor::new(
+            last.updated_at(),
+            last.memory_id().clone(),
+        );
+        let second_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(
+                    vec![scope.clone()],
+                    vec![MemoryRevisionStatus::Active],
+                    Some(cursor),
+                    8,
+                )
+                .expect("second page query")
+                .with_sensitivity_ceiling(Sensitivity::Internal),
+            )
+            .expect("second page");
+        assert!(first_page.records().iter().all(|first| {
+            second_page
+                .records()
+                .iter()
+                .all(|second| first.memory_id() != second.memory_id())
+        }));
+
+        let deleted_sentinel = "erased-only workspace search sentinel";
+        let (deleted_revision, deleted_sidecar) = revision(
+            "revision-deleted-inspection",
+            1,
+            deleted_sentinel,
+            MemoryRevisionStatus::Active,
+        );
+        let deleted_create = create_operation(
+            "memory-deleted-inspection",
+            "operation-deleted-inspection",
+            deleted_revision.clone(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                deleted_create.clone(),
+                Some(deleted_sidecar),
+            ))
+            .expect("append deletable inspection item");
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                1,
+                MemoryOperationEnvelope::new_v1(
+                    MemoryOperationId::new("operation-delete-inspection").expect("operation ID"),
+                    deleted_create.memory_id().clone(),
+                    MemorySequence::new(2).expect("memory sequence"),
+                    TimestampMillis::new(20),
+                    MemoryCausation::Command(
+                        CommandId::new("command-delete-inspection").expect("command ID"),
+                    ),
+                    CorrelationId::new("correlation-delete-inspection").expect("correlation ID"),
+                    MemoryOperationPayload::MemoryDeleted {
+                        revision_id: deleted_revision.revision_id().clone(),
+                    },
+                ),
+                None,
+            ))
+            .expect("delete inspection item");
+        let erased_content_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(vec![scope.clone()], Vec::new(), None, 8)
+                    .expect("erased-content query")
+                    .with_literal_search(
+                        MemoryContent::new(deleted_sentinel).expect("deleted literal"),
+                    ),
+            )
+            .expect("erased-content page");
+        assert!(erased_content_page.records().is_empty());
+        let tombstone_page = store
+            .inspect_memory_page(
+                &MemoryInspectionQuery::new(
+                    vec![scope],
+                    vec![MemoryRevisionStatus::Deleted],
+                    None,
+                    8,
+                )
+                .expect("tombstone query")
+                .with_literal_search(
+                    MemoryContent::new("memory-deleted-inspection").expect("tombstone ID"),
+                ),
+            )
+            .expect("tombstone page");
+        assert_eq!(tombstone_page.records().len(), 1);
+        assert!(tombstone_page.records()[0].content().is_none());
     }
 
     #[test]

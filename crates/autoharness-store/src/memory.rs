@@ -702,6 +702,8 @@ pub struct MemoryInspectionQuery {
     statuses: Vec<MemoryRevisionStatus>,
     memory_kind: Option<MemoryKind>,
     subject_key: Option<MemorySubjectKey>,
+    literal_search: Option<MemoryContent>,
+    sensitivity_ceiling: Sensitivity,
     before: Option<MemoryInspectionCursor>,
     limit: u32,
 }
@@ -722,6 +724,8 @@ impl MemoryInspectionQuery {
             statuses,
             memory_kind: None,
             subject_key: None,
+            literal_search: None,
+            sensitivity_ceiling: Sensitivity::Sensitive,
             before,
             limit,
         })
@@ -738,6 +742,22 @@ impl MemoryInspectionQuery {
     #[must_use]
     pub fn with_subject_key(mut self, subject_key: MemorySubjectKey) -> Self {
         self.subject_key = Some(subject_key);
+        self
+    }
+
+    /// Restricts inspection to a literal retained-content or memory-ID substring.
+    ///
+    /// The store binds this value as data and never interprets FTS, SQL, or control syntax.
+    #[must_use]
+    pub fn with_literal_search(mut self, literal_search: MemoryContent) -> Self {
+        self.literal_search = Some(literal_search);
+        self
+    }
+
+    /// Restricts inspection before pagination to authorized sensitivity classes.
+    #[must_use]
+    pub fn with_sensitivity_ceiling(mut self, sensitivity_ceiling: Sensitivity) -> Self {
+        self.sensitivity_ceiling = sensitivity_ceiling;
         self
     }
 
@@ -765,6 +785,18 @@ impl MemoryInspectionQuery {
         self.subject_key.as_ref()
     }
 
+    /// Returns the optional literal retained-content or durable-ID substring.
+    #[must_use]
+    pub const fn literal_search(&self) -> Option<&MemoryContent> {
+        self.literal_search.as_ref()
+    }
+
+    /// Returns the maximum authorized sensitivity applied before the row limit.
+    #[must_use]
+    pub const fn sensitivity_ceiling(&self) -> Sensitivity {
+        self.sensitivity_ceiling
+    }
+
     /// Returns the exclusive newest-first boundary.
     #[must_use]
     pub const fn before(&self) -> Option<&MemoryInspectionCursor> {
@@ -775,6 +807,39 @@ impl MemoryInspectionQuery {
     #[must_use]
     pub const fn limit(&self) -> u32 {
         self.limit
+    }
+}
+
+/// One bounded newest-first Memory workspace page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryInspectionPage {
+    records: Vec<MemoryInspectionRecord>,
+    has_more: bool,
+}
+
+impl MemoryInspectionPage {
+    /// Constructs one deterministic inspection page.
+    #[must_use]
+    pub const fn new(records: Vec<MemoryInspectionRecord>, has_more: bool) -> Self {
+        Self { records, has_more }
+    }
+
+    /// Returns records in stable newest-first order.
+    #[must_use]
+    pub fn records(&self) -> &[MemoryInspectionRecord] {
+        &self.records
+    }
+
+    /// Returns whether at least one additional authorized matching row exists.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    /// Consumes the page and returns its records.
+    #[must_use]
+    pub fn into_records(self) -> Vec<MemoryInspectionRecord> {
+        self.records
     }
 }
 
@@ -1177,11 +1242,22 @@ pub trait MemoryStore {
         revision_id: &MemoryRevisionId,
     ) -> Result<Option<StoredMemoryCandidate>, StoreError>;
 
+    /// Loads an authorized Memory workspace page and an exact continuation indicator.
+    fn inspect_memory_page(
+        &self,
+        query: &MemoryInspectionQuery,
+    ) -> Result<MemoryInspectionPage, StoreError>;
+
     /// Lists authorized memory items across every lifecycle with stable pagination.
+    ///
+    /// Callers that need a continuation indicator should use [`Self::inspect_memory_page`].
     fn inspect_memories(
         &self,
         query: &MemoryInspectionQuery,
-    ) -> Result<Vec<MemoryInspectionRecord>, StoreError>;
+    ) -> Result<Vec<MemoryInspectionRecord>, StoreError> {
+        self.inspect_memory_page(query)
+            .map(MemoryInspectionPage::into_records)
+    }
 
     /// Loads bounded newest-first provider-context admission history.
     fn load_memory_admissions(
