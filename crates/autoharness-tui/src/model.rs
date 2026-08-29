@@ -26,7 +26,7 @@ const MAX_MEMORY_DETAILS: usize = 100;
 const MAX_MEMORY_ADMISSIONS: usize = 64;
 const MAX_MEMORY_EVIDENCE: usize = 64;
 const MAX_MEMORY_RELATIONS: usize = 64;
-const MAX_MEMORY_FINDINGS: usize = 16;
+const MAX_MEMORY_FINDINGS: usize = 80;
 const MAX_MEMORY_REASON_FACTORS: usize = 16;
 const MAX_MEMORY_VIEW_CURSOR_CHARS: usize = 512;
 /// Maximum literal characters accepted by one Memory workspace query.

@@ -1,6 +1,7 @@
 use autoharness_domain::{
-    ContextAdmissionFactor, ErrorClass, MemoryOrigin, MemoryRevisionStatus,
-    MemoryScope as DomainMemoryScope, MemoryValidity, ModelRef, TrustClass,
+    ContextAdmissionFactor, ErrorClass, MemoryEvidenceRelation, MemoryEvidenceSource, MemoryOrigin,
+    MemoryRevisionStatus, MemoryScope as DomainMemoryScope, MemoryValidationIssue, MemoryValidity,
+    ModelRef, TimestampMillis, TrustClass,
 };
 use autoharness_engine::{AttemptStatus as EngineAttemptStatus, SessionAggregate};
 use autoharness_provider::{CapabilitySupport, ModelDescriptor};
@@ -10,10 +11,11 @@ use autoharness_tui::{
     TranscriptItem, UiFailure, UsageView,
 };
 use autoharness_tui::{
-    MemoryAdmission, MemoryAdmissionContext, MemoryDetail, MemoryFindingKind,
-    MemoryOrigin as UiMemoryOrigin, MemoryProjection, MemoryRelation as UiMemoryRelation,
-    MemoryRelationKind as UiMemoryRelationKind, MemoryRevisionContext, MemoryScope,
-    MemorySensitivity, MemoryStatus, MemorySummary, MemoryTrust, MemoryValidationFinding,
+    MemoryAdmission, MemoryAdmissionContext, MemoryDetail, MemoryEvidence as UiMemoryEvidence,
+    MemoryFindingKind, MemoryOrigin as UiMemoryOrigin, MemoryProjection,
+    MemoryRelation as UiMemoryRelation, MemoryRelationKind as UiMemoryRelationKind,
+    MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus, MemorySummary,
+    MemoryTrust, MemoryValidationFinding,
 };
 
 const MEMORY_PROJECTION_PAGE_SIZE: u32 = 100;
@@ -187,6 +189,31 @@ pub fn memory(
     )>,
     stale: bool,
 ) -> Result<MemoryProjection, &'static str> {
+    memory_projection(generation, records, stale, None)
+}
+
+/// Converts authorized store rows at an explicit wall-clock boundary.
+pub fn memory_at(
+    generation: u64,
+    records: Vec<(
+        autoharness_store::MemoryInspectionRecord,
+        Vec<autoharness_store::MemoryAdmissionRecord>,
+    )>,
+    stale: bool,
+    as_of: TimestampMillis,
+) -> Result<MemoryProjection, &'static str> {
+    memory_projection(generation, records, stale, Some(as_of))
+}
+
+fn memory_projection(
+    generation: u64,
+    records: Vec<(
+        autoharness_store::MemoryInspectionRecord,
+        Vec<autoharness_store::MemoryAdmissionRecord>,
+    )>,
+    stale: bool,
+    as_of: Option<TimestampMillis>,
+) -> Result<MemoryProjection, &'static str> {
     let total = u32::try_from(records.len()).unwrap_or(u32::MAX);
     let mut summaries = Vec::with_capacity(records.len());
     let mut details = Vec::with_capacity(records.len());
@@ -201,10 +228,14 @@ pub fn memory(
             .collect::<Result<Vec<_>, _>>()?;
         let admission_count = u32::try_from(admissions.len()).unwrap_or(u32::MAX);
         let revision = record.latest_revision();
+        let status = as_of.map_or_else(
+            || memory_status(record.lifecycle()),
+            |as_of| effective_memory_status(&record, as_of),
+        );
         summaries.push(MemorySummary::new(
             record.memory_id().as_str(),
             preview,
-            memory_status(record.lifecycle()),
+            status,
             memory_scope(record.scope()),
             record.updated_at().get(),
             Some(revision.confidence().get()),
@@ -306,10 +337,40 @@ fn memory_revision_context(
     record: &autoharness_store::MemoryInspectionRecord,
 ) -> Result<MemoryRevisionContext, &'static str> {
     let revision = record.latest_revision();
+    if revision.evidence().len() != record.evidence_content().len() {
+        return Err("memory evidence metadata and content do not align");
+    }
+    let evidence = revision
+        .evidence()
+        .iter()
+        .zip(record.evidence_content())
+        .map(|(metadata, content)| {
+            if metadata.evidence_id() != content.evidence_id() {
+                return Err("memory evidence identities do not align");
+            }
+            let label = format!(
+                "{} - {}",
+                memory_evidence_relation(metadata.relation()),
+                metadata.evidence_id().as_str()
+            );
+            let source = memory_evidence_source(metadata.source());
+            match content.excerpt() {
+                autoharness_store::MemoryEvidenceExcerptState::Retained(excerpt) => {
+                    UiMemoryEvidence::new(label, source, excerpt.as_str())
+                }
+                autoharness_store::MemoryEvidenceExcerptState::Absent => {
+                    UiMemoryEvidence::absent(label, source)
+                }
+                autoharness_store::MemoryEvidenceExcerptState::Erased => {
+                    UiMemoryEvidence::erased(label, source)
+                }
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let relations = revision
         .relations()
         .iter()
-        .filter_map(|relation| {
+        .map(|relation| {
             let kind = match relation.kind() {
                 autoharness_domain::MemoryRelationKind::DuplicateOf => {
                     UiMemoryRelationKind::DuplicateOf
@@ -320,31 +381,67 @@ fn memory_revision_context(
                 autoharness_domain::MemoryRelationKind::Supersedes => {
                     UiMemoryRelationKind::Supersedes
                 }
-                autoharness_domain::MemoryRelationKind::Refines
-                | autoharness_domain::MemoryRelationKind::Related => return None,
+                autoharness_domain::MemoryRelationKind::Refines => UiMemoryRelationKind::Refines,
+                autoharness_domain::MemoryRelationKind::Related => UiMemoryRelationKind::Related,
             };
-            UiMemoryRelation::new(kind, relation.memory_id().as_str()).ok()
+            UiMemoryRelation::new(kind, relation.memory_id().as_str())
         })
-        .collect::<Vec<_>>();
-    let findings = revision
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut findings = revision
         .relations()
         .iter()
         .filter_map(|relation| {
             let (kind, summary) = match relation.kind() {
-                autoharness_domain::MemoryRelationKind::DuplicateOf => {
-                    (MemoryFindingKind::Duplicate, "Exact duplicate relation")
-                }
+                autoharness_domain::MemoryRelationKind::DuplicateOf => (
+                    MemoryFindingKind::Duplicate,
+                    "Durable exact-duplicate relation",
+                ),
                 autoharness_domain::MemoryRelationKind::Contradicts => (
                     MemoryFindingKind::Contradiction,
-                    "Contradictory memory relation",
+                    "Durable contradictory-memory relation",
                 ),
                 autoharness_domain::MemoryRelationKind::Refines
                 | autoharness_domain::MemoryRelationKind::Supersedes
                 | autoharness_domain::MemoryRelationKind::Related => return None,
             };
-            MemoryValidationFinding::new(kind, relation.memory_id().as_str(), summary).ok()
+            Some(MemoryValidationFinding::new(
+                kind,
+                relation.memory_id().as_str(),
+                summary,
+            ))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(validation) = record.latest_validation() {
+        if validation.content_hash() != revision.content_hash() {
+            return Err("memory validation does not match the latest revision");
+        }
+        let has_duplicate_relation = revision
+            .relations()
+            .iter()
+            .any(|relation| relation.kind() == autoharness_domain::MemoryRelationKind::DuplicateOf);
+        let has_contradiction_relation = revision
+            .relations()
+            .iter()
+            .any(|relation| relation.kind() == autoharness_domain::MemoryRelationKind::Contradicts);
+        let validation_anchor = format!("validation result v{}", validation.validator_version());
+        for issue in validation.issues() {
+            if (*issue == MemoryValidationIssue::Duplicate && has_duplicate_relation)
+                || (*issue == MemoryValidationIssue::Contradiction && has_contradiction_relation)
+            {
+                continue;
+            }
+            let kind = memory_finding_kind(*issue);
+            findings.push(MemoryValidationFinding::new(
+                kind,
+                &validation_anchor,
+                format!(
+                    "Validator v{} reported {} without a retained related-memory identity",
+                    validation.validator_version(),
+                    kind.label()
+                ),
+            )?);
+        }
+    }
     MemoryRevisionContext::new(
         record.last_sequence(),
         revision.revision_id().as_str(),
@@ -353,10 +450,78 @@ fn memory_revision_context(
         memory_scope_identity(record.scope()),
         memory_origin(revision.origin()),
         memory_sensitivity(revision.sensitivity()),
-        Vec::new(),
+        evidence,
         relations,
         findings,
     )
+}
+
+const fn memory_evidence_relation(relation: MemoryEvidenceRelation) -> &'static str {
+    match relation {
+        MemoryEvidenceRelation::Supports => "supports",
+        MemoryEvidenceRelation::Contradicts => "contradicts",
+        MemoryEvidenceRelation::DerivedFrom => "derived from",
+    }
+}
+
+fn memory_evidence_source(source: &MemoryEvidenceSource) -> String {
+    match source {
+        MemoryEvidenceSource::UserInput {
+            session_id,
+            input_id,
+        } => format!(
+            "session {} / user input {}",
+            session_id.as_str(),
+            input_id.as_str()
+        ),
+        MemoryEvidenceSource::ToolObservation {
+            session_id,
+            tool_call_id,
+            output_hash,
+        } => format!(
+            "session {} / tool {} / output sha256:{}",
+            session_id.as_str(),
+            tool_call_id.as_str(),
+            output_hash.as_str()
+        ),
+        MemoryEvidenceSource::ImportedDocument {
+            source_key,
+            source_revision,
+        } => format!(
+            "source {} / revision sha256:{}",
+            source_key.as_str(),
+            source_revision.as_str()
+        ),
+        MemoryEvidenceSource::SessionEvent {
+            session_id,
+            event_id,
+        } => format!(
+            "session {} / event {}",
+            session_id.as_str(),
+            event_id.as_str()
+        ),
+        MemoryEvidenceSource::MemoryRevision {
+            memory_id,
+            revision_id,
+        } => format!(
+            "memory {} / revision {}",
+            memory_id.as_str(),
+            revision_id.as_str()
+        ),
+    }
+}
+
+const fn memory_finding_kind(issue: MemoryValidationIssue) -> MemoryFindingKind {
+    match issue {
+        MemoryValidationIssue::SecretDetected => MemoryFindingKind::SecretDetected,
+        MemoryValidationIssue::UnsupportedScope => MemoryFindingKind::UnsupportedScope,
+        MemoryValidationIssue::MalformedContent => MemoryFindingKind::MalformedContent,
+        MemoryValidationIssue::PolicyConflict => MemoryFindingKind::PolicyConflict,
+        MemoryValidationIssue::Duplicate => MemoryFindingKind::Duplicate,
+        MemoryValidationIssue::Contradiction => MemoryFindingKind::Contradiction,
+        MemoryValidationIssue::InjectionPattern => MemoryFindingKind::InjectionPattern,
+        MemoryValidationIssue::UngroundedEvidence => MemoryFindingKind::UngroundedEvidence,
+    }
 }
 
 const fn memory_status(status: MemoryRevisionStatus) -> MemoryStatus {
@@ -367,6 +532,45 @@ const fn memory_status(status: MemoryRevisionStatus) -> MemoryStatus {
         MemoryRevisionStatus::Rejected => MemoryStatus::Rejected,
         MemoryRevisionStatus::Retracted => MemoryStatus::Retracted,
         MemoryRevisionStatus::Deleted => MemoryStatus::Deleted,
+    }
+}
+
+fn effective_memory_status(
+    record: &autoharness_store::MemoryInspectionRecord,
+    as_of: TimestampMillis,
+) -> MemoryStatus {
+    let lifecycle = record.lifecycle();
+    if matches!(
+        lifecycle,
+        MemoryRevisionStatus::Active | MemoryRevisionStatus::Proposed
+    ) {
+        let revision = record.latest_revision();
+        let conflicting =
+            revision.relations().iter().any(|relation| {
+                relation.kind() == autoharness_domain::MemoryRelationKind::Contradicts
+            }) || record.latest_validation().is_some_and(|validation| {
+                validation
+                    .issues()
+                    .contains(&MemoryValidationIssue::Contradiction)
+            });
+        if conflicting {
+            return MemoryStatus::Conflicting;
+        }
+        if !memory_validity_contains(revision.validity(), as_of) {
+            return MemoryStatus::Expired;
+        }
+    }
+    memory_status(lifecycle)
+}
+
+const fn memory_validity_contains(validity: MemoryValidity, as_of: TimestampMillis) -> bool {
+    match validity {
+        MemoryValidity::Indefinite => true,
+        MemoryValidity::From { valid_from } => as_of.get() >= valid_from.get(),
+        MemoryValidity::Until { valid_until } => as_of.get() < valid_until.get(),
+        MemoryValidity::Window(window) => {
+            as_of.get() >= window.valid_from().get() && as_of.get() < window.valid_until().get()
+        }
     }
 }
 
@@ -479,9 +683,21 @@ fn interrupted_failure() -> UiFailure {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        Causation, CommandId, CorrelationId, EventEnvelope, EventId, EventPayload, SessionId,
-        SessionSequence, TimestampMillis,
+        Causation, CommandId, ConfidenceBasisPoints, ContextSourceKey, CorrelationId,
+        EventEnvelope, EventId, EventPayload, InputId, MemoryContent as DomainMemoryContent,
+        MemoryEvidence, MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceSource, MemoryId,
+        MemoryKind, MemoryOrigin, MemoryRelation, MemoryRelationKind, MemoryRevision,
+        MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus,
+        MemoryScope, MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus,
+        MemoryValidity, SessionId, SessionSequence, Sha256Digest, TimestampMillis, ToolCallId,
+        TrustClass, UserId,
     };
+    use autoharness_memory::normalized_content_hash;
+    use autoharness_store::{
+        MemoryEvidenceExcerptState, MemoryInspectionRecord, StoredMemoryEvidenceContent,
+    };
+    use autoharness_tui::MemoryEvidenceAvailability;
+    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -500,5 +716,343 @@ mod tests {
         let aggregate = SessionAggregate::rehydrate(session_id, [&event]).expect("valid history");
 
         assert_eq!(session(&aggregate).revision, 1);
+    }
+
+    #[test]
+    fn memory_projection_preserves_provenance_and_derives_risk_states() {
+        const CONTENT_SENTINEL: &str = "private projection content sentinel";
+        const EVIDENCE_SENTINEL: &str = "authorization bearer evidence sentinel";
+
+        let retained_excerpt =
+            MemoryEvidenceExcerpt::new(EVIDENCE_SENTINEL).expect("evidence excerpt");
+        let erased_excerpt =
+            MemoryEvidenceExcerpt::new("erased evidence bytes").expect("evidence excerpt");
+        let retained_hash = raw_digest(retained_excerpt.as_str());
+        let erased_hash = raw_digest(erased_excerpt.as_str());
+        let evidence = vec![
+            MemoryEvidence::new(
+                MemoryEvidenceId::new("evidence-user").expect("evidence ID"),
+                MemoryEvidenceSource::UserInput {
+                    session_id: SessionId::new("session-evidence-user").expect("session ID"),
+                    input_id: InputId::new("input-evidence-user").expect("input ID"),
+                },
+                MemoryEvidenceRelation::Supports,
+                Some(retained_excerpt.clone()),
+                Some(retained_hash),
+            )
+            .expect("user evidence"),
+            MemoryEvidence::new(
+                MemoryEvidenceId::new("evidence-tool").expect("evidence ID"),
+                MemoryEvidenceSource::ToolObservation {
+                    session_id: SessionId::new("session-evidence-tool").expect("session ID"),
+                    tool_call_id: ToolCallId::new("tool-evidence").expect("tool ID"),
+                    output_hash: raw_digest("tool output"),
+                },
+                MemoryEvidenceRelation::Contradicts,
+                None,
+                None,
+            )
+            .expect("tool evidence"),
+            MemoryEvidence::new(
+                MemoryEvidenceId::new("evidence-import").expect("evidence ID"),
+                MemoryEvidenceSource::ImportedDocument {
+                    source_key: ContextSourceKey::new("source-evidence-import")
+                        .expect("source key"),
+                    source_revision: raw_digest("import revision"),
+                },
+                MemoryEvidenceRelation::DerivedFrom,
+                Some(erased_excerpt.clone()),
+                Some(erased_hash),
+            )
+            .expect("import evidence"),
+            MemoryEvidence::new(
+                MemoryEvidenceId::new("evidence-event").expect("evidence ID"),
+                MemoryEvidenceSource::SessionEvent {
+                    session_id: SessionId::new("session-evidence-event").expect("session ID"),
+                    event_id: EventId::new("event-evidence").expect("event ID"),
+                },
+                MemoryEvidenceRelation::Supports,
+                None,
+                None,
+            )
+            .expect("event evidence"),
+            MemoryEvidence::new(
+                MemoryEvidenceId::new("evidence-memory").expect("evidence ID"),
+                MemoryEvidenceSource::MemoryRevision {
+                    memory_id: MemoryId::new("memory-evidence-source").expect("memory ID"),
+                    revision_id: MemoryRevisionId::new("revision-evidence-source")
+                        .expect("revision ID"),
+                },
+                MemoryEvidenceRelation::DerivedFrom,
+                None,
+                None,
+            )
+            .expect("memory evidence"),
+        ];
+        let relations = [
+            MemoryRelationKind::DuplicateOf,
+            MemoryRelationKind::Contradicts,
+            MemoryRelationKind::Refines,
+            MemoryRelationKind::Supersedes,
+            MemoryRelationKind::Related,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            MemoryRelation::new(
+                MemoryId::new(format!("memory-related-{index}")).expect("memory ID"),
+                kind,
+            )
+        })
+        .collect::<Vec<_>>();
+        let content = DomainMemoryContent::new(CONTENT_SENTINEL).expect("memory content");
+        let draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-projection-risk").expect("revision ID"),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ModelProposal,
+            TrustClass::UntrustedProposal,
+            ConfidenceBasisPoints::new(7_500).expect("confidence"),
+            autoharness_domain::Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            evidence,
+            relations,
+        )
+        .expect("revision draft");
+        let revision = MemoryRevision::from_draft(
+            MemoryRevisionStatus::Proposed,
+            &draft,
+            TimestampMillis::new(10),
+            None,
+        );
+        let validation_issues = vec![
+            MemoryValidationIssue::SecretDetected,
+            MemoryValidationIssue::UnsupportedScope,
+            MemoryValidationIssue::MalformedContent,
+            MemoryValidationIssue::PolicyConflict,
+            MemoryValidationIssue::Duplicate,
+            MemoryValidationIssue::Contradiction,
+            MemoryValidationIssue::InjectionPattern,
+            MemoryValidationIssue::UngroundedEvidence,
+        ];
+        let validation = MemoryValidationResult::new(
+            3,
+            revision.content_hash().clone(),
+            MemoryValidationStatus::NeedsReview,
+            validation_issues,
+        )
+        .expect("validation");
+        let evidence_content = vec![
+            StoredMemoryEvidenceContent::new(
+                MemoryEvidenceId::new("evidence-user").expect("evidence ID"),
+                MemoryEvidenceExcerptState::Retained(retained_excerpt),
+            ),
+            StoredMemoryEvidenceContent::new(
+                MemoryEvidenceId::new("evidence-tool").expect("evidence ID"),
+                MemoryEvidenceExcerptState::Absent,
+            ),
+            StoredMemoryEvidenceContent::new(
+                MemoryEvidenceId::new("evidence-import").expect("evidence ID"),
+                MemoryEvidenceExcerptState::Erased,
+            ),
+            StoredMemoryEvidenceContent::new(
+                MemoryEvidenceId::new("evidence-event").expect("evidence ID"),
+                MemoryEvidenceExcerptState::Absent,
+            ),
+            StoredMemoryEvidenceContent::new(
+                MemoryEvidenceId::new("evidence-memory").expect("evidence ID"),
+                MemoryEvidenceExcerptState::Absent,
+            ),
+        ];
+        let record = MemoryInspectionRecord::new(
+            MemoryId::new("memory-projection-risk").expect("memory ID"),
+            MemoryScope::User(UserId::new("user-projection").expect("user ID")),
+            MemoryKind::Fact,
+            MemoryRevisionStatus::Proposed,
+            revision,
+            Some(content),
+            evidence_content,
+            Some(validation),
+            None,
+            2,
+            TimestampMillis::new(10),
+            TimestampMillis::new(11),
+        );
+
+        let projected = memory_at(
+            4,
+            vec![(record, Vec::new())],
+            false,
+            TimestampMillis::new(20),
+        )
+        .expect("memory projection");
+        assert_eq!(projected.summaries()[0].status(), MemoryStatus::Conflicting);
+        let context = projected
+            .detail("memory-projection-risk")
+            .and_then(MemoryDetail::revision_context)
+            .expect("revision context");
+        assert_eq!(context.evidence().len(), 5);
+        assert_eq!(
+            context.evidence()[0].availability(),
+            MemoryEvidenceAvailability::Retained
+        );
+        assert_eq!(
+            context.evidence()[1].availability(),
+            MemoryEvidenceAvailability::Absent
+        );
+        assert_eq!(
+            context.evidence()[2].availability(),
+            MemoryEvidenceAvailability::Erased
+        );
+        assert!(
+            context.evidence()[0]
+                .source()
+                .contains("input-evidence-user")
+        );
+        assert!(context.evidence()[1].source().contains("tool-evidence"));
+        assert!(
+            context.evidence()[2]
+                .source()
+                .contains("source-evidence-import")
+        );
+        assert!(context.evidence()[3].source().contains("event-evidence"));
+        assert!(
+            context.evidence()[4]
+                .source()
+                .contains("revision-evidence-source")
+        );
+        let maximum_id = "a".repeat(512);
+        let maximum_source = memory_evidence_source(&MemoryEvidenceSource::ToolObservation {
+            session_id: SessionId::new(maximum_id.clone()).expect("maximum session ID"),
+            tool_call_id: ToolCallId::new(maximum_id).expect("maximum tool ID"),
+            output_hash: raw_digest("maximum source output"),
+        });
+        assert!(UiMemoryEvidence::absent("maximum source", maximum_source).is_ok());
+        assert_eq!(
+            context
+                .relations()
+                .iter()
+                .map(autoharness_tui::MemoryRelation::kind)
+                .collect::<Vec<_>>(),
+            vec![
+                UiMemoryRelationKind::DuplicateOf,
+                UiMemoryRelationKind::Contradicts,
+                UiMemoryRelationKind::Refines,
+                UiMemoryRelationKind::Supersedes,
+                UiMemoryRelationKind::Related,
+            ]
+        );
+        assert_eq!(context.findings().len(), 8);
+        assert_eq!(
+            context
+                .findings()
+                .iter()
+                .map(MemoryValidationFinding::kind)
+                .collect::<Vec<_>>(),
+            vec![
+                MemoryFindingKind::Duplicate,
+                MemoryFindingKind::Contradiction,
+                MemoryFindingKind::SecretDetected,
+                MemoryFindingKind::UnsupportedScope,
+                MemoryFindingKind::MalformedContent,
+                MemoryFindingKind::PolicyConflict,
+                MemoryFindingKind::InjectionPattern,
+                MemoryFindingKind::UngroundedEvidence,
+            ]
+        );
+        assert_eq!(
+            context.findings()[0].related_memory_id(),
+            "memory-related-0"
+        );
+        assert_eq!(
+            context.findings()[1].related_memory_id(),
+            "memory-related-1"
+        );
+        assert!(
+            context.findings()[2]
+                .related_memory_id()
+                .starts_with("validation result v")
+        );
+        let debug = format!("{projected:?}");
+        assert!(!debug.contains(CONTENT_SENTINEL));
+        assert!(!debug.contains(EVIDENCE_SENTINEL));
+
+        let expired = inspection_record_with_validity(
+            "memory-projection-expired",
+            "revision-projection-expired",
+            MemoryValidity::Until {
+                valid_until: TimestampMillis::new(100),
+            },
+        );
+        let before = memory_at(
+            5,
+            vec![(expired.clone(), Vec::new())],
+            false,
+            TimestampMillis::new(99),
+        )
+        .expect("pre-expiry projection");
+        assert_eq!(before.summaries()[0].status(), MemoryStatus::Active);
+        let at_boundary = memory_at(
+            5,
+            vec![(expired, Vec::new())],
+            false,
+            TimestampMillis::new(100),
+        )
+        .expect("expiry-boundary projection");
+        assert_eq!(at_boundary.summaries()[0].status(), MemoryStatus::Expired);
+    }
+
+    fn inspection_record_with_validity(
+        memory_id: &str,
+        revision_id: &str,
+        validity: MemoryValidity,
+    ) -> MemoryInspectionRecord {
+        let content = DomainMemoryContent::new("time-bound memory").expect("memory content");
+        let draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new(revision_id).expect("revision ID"),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(9_000).expect("confidence"),
+            autoharness_domain::Sensitivity::Internal,
+            validity,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("revision draft");
+        MemoryInspectionRecord::new(
+            MemoryId::new(memory_id).expect("memory ID"),
+            MemoryScope::User(UserId::new("user-projection").expect("user ID")),
+            MemoryKind::Fact,
+            MemoryRevisionStatus::Active,
+            MemoryRevision::from_draft(
+                MemoryRevisionStatus::Active,
+                &draft,
+                TimestampMillis::new(10),
+                None,
+            ),
+            Some(content),
+            Vec::new(),
+            None,
+            Some(draft.revision_id().clone()),
+            1,
+            TimestampMillis::new(10),
+            TimestampMillis::new(10),
+        )
+    }
+
+    fn raw_digest(value: &str) -> Sha256Digest {
+        Sha256Digest::new(
+            Sha256::digest(value.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        )
+        .expect("SHA-256 digest")
     }
 }
