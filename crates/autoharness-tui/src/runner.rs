@@ -246,7 +246,13 @@ where
                     .ok()
                     .and_then(|elapsed_wall| i64::try_from(elapsed_wall.as_millis()).ok())
                     .unwrap_or(0);
-                let _ = update(&mut model, Message::Tick(UiClock::new(elapsed, wall_ms)));
+                if update_and_dispatch(
+                    &mut model,
+                    Message::Tick(UiClock::new(elapsed, wall_ms)),
+                    &intents,
+                ) {
+                    return Ok(ExitReason::UserQuit);
+                }
             }
             _ = frames.tick() => {
                 if model.dirty {
@@ -331,6 +337,15 @@ fn dispatch_effects(
         }
     }
     false
+}
+
+fn update_and_dispatch(
+    model: &mut Model,
+    message: Message,
+    intents: &mpsc::Sender<UiIntent>,
+) -> bool {
+    let effects = update(model, message);
+    dispatch_effects(model, effects, intents)
 }
 
 fn draw<B>(terminal: &mut Terminal<B>, model: &mut Model) -> Result<(), RunnerError>
@@ -470,6 +485,49 @@ mod tests {
                 retry: RetryPolicy::Never,
                 ..
             }))
+        ));
+    }
+
+    #[test]
+    fn timer_tick_dispatches_a_due_memory_query_to_the_application() {
+        let mut model = model_with_draft();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let _ = update(
+            &mut model,
+            Message::Input(Input {
+                key: Key::Char('6'),
+                ctrl: false,
+                alt: true,
+                shift: false,
+            }),
+        );
+        let _ = update(
+            &mut model,
+            Message::Input(Input {
+                key: Key::Char('/'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            }),
+        );
+        let _ = update(&mut model, Message::Paste("durable evidence".to_owned()));
+
+        assert!(!update_and_dispatch(
+            &mut model,
+            Message::Tick(UiClock::new(149, 1_725_000_000_000)),
+            &sender,
+        ));
+        assert!(receiver.try_recv().is_err());
+        assert!(!update_and_dispatch(
+            &mut model,
+            Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+            &sender,
+        ));
+        let intent = receiver.try_recv().expect("due query dispatched");
+        assert!(matches!(
+            intent,
+            UiIntent::QueryMemory { query, .. }
+                if query.literal() == "durable evidence"
         ));
     }
 

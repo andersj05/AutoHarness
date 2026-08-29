@@ -4,13 +4,13 @@ use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     CatalogProjection, Focus, MEMORY_VIEW_PAGE_SIZE, MemoryAdmission, MemoryAdmissionContext,
-    MemoryDetail, MemoryEvidence, MemoryFindingKind, MemoryLifecycleMode, MemoryOrigin,
-    MemoryPageDirection, MemoryPane, MemoryProjection, MemoryRelation, MemoryRelationKind,
-    MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus, MemoryStatusFilter,
-    MemorySummary, MemoryTrust, MemoryValidationFinding, MemoryViewCursor, MemoryViewQuery,
-    Message, Model, ModelSummary, MouseAction, OverlayKind, RetryPolicy, Route, SessionProjection,
-    SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
-    hit_test, update, view,
+    MemoryDetail, MemoryEvidence, MemoryFindingKind, MemoryImportPath, MemoryLifecycleMode,
+    MemoryOrigin, MemoryPageDirection, MemoryPane, MemoryProjection, MemoryRelation,
+    MemoryRelationKind, MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus,
+    MemoryStatusFilter, MemorySummary, MemoryTrust, MemoryValidationFinding, MemoryViewCursor,
+    MemoryViewQuery, Message, Model, ModelSummary, MouseAction, Notice, OverlayKind, PendingKind,
+    RetryPolicy, Route, SessionProjection, SessionsProjection, SettingsProjection, UiClock,
+    UiEffect, UiFailure, UiIntent, UiNotice, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -281,6 +281,8 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
     assert!(wide.contains("Evidence"));
     assert!(wide.contains("Findings 0"));
     assert!(!wide.contains("Review data"));
+    assert!(wide.contains("Alt+N remember  Alt+I import"));
+    assert!(wide.contains("Import"));
 
     let extra_wide = text(&render(&model, 140, 50));
     assert!(extra_wide.contains("Admission history"));
@@ -290,11 +292,12 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
     assert!(medium.contains("Search all memory"));
     assert!(medium.contains("Revision detail"));
     assert!(!medium.contains("Admission history"));
-    assert!(medium.contains("Alt+N remember  Alt+A actions"));
+    assert!(medium.contains("Alt+N / Alt+I"));
+    assert!(medium.contains("Import"));
 
     let narrow = text(&render(&model, 60, 18));
-    assert!(narrow.contains("Alt+N remember"));
-    assert!(!narrow.contains("Alt+A ac"));
+    assert!(narrow.contains("Alt+N / Alt+I"));
+    assert!(narrow.contains("Import"));
 
     for (width, height) in [(60, 18), (40, 12)] {
         let compact = text(&render(&model, width, height));
@@ -303,6 +306,8 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
             "missing index at {width}x{height}"
         );
         assert!(!compact.contains("Revision detail"));
+        assert!(compact.contains("Alt+N / Alt+I"));
+        assert!(compact.contains("Import"));
     }
 
     let _ = update(&mut model, Message::Input(key(Key::Enter)));
@@ -323,9 +328,60 @@ fn empty_memory_index_invites_the_first_saved_memory() {
     ));
     let _ = update(&mut model, Message::Input(alt('6')));
 
+    let eligible = text(&render(&model, 80, 24));
+    assert!(eligible.contains("No eligible memories yet."));
+    let _ = update(&mut model, Message::Mouse(MouseAction::MemoryCycleStatus));
+    let desired = model.memory_view_generation();
+    let effects = update(
+        &mut model,
+        Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::QueryMemory { view_generation, .. })]
+            if *view_generation == desired
+    ));
+    let settled = MemoryProjection::ready(9, Vec::new(), Vec::new(), 0, false)
+        .expect("settled all-state view")
+        .with_view_page(desired, None);
+    let _ = update(&mut model, Message::MemoryChanged(Arc::new(settled)));
+
     let rendered = text(&render(&model, 80, 24));
     assert!(rendered.contains("No saved memories yet."));
     assert!(!rendered.contains("No admitted memories yet."));
+}
+
+#[test]
+fn settled_empty_search_distinguishes_no_match_from_an_empty_ledger() {
+    let mut model = model();
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(8, Vec::new(), Vec::new(), 0, false)
+            .expect("empty ready projection"),
+    ));
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(key(Key::Char('/'))));
+    type_text(&mut model, "missing memory sentinel");
+    let desired = model.memory_view_generation();
+    let effects = update(
+        &mut model,
+        Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::QueryMemory { view_generation, .. })]
+            if *view_generation == desired
+    ));
+    let settled = MemoryProjection::ready(9, Vec::new(), Vec::new(), 0, false)
+        .expect("settled empty search")
+        .with_view_page(desired, None);
+    let _ = update(&mut model, Message::MemoryChanged(Arc::new(settled)));
+
+    let rendered = text(&render(&model, 80, 24));
+    assert!(
+        rendered.contains("No memories match these filters"),
+        "settled empty search should show explicit no-match copy:\n{rendered}"
+    );
+    assert!(!rendered.contains("No saved memories yet."));
 }
 
 #[test]
@@ -651,6 +707,9 @@ fn memory_pages_have_loading_keyboard_and_mouse_affordances() {
     let rendered = text(&render(&model, 80, 24));
     assert!(rendered.contains("PgUp"));
     assert!(rendered.contains("PgDn"));
+    let compact = text(&render(&model, 40, 12));
+    assert!(compact.contains("Alt+N / Alt+I"));
+    assert!(compact.contains("Import"));
 
     let mut actions = Vec::new();
     for column in 0..80 {
@@ -874,6 +933,132 @@ fn remember_editor_is_bounded_redacted_pending_safe_and_restores_focus() {
     assert!(model.overlay().is_none());
     assert_eq!(model.route(), Route::Memory);
     assert_eq!(model.focus, Focus::Memory);
+}
+
+#[test]
+fn import_paths_are_normalized_bounded_and_redacted() {
+    let unix = MemoryImportPath::new("./docs/architecture/OVERVIEW.md").expect("relative path");
+    assert_eq!(unix.as_str(), "docs/architecture/OVERVIEW.md");
+    let windows =
+        MemoryImportPath::new(r"docs\architecture\OVERVIEW.md").expect("Windows separators");
+    assert_eq!(windows.as_str(), "docs/architecture/OVERVIEW.md");
+    assert_eq!(
+        windows.clone().into_string(),
+        "docs/architecture/OVERVIEW.md"
+    );
+    assert!(!format!("{windows:?}").contains("OVERVIEW"));
+    assert!(format!("{windows:?}").contains("[REDACTED]"));
+    assert!(MemoryImportPath::new("a".repeat(1_024)).is_ok());
+    assert!(MemoryImportPath::new("a".repeat(1_025)).is_err());
+
+    for invalid in [
+        "",
+        "../outside.md",
+        "docs/../outside.md",
+        "/absolute.md",
+        r"C:\absolute.md",
+        r"\\server\share\document.md",
+        "docs//document.md",
+        "docs/document.md\nnext.md",
+    ] {
+        assert!(
+            MemoryImportPath::new(invalid).is_err(),
+            "unsafe import path should fail"
+        );
+    }
+}
+
+#[test]
+fn workspace_document_import_is_single_line_pending_safe_and_retryable() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(alt('i')));
+    assert_eq!(model.overlay(), Some(OverlayKind::MemoryLifecycle));
+    assert_eq!(model.focus, Focus::MemoryLifecycle);
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Import)
+    );
+
+    let wide = text(&render(&model, 80, 24));
+    assert!(wide.contains("Workspace-relative UTF-8 text."));
+    assert!(wide.contains("Copies exact bytes, up to 16 KiB."));
+    assert!(wide.contains("Review-only until separate approval."));
+    assert!(wide.contains("docs/decisions.md"));
+    let compact = text(&render(&model, 40, 12));
+    assert!(compact.contains("Workspace-relative UTF-8 text."));
+    assert!(compact.contains("exact bytes"));
+    assert!(compact.contains("16 KiB"));
+    assert!(compact.contains("Review-only"));
+
+    let _ = update(
+        &mut model,
+        Message::Paste("docs/first.md\ndocs/second.md".to_owned()),
+    );
+    assert!(update(&mut model, Message::Input(key(Key::Enter))).is_empty());
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Import)
+    );
+
+    type_text(&mut model, r"./docs\decisions.md");
+    assert!(!format!("{model:?}").contains("decisions.md"));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let debug = format!("{effects:?}");
+    assert!(!debug.contains("decisions.md"));
+    assert!(debug.contains("[REDACTED]"));
+    let [UiEffect::Dispatch(UiIntent::ImportMemory { request_id, path })] = effects.as_slice()
+    else {
+        panic!("expected typed workspace import intent");
+    };
+    assert_eq!(path.as_str(), "docs/decisions.md");
+    let request_id = *request_id;
+    assert!(matches!(
+        model.pending().get(&request_id),
+        Some(PendingKind::ImportMemory(path)) if path.as_str() == "docs/decisions.md"
+    ));
+    assert!(model.memory_lifecycle_pending());
+    assert!(
+        text(&render(&model, 60, 18)).contains("Importing workspace document..."),
+        "the pending overlay should explain the in-flight import"
+    );
+    assert!(update(&mut model, Message::Input(key(Key::Backspace))).is_empty());
+
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentRejected {
+            request_id,
+            failure: UiFailure::new(
+                ErrorClass::Validation,
+                "workspace document could not be imported",
+                RetryPolicy::Never,
+            ),
+        }),
+    );
+    assert!(!model.memory_lifecycle_pending());
+    assert_eq!(model.overlay(), Some(OverlayKind::MemoryLifecycle));
+    assert!(text(&render(&model, 60, 18)).contains(r"./docs\decisions.md"));
+
+    let effects = update(&mut model, Message::Input(ctrl('s')));
+    let [UiEffect::Dispatch(UiIntent::ImportMemory { request_id, path })] = effects.as_slice()
+    else {
+        panic!("expected retried workspace import intent");
+    };
+    assert_eq!(path.as_str(), "docs/decisions.md");
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted {
+            request_id: *request_id,
+        }),
+    );
+    assert!(model.overlay().is_none());
+    assert_eq!(model.focus, Focus::Memory);
+    assert_eq!(
+        model.notice,
+        Some(Notice::Info(
+            "Document imported; proposal ready for review".to_owned()
+        ))
+    );
 }
 
 #[test]
@@ -1101,7 +1286,20 @@ fn lifecycle_actions_and_modal_controls_are_measured_at_every_target_size() {
             }
         }
         assert!(actions.contains(&MouseAction::MemoryRemember));
-        assert!(actions.contains(&MouseAction::MemoryActions));
+        assert!(actions.contains(&MouseAction::MemoryImport));
+        if width >= 60 {
+            assert!(actions.contains(&MouseAction::MemoryActions));
+        }
+
+        let _ = update(&mut model, Message::Mouse(MouseAction::MemoryImport));
+        assert_eq!(
+            model.memory_lifecycle_mode(),
+            Some(MemoryLifecycleMode::Import)
+        );
+        let _ = update(
+            &mut model,
+            Message::Mouse(MouseAction::MemoryLifecycleCancel),
+        );
 
         let _ = update(&mut model, Message::Mouse(MouseAction::MemoryActions));
         let rendered = text(&render(&model, width, height));
@@ -1134,6 +1332,29 @@ fn slash_commands_and_settings_cross_link_converge_on_memory_workflows() {
     assert_eq!(
         remember.memory_lifecycle_mode(),
         Some(MemoryLifecycleMode::Remember)
+    );
+
+    let mut import = model();
+    type_text(&mut import, "/memory-import");
+    let effects = update(&mut import, Message::Input(key(Key::Enter)));
+    assert!(effects.is_empty());
+    assert_eq!(import.route(), Route::Memory);
+    assert_eq!(
+        import.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Import)
+    );
+
+    let mut palette = model();
+    let _ = update(&mut palette, Message::Input(ctrl('/')));
+    type_text(&mut palette, "memory-import");
+    let _ = update(
+        &mut palette,
+        Message::Mouse(MouseAction::PaletteRun("memory-import".to_owned())),
+    );
+    assert_eq!(palette.route(), Route::Memory);
+    assert_eq!(
+        palette.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Import)
     );
 
     let mut export = model();
@@ -1192,6 +1413,24 @@ fn ascii_no_color_reduced_motion_lifecycle_overlay_keeps_redundant_semantics() {
             .iter()
             .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
     );
+
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(&mut model, Message::Input(alt('i')));
+    let backend = render(&model, 40, 12);
+    let rendered = text(&backend);
+    assert!(rendered.is_ascii());
+    assert!(rendered.contains("Workspace-relative UTF-8 text."));
+    assert!(rendered.contains("exact bytes"));
+    assert!(rendered.contains("16 KiB"));
+    assert!(rendered.contains("Review-only"));
+    assert!(!model.motion().animating());
+    assert!(
+        backend
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
+    );
 }
 
 #[test]
@@ -1227,6 +1466,17 @@ fn render_memory_review_matrix() {
         println!(
             "=== Remember {width}x{height} ===\n{}",
             text(&render(&remember, width, height))
+        );
+    }
+
+    let mut import = model();
+    let _ = update(&mut import, Message::Input(alt('6')));
+    let _ = update(&mut import, Message::Input(alt('i')));
+    type_text(&mut import, r"docs\architecture\OVERVIEW.md");
+    for (width, height) in [(80, 24), (40, 12)] {
+        println!(
+            "=== Import document {width}x{height} ===\n{}",
+            text(&render(&import, width, height))
         );
     }
 

@@ -49,6 +49,7 @@ enum Surface {
     Memory,
     MemoryAdmissions,
     MemoryRemember,
+    MemoryImport,
     MemoryCorrect,
     MemoryProposal,
     MemoryActions,
@@ -59,7 +60,7 @@ enum Surface {
 }
 
 impl Surface {
-    const ALL: [Self; 28] = [
+    const ALL: [Self; 29] = [
         Self::Chat,
         Self::StreamingChat,
         Self::Sessions,
@@ -81,6 +82,7 @@ impl Surface {
         Self::Memory,
         Self::MemoryAdmissions,
         Self::MemoryRemember,
+        Self::MemoryImport,
         Self::MemoryCorrect,
         Self::MemoryProposal,
         Self::MemoryActions,
@@ -113,6 +115,7 @@ impl Surface {
             Self::Memory => "memory",
             Self::MemoryAdmissions => "memory-admissions",
             Self::MemoryRemember => "memory-remember",
+            Self::MemoryImport => "memory-import",
             Self::MemoryCorrect => "memory-correct",
             Self::MemoryProposal => "memory-proposal",
             Self::MemoryActions => "memory-actions",
@@ -145,6 +148,7 @@ impl Surface {
             Self::Memory => "Memory index",
             Self::MemoryAdmissions => "Admission history",
             Self::MemoryRemember => "Remember",
+            Self::MemoryImport => "Import document",
             Self::MemoryCorrect => "Correct memory",
             Self::MemoryProposal => "Review proposal",
             Self::MemoryActions => "Memory actions",
@@ -587,6 +591,14 @@ fn surface_model(surface: Surface) -> Model {
         Surface::MemoryRemember => {
             press(&mut model, alt('6'));
             press(&mut model, alt('n'));
+        }
+        Surface::MemoryImport => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('i'));
+            let _ = update(
+                &mut model,
+                Message::Paste("docs/architecture/OVERVIEW.md".to_owned()),
+            );
         }
         Surface::MemoryCorrect => {
             press(&mut model, alt('6'));

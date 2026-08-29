@@ -343,6 +343,10 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             open_memory_lifecycle(model, MemoryLifecycleMode::Remember);
             Vec::new()
         }
+        MouseAction::MemoryImport => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Import);
+            Vec::new()
+        }
         MouseAction::MemoryRevise => {
             open_memory_lifecycle(model, MemoryLifecycleMode::Revise);
             Vec::new()
@@ -636,6 +640,7 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     if input.alt {
         let mode = match input.key {
             Key::Char('n' | 'N') => Some(MemoryLifecycleMode::Remember),
+            Key::Char('i' | 'I') => Some(MemoryLifecycleMode::Import),
             Key::Char('e' | 'E') => Some(MemoryLifecycleMode::Revise),
             Key::Char('v' | 'V') => Some(MemoryLifecycleMode::Review),
             Key::Char('a' | 'A') => Some(MemoryLifecycleMode::Actions),
@@ -946,7 +951,10 @@ fn open_memory_lifecycle(model: &mut Model, mode: MemoryLifecycleMode) {
     if model.route() != Route::Memory || model.overlay().is_some() {
         return;
     }
-    let target = if mode == MemoryLifecycleMode::Remember {
+    let target = if matches!(
+        mode,
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Import
+    ) {
         None
     } else {
         let Some((summary, Some(detail))) = model.selected_memory() else {
@@ -973,7 +981,10 @@ fn open_memory_lifecycle(model: &mut Model, mode: MemoryLifecycleMode) {
             revision_context: detail.revision_context().cloned(),
         })
     };
-    if mode != MemoryLifecycleMode::Remember && mode != MemoryLifecycleMode::Actions {
+    if !matches!(
+        mode,
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Import | MemoryLifecycleMode::Actions
+    ) {
         let available = model.memory_actions();
         if !available.contains(&mode) {
             model.notice = Some(Notice::Info(
@@ -989,9 +1000,9 @@ fn open_memory_lifecycle(model: &mut Model, mode: MemoryLifecycleMode) {
                     MemoryLifecycleMode::Export => {
                         "Exact revision content is not loaded for export"
                     }
-                    MemoryLifecycleMode::Remember | MemoryLifecycleMode::Actions => {
-                        "This memory action is unavailable"
-                    }
+                    MemoryLifecycleMode::Remember
+                    | MemoryLifecycleMode::Import
+                    | MemoryLifecycleMode::Actions => "This memory action is unavailable",
                 }
                 .to_owned(),
             ));
@@ -1007,7 +1018,9 @@ fn open_memory_lifecycle(model: &mut Model, mode: MemoryLifecycleMode) {
         return;
     }
     let editor = match mode {
-        MemoryLifecycleMode::Remember => Some(MemoryDraftEditor::default()),
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Import => {
+            Some(MemoryDraftEditor::default())
+        }
         MemoryLifecycleMode::Revise => target
             .as_ref()
             .and_then(|target| target.content.as_ref())
@@ -1089,6 +1102,37 @@ fn handle_memory_lifecycle_input(model: &mut Model, input: Input) -> Vec<UiEffec
     }
     let mode = state.mode;
     match mode {
+        MemoryLifecycleMode::Import => match input {
+            Input {
+                key: Key::Char('s' | 'S'),
+                ctrl: true,
+                ..
+            }
+            | Input {
+                key: Key::Enter, ..
+            } => submit_memory_lifecycle(model, true),
+            Input { key: Key::Esc, .. } => {
+                close_memory_lifecycle(model);
+                Vec::new()
+            }
+            Input {
+                key: Key::Backspace,
+                ..
+            } => {
+                pop_memory_draft(model);
+                Vec::new()
+            }
+            Input {
+                key: Key::Char(character),
+                ctrl: false,
+                alt: false,
+                ..
+            } if !character.is_control() => {
+                edit_memory_import_path(model, character);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise => match input {
             Input {
                 key: Key::Char('s' | 'S'),
@@ -1109,15 +1153,7 @@ fn handle_memory_lifecycle_input(model: &mut Model, input: Input) -> Vec<UiEffec
                 key: Key::Backspace,
                 ..
             } => {
-                if let Some(editor) = model
-                    .memory_lifecycle
-                    .as_mut()
-                    .and_then(|state| state.editor.as_mut())
-                {
-                    editor.pop();
-                    model.notice = None;
-                    model.dirty = true;
-                }
+                pop_memory_draft(model);
                 Vec::new()
             }
             Input {
@@ -1202,6 +1238,18 @@ fn handle_memory_lifecycle_input(model: &mut Model, input: Input) -> Vec<UiEffec
     }
 }
 
+fn pop_memory_draft(model: &mut Model) {
+    if let Some(editor) = model
+        .memory_lifecycle
+        .as_mut()
+        .and_then(|state| state.editor.as_mut())
+    {
+        editor.pop();
+        model.notice = None;
+        model.dirty = true;
+    }
+}
+
 fn scroll_memory_lifecycle(model: &mut Model, direction: i32) {
     let Some(state) = model.memory_lifecycle.as_mut() else {
         return;
@@ -1222,6 +1270,25 @@ fn edit_memory_draft(model: &mut Model, character: Option<char>) {
         .map_or(Ok(()), |editor| {
             character.map_or(Ok(()), |character| editor.append_character(character))
         });
+    match result {
+        Ok(()) => model.notice = None,
+        Err(message) => {
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                message,
+                RetryPolicy::Never,
+            )));
+        }
+    }
+    model.dirty = true;
+}
+
+fn edit_memory_import_path(model: &mut Model, character: char) {
+    let result = model
+        .memory_lifecycle
+        .as_mut()
+        .and_then(|state| state.editor.as_mut())
+        .map_or(Ok(()), |editor| editor.append_path_character(character));
     match result {
         Ok(()) => model.notice = None,
         Err(message) => {
@@ -1262,13 +1329,41 @@ fn submit_memory_lifecycle(model: &mut Model, affirmative: bool) -> Vec<UiEffect
     }
     let mode = state.mode;
     let target = state.target.clone();
-    let content = state
-        .editor
-        .as_ref()
-        .map(MemoryDraftEditor::content)
-        .transpose();
+    let content = if matches!(
+        mode,
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise
+    ) {
+        state
+            .editor
+            .as_ref()
+            .map(MemoryDraftEditor::content)
+            .transpose()
+    } else {
+        Ok(None)
+    };
     let content = match content {
         Ok(content) => content,
+        Err(message) => {
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                message,
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
+            return Vec::new();
+        }
+    };
+    let import_path = if mode == MemoryLifecycleMode::Import {
+        state
+            .editor
+            .as_ref()
+            .map(MemoryDraftEditor::import_path)
+            .transpose()
+    } else {
+        Ok(None)
+    };
+    let import_path = match import_path {
+        Ok(path) => path,
         Err(message) => {
             model.notice = Some(Notice::Failure(UiFailure::new(
                 ErrorClass::Validation,
@@ -1292,6 +1387,16 @@ fn submit_memory_lifecycle(model: &mut Model, affirmative: bool) -> Vec<UiEffect
                     content,
                 },
                 "Saving memory...",
+            )
+        }
+        MemoryLifecycleMode::Import => {
+            let Some(path) = import_path else {
+                return Vec::new();
+            };
+            (
+                PendingKind::ImportMemory(path.clone()),
+                UiIntent::ImportMemory { request_id, path },
+                "Importing workspace document...",
             )
         }
         MemoryLifecycleMode::Revise => {
@@ -2387,6 +2492,11 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
         "remember" => {
             navigate_to_route(model, Route::Memory);
             open_memory_lifecycle(model, MemoryLifecycleMode::Remember);
+            Vec::new()
+        }
+        "memory-import" => {
+            navigate_to_route(model, Route::Memory);
+            open_memory_lifecycle(model, MemoryLifecycleMode::Import);
             Vec::new()
         }
         "memory-actions" => {
@@ -4198,6 +4308,7 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::ExportTranscript
         | PendingKind::CodexLogin
         | PendingKind::RememberMemory(_)
+        | PendingKind::ImportMemory(_)
         | PendingKind::ReviseMemory { .. }
         | PendingKind::ApproveMemoryProposal(_)
         | PendingKind::RejectMemoryProposal(_)
@@ -4464,11 +4575,22 @@ fn handle_paste(model: &mut Model, text: &str) {
             model.dirty = true;
         }
         Some(OverlayKind::MemoryLifecycle) => {
+            let import = model
+                .memory_lifecycle
+                .as_ref()
+                .is_some_and(|state| state.mode == MemoryLifecycleMode::Import);
+            let editable = editable_safe(text);
             let result = model
                 .memory_lifecycle
                 .as_mut()
                 .and_then(|state| state.editor.as_mut())
-                .map_or(Ok(()), |editor| editor.append_text(&editable_safe(text)));
+                .map_or(Ok(()), |editor| {
+                    if import {
+                        editor.append_path_text(&editable)
+                    } else {
+                        editor.append_text(&editable)
+                    }
+                });
             match result {
                 Ok(()) => model.notice = None,
                 Err(message) => {
@@ -5006,6 +5128,12 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                             "Memory saved; waiting for the next ledger projection".to_owned(),
                         ));
                     }
+                    PendingKind::ImportMemory(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Document imported; proposal ready for review".to_owned(),
+                        ));
+                    }
                     PendingKind::ReviseMemory { .. } => {
                         finish_memory_lifecycle(model, request_id);
                         model.notice = Some(Notice::Info(
@@ -5140,6 +5268,7 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                 }
                 Some(
                     PendingKind::RememberMemory(_)
+                    | PendingKind::ImportMemory(_)
                     | PendingKind::ReviseMemory { .. }
                     | PendingKind::ApproveMemoryProposal(_)
                     | PendingKind::RejectMemoryProposal(_)
@@ -5628,6 +5757,7 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::ExportTranscript
             | PendingKind::CodexLogin
             | PendingKind::RememberMemory(_)
+            | PendingKind::ImportMemory(_)
             | PendingKind::ReviseMemory { .. }
             | PendingKind::ApproveMemoryProposal(_)
             | PendingKind::RejectMemoryProposal(_)

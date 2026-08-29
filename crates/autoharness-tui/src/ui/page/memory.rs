@@ -8,8 +8,8 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::model::{
-    MemoryLifecycleMode, MemoryLoadState, MemoryPane, MemoryStatus, MemorySummary,
-    MemoryWorkspaceFocus, Model, MouseAction,
+    MemoryLifecycleMode, MemoryLoadState, MemoryPane, MemoryScopeFilter, MemoryStatus,
+    MemoryStatusFilter, MemorySummary, MemoryWorkspaceFocus, Model, MouseAction,
 };
 use crate::text::display_safe;
 use crate::time::{format_absolute_time, format_relative_age, relative_age};
@@ -324,11 +324,26 @@ fn render_list(buf: &mut Buffer, area: Rect, model: &Model) {
                 .map_or("Memory index unavailable", |failure| {
                     failure.message.as_str()
                 }),
-            MemoryLoadState::Ready if model.memory().summaries().is_empty() => {
+            MemoryLoadState::Ready
+                if model.memory().summaries().is_empty()
+                    && model.memory_workspace.query.is_empty()
+                    && model.memory_workspace.status == MemoryStatusFilter::All
+                    && model.memory_workspace.scope == MemoryScopeFilter::All
+                    && !model.memory_has_next_page()
+                    && !model.memory().stale() =>
+            {
                 "No saved memories yet."
             }
             MemoryLoadState::Ready if model.memory_has_next_page() || model.memory().stale() => {
                 "No matches on this page; use Next for older results."
+            }
+            MemoryLoadState::Ready
+                if model.memory().summaries().is_empty()
+                    && model.memory_workspace.query.is_empty()
+                    && model.memory_workspace.status == MemoryStatusFilter::Eligible
+                    && model.memory_workspace.scope == MemoryScopeFilter::All =>
+            {
+                "No eligible memories yet."
             }
             MemoryLoadState::Ready => "No memories match these filters.",
         };
@@ -866,6 +881,12 @@ fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
         ButtonVariant::Primary,
         MouseAction::MemoryRemember,
     )];
+    buttons.push(Button::new(
+        "Import",
+        None,
+        ButtonVariant::Secondary,
+        MouseAction::MemoryImport,
+    ));
     if width >= MEMORY_ACTIONS_FULL_WIDTH {
         let primary = model.memory_actions().into_iter().find(|mode| {
             matches!(
@@ -945,7 +966,14 @@ fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
             MouseAction::MemoryNextPage,
         ));
     }
-    while ButtonRow::new(model.theme(), &buttons).measure() > width {
+    let compact_hint_width = u16::try_from("Alt+N / Alt+I".width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(ROW);
+    while ButtonRow::new(model.theme(), &buttons)
+        .measure()
+        .saturating_add(compact_hint_width)
+        > width
+    {
         let removable = buttons
             .iter()
             .position(|button| {
@@ -953,11 +981,6 @@ fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
                     button.action,
                     MouseAction::MemoryReview | MouseAction::MemoryRevise
                 )
-            })
-            .or_else(|| {
-                buttons
-                    .iter()
-                    .position(|button| button.action == MouseAction::MemoryRemember)
             })
             .or_else(|| {
                 buttons.iter().position(|button| {
@@ -968,6 +991,24 @@ fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
                             | MouseAction::MemoryBack
                     )
                 })
+            })
+            .or_else(|| {
+                buttons
+                    .iter()
+                    .position(|button| button.action == MouseAction::MemoryActions)
+            })
+            .or_else(|| {
+                buttons.iter().position(|button| {
+                    matches!(
+                        button.action,
+                        MouseAction::MemoryPreviousPage | MouseAction::MemoryNextPage
+                    )
+                })
+            })
+            .or_else(|| {
+                buttons
+                    .iter()
+                    .position(|button| button.action == MouseAction::MemoryRemember)
             });
         let Some(index) = removable else {
             break;
@@ -986,8 +1027,8 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
     let button_width = button_row.measure().min(area.width);
     let hint_width = area.width.saturating_sub(button_width).saturating_sub(ROW);
     let loading_hint = memory_loading_label(model);
-    let full_hint = "Alt+N remember  Alt+A actions";
-    let compact_hint = "Alt+N remember";
+    let full_hint = "Alt+N remember  Alt+I import";
+    let compact_hint = "Alt+N / Alt+I";
     let hint = if model.memory_view_loading()
         && u16::try_from(loading_hint.width()).unwrap_or(u16::MAX) <= hint_width
     {
@@ -1040,6 +1081,20 @@ pub(crate) fn lifecycle_buttons(model: &Model) -> Vec<Button<MouseAction>> {
             Button::new(
                 "Save",
                 Some("Ctrl+S".to_owned()),
+                ButtonVariant::Primary,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Import => vec![
+            Button::new(
+                "Cancel",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Import",
+                Some("Enter".to_owned()),
                 ButtonVariant::Primary,
                 MouseAction::MemoryLifecycleSubmit,
             ),
@@ -1179,6 +1234,7 @@ pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model)
         MemoryLifecycleMode::Delete | MemoryLifecycleMode::Retract => Icon::Danger,
         MemoryLifecycleMode::Review => Icon::Warning,
         MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Import
         | MemoryLifecycleMode::Revise
         | MemoryLifecycleMode::Actions
         | MemoryLifecycleMode::Export => Icon::RouteMemory,
@@ -1187,6 +1243,7 @@ pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model)
         MemoryLifecycleMode::Delete => ModalIntent::Danger,
         MemoryLifecycleMode::Retract | MemoryLifecycleMode::Review => ModalIntent::Warning,
         MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Import
         | MemoryLifecycleMode::Revise
         | MemoryLifecycleMode::Actions
         | MemoryLifecycleMode::Export => ModalIntent::Neutral,
@@ -1209,9 +1266,9 @@ pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model)
         return;
     }
     match state.mode {
-        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise => {
-            render_lifecycle_editor(frame.buffer_mut(), inner, model)
-        }
+        MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Import
+        | MemoryLifecycleMode::Revise => render_lifecycle_editor(frame.buffer_mut(), inner, model),
         MemoryLifecycleMode::Actions => render_lifecycle_actions(frame.buffer_mut(), inner, model),
         MemoryLifecycleMode::Review
         | MemoryLifecycleMode::Retract
@@ -1225,12 +1282,17 @@ pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model)
         }
     }
     if state.pending_request.is_some() && inner.height > 0 {
+        let pending = if state.mode == MemoryLifecycleMode::Import {
+            "Importing workspace document..."
+        } else {
+            "Saving durable change..."
+        };
         paint::put(
             frame.buffer_mut(),
             inner.x,
             inner.bottom().saturating_sub(ROW),
             inner.width,
-            "Saving durable change...",
+            pending,
             model.theme().style(Token::Warning),
         );
     }
@@ -1243,6 +1305,10 @@ fn render_lifecycle_editor(buf: &mut Buffer, area: Rect, model: &Model) {
     let Some(editor) = state.editor.as_ref() else {
         return;
     };
+    if state.mode == MemoryLifecycleMode::Import {
+        render_import_editor(buf, area, model, editor);
+        return;
+    }
     let instruction = if state.mode == MemoryLifecycleMode::Remember {
         format!(
             "Scope: Workspace{}Kind: Fact",
@@ -1322,6 +1388,70 @@ fn render_lifecycle_editor(buf: &mut Buffer, area: Rect, model: &Model) {
         .render(editor_area, buf);
 }
 
+fn render_import_editor(
+    buf: &mut Buffer,
+    area: Rect,
+    model: &Model,
+    editor: &crate::model::MemoryDraftEditor,
+) {
+    let guidance = [
+        ("Workspace-relative UTF-8 text.", Token::TextMuted),
+        ("Copies exact bytes, up to 16 KiB.", Token::Warning),
+        ("Review-only until separate approval.", Token::Warning),
+        ("Enter imports; Esc cancels.", Token::TextMuted),
+    ];
+    for (offset, (line, token)) in guidance.into_iter().enumerate() {
+        let y = area
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        if y >= area.bottom() {
+            return;
+        }
+        paint::put(buf, area.x, y, area.width, line, model.theme().style(token));
+    }
+    let count_y = area
+        .y
+        .saturating_add(u16::try_from(guidance.len()).unwrap_or(u16::MAX));
+    if count_y >= area.bottom() {
+        return;
+    }
+    paint::put(
+        buf,
+        area.x,
+        count_y,
+        area.width,
+        &format!("{} path characters", editor.char_count()),
+        model.theme().style(Token::TextSecondary),
+    );
+    let path_area = Rect::new(
+        area.x,
+        count_y.saturating_add(ROW),
+        area.width,
+        area.bottom().saturating_sub(count_y.saturating_add(ROW)),
+    );
+    if path_area.height == 0 {
+        return;
+    }
+    let empty = editor.text().is_empty();
+    let path = if empty {
+        "docs/decisions.md".to_owned()
+    } else {
+        display_safe(editor.text())
+    };
+    paint::put(
+        buf,
+        path_area.x,
+        path_area.y,
+        path_area.width,
+        &path,
+        if empty {
+            model.theme().style(Token::TextMuted)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        },
+    );
+}
+
 fn render_lifecycle_actions(buf: &mut Buffer, area: Rect, model: &Model) {
     let Some(state) = model.memory_lifecycle.as_ref() else {
         return;
@@ -1357,6 +1487,7 @@ fn render_lifecycle_actions(buf: &mut Buffer, area: Rect, model: &Model) {
             " "
         };
         let description = match mode {
+            MemoryLifecycleMode::Import => "copy a document into review",
             MemoryLifecycleMode::Revise => "write a corrected revision",
             MemoryLifecycleMode::Review => "inspect and decide this proposal",
             MemoryLifecycleMode::Retract => "stop future admission, keep audit history",
@@ -1514,6 +1645,7 @@ fn lifecycle_review_lines(model: &Model) -> Vec<Line<'static>> {
             ));
         }
         MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Import
         | MemoryLifecycleMode::Revise
         | MemoryLifecycleMode::Actions => {}
     }

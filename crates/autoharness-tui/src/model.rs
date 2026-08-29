@@ -21,6 +21,7 @@ const MAX_CREDENTIAL_BYTES: usize = 4_096;
 const MAX_MEMORY_ID_CHARS: usize = 512;
 const MAX_MEMORY_PREVIEW_CHARS: usize = 240;
 const MAX_MEMORY_CONTENT_CHARS: usize = 16_384;
+const MAX_MEMORY_IMPORT_PATH_CHARS: usize = 1_024;
 const MAX_MEMORY_SOURCE_CHARS: usize = 512;
 const MAX_MEMORY_ADMISSION_TEXT_CHARS: usize = 256;
 const MAX_MEMORY_CONTEXT_TEXT_CHARS: usize = 4_096;
@@ -753,6 +754,69 @@ impl MemoryContent {
 impl Debug for MemoryContent {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter.write_str("MemoryContent([REDACTED])")
+    }
+}
+
+/// Bounded workspace-relative document path transferred without diagnostic disclosure.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryImportPath {
+    raw: Zeroizing<String>,
+}
+
+impl MemoryImportPath {
+    /// Creates one normalized workspace-relative path with no traversal or platform prefix.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err("import path must not be blank");
+        }
+        if value.chars().count() > MAX_MEMORY_IMPORT_PATH_CHARS {
+            return Err("import path is too long");
+        }
+        if value.chars().any(char::is_control) {
+            return Err("import path must be one safe line");
+        }
+
+        let normalized = value.replace('\\', "/");
+        let mut relative = normalized.as_str();
+        while let Some(stripped) = relative.strip_prefix("./") {
+            relative = stripped;
+        }
+        if relative.is_empty() || relative.starts_with('/') {
+            return Err("import path must be workspace-relative");
+        }
+        let first = relative.split('/').next().unwrap_or_default().as_bytes();
+        if first.len() >= 2 && first[0].is_ascii_alphabetic() && first[1] == b':' {
+            return Err("import path must not use a platform prefix");
+        }
+        if relative
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        {
+            return Err("import path must not contain traversal components");
+        }
+
+        Ok(Self {
+            raw: Zeroizing::new(relative.to_owned()),
+        })
+    }
+
+    /// Borrows the normalized relative path for application-owned resolution.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    /// Moves the normalized relative path into application composition.
+    #[must_use]
+    pub fn into_string(mut self) -> String {
+        std::mem::take(&mut *self.raw)
+    }
+}
+
+impl Debug for MemoryImportPath {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("MemoryImportPath([REDACTED])")
     }
 }
 
@@ -2323,6 +2387,8 @@ pub enum PendingKind {
     CodexLogin,
     /// Explicit user-authored memory creation.
     RememberMemory(MemoryContent),
+    /// Workspace document copied into one review-only proposal.
+    ImportMemory(MemoryImportPath),
     /// Explicit correction of one exact memory revision.
     ReviseMemory {
         memory_id: String,
@@ -2495,6 +2561,11 @@ pub enum UiIntent {
         request_id: RequestId,
         content: MemoryContent,
     },
+    /// Copy one workspace-relative UTF-8 document into a review-only proposal.
+    ImportMemory {
+        request_id: RequestId,
+        path: MemoryImportPath,
+    },
     /// Correct one exact memory with optimistic sequence protection.
     ReviseMemory {
         request_id: RequestId,
@@ -2570,6 +2641,7 @@ impl UiIntent {
             | Self::ExportTranscript { request_id, .. }
             | Self::QueryMemory { request_id, .. }
             | Self::RememberMemory { request_id, .. }
+            | Self::ImportMemory { request_id, .. }
             | Self::ReviseMemory { request_id, .. }
             | Self::ApproveMemoryProposal { request_id, .. }
             | Self::RejectMemoryProposal { request_id, .. }
@@ -2676,6 +2748,8 @@ pub enum MouseAction {
     MemoryAdmissions,
     /// Open explicit memory creation.
     MemoryRemember,
+    /// Open workspace-document import.
+    MemoryImport,
     /// Open correction for the selected revision.
     MemoryRevise,
     /// Open deliberate review for the selected proposal.
@@ -2931,6 +3005,7 @@ pub(crate) struct MemoryState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryLifecycleMode {
     Remember,
+    Import,
     Revise,
     Review,
     Actions,
@@ -2944,6 +3019,7 @@ impl MemoryLifecycleMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Remember => "Remember",
+            Self::Import => "Import document",
             Self::Revise => "Correct memory",
             Self::Review => "Review proposal",
             Self::Actions => "Memory actions",
@@ -3032,12 +3108,38 @@ impl MemoryDraftEditor {
         Ok(())
     }
 
+    pub fn append_path_character(&mut self, character: char) -> Result<(), &'static str> {
+        if character.is_control() {
+            return Err("import path must be one safe line");
+        }
+        if self.char_count() >= MAX_MEMORY_IMPORT_PATH_CHARS {
+            return Err("import path is too long");
+        }
+        self.raw.push(character);
+        Ok(())
+    }
+
+    pub fn append_path_text(&mut self, value: &str) -> Result<(), &'static str> {
+        if value.chars().any(char::is_control) {
+            return Err("import path must be one safe line");
+        }
+        if self.char_count().saturating_add(value.chars().count()) > MAX_MEMORY_IMPORT_PATH_CHARS {
+            return Err("import path is too long");
+        }
+        self.raw.push_str(value);
+        Ok(())
+    }
+
     pub fn pop(&mut self) {
         self.raw.pop();
     }
 
     pub fn content(&self) -> Result<MemoryContent, &'static str> {
         MemoryContent::new(self.raw.as_str())
+    }
+
+    pub fn import_path(&self) -> Result<MemoryImportPath, &'static str> {
+        MemoryImportPath::new(self.raw.as_str())
     }
 }
 
@@ -3638,8 +3740,8 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Left/Right", "change the focused filter"),
             ("Enter", "open details or admission history"),
             (
-                "Alt+N",
-                "remember a Workspace Fact with Internal sensitivity",
+                "Alt+N / Alt+I",
+                "remember a fact or import a review-only workspace document",
             ),
             (
                 "Alt+E / Alt+V",
@@ -3654,7 +3756,10 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
                 "retract future admission or logically delete",
             ),
             ("Alt+S", "export the selected loaded memory"),
-            ("Ctrl+S", "save an open Remember or Correct editor"),
+            (
+                "Enter / Ctrl+S",
+                "submit an open Import, Remember, or Correct editor",
+            ),
             ("Esc", "step back, clear search, or return to Chat"),
         ],
     },
@@ -3830,6 +3935,12 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Remember",
         description: "Create an explicit workspace fact in Memory",
         key_hint: Some("Alt+N in Memory"),
+    },
+    CommandEntry {
+        id: "memory-import",
+        label: "Import document",
+        description: "Copy a workspace document into a review-only memory proposal",
+        key_hint: Some("Alt+I in Memory"),
     },
     CommandEntry {
         id: "memory-actions",

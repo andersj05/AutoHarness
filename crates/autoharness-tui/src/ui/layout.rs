@@ -525,7 +525,7 @@ fn command_category(id: &str) -> &'static str {
         "refresh" | "connect" => "Connections",
         "retry" | "cancel" | "search" | "tools" => "Conversation",
         "settings" | "help" | "memory" => "Navigation",
-        "remember" | "memory-actions" => "Memory",
+        "remember" | "memory-import" | "memory-actions" => "Memory",
         "copy" | "export" | "memory-export" => "Artifacts",
         _ => "Commands",
     }

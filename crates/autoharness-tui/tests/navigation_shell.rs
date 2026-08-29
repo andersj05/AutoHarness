@@ -807,6 +807,7 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::MemoryBack => "MemoryBack",
         MouseAction::MemoryAdmissions => "MemoryAdmissions",
         MouseAction::MemoryRemember => "MemoryRemember",
+        MouseAction::MemoryImport => "MemoryImport",
         MouseAction::MemoryRevise => "MemoryRevise",
         MouseAction::MemoryReview => "MemoryReview",
         MouseAction::MemoryActions => "MemoryActions",
