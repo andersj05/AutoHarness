@@ -168,6 +168,7 @@ fn ctrl_number_routes_cover_every_primary_destination() {
         ('3', Route::Profiles, Focus::Profiles),
         ('4', Route::Settings, Focus::Settings),
         ('5', Route::Help, Focus::Help),
+        ('6', Route::Memory, Focus::Memory),
         ('1', Route::Chat, Focus::Composer),
     ] {
         let _ = update(&mut model, Message::Input(ctrl(key)));
@@ -297,6 +298,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
         ('3', "Providers"),
         ('4', "Settings"),
         ('5', "Help"),
+        ('6', "Memory index"),
     ];
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
         let mut model = model();
@@ -626,6 +628,7 @@ fn render_route_review_matrix() {
             ('3', Route::Profiles),
             ('4', Route::Settings),
             ('5', Route::Help),
+            ('6', Route::Memory),
         ] {
             let _ = update(&mut model, Message::Input(ctrl(key)));
             println!(
@@ -793,6 +796,28 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::OverlayCancel => "OverlayCancel",
         MouseAction::PermissionAllow => "PermissionAllow",
         MouseAction::PermissionDeny => "PermissionDeny",
+        MouseAction::MemoryFocusSearch => "MemoryFocusSearch",
+        MouseAction::MemorySelect(_) => "MemorySelect",
+        MouseAction::MemorySelectAdmission(_) => "MemorySelectAdmission",
+        MouseAction::MemoryCycleStatus => "MemoryCycleStatus",
+        MouseAction::MemoryCycleScope => "MemoryCycleScope",
+        MouseAction::MemoryPreviousPage => "MemoryPreviousPage",
+        MouseAction::MemoryNextPage => "MemoryNextPage",
+        MouseAction::MemoryOpen => "MemoryOpen",
+        MouseAction::MemoryBack => "MemoryBack",
+        MouseAction::MemoryAdmissions => "MemoryAdmissions",
+        MouseAction::MemoryRemember => "MemoryRemember",
+        MouseAction::MemoryImport => "MemoryImport",
+        MouseAction::MemoryRevise => "MemoryRevise",
+        MouseAction::MemoryReview => "MemoryReview",
+        MouseAction::MemoryActions => "MemoryActions",
+        MouseAction::MemoryRetract => "MemoryRetract",
+        MouseAction::MemoryDelete => "MemoryDelete",
+        MouseAction::MemoryExport => "MemoryExport",
+        MouseAction::MemoryActionSelect(_) => "MemoryActionSelect",
+        MouseAction::MemoryLifecycleSubmit => "MemoryLifecycleSubmit",
+        MouseAction::MemoryProposalReject => "MemoryProposalReject",
+        MouseAction::MemoryLifecycleCancel => "MemoryLifecycleCancel",
     }
 }
 

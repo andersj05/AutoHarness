@@ -106,6 +106,7 @@ dependencies = [
  "async-trait",
  "autoharness-domain",
  "autoharness-engine",
+ "autoharness-memory",
  "autoharness-provider",
  "autoharness-provider-codex-cli",
  "autoharness-provider-gemini",
@@ -120,7 +121,9 @@ dependencies = [
  "keyring",
  "portable-pty",
  "ratatui",
+ "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -147,6 +150,15 @@ dependencies = [
  "autoharness-domain",
  "autoharness-store",
  "serde_json",
+]
+
+[[package]]
+name = "autoharness-memory"
+version = "0.1.0"
+dependencies = [
+ "autoharness-domain",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -242,8 +254,10 @@ name = "autoharness-store-sqlite"
 version = "0.1.0"
 dependencies = [
  "autoharness-domain",
+ "autoharness-memory",
  "autoharness-store",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",

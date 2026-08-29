@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use autoharness_domain::{
-    AttemptId, ClassifiedError, CommandId, ErrorClass, EventId, InputId, RetryAdvice, SessionId,
-    ToolCallId,
+    AttemptId, ClassifiedError, CommandId, ContextTurnId, ErrorClass, EventId, InputId,
+    RetryAdvice, SessionId, ToolCallId,
 };
 
 /// Expected rejection of a command that is invalid for current session state.
@@ -107,6 +107,20 @@ pub enum CommandRejection {
         /// Attempt in incompatible state.
         attempt_id: AttemptId,
     },
+    /// A context-turn identity was already bound in this session.
+    DuplicateContextTurn {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Reused context-turn identity.
+        context_turn_id: ContextTurnId,
+    },
+    /// A context binding does not exactly match the next dispatchable turn.
+    InvalidContextTurnBinding {
+        /// Target session identity.
+        session_id: SessionId,
+        /// Attempt whose next turn is not exactly bound.
+        attempt_id: AttemptId,
+    },
     /// A settled attempt's policy does not permit retry.
     RetryNotAllowed {
         /// Target session identity.
@@ -201,6 +215,20 @@ impl Display for CommandRejection {
                 formatter,
                 "attempt {attempt_id} cannot make that transition in session {session_id}"
             ),
+            Self::DuplicateContextTurn {
+                session_id,
+                context_turn_id,
+            } => write!(
+                formatter,
+                "context turn {context_turn_id} is already bound in session {session_id}"
+            ),
+            Self::InvalidContextTurnBinding {
+                session_id,
+                attempt_id,
+            } => write!(
+                formatter,
+                "attempt {attempt_id} has no exact adjacent context binding for its next turn in session {session_id}"
+            ),
             Self::DuplicateToolCall {
                 session_id,
                 tool_call_id,
@@ -263,6 +291,8 @@ impl ClassifiedError for CommandRejection {
             | Self::InputAlreadyPromoted { .. }
             | Self::DuplicateAttempt { .. }
             | Self::InvalidAttemptState { .. }
+            | Self::DuplicateContextTurn { .. }
+            | Self::InvalidContextTurnBinding { .. }
             | Self::DuplicateToolCall { .. }
             | Self::InvalidToolCallState { .. }
             | Self::RetryNotAllowed { .. } => ErrorClass::Conflict,
@@ -355,6 +385,24 @@ pub enum ReplayError {
         /// Owning session identity.
         session_id: SessionId,
         /// Attempt in incompatible state.
+        attempt_id: AttemptId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// A context-turn identity appears more than once in session history.
+    DuplicateContextTurn {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Repeated context-turn identity.
+        context_turn_id: ContextTurnId,
+        /// Event being validated.
+        event_id: EventId,
+    },
+    /// Context binding history does not match a dispatchable next turn.
+    IllegalContextTurnBinding {
+        /// Owning session identity.
+        session_id: SessionId,
+        /// Attempt with an invalid or missing binding.
         attempt_id: AttemptId,
         /// Event being validated.
         event_id: EventId,
@@ -580,6 +628,22 @@ impl Display for ReplayError {
             } => write!(
                 formatter,
                 "event {event_id} makes an illegal transition for attempt {attempt_id} in session {session_id}"
+            ),
+            Self::DuplicateContextTurn {
+                session_id,
+                context_turn_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} reuses context turn {context_turn_id} in session {session_id}"
+            ),
+            Self::IllegalContextTurnBinding {
+                session_id,
+                attempt_id,
+                event_id,
+            } => write!(
+                formatter,
+                "event {event_id} records an invalid context boundary for attempt {attempt_id} in session {session_id}"
             ),
             Self::InvalidRetry {
                 session_id,

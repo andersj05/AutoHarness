@@ -136,6 +136,50 @@ fn save_credential_links_one_reference_without_storing_secret() {
 }
 
 #[test]
+fn redaction_credentials_include_inactive_profiles_in_stable_order() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    let (_, _, manager, home) = manager(&path);
+    let work = profile_id("work-router");
+    manager
+        .upsert(&work, &router_profile())
+        .expect("upsert work profile");
+    manager
+        .save_credential(&work, "work-profile-secret")
+        .expect("save work credential");
+    manager
+        .save_credential(&home, "home-profile-secret")
+        .expect("save home credential");
+    manager
+        .activate(Some(&work))
+        .expect("activate work profile");
+
+    let credentials = manager
+        .configured_credentials_for_redaction()
+        .expect("load redaction credentials");
+
+    assert_eq!(credentials.len(), 2);
+    assert_eq!(credentials[0].as_str(), "home-profile-secret");
+    assert_eq!(credentials[1].as_str(), "work-profile-secret");
+}
+
+#[test]
+fn redaction_credentials_fail_closed_when_a_linked_vault_entry_is_missing() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    let (_, vault, manager, id) = manager(&path);
+    let reference = manager
+        .save_credential(&id, "linked-profile-secret")
+        .expect("save credential");
+    vault.delete(&reference).expect("remove linked vault entry");
+
+    assert!(matches!(
+        manager.configured_credentials_for_redaction(),
+        Err(ProfileManagementError::Vault(VaultError::MissingEntry))
+    ));
+}
+
+#[test]
 fn disconnect_removes_reference_and_keeps_profile() {
     let dir = store_dir();
     let path = dir.path().join("profiles.json");
@@ -395,6 +439,10 @@ fn interrupted_save_is_rolled_back_from_durable_recovery_record() {
             .expect("pending snapshot")
             .pending_recovery,
         1
+    );
+    assert_eq!(
+        manager.configured_credentials_for_redaction(),
+        Err(ProfileManagementError::RecoveryPending)
     );
     assert!(
         !store

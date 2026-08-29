@@ -6,8 +6,8 @@ mod engine;
 mod error;
 
 pub use aggregate::{
-    AdmittedInput, AttemptProjection, AttemptStatus, SessionAggregate, ToolCallProjection,
-    ToolCallStatus,
+    AdmittedInput, AttemptProjection, AttemptStatus, ContextTurnBinding, SessionAggregate,
+    ToolCallProjection, ToolCallStatus,
 };
 pub use durable::{DurableEngine, DurableEngineError};
 pub use engine::{EventMetadataSource, GeneratedEventMetadata, InMemoryEngine};

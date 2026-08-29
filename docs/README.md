@@ -11,6 +11,7 @@ This index routes humans and agents to the smallest authoritative document for a
 - [Terminal design system](design/TUI_DESIGN_SYSTEM.md): terminal visual tokens, gradients, icon triples, components, and responsive rules.
 - [Terminal interface audit](design/TUI_AUDIT.md): the evidence-backed defect baseline the redesign closes.
 - [Terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md): the ordered Phase 3.10 steps and exit criteria.
+- [Persistent context and memory plan](design/PERSISTENT_CONTEXT_MEMORY_PLAN.md): the ordered Phase 4 runtime, storage, provider, and terminal slices.
 
 ## Architecture
 

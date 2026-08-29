@@ -60,6 +60,15 @@ impl PermissionPolicy {
         let workspace = ResourceRef::new("workspace:").expect("static resource is valid");
         Self::new(vec![
             PermissionRule {
+                tool_name: Some(
+                    ToolName::new("memory_propose").expect("static tool name is valid"),
+                ),
+                capability: CapabilityKind::MemoryProposal,
+                resource_prefix: ResourceRef::new("memory-proposal:")
+                    .expect("static resource is valid"),
+                outcome: PermissionOutcome::Allow,
+            },
+            PermissionRule {
                 tool_name: Some(ToolName::new("fs_read").expect("static tool name is valid")),
                 capability: CapabilityKind::FilesystemRead,
                 resource_prefix: workspace.clone(),
@@ -191,5 +200,28 @@ mod tests {
 
         assert_eq!(permissive.evaluate(planned.spec()), PermissionOutcome::Deny);
         assert!(authorize(planned, PermissionOutcome::Allow, None).is_err());
+    }
+
+    #[test]
+    fn review_only_memory_proposals_are_allowed_without_promotion_authority() {
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ToolCallId::new("call-memory").expect("ID"),
+            provider_call_id: ProviderCallId::new("provider-memory").expect("ID"),
+            tool_name: ToolName::new("memory_propose").expect("name"),
+            arguments: ToolArguments::new(json!({
+                "content":"Prefer concise explanations.",
+                "kind":"preference",
+                "scope":"session",
+                "sensitivity":"internal"
+            }))
+            .expect("arguments"),
+        })
+        .expect("plan");
+        let policy = PermissionPolicy::local_default();
+
+        assert_eq!(policy.evaluate(planned.spec()), PermissionOutcome::Allow);
+        let (_, evidence) = authorize(planned, PermissionOutcome::Allow, None)
+            .expect("review-only proposal is policy allowed");
+        assert_eq!(evidence, PermissionEvidence::PolicyAllow);
     }
 }

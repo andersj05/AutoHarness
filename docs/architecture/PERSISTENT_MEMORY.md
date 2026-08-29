@@ -1,8 +1,8 @@
 # Persistent memory architecture
 
-**Status:** Proposed contract
+**Status:** Phase 4 implementation contract
 
-**Last updated:** 2026-08-20
+**Last updated:** 2026-08-29
 
 ## Purpose
 
@@ -67,6 +67,10 @@ Memory scopes are explicit:
 - **Session:** Facts relevant only to one conversation or task.
 - **Agent:** Approved strategy or role-specific knowledge.
 
+Each non-system scope uses a typed opaque identity.
+The local user profile label, provider profile identity, and raw workspace path are display or connection data, not memory authority.
+Canonical workspace locations resolve to an opaque `WorkspaceId`, and relocation or explicit reassociation begins a new context epoch rather than silently merging two scopes.
+
 Scope controls eligibility, not unquestioned truth. When eligible records conflict, the context builder does not merge them into a fabricated fact. It applies explicit policy based on source authority, specificity, revision time, and contradiction state, and may surface the conflict to the user.
 
 Repository `AGENTS.md` instructions are an authorized workspace context source. Arbitrary Markdown discovered in a repository is data unless the user or configuration explicitly authorizes it as instructions.
@@ -113,7 +117,12 @@ ProviderAttempt
 
 ```text
 MemoryItem
-  id, scope_type, scope_id, kind, created_at
+  id, scope_type, scope_id, kind, current_sequence, current_revision,
+  lifecycle, created_at, updated_at
+
+MemoryOperation
+  id, memory_id, sequence, schema_version, kind, payload_ref,
+  causation_id, correlation_id, occurred_at
 
 MemoryRevision
   id, memory_id, revision, status, content_ref, content_hash,
@@ -125,26 +134,48 @@ MemoryEvidence
 
 MemoryRelation
   from_memory_id, to_memory_id, relation
+
+MemoryStoreState
+  global_generation, updated_at
 ```
 
-Revision status is `proposed`, `active`, `superseded`, `retracted`, or `deleted`. Deletion removes or cryptographically erases content and embeddings while retaining only the minimum non-sensitive tombstone needed for consistency and audit.
+Memory operations use a separate event-sourced ledger because user-, workspace-, and agent-scoped records do not belong to the session that happened to observe or approve them.
+The ledger stores bounded non-content envelopes while exact memory text and evidence excerpts live in separately erasable, hash-verified content records.
+Every eligibility-changing operation increments the global generation used by optimistic context commits.
+
+Revision status is `proposed`, `active`, `superseded`, `rejected`, `retracted`, or `deleted`.
+Deletion removes application-owned content, evidence excerpts, FTS rows, embeddings, caches, and retained rendered admission copies while preserving only the minimum non-content tombstone needed for consistency and audit.
+Plaintext SQLite, WAL files, backups, exports, and source session events prevent a forensic-erasure guarantee without a later encryption and key-erasure decision.
 
 ### Context state
 
 ```text
 ContextEpoch
-  id, session_id, generation, baseline_hash, config_version,
-  token_budget, started_at, ended_at
+  id, session_id, generation, reason, predecessor_epoch_id, baseline_hash,
+  builder_version, registry_version, ranker_version, renderer_version,
+  sizer_version, config_hash, catalog_hash, model_capability_hash,
+  tool_registry_hash, token_budget, started_at, ended_at
 
 ContextSnapshot
-  epoch_id, source_key, source_revision, value_hash, observed_at
+  id, epoch_id, source_key, source_revision, observation_state,
+  value_hash, prior_snapshot_id, observed_at
+
+ContextTurn
+  id, epoch_id, session_id, provider_attempt_id, run_turn,
+  expected_session_sequence, memory_generation, request_hash,
+  rendered_hash, rendered_token_count, committed_at
 
 ContextAdmission
-  id, epoch_id, provider_attempt_id, source_key, memory_revision_id,
-  renderer_version, rendered_hash, rank, token_count, admitted_at
+  id, context_turn_id, source_key, source_revision, memory_revision_id,
+  renderer_version, rendered_hash, rank, rank_score, token_count, admitted_at
+
+ContextAdmissionReason
+  admission_id, ordinal, factor_key, contribution, reason_code
 ```
 
 Rendered content may be retained directly when required for exact audit/replay, or stored as a content-addressed artifact referenced by hash and policy.
+Every provider call, including a tool continuation inside an existing attempt, receives a distinct `ContextTurn` identified by `(provider_attempt_id, run_turn)`.
+Source observation state is `available`, `retained_stale`, `observed_absent`, or `unavailable`, so temporary failure cannot be mistaken for confirmed absence.
 
 ## Write path
 
@@ -195,14 +226,22 @@ Immediately before a provider request, the session runner:
 4. Samples authorized context sources.
 5. Reconciles sources against the active snapshot.
 6. Retrieves and ranks eligible memory for the fixed token budget.
-7. Persists context admissions and the attempt record atomically enough that recovery can determine what the model was intended to see.
-8. Dispatches exactly one provider request for that turn.
+7. Builds one canonical provider-neutral context manifest from the immutable source and memory snapshot.
+8. Commits the turn manifest, snapshots, admissions, reason factors, sizing counts, and rendered hashes while verifying the same session sequence and global memory generation.
+9. Binds the committed manifest hash to the exact attempt and run turn through the session event stream before `RunTurnStarted` makes dispatch possible.
+10. Dispatches exactly one provider request for that turn.
 
 Changes observed after this boundary apply to the next provider turn. They do not restart or mutate the current request.
+Provider-native instruction framing happens only after this boundary inside the adapter.
+Memory is never inserted as a fabricated historical user message.
 
 ## Context epochs and compaction
 
-The first provider turn creates a complete baseline context and snapshot. Later source changes may be represented as chronological context updates when the provider protocol and policy support them.
+The first provider turn of a top-level attempt creates a complete baseline context and snapshot.
+An explicit retry starts another attempt and epoch.
+Tool continuations stay inside the attempt's epoch, while dynamic history and tool state receive a distinct per-turn snapshot.
+The epoch freezes its baseline source set and eligible memory revisions, so a proposal emitted by the current run cannot feed itself back before a later epoch.
+Later source changes may be represented as chronological context updates when the provider protocol and policy support them.
 
 Compaction begins a new epoch:
 
@@ -213,6 +252,7 @@ Compaction begins a new epoch:
 5. Persist the new snapshot and epoch boundary.
 
 The event log remains authoritative. A compaction summary cannot erase pending input, permission decisions, tool settlement, accepted memories, or audit evidence.
+Relocation and incompatible builder, registry, ranker, renderer, sizer, configuration, catalog, model-capability, or tool-registry versions also begin a new epoch.
 
 ## Crash recovery and consistency
 
@@ -232,6 +272,8 @@ The event log remains authoritative. A compaction summary cannot erase pending i
 - Retrieved content cannot request additional tools, permissions, network access, or trust.
 - Sensitive memory can be encrypted with a workspace- or user-scoped key.
 - Export includes provenance and scope. Deletion removes derived indexes, embeddings, caches, and artifacts.
+- Deletion is an application-level logical deletion unless encrypted content and key erasure later provide a separately verified forensic guarantee.
+- Source events, external exports, backups, and already dispatched provider requests remain separate authorities and are never silently rewritten by memory deletion.
 - Retention policies are configurable by scope and memory kind.
 - The UI shows why a memory was retrieved and offers correction, retraction, and deletion.
 
@@ -254,14 +296,15 @@ These signals may influence future ranking only through a versioned policy evalu
 - Admitted inputs, provider attempts, normalized events, transcript projection, and restart replay.
 - No semantic memory extraction.
 
-### Stage 2: Explicit memory
+### Stage 2: Deterministic context core
 
-- User-approved facts and preferences with scope, revisions, evidence, inspection, and retraction.
-- Deterministic structured/FTS retrieval.
+- Typed source registry, observation state, canonical rendering, conservative sizing, stable budget fitting, and manifest hashing.
+- Per-turn identity, versioned ranking reasons, and shuffled-input determinism.
 
-### Stage 3: Context epochs
+### Stage 3: Context epochs and explicit memory
 
-- Source registry, snapshots, admissions, safe updates, and compaction boundaries.
+- Source snapshots, turn manifests, admissions, safe updates, and compaction boundaries.
+- User-approved facts and preferences with typed scope, revisions, evidence, inspection, correction, retraction, deletion, and deterministic structured/FTS retrieval.
 
 ### Stage 4: Proposed memory
 
@@ -278,6 +321,7 @@ These signals may influence future ranking only through a versioned policy evalu
 - Atomic prompt admission and promotion.
 - No context mutation during an in-flight turn.
 - Context reconstruction from admissions after memory revisions change.
+- Distinct manifest and admission reconstruction for every provider run turn inside a tool-loop attempt.
 - Duplicate, supersession, contradiction, expiry, retraction, and deletion behavior.
 - Source failure with stale-while-revalidate versus observed absence.
 - Token-budget stability and deterministic ordering.
@@ -285,3 +329,5 @@ These signals may influence future ranking only through a versioned policy evalu
 - Secret values structurally unable to reach serialization.
 - Crash points before dispatch, during streaming, and before settlement.
 - Rebuilding projections and search indexes from authoritative records.
+- Global memory generation conflicts between retrieval and context commit.
+- Logical deletion purging FTS and retained rendered copies without claiming erasure from backups or source events.

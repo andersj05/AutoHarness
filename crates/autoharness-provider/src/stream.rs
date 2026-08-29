@@ -8,6 +8,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{ProviderError, ProviderErrorKind};
 
+/// Maximum provider-neutral instruction prelude retained in one request.
+pub const MAX_CONTEXT_PRELUDE_BYTES: usize = 256 * 1024;
+
 /// Provider-neutral conversational role.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +57,54 @@ impl Debug for ChatContent {
 }
 
 impl<'de> Deserialize<'de> for ChatContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(D::Error::custom)
+    }
+}
+
+/// Exact provider-neutral context rendered before conversational history.
+///
+/// The application classifies and delimits authorized instructions and inert
+/// memory data before constructing this value.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ContextPrelude(String);
+
+impl ContextPrelude {
+    /// Constructs a bounded non-empty context prelude.
+    pub fn new(value: impl Into<String>) -> Result<Self, ProviderError> {
+        let value = value.into();
+        if value.trim().is_empty() || value.len() > MAX_CONTEXT_PRELUDE_BYTES {
+            return Err(ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                RetryAdvice::Never,
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the exact prelude for provider-native request preparation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Debug for ContextPrelude {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContextPrelude")
+            .field("content", &"[REDACTED]")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for ContextPrelude {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -188,6 +239,9 @@ pub struct ChatRequest {
     pub model_id: ModelId,
     /// Complete local history, in provider-turn order.
     pub messages: Vec<ChatMessage>,
+    /// Exact provider-neutral context rendered outside conversational history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextPrelude>,
     /// Exact registered tools available for this provider turn.
     pub tools: Vec<ProviderToolDefinition>,
 }
@@ -202,12 +256,20 @@ impl<'de> Deserialize<'de> for ChatRequest {
             model_id: ModelId,
             messages: Vec<ChatMessage>,
             #[serde(default)]
+            context: Option<ContextPrelude>,
+            #[serde(default)]
             tools: Vec<ProviderToolDefinition>,
         }
 
         let request = SerializedRequest::deserialize(deserializer)?;
         Self::new(request.model_id, request.messages)
-            .map(|request_value| request_value.with_tools(request.tools))
+            .map(|request_value| {
+                let request_value = match request.context {
+                    Some(context) => request_value.with_context(context),
+                    None => request_value,
+                };
+                request_value.with_tools(request.tools)
+            })
             .map_err(D::Error::custom)
     }
 }
@@ -224,8 +286,16 @@ impl ChatRequest {
         Ok(Self {
             model_id,
             messages,
+            context: None,
             tools: Vec::new(),
         })
+    }
+
+    /// Adds the exact classified context prelude for this provider turn.
+    #[must_use]
+    pub fn with_context(mut self, context: ContextPrelude) -> Self {
+        self.context = Some(context);
+        self
     }
 
     /// Adds the exact trusted tool registry for this request.
@@ -346,15 +416,25 @@ mod tests {
     fn transcript_debug_forms_are_redacted() {
         let sentinel = "secret transcript sentinel";
         let content = ChatContent::new(sentinel).expect("valid content");
+        let context = ContextPrelude::new(sentinel).expect("valid context");
         let delta = TextDelta::new(sentinel).expect("valid delta");
 
         assert!(!format!("{content:?}").contains(sentinel));
+        assert!(!format!("{context:?}").contains(sentinel));
         assert!(!format!("{delta:?}").contains(sentinel));
+    }
+
+    #[test]
+    fn context_preludes_are_non_empty_and_bounded() {
+        assert!(ContextPrelude::new(" ").is_err());
+        assert!(ContextPrelude::new("x".repeat(MAX_CONTEXT_PRELUDE_BYTES)).is_ok());
+        assert!(ContextPrelude::new("x".repeat(MAX_CONTEXT_PRELUDE_BYTES + 1)).is_err());
     }
 
     #[test]
     fn deserialization_cannot_bypass_message_validation() {
         assert!(serde_json::from_str::<ChatContent>(r#""""#).is_err());
+        assert!(serde_json::from_str::<ContextPrelude>(r#""""#).is_err());
         assert!(serde_json::from_str::<TextDelta>(r#""""#).is_err());
         assert!(
             serde_json::from_str::<ChatRequest>(

@@ -253,7 +253,7 @@ fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
     match model.route() {
         Route::Chat => fill_chat_regions(regions, model),
         Route::Settings => fill_settings_regions(regions),
-        Route::Sessions | Route::Profiles | Route::Help => {}
+        Route::Sessions | Route::Profiles | Route::Help | Route::Memory => {}
     }
 }
 
@@ -524,8 +524,9 @@ fn command_category(id: &str) -> &'static str {
         "new" | "session-model" => "Session setup",
         "refresh" | "connect" => "Connections",
         "retry" | "cancel" | "search" | "tools" => "Conversation",
-        "settings" | "help" => "Navigation",
-        "copy" | "export" => "Artifacts",
+        "settings" | "help" | "memory" => "Navigation",
+        "remember" | "memory-import" | "memory-actions" => "Memory",
+        "copy" | "export" | "memory-export" => "Artifacts",
         _ => "Commands",
     }
 }
@@ -568,6 +569,7 @@ fn overlay_rect(area: Rect, model: &Model) -> Option<Rect> {
             Some(credential_rect(area))
         }
         Some(OverlayKind::ProfileCredential) => Some(popup_rect(area)),
+        Some(OverlayKind::MemoryLifecycle) => Some(popup_rect(area)),
         Some(OverlayKind::TranscriptSearch) | None => None,
     }
 }
@@ -621,6 +623,7 @@ fn push_route_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, mo
         Route::Sessions => push_session_hits(hits, regions, model),
         Route::Profiles => push_profile_hits(hits, regions.content, model),
         Route::Help => {}
+        Route::Memory => hits.extend(crate::ui::page::memory_hits(regions.content, model)),
     }
 }
 
@@ -1057,6 +1060,13 @@ fn push_overlay_hits(
                 ];
                 push_modal_buttons(hits, popup, model, &buttons);
             }
+        }
+        OverlayKind::MemoryLifecycle => {
+            for (row, index) in crate::ui::page::memory::lifecycle_action_rows(popup, model) {
+                hits.push((row, MouseAction::MemoryActionSelect(index)));
+            }
+            let buttons = crate::ui::page::memory::lifecycle_buttons(model);
+            push_modal_buttons(hits, popup, model, &buttons);
         }
         OverlayKind::TranscriptSearch => {}
     }

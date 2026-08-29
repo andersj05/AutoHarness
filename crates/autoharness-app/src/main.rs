@@ -1,11 +1,15 @@
 mod catalog_cache;
 mod config;
+mod context_runtime;
 mod coordinator;
 mod engine_actor;
 mod error;
 mod export;
 mod ids;
+mod import_runtime;
+mod memory_runtime;
 mod projection;
+mod proposal_runtime;
 mod telemetry;
 mod terminal;
 
@@ -94,6 +98,7 @@ async fn run() -> Result<(), AppError> {
         config::workspace_root()?.display().to_string(),
     );
     let tool_runtime = configure_tool_runtime(&paths)?;
+    let artifact_root = paths.artifacts();
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
     let initial_session = Arc::new(projection::session(&session));
@@ -126,6 +131,7 @@ async fn run() -> Result<(), AppError> {
             provider: provider.composition,
             profiles: Some(profile_runtime),
             tool_runtime,
+            artifact_root: Some(artifact_root),
         },
         app_ports,
         shutdown.clone(),

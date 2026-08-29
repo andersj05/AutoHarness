@@ -56,9 +56,9 @@ pub const SIDEBAR_WIDTH_XL: u16 = 32;
 /// Brand row plus breathing room above the rail destinations.
 pub const SIDEBAR_BRAND_ROWS: u16 = 2;
 /// Primary route rows in the rebuilt rail.
-pub const SIDEBAR_NAV_COUNT: u16 = 5;
+pub const SIDEBAR_NAV_COUNT: u16 = 6;
 /// Blank row between the rail and the recent-session group.
-pub const SIDEBAR_GROUP_GAP: u16 = 1;
+pub const SIDEBAR_GROUP_GAP: u16 = 0;
 /// Group heading above recent sessions.
 pub const SIDEBAR_RECENT_HEADER: u16 = 1;
 /// Workspace heading plus the current project label.
@@ -194,6 +194,38 @@ pub const SESSION_TWO_PANE_MIN_WIDTH: u16 = 72;
 pub const SESSION_LIST_PERCENT: u16 = 58;
 /// Session detail share in the two-pane workspace.
 pub const SESSION_DETAIL_PERCENT: u16 = 42;
+/// Memory shows all three inspection panes at or above this width.
+pub const MEMORY_THREE_PANE_MIN_WIDTH: u16 = 106;
+/// Memory shows index and detail side by side at or above this width.
+pub const MEMORY_TWO_PANE_MIN_WIDTH: u16 = 72;
+/// Memory index share in the three-pane workspace.
+pub const MEMORY_LIST_PERCENT_WIDE: u16 = 32;
+/// Memory detail share in the three-pane workspace.
+pub const MEMORY_DETAIL_PERCENT_WIDE: u16 = 43;
+/// Memory admission share in the three-pane workspace.
+pub const MEMORY_ADMISSIONS_PERCENT_WIDE: u16 = 25;
+/// Memory index share in the two-pane workspace.
+pub const MEMORY_LIST_PERCENT: u16 = 42;
+/// Memory detail share in the two-pane workspace.
+pub const MEMORY_DETAIL_PERCENT: u16 = 58;
+/// Height at which a Memory list row may use a second metadata line.
+pub const MEMORY_TALL_LIST_MIN_HEIGHT: u16 = 8;
+/// Height at which Memory renders the expanded two-row page header.
+pub const MEMORY_TALL_HEADER_MIN_HEIGHT: u16 = 20;
+/// Height at which Memory reserves a contextual footer.
+pub const MEMORY_FOOTER_MIN_HEIGHT: u16 = 12;
+/// Width at which Memory index rows keep a trailing status badge.
+pub const MEMORY_ROW_BADGE_MIN_WIDTH: u16 = 28;
+/// Maximum wrapped content rows shown before Memory metadata.
+pub const MEMORY_CONTENT_PREVIEW_ROWS: u16 = 3;
+/// Memory footer shows a context-specific direct action at or above this width.
+pub const MEMORY_ACTIONS_FULL_WIDTH: u16 = 72;
+/// Remember defaults and safety copy above the bounded editor.
+pub const MEMORY_REMEMBER_EDITOR_CHROME_ROWS: u16 = 4;
+/// Admission panes at this height reserve exact selected-turn coordinates.
+pub const MEMORY_ADMISSION_CONTEXT_MIN_HEIGHT: u16 = 12;
+/// Rows reserved for selected admission coordinates and reason factors.
+pub const MEMORY_ADMISSION_CONTEXT_ROWS: u16 = 7;
 /// Inline command palette shows at most this many grouped result rows.
 pub const INLINE_PALETTE_MAX_ROWS: u16 = 10;
 /// Inline palette left inset.

@@ -41,6 +41,8 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0014](0014-use-codex-cli-subscription-boundary.md) | Superseded by ADR-0015 | Use the official Codex CLI subscription boundary |
 | [0015](0015-use-native-codex-subscription-adapter.md) | Accepted | Use a native Codex subscription adapter |
 | [0016](0016-use-typed-tui-presentation-layer.md) | Proposed | Use a typed terminal presentation layer |
+| [0017](0017-use-auditable-provider-turn-context.md) | Proposed | Use auditable provider-turn context manifests |
+| [0018](0018-use-a-separate-revisioned-memory-ledger.md) | Proposed | Use a separate revisioned memory ledger |
 
 ## When an ADR is not needed
 
