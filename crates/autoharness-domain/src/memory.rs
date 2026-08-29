@@ -21,6 +21,9 @@ pub const MAX_MEMORY_RELATIONS: usize = 64;
 /// Maximum stable validation issues retained for one validation pass.
 pub const MAX_MEMORY_VALIDATION_ISSUES: usize = 32;
 
+/// Maximum related memory identities retained across one validation pass.
+pub const MAX_MEMORY_VALIDATION_CANDIDATES: usize = 256;
+
 /// Exact bounded memory content that remains redacted from debug output.
 #[derive(Clone, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -720,12 +723,16 @@ pub enum MemoryValidationIssue {
 }
 
 /// A versioned deterministic validation result for exact revision content.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct MemoryValidationResult {
     validator_version: u16,
     content_hash: Sha256Digest,
     status: MemoryValidationStatus,
     issues: Vec<MemoryValidationIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    duplicate_candidates: Vec<MemoryId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    contradiction_candidates: Vec<MemoryId>,
 }
 
 #[derive(Deserialize)]
@@ -734,6 +741,10 @@ struct RawMemoryValidationResult {
     content_hash: Sha256Digest,
     status: MemoryValidationStatus,
     issues: Vec<MemoryValidationIssue>,
+    #[serde(default)]
+    duplicate_candidates: Vec<MemoryId>,
+    #[serde(default)]
+    contradiction_candidates: Vec<MemoryId>,
 }
 
 impl<'de> Deserialize<'de> for MemoryValidationResult {
@@ -742,13 +753,32 @@ impl<'de> Deserialize<'de> for MemoryValidationResult {
         D: Deserializer<'de>,
     {
         let raw = RawMemoryValidationResult::deserialize(deserializer)?;
-        Self::new(
+        Self::new_with_candidates(
             raw.validator_version,
             raw.content_hash,
             raw.status,
             raw.issues,
+            raw.duplicate_candidates,
+            raw.contradiction_candidates,
         )
         .map_err(D::Error::custom)
+    }
+}
+
+impl Debug for MemoryValidationResult {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryValidationResult")
+            .field("validator_version", &self.validator_version)
+            .field("content_hash", &"[REDACTED]")
+            .field("status", &self.status)
+            .field("issues", &self.issues)
+            .field("duplicate_candidates", &self.duplicate_candidates.len())
+            .field(
+                "contradiction_candidates",
+                &self.contradiction_candidates.len(),
+            )
+            .finish()
     }
 }
 
@@ -760,10 +790,47 @@ impl MemoryValidationResult {
         status: MemoryValidationStatus,
         issues: Vec<MemoryValidationIssue>,
     ) -> Result<Self, ValueError> {
+        Self::new_with_candidates(
+            validator_version,
+            content_hash,
+            status,
+            issues,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Constructs a bounded validation result with exact related memory identities.
+    pub fn new_with_candidates(
+        validator_version: u16,
+        content_hash: Sha256Digest,
+        status: MemoryValidationStatus,
+        issues: Vec<MemoryValidationIssue>,
+        mut duplicate_candidates: Vec<MemoryId>,
+        mut contradiction_candidates: Vec<MemoryId>,
+    ) -> Result<Self, ValueError> {
         if validator_version == 0 {
             return Err(ValueError::ZeroVersion);
         }
         if issues.len() > MAX_MEMORY_VALIDATION_ISSUES {
+            return Err(ValueError::CollectionTooLarge);
+        }
+        if (!duplicate_candidates.is_empty() && !issues.contains(&MemoryValidationIssue::Duplicate))
+            || (!contradiction_candidates.is_empty()
+                && !issues.contains(&MemoryValidationIssue::Contradiction))
+        {
+            return Err(ValueError::InvalidMemoryValidation);
+        }
+
+        duplicate_candidates.sort();
+        duplicate_candidates.dedup();
+        contradiction_candidates.sort();
+        contradiction_candidates.dedup();
+        let candidate_count = duplicate_candidates
+            .len()
+            .checked_add(contradiction_candidates.len())
+            .ok_or(ValueError::CollectionTooLarge)?;
+        if candidate_count > MAX_MEMORY_VALIDATION_CANDIDATES {
             return Err(ValueError::CollectionTooLarge);
         }
 
@@ -772,6 +839,8 @@ impl MemoryValidationResult {
             content_hash,
             status,
             issues,
+            duplicate_candidates,
+            contradiction_candidates,
         })
     }
 
@@ -797,6 +866,18 @@ impl MemoryValidationResult {
     #[must_use]
     pub fn issues(&self) -> &[MemoryValidationIssue] {
         &self.issues
+    }
+
+    /// Returns exact duplicate identities in stable sorted order.
+    #[must_use]
+    pub fn duplicate_candidates(&self) -> &[MemoryId] {
+        &self.duplicate_candidates
+    }
+
+    /// Returns exact contradiction identities in stable sorted order.
+    #[must_use]
+    pub fn contradiction_candidates(&self) -> &[MemoryId] {
+        &self.contradiction_candidates
     }
 }
 
@@ -1668,6 +1749,89 @@ mod tests {
         };
 
         assert!(matches!(source, MemoryEvidenceSource::SessionEvent { .. }));
+    }
+
+    #[test]
+    fn validation_candidates_are_stable_bounded_and_backward_compatible() {
+        let legacy_json = serde_json::json!({
+            "validator_version": 1,
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "needs_review",
+            "issues": ["contradiction"]
+        });
+        let legacy: MemoryValidationResult =
+            serde_json::from_value(legacy_json.clone()).expect("legacy validation result");
+        assert!(legacy.duplicate_candidates().is_empty());
+        assert!(legacy.contradiction_candidates().is_empty());
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("serialize legacy validation"),
+            legacy_json
+        );
+
+        let duplicate_a = MemoryId::new("memory-duplicate-a").expect("memory ID");
+        let duplicate_b = MemoryId::new("memory-duplicate-b").expect("memory ID");
+        let contradiction_a = MemoryId::new("memory-contradiction-a").expect("memory ID");
+        let contradiction_b = MemoryId::new("memory-contradiction-b").expect("memory ID");
+        let validation = MemoryValidationResult::new_with_candidates(
+            2,
+            digest('b'),
+            MemoryValidationStatus::NeedsReview,
+            vec![
+                MemoryValidationIssue::Duplicate,
+                MemoryValidationIssue::Contradiction,
+            ],
+            vec![duplicate_b.clone(), duplicate_a.clone(), duplicate_b],
+            vec![
+                contradiction_b.clone(),
+                contradiction_a.clone(),
+                contradiction_b,
+            ],
+        )
+        .expect("validation candidates");
+        assert_eq!(
+            validation.duplicate_candidates(),
+            &[
+                duplicate_a,
+                MemoryId::new("memory-duplicate-b").expect("memory ID"),
+            ]
+        );
+        assert_eq!(
+            validation.contradiction_candidates(),
+            &[
+                contradiction_a,
+                MemoryId::new("memory-contradiction-b").expect("memory ID")
+            ]
+        );
+        let debug = format!("{validation:?}");
+        assert!(!debug.contains("memory-duplicate"));
+        assert!(!debug.contains("memory-contradiction"));
+        assert!(!debug.contains(digest('b').as_str()));
+
+        let too_many = (0..=MAX_MEMORY_VALIDATION_CANDIDATES)
+            .map(|index| MemoryId::new(format!("memory-{index}")).expect("memory ID"))
+            .collect();
+        assert_eq!(
+            MemoryValidationResult::new_with_candidates(
+                1,
+                digest('c'),
+                MemoryValidationStatus::Rejected,
+                vec![MemoryValidationIssue::Duplicate],
+                too_many,
+                Vec::new(),
+            ),
+            Err(ValueError::CollectionTooLarge)
+        );
+        assert_eq!(
+            MemoryValidationResult::new_with_candidates(
+                1,
+                digest('d'),
+                MemoryValidationStatus::NeedsReview,
+                Vec::new(),
+                vec![MemoryId::new("memory-unreported").expect("memory ID")],
+                Vec::new(),
+            ),
+            Err(ValueError::InvalidMemoryValidation)
+        );
     }
 
     #[test]

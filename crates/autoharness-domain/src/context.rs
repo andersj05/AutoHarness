@@ -633,11 +633,33 @@ pub enum ContextObservationState {
     Unavailable,
 }
 
+/// Whether a source snapshot may contribute bytes to the context prelude.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSourceVisibility {
+    /// The source may be rendered through the ordinary admission policy.
+    #[default]
+    PreludeEligible,
+    /// The snapshot records hashes for audit only and has no renderable value.
+    AuditOnly,
+}
+
+impl ContextSourceVisibility {
+    fn is_prelude_eligible(&self) -> bool {
+        *self == Self::PreludeEligible
+    }
+}
+
 /// One immutable source observation frozen for a provider turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ContextSourceSnapshot {
     source_key: ContextSourceKey,
     observation_state: ContextObservationState,
+    #[serde(
+        default,
+        skip_serializing_if = "ContextSourceVisibility::is_prelude_eligible"
+    )]
+    visibility: ContextSourceVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_revision: Option<Sha256Digest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -654,9 +676,44 @@ impl ContextSourceSnapshot {
         value_hash: Option<Sha256Digest>,
         observed_at: TimestampMillis,
     ) -> Result<Self, ValueError> {
+        Self::new_with_visibility(
+            source_key,
+            observation_state,
+            ContextSourceVisibility::PreludeEligible,
+            source_revision,
+            value_hash,
+            observed_at,
+        )
+    }
+
+    /// Constructs an available hash-only observation that can never render into a prelude.
+    pub fn audit_only(
+        source_key: ContextSourceKey,
+        source_revision: Sha256Digest,
+        value_hash: Sha256Digest,
+        observed_at: TimestampMillis,
+    ) -> Result<Self, ValueError> {
+        Self::new_with_visibility(
+            source_key,
+            ContextObservationState::Available,
+            ContextSourceVisibility::AuditOnly,
+            Some(source_revision),
+            Some(value_hash),
+            observed_at,
+        )
+    }
+
+    fn new_with_visibility(
+        source_key: ContextSourceKey,
+        observation_state: ContextObservationState,
+        visibility: ContextSourceVisibility,
+        source_revision: Option<Sha256Digest>,
+        value_hash: Option<Sha256Digest>,
+        observed_at: TimestampMillis,
+    ) -> Result<Self, ValueError> {
         let has_value = source_revision.is_some() && value_hash.is_some();
         let has_no_value = source_revision.is_none() && value_hash.is_none();
-        let valid = match observation_state {
+        let state_is_valid = match observation_state {
             ContextObservationState::Available | ContextObservationState::RetainedStale => {
                 has_value
             }
@@ -664,13 +721,16 @@ impl ContextSourceSnapshot {
                 has_no_value
             }
         };
-        if !valid {
+        let visibility_is_valid = visibility == ContextSourceVisibility::PreludeEligible
+            || observation_state == ContextObservationState::Available;
+        if !state_is_valid || !visibility_is_valid {
             return Err(ValueError::InvalidContextObservation);
         }
 
         Ok(Self {
             source_key,
             observation_state,
+            visibility,
             source_revision,
             value_hash,
             observed_at,
@@ -687,6 +747,12 @@ impl ContextSourceSnapshot {
     #[must_use]
     pub const fn observation_state(&self) -> ContextObservationState {
         self.observation_state
+    }
+
+    /// Returns whether this source is eligible for rendering or retained for audit only.
+    #[must_use]
+    pub const fn visibility(&self) -> ContextSourceVisibility {
+        self.visibility
     }
 
     /// Returns the observed or retained source revision.
@@ -712,6 +778,8 @@ impl ContextSourceSnapshot {
 struct RawContextSourceSnapshot {
     source_key: ContextSourceKey,
     observation_state: ContextObservationState,
+    #[serde(default)]
+    visibility: ContextSourceVisibility,
     source_revision: Option<Sha256Digest>,
     value_hash: Option<Sha256Digest>,
     observed_at: TimestampMillis,
@@ -723,9 +791,10 @@ impl<'de> Deserialize<'de> for ContextSourceSnapshot {
         D: Deserializer<'de>,
     {
         let raw = RawContextSourceSnapshot::deserialize(deserializer)?;
-        Self::new(
+        Self::new_with_visibility(
             raw.source_key,
             raw.observation_state,
+            raw.visibility,
             raw.source_revision,
             raw.value_hash,
             raw.observed_at,
@@ -1329,6 +1398,46 @@ mod tests {
                 TimestampMillis::new(1),
             ),
             Err(ValueError::InvalidContextObservation)
+        );
+    }
+
+    #[test]
+    fn audit_only_snapshots_require_available_hashes_and_serialize_the_boundary() {
+        let snapshot = ContextSourceSnapshot::audit_only(
+            ContextSourceKey::new("session:provider-history:v1").expect("valid source key"),
+            digest('a'),
+            digest('b'),
+            TimestampMillis::new(2),
+        )
+        .expect("valid audit snapshot");
+
+        assert_eq!(snapshot.visibility(), ContextSourceVisibility::AuditOnly);
+        assert_eq!(
+            serde_json::to_value(&snapshot).expect("serialize audit snapshot"),
+            serde_json::json!({
+                "source_key": "session:provider-history:v1",
+                "observation_state": "available",
+                "visibility": "audit_only",
+                "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "value_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "observed_at": 2
+            })
+        );
+        assert!(
+            serde_json::from_value::<ContextSourceSnapshot>(serde_json::json!({
+                "source_key": "session:provider-history:v1",
+                "observation_state": "unavailable",
+                "visibility": "audit_only",
+                "observed_at": 2
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::to_value(source("workspace:agents"))
+                .expect("serialize prelude source")
+                .get("visibility")
+                .is_none(),
+            "legacy prelude-source serialization must remain stable"
         );
     }
 

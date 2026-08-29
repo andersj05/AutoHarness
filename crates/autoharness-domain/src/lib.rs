@@ -14,8 +14,8 @@ pub use context::{
     ContextAdmission, ContextAdmissionFactor, ContextAdmissionReason, ContextBudgetAllocation,
     ContextEligibility, ContextEpochHashes, ContextEpochManifest, ContextEpochReason,
     ContextEpochVersions, ContextObservationState, ContextSection, ContextSourceSnapshot,
-    ContextTokenBudget, ContextTurnManifest, EstimatedTokens, MAX_CONTEXT_ADMISSION_REASONS,
-    MAX_CONTEXT_ADMISSIONS, MAX_CONTEXT_SOURCES, MemoryGeneration,
+    ContextSourceVisibility, ContextTokenBudget, ContextTurnManifest, EstimatedTokens,
+    MAX_CONTEXT_ADMISSION_REASONS, MAX_CONTEXT_ADMISSIONS, MAX_CONTEXT_SOURCES, MemoryGeneration,
 };
 pub use error::{ClassifiedError, ErrorClass, RetryAdvice, ValueError};
 pub use event::{Causation, EVENT_SCHEMA_V1, EventEnvelope, EventPayload};
@@ -26,15 +26,15 @@ pub use id::{
     ProviderCallId, ProviderId, SessionId, ToolCallId, ToolName, UserId, WorkspaceId,
 };
 pub use memory::{
-    ConfidenceBasisPoints, MAX_MEMORY_EVIDENCE, MAX_MEMORY_RELATIONS, MAX_MEMORY_VALIDATION_ISSUES,
-    MEMORY_SCHEMA_V1, MemoryCausation, MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent,
-    MemoryEvidence, MemoryEvidenceExcerpt, MemoryEvidenceMetadata, MemoryEvidenceRelation,
-    MemoryEvidenceSource, MemoryKind, MemoryOperationEnvelope, MemoryOperationPayload,
-    MemoryOrigin, MemoryRejectionReason, MemoryRelation, MemoryRelationKind, MemoryRevision,
-    MemoryRevisionDraft, MemoryRevisionMetadata, MemoryRevisionNumber, MemoryRevisionStatus,
-    MemoryScope, MemorySequence, MemoryValidationIssue, MemoryValidationResult,
-    MemoryValidationStatus, MemoryValidity, MemoryValidityWindow, Sensitivity, Sha256Digest,
-    TrustClass,
+    ConfidenceBasisPoints, MAX_MEMORY_EVIDENCE, MAX_MEMORY_RELATIONS,
+    MAX_MEMORY_VALIDATION_CANDIDATES, MAX_MEMORY_VALIDATION_ISSUES, MEMORY_SCHEMA_V1,
+    MemoryCausation, MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent, MemoryEvidence,
+    MemoryEvidenceExcerpt, MemoryEvidenceMetadata, MemoryEvidenceRelation, MemoryEvidenceSource,
+    MemoryKind, MemoryOperationEnvelope, MemoryOperationPayload, MemoryOrigin,
+    MemoryRejectionReason, MemoryRelation, MemoryRelationKind, MemoryRevision, MemoryRevisionDraft,
+    MemoryRevisionMetadata, MemoryRevisionNumber, MemoryRevisionStatus, MemoryScope,
+    MemorySequence, MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus,
+    MemoryValidity, MemoryValidityWindow, Sensitivity, Sha256Digest, TrustClass,
 };
 pub use tool::{
     ArtifactRef, CapabilityKind, CapabilityRequest, MAX_INLINE_TOOL_OUTPUT_BYTES, PermissionAnswer,

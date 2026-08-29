@@ -124,6 +124,8 @@ pub enum ValueError {
     InvalidMemoryValidity,
     /// Memory evidence excerpt fields were not both present or both absent.
     InvalidMemoryEvidence,
+    /// Memory validation candidates were inconsistent with reported issues.
+    InvalidMemoryValidation,
     /// A create command supplied an expected sequence or an update omitted one.
     InvalidMemoryExpectedSequence,
     /// A bounded collection exceeded its durable item limit.
@@ -193,6 +195,9 @@ impl Display for ValueError {
             Self::InvalidMemoryValidity => "memory validity window ends before it begins",
             Self::InvalidMemoryEvidence => {
                 "memory evidence excerpt and digest must be present together"
+            }
+            Self::InvalidMemoryValidation => {
+                "memory validation candidates require their matching issue"
             }
             Self::InvalidMemoryExpectedSequence => {
                 "memory command expected sequence does not match its operation"
