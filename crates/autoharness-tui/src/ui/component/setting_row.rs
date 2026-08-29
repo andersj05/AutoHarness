@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use super::super::Icon;
+use super::super::metrics::SETTINGS_ROW_SELECTION_INSET;
 use super::super::theme::Theme;
 use super::super::tokens::Token;
 use super::chip::{Chip, ChipVariant};
@@ -127,7 +128,7 @@ impl<'a> SettingRow<'a> {
                 Some(' '),
             );
         }
-        let marker_width = 2.min(area.width);
+        let marker_width = SETTINGS_ROW_SELECTION_INSET.min(area.width);
         if self.focused {
             put(
                 buf,

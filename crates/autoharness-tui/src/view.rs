@@ -26,8 +26,8 @@ use crate::ui::metrics::{
     PALETTE_KEY_MAX_WIDTH, PALETTE_LABEL_MIN_WIDTH, PALETTE_THREE_COLUMN_MIN_WIDTH,
     PROFILE_COMPACT_WIDTH, PROFILE_HELP_MEDIUM, PROFILE_HELP_NARROW, PROFILE_HELP_WIDE, ROW,
     SESSION_DETAIL_PERCENT, SESSION_LIST_PERCENT, SESSION_TWO_PANE_MIN_WIDTH,
-    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_THEME_LABEL_WIDTH, SETTINGS_THEME_PREVIEW_CELLS,
-    SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
+    SETTINGS_CATEGORY_RAIL_XS, SETTINGS_ROW_SELECTION_INSET, SETTINGS_THEME_LABEL_WIDTH,
+    SETTINGS_THEME_PREVIEW_CELLS, SETTINGS_THEME_PREVIEW_INSET, TWO_ROWS,
 };
 use crate::ui::{Icon, Theme, Token, normalized_t};
 
@@ -917,6 +917,7 @@ fn render_settings(frame: &mut Frame<'_>, regions: &ui_layout::NamedRects, model
         return;
     };
     render_settings_nav(frame, rail, model);
+    render_settings_workspace_divider(frame, rail, body, model);
     if model.settings_workspace.search_active {
         render_settings_search(frame, body, model);
     } else if model.settings_workspace.choice_picker_open {
@@ -929,6 +930,21 @@ fn render_settings(frame: &mut Frame<'_>, regions: &ui_layout::NamedRects, model
     render_settings_footer(frame, footer, model);
 }
 
+fn render_settings_workspace_divider(frame: &mut Frame<'_>, rail: Rect, body: Rect, model: &Model) {
+    let x = body.x.saturating_sub(ROW);
+    let height = rail.height.min(body.height);
+    for index in 0..height {
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            x,
+            rail.y.saturating_add(index),
+            ROW,
+            model.theme().icons().vertical_rule(),
+            model.theme().gradient_style(normalized_t(index, height)),
+        );
+    }
+}
+
 fn render_settings_page_header(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -936,19 +952,51 @@ fn render_settings_page_header(
     title: &'static str,
     description: &'static str,
 ) {
-    if area.height > 1 {
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::styled(title, visual_style(model, VisualRole::User)),
-                Line::styled(description, visual_style(model, VisualRole::Muted)),
-            ]),
-            area,
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let title_width = u16::try_from(title.width()).unwrap_or(u16::MAX).max(ROW);
+    let mut title_x = area.x;
+    let mut title_cell = 0_u16;
+    for character in title.chars() {
+        let width = u16::try_from(character.width().unwrap_or(0)).unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        if title_x.saturating_add(width) > area.right() {
+            break;
+        }
+        let used = crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            title_x,
+            area.y,
+            area.right().saturating_sub(title_x),
+            &character.to_string(),
+            model
+                .theme()
+                .gradient_emphasis_style(normalized_t(title_cell, title_width)),
         );
-    } else if area.height == 1 {
-        frame.render_widget(
-            Paragraph::new(format!("{title}  {description}"))
-                .style(visual_style(model, VisualRole::User)),
-            area,
+        title_x = title_x.saturating_add(used);
+        title_cell = title_cell.saturating_add(width);
+    }
+    if area.height > 1 {
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            area.x,
+            area.y.saturating_add(ROW),
+            area.width,
+            description,
+            model.theme().style(Token::TextMuted),
+        );
+    } else if title_x.saturating_add(TWO_ROWS) < area.right() {
+        crate::ui::component::paint::put(
+            frame.buffer_mut(),
+            title_x.saturating_add(TWO_ROWS),
+            area.y,
+            area.right()
+                .saturating_sub(title_x.saturating_add(TWO_ROWS)),
+            description,
+            model.theme().style(Token::TextMuted),
         );
     }
 }
@@ -973,20 +1021,24 @@ fn render_settings_nav(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         if row >= area.height {
             break;
         }
-        let style = if index == model.settings_workspace.nav_selected {
-            if model.settings_workspace.nav_focus {
-                theme.filled(Token::SurfaceSelected)
-            } else {
-                theme.style(Token::Accent)
-            }
+        let selected = index == model.settings_workspace.nav_selected;
+        let style = if selected && model.settings_workspace.nav_focus {
+            theme.style(Token::SurfaceSelected)
+        } else if selected {
+            theme.style(Token::SurfaceSelectedMuted)
         } else {
             theme.style(Token::TextSecondary)
         };
         let icon = settings_category_icon(category);
-        let text = if area.width <= SETTINGS_CATEGORY_RAIL_XS {
-            icons.glyph(icon).to_owned()
+        let marker = if selected {
+            icons.glyph(Icon::SelectionCaret)
         } else {
-            format!("{} {}", icons.glyph(icon), category.label())
+            " "
+        };
+        let text = if area.width <= SETTINGS_CATEGORY_RAIL_XS {
+            format!("{marker}{}", icons.glyph(icon))
+        } else {
+            format!("{marker} {} {}", icons.glyph(icon), category.label())
         };
         crate::ui::component::paint::put(
             frame.buffer_mut(),
@@ -1159,9 +1211,16 @@ fn render_typed_settings_row(
         render_theme_preview(
             frame.buffer_mut(),
             Rect::new(
-                area.x.saturating_add(label_width).saturating_add(ROW),
+                area.x
+                    .saturating_add(SETTINGS_ROW_SELECTION_INSET)
+                    .saturating_add(label_width)
+                    .saturating_add(ROW),
                 area.y.saturating_add(ROW),
-                area.width.saturating_sub(label_width.saturating_add(ROW)),
+                area.width.saturating_sub(
+                    SETTINGS_ROW_SELECTION_INSET
+                        .saturating_add(label_width)
+                        .saturating_add(ROW),
+                ),
                 ROW,
             ),
             model.theme(),

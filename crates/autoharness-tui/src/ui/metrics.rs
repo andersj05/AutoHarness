@@ -279,6 +279,8 @@ pub const SETTINGS_CATEGORY_RAIL_XS: u16 = 3;
 pub const SETTINGS_CATEGORY_RAIL_WIDE: u16 = 22;
 /// Settings footer height with context and active controls.
 pub const SETTINGS_FOOTER_ROWS: u16 = 2;
+/// Reserved caret and gap before every typed Settings row.
+pub const SETTINGS_ROW_SELECTION_INSET: u16 = 2;
 /// Accent cells in the focused theme preview.
 pub const SETTINGS_THEME_PREVIEW_CELLS: u16 = 8;
 /// Theme picker label width before its visual preview.
