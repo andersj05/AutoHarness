@@ -2,9 +2,13 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use autoharness_domain::{
-    ClassifiedError, CommandEnvelope, ErrorClass, EventEnvelope, RetryAdvice, SessionId,
+    ClassifiedError, CommandEnvelope, ErrorClass, EventEnvelope, EventPayload, RetryAdvice,
+    SessionId,
 };
-use autoharness_store::{AppendRequest, DEFAULT_EVENT_PAGE_SIZE, SessionStore, StoreError};
+use autoharness_store::{
+    AppendRequest, BoundContextTurnCommitRequest, ContextCompactionBoundary, ContextStore,
+    ContextTurnCommitRequest, DEFAULT_EVENT_PAGE_SIZE, SessionStore, StoreError,
+};
 
 use crate::{EngineError, EventMetadataSource, InMemoryEngine, ReplayError, SessionAggregate};
 
@@ -153,6 +157,93 @@ where
             prepared.events().to_vec(),
         );
         let receipt = self.store.append(&request)?;
+        if receipt.last_sequence() != expected_receipt {
+            return Err(DurableEngineError::StoreInvariant);
+        }
+
+        let events = prepared.events().to_vec();
+        self.inner.commit_prepared(prepared);
+        Ok(events)
+    }
+
+    /// Atomically commits a provider-turn context and its authoritative binding event.
+    ///
+    /// The command must prepare exactly one `ContextTurnBound` event matching the context
+    /// manifest. The durable transaction completes before the binding becomes visible to the
+    /// in-memory aggregate, so a following `StartRunTurn` command observes the exact committed
+    /// sequence without a replay window.
+    pub fn commit_context_turn_and_bind(
+        &mut self,
+        context: ContextTurnCommitRequest,
+        command: &CommandEnvelope,
+    ) -> Result<Vec<EventEnvelope>, DurableEngineError>
+    where
+        S: ContextStore,
+    {
+        self.commit_context_turn_and_bind_inner(context, None, command)
+    }
+
+    /// Atomically commits a verified compaction context and its authoritative binding event.
+    ///
+    /// The storage adapter validates that the explicit durable-facts boundary belongs to the
+    /// compaction epoch in the context request. The engine retains sole ownership of constructing
+    /// and publishing the adjacent session binding event.
+    pub fn commit_compaction_context_turn_and_bind(
+        &mut self,
+        context: ContextTurnCommitRequest,
+        boundary: ContextCompactionBoundary,
+        command: &CommandEnvelope,
+    ) -> Result<Vec<EventEnvelope>, DurableEngineError>
+    where
+        S: ContextStore,
+    {
+        self.commit_context_turn_and_bind_inner(context, Some(boundary), command)
+    }
+
+    fn commit_context_turn_and_bind_inner(
+        &mut self,
+        context: ContextTurnCommitRequest,
+        compaction_boundary: Option<ContextCompactionBoundary>,
+        command: &CommandEnvelope,
+    ) -> Result<Vec<EventEnvelope>, DurableEngineError>
+    where
+        S: ContextStore,
+    {
+        let prepared = self.inner.prepare(command)?;
+        let [binding_event] = prepared.events() else {
+            return Err(DurableEngineError::StoreInvariant);
+        };
+        let EventPayload::ContextTurnBound {
+            attempt_id,
+            run_turn,
+            context_turn_id,
+            manifest_hash,
+        } = binding_event.payload()
+        else {
+            return Err(DurableEngineError::StoreInvariant);
+        };
+        let turn = context.turn();
+        if binding_event.session_id() != turn.session_id()
+            || attempt_id != turn.attempt_id()
+            || *run_turn != turn.run_turn()
+            || context_turn_id != turn.context_turn_id()
+            || manifest_hash != turn.manifest_hash()
+        {
+            return Err(DurableEngineError::StoreInvariant);
+        }
+        let expected_receipt = prepared
+            .expected_last_sequence()
+            .checked_add(1)
+            .ok_or(DurableEngineError::StoreInvariant)?;
+        if binding_event.sequence().get() != expected_receipt {
+            return Err(DurableEngineError::StoreInvariant);
+        }
+
+        let mut request = BoundContextTurnCommitRequest::new(context, binding_event.clone());
+        if let Some(boundary) = compaction_boundary {
+            request = request.with_compaction_boundary(boundary);
+        }
+        let receipt = self.store.commit_context_turn_and_bind(&request)?;
         if receipt.last_sequence() != expected_receipt {
             return Err(DurableEngineError::StoreInvariant);
         }
