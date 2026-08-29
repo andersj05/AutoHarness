@@ -1,10 +1,10 @@
 # Active memory
 
-**Last reviewed:** 2026-08-28
+**Last reviewed:** 2026-08-29
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 implementation is on `dev` and `main`; follow-up conversation-flow and session-management polish passes local workspace, conformance, render-cost, and real-PTY validation on `feat/tui-conversation-flow`, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
+**Status:** Phase 3.10 implementation is on `dev` and `main`; the settings-selection refinement on `feat/tui-settings-selection-redesign` passes formatting, strict workspace Clippy, the complete locked workspace suite, and visual conformance, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
 
 ## Current objective
 
@@ -40,10 +40,10 @@ The remaining release evidence is recorded in [the validation report](../release
 - Empty Chat sessions render no onboarding hero or numbered provider and model instructions, and successful session switches do not spend a row on a redundant `Session opened` notice.
 - The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, collapses recognized home paths to `~/` with forward separators, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
 - Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
-- Settings is a responsive two-pane workspace with nine categories, editable typed rows, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
+- Settings is a responsive two-pane workspace with nine categories, a persistent selected-category surface, gradient page accents, translucent focused rows, explicit selected glyphs and fills for typed controls, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
 - Sessions is a responsive grouped list and detail workspace with deterministic relative ages, exact UTC date and time details, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, a shared search field, and action buttons whose measured render and mouse regions share one geometry.
 - Deleting the current session is allowed when another open session exists, exports the authoritative event stream first, and atomically presents the newest replacement session after the deletion succeeds.
-- Models persists the selected model and thinking level together from one workspace, while Providers uses catalog and saved-connection panes with grouped identity, connection, credential, and default tables and measured action buttons.
+- Models persists the selected model and thinking level together from one workspace and visually distinguishes saved defaults from the current unsaved draft, while Providers preserves selection across catalog and saved-connection focus with strong and quiet translucent surfaces, grouped identity, connection, credential, and default tables, and measured action buttons.
 - Every modal-like dialog now uses the shared transparent scrim, reset-background panel body, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
 - The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
 - The Phase 3.10 conformance harness pins 5,035 style-aware cells across nineteen routes and overlays, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
@@ -76,6 +76,7 @@ The remaining release evidence is recorded in [the validation report](../release
 
 ## Recently completed
 
+- On 2026-08-29, `feat/tui-settings-selection-redesign` unified Settings, Models, and Providers around persistent translucent selection surfaces, gradient headings and dividers, selected glyphs, saved-default and unsaved-draft labels, clearer thinking focus, responsive summary and footer guidance, and strong-versus-quiet provider selection across pane focus; formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, the refreshed 5,035-cell conformance matrix, and responsive visual reviews pass.
 - On 2026-08-28, `feat/tui-conversation-flow` gave the shared wide rail one full-width theme-selected primary route with a caret and icon, moved active-session context to the quieter selected surface, removed the duplicate Settings footer action, added spacing below the brand, and reused robust home-relative workspace paths in both the rail and prompt bar; formatting, strict workspace Clippy, the complete locked workspace suite, documentation links, refreshed goldens, full visual conformance, and the real Windows routed-shell PTY journey pass.
 
 - On 2026-08-28, `feat/tui-conversation-flow` renamed the conversational assistant label to Agent, kept the terminal hardware cursor hidden during interactive redraws, made shared panels and modal scrims preserve the native terminal background, replaced raw session milliseconds with readable UTC timestamps, rebuilt the Sessions action footer around exact shared button geometry, and made confirmed deletion of the current session export it and open the newest remaining session; focused TUI and coordinator tests, two real Windows PTY journeys, formatting, strict workspace Clippy, the complete locked workspace suite, and documentation links pass.

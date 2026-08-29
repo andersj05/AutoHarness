@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-08-28
+**Last reviewed:** 2026-08-29
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -202,6 +202,7 @@
 - On 2026-08-28, `feat/tui-conversation-flow` made the prompt the final item in one scrollable conversation flow, placed it at the top of a blank session and directly after short transcripts, clamped repeated upward scrolling at the oldest populated viewport with immediate downward recovery, removed redundant empty-state and session-opened copy plus the per-message vertical rule, preserved constant-cost 32-turn and 4,096-turn rendering at 417 allocations and approximately 69 KiB, and passed workspace formatting, strict Clippy, the full locked suite, conformance, release render-cost, and a real long-session Windows PTY test.
 - On 2026-08-28, the same branch renamed the conversational assistant label to Agent, removed competing hardware-cursor redraws, preserved the terminal background through every shared panel and modal scrim, rendered session timestamps as exact UTC date and time, unified Sessions footer rendering and hit testing around measured buttons, and made current-session deletion switch safely to the newest remaining open session after its export and deletion commit.
 - Focused TUI, coordinator, golden, conformance, and real Windows PTY regressions cover the follow-up, and formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, and documentation-link validation pass.
+- On 2026-08-29, `feat/tui-settings-selection-redesign` unified Settings, Models, and Providers around persistent translucent selection surfaces, gradient headings and dividers, selected glyphs, saved-default and unsaved-draft labels, clearer thinking focus, responsive summary and footer guidance, and strong-versus-quiet provider selection across pane focus; formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, the refreshed 5,035-cell conformance matrix, and responsive visual reviews pass.
 
 - Reviewed live Gemini compatibility verification passed on 2026-08-22; the checked-in evidence includes a fixture recorded from the same live dialect.
 - No successful reviewed live router compatibility verification has been performed; checked-in router and function-calling dialect evidence is fixture-backed.
