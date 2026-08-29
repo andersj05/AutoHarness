@@ -109,6 +109,10 @@ impl ToolRuntime {
                 ToolErrorKind::InvalidCall,
                 RetryAdvice::Never,
             )),
+            Operation::SubmitMemoryProposal { .. } => Err(ToolError::new(
+                ToolErrorKind::MemoryProposalSinkRequired,
+                RetryAdvice::Never,
+            )),
             Operation::ReadFile { path } => self.filesystem.read(&path, cancellation).await,
             Operation::WriteFile { path, content } => {
                 self.filesystem.write(&path, &content, cancellation).await
@@ -231,5 +235,58 @@ mod tests {
         assert_eq!(output.original_bytes(), 10);
         assert!(output.artifact().is_some());
         assert_eq!(std::fs::read_dir(artifacts).expect("artifacts").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_proposal_cannot_report_success_without_application_sink() {
+        let directory = tempfile::tempdir().expect("directory");
+        let artifacts = directory.path().join("artifacts");
+        std::fs::create_dir(&artifacts).expect("artifact directory");
+        let runtime = ToolRuntime::new(
+            Arc::new(LocalFilesystem::new(directory.path(), 1024).expect("filesystem")),
+            Arc::new(LocalProcess::new(directory.path(), 1024).expect("process")),
+            Arc::new(LocalHttp::new(1024).expect("HTTP")),
+            Arc::new(FileArtifactStore::new(&artifacts).expect("artifacts")),
+            PermissionPolicy::local_default(),
+            1,
+            Duration::from_secs(1),
+            1024,
+        )
+        .expect("runtime");
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ToolCallId::new("call-memory").expect("call ID"),
+            provider_call_id: ProviderCallId::new("provider-memory").expect("provider ID"),
+            tool_name: ToolName::new("memory_propose").expect("tool name"),
+            arguments: ToolArguments::new(json!({
+                "content":"The build uses Rust 2024.",
+                "kind":"fact",
+                "scope":"workspace",
+                "sensitivity":"public"
+            }))
+            .expect("arguments"),
+        })
+        .expect("plan");
+        assert!(planned.memory_proposal().is_some());
+        let outcome = runtime.evaluate(&planned);
+        let (authorized, _) = authorize(planned, outcome, None).expect("policy authorization");
+
+        let error = runtime
+            .execute(authorized, CancellationToken::new())
+            .await
+            .expect_err("application sink is required for a successful proposal");
+
+        assert_eq!(error.kind(), ToolErrorKind::MemoryProposalSinkRequired);
+        assert_eq!(
+            error.to_string(),
+            "The memory proposal requires the application review sink"
+        );
+        let failure = error.durable_failure();
+        assert_eq!(failure.code().as_str(), "memory_proposal_sink_required");
+        assert_eq!(
+            failure.message().as_str(),
+            "The memory proposal requires the application review sink"
+        );
+        assert!(!failure.message().as_str().contains("Rust 2024"));
+        assert_eq!(std::fs::read_dir(artifacts).expect("artifacts").count(), 0);
     }
 }

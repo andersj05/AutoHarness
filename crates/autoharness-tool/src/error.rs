@@ -10,6 +10,8 @@ use autoharness_domain::{
 pub enum ToolErrorKind {
     /// The tool name, schema, or arguments are invalid.
     InvalidCall,
+    /// An internal memory proposal reached the external capability runtime.
+    MemoryProposalSinkRequired,
     /// The exact call lacks execution authority.
     PermissionDenied,
     /// A path escaped or could not be accessed through the workspace capability.
@@ -68,6 +70,9 @@ impl Display for ToolError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.kind {
             ToolErrorKind::InvalidCall => "The model requested an invalid or unknown tool call",
+            ToolErrorKind::MemoryProposalSinkRequired => {
+                "The memory proposal requires the application review sink"
+            }
             ToolErrorKind::PermissionDenied => "The exact tool capability was not authorized",
             ToolErrorKind::Filesystem => "The workspace filesystem operation failed",
             ToolErrorKind::Process => "The process operation failed",
@@ -90,6 +95,7 @@ impl ClassifiedError for ToolError {
             ToolErrorKind::InvalidCall | ToolErrorKind::OutputLimit | ToolErrorKind::TurnLimit => {
                 ErrorClass::Validation
             }
+            ToolErrorKind::MemoryProposalSinkRequired => ErrorClass::Internal,
             ToolErrorKind::PermissionDenied => ErrorClass::PermissionDenied,
             ToolErrorKind::Timeout => ErrorClass::Timeout,
             ToolErrorKind::Cancelled => ErrorClass::Cancelled,
@@ -107,6 +113,7 @@ impl ClassifiedError for ToolError {
 const fn error_code(kind: ToolErrorKind) -> &'static str {
     match kind {
         ToolErrorKind::InvalidCall => "invalid_tool_call",
+        ToolErrorKind::MemoryProposalSinkRequired => "memory_proposal_sink_required",
         ToolErrorKind::PermissionDenied => "tool_permission_denied",
         ToolErrorKind::Filesystem => "tool_filesystem_failed",
         ToolErrorKind::Process => "tool_process_failed",

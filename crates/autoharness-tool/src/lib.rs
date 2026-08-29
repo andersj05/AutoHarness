@@ -20,6 +20,6 @@ pub use permission::{
 };
 pub use runtime::ToolRuntime;
 pub use schema::{
-    IncomingToolCall, PermissionDetail, PlannedToolCall, ToolDefinition, definitions,
-    permission_details, plan, replan,
+    IncomingToolCall, MemoryProposal, MemoryProposalScope, PermissionDetail, PlannedToolCall,
+    ToolDefinition, definitions, permission_details, plan, replan,
 };
