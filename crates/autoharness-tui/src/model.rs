@@ -20,12 +20,12 @@ const MAX_MEMORY_PREVIEW_CHARS: usize = 240;
 const MAX_MEMORY_CONTENT_CHARS: usize = 16_384;
 const MAX_MEMORY_SOURCE_CHARS: usize = 512;
 const MAX_MEMORY_ADMISSION_TEXT_CHARS: usize = 256;
-const MAX_MEMORY_CONTEXT_TEXT_CHARS: usize = 512;
+const MAX_MEMORY_CONTEXT_TEXT_CHARS: usize = 4_096;
 const MAX_MEMORY_SUMMARIES: usize = 100;
 const MAX_MEMORY_DETAILS: usize = 100;
 const MAX_MEMORY_ADMISSIONS: usize = 64;
-const MAX_MEMORY_EVIDENCE: usize = 16;
-const MAX_MEMORY_RELATIONS: usize = 16;
+const MAX_MEMORY_EVIDENCE: usize = 64;
+const MAX_MEMORY_RELATIONS: usize = 64;
 const MAX_MEMORY_FINDINGS: usize = 16;
 const MAX_MEMORY_REASON_FACTORS: usize = 16;
 const MAX_MEMORY_VIEW_CURSOR_CHARS: usize = 512;
@@ -801,10 +801,12 @@ impl MemorySensitivity {
 pub struct MemoryEvidence {
     label: String,
     source: String,
-    excerpt: String,
+    excerpt: Option<String>,
+    availability: MemoryEvidenceAvailability,
 }
 
 impl MemoryEvidence {
+    /// Constructs evidence whose exact retained excerpt may be displayed deliberately.
     pub fn new(
         label: impl Into<String>,
         source: impl Into<String>,
@@ -821,11 +823,49 @@ impl MemoryEvidence {
                 MAX_MEMORY_CONTEXT_TEXT_CHARS,
                 "memory evidence source",
             )?,
-            excerpt: bounded_text(
+            excerpt: Some(bounded_text(
                 excerpt.into(),
                 MAX_MEMORY_CONTEXT_TEXT_CHARS,
                 "memory evidence excerpt",
+            )?),
+            availability: MemoryEvidenceAvailability::Retained,
+        })
+    }
+
+    /// Constructs evidence whose immutable metadata never named an excerpt.
+    pub fn absent(
+        label: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Self::without_excerpt(label, source, MemoryEvidenceAvailability::Absent)
+    }
+
+    /// Constructs evidence whose formerly retained excerpt was logically erased.
+    pub fn erased(
+        label: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Self::without_excerpt(label, source, MemoryEvidenceAvailability::Erased)
+    }
+
+    fn without_excerpt(
+        label: impl Into<String>,
+        source: impl Into<String>,
+        availability: MemoryEvidenceAvailability,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            label: bounded_single_line(
+                label.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory evidence label",
             )?,
+            source: bounded_single_line(
+                source.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory evidence source",
+            )?,
+            excerpt: None,
+            availability,
         })
     }
 
@@ -841,7 +881,26 @@ impl MemoryEvidence {
 
     #[must_use]
     pub fn excerpt(&self) -> &str {
-        &self.excerpt
+        match self.availability {
+            MemoryEvidenceAvailability::Retained => self
+                .excerpt
+                .as_deref()
+                .expect("retained evidence owns an excerpt"),
+            MemoryEvidenceAvailability::Absent => "No excerpt was recorded.",
+            MemoryEvidenceAvailability::Erased => "Excerpt erased by logical deletion.",
+        }
+    }
+
+    /// Returns retained exact evidence bytes without conflating absent and erased states.
+    #[must_use]
+    pub fn retained_excerpt(&self) -> Option<&str> {
+        self.excerpt.as_deref()
+    }
+
+    /// Returns the explicit excerpt availability state.
+    #[must_use]
+    pub const fn availability(&self) -> MemoryEvidenceAvailability {
+        self.availability
     }
 }
 
@@ -852,8 +911,17 @@ impl Debug for MemoryEvidence {
             .field("label", &"[REDACTED]")
             .field("source", &"[REDACTED]")
             .field("excerpt", &"[REDACTED]")
+            .field("availability", &self.availability)
             .finish()
     }
+}
+
+/// Whether exact evidence bytes remain available to the inspection workspace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryEvidenceAvailability {
+    Retained,
+    Absent,
+    Erased,
 }
 
 /// Typed relation between one memory and another ledger identity.
@@ -861,7 +929,9 @@ impl Debug for MemoryEvidence {
 pub enum MemoryRelationKind {
     DuplicateOf,
     Contradicts,
+    Refines,
     Supersedes,
+    Related,
     DerivedFrom,
 }
 
@@ -871,7 +941,9 @@ impl MemoryRelationKind {
         match self {
             Self::DuplicateOf => "duplicate of",
             Self::Contradicts => "contradicts",
+            Self::Refines => "refines",
             Self::Supersedes => "supersedes",
+            Self::Related => "related to",
             Self::DerivedFrom => "derived from",
         }
     }
@@ -925,6 +997,12 @@ impl Debug for MemoryRelation {
 pub enum MemoryFindingKind {
     Duplicate,
     Contradiction,
+    SecretDetected,
+    UnsupportedScope,
+    MalformedContent,
+    PolicyConflict,
+    InjectionPattern,
+    UngroundedEvidence,
 }
 
 impl MemoryFindingKind {
@@ -933,6 +1011,12 @@ impl MemoryFindingKind {
         match self {
             Self::Duplicate => "possible duplicate",
             Self::Contradiction => "possible contradiction",
+            Self::SecretDetected => "secret detected",
+            Self::UnsupportedScope => "unsupported scope",
+            Self::MalformedContent => "malformed content",
+            Self::PolicyConflict => "policy conflict",
+            Self::InjectionPattern => "injection pattern",
+            Self::UngroundedEvidence => "ungrounded evidence",
         }
     }
 }
