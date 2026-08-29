@@ -2270,7 +2270,7 @@ fn apply_rebuild_operation(
     apply_operation(transaction, &request, true)
 }
 
-fn decode_projected_revision(
+pub(crate) fn decode_projected_revision(
     state: &str,
     json: &[u8],
     hash: &[u8],

@@ -17,6 +17,7 @@ use autoharness_store::{
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
+use crate::memory_store::decode_projected_revision;
 use crate::sqlite_store::{SqliteStore, map_sqlite_error, to_sql_sequence};
 
 impl ContextStore for SqliteStore {
@@ -1240,7 +1241,7 @@ fn validate_context_boundary(
         let Some((state, json, hash, content_id, scope_type, scope_id, memory_id)) = row else {
             return Err(StoreError::InvalidContextTransition);
         };
-        let metadata: MemoryRevision = decode_context_json(&json, &hash)?;
+        let metadata = decode_projected_revision(&state, &json, &hash)?;
         let scope = decode_scope(&scope_type, scope_id)?;
         let memory_id = MemoryId::new(memory_id).map_err(|_| corrupt_context())?;
         let rendered = request
@@ -2058,6 +2059,121 @@ mod tests {
             ))
             .expect("append expiring memory");
         (memory_id, revision)
+    }
+
+    fn seed_approved_proposal_memory(store: &mut SqliteStore) -> (MemoryId, MemoryRevision) {
+        let memory_id = MemoryId::new("memory-approved-proposal").expect("memory ID");
+        let content = MemoryContent::new("Approved proposal can enter context").expect("content");
+        let proposal_draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-original-proposal").expect("proposal revision ID"),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ModelProposal,
+            TrustClass::UntrustedProposal,
+            ConfidenceBasisPoints::new(5_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("proposal draft");
+        let proposal = MemoryRevision::from_draft(
+            MemoryRevisionStatus::Proposed,
+            &proposal_draft,
+            TimestampMillis::new(6),
+            None,
+        );
+        let create = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-create-proposal").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::FIRST,
+            TimestampMillis::new(6),
+            autoharness_domain::MemoryCausation::Command(
+                CommandId::new("command-create-proposal").expect("command ID"),
+            ),
+            CorrelationId::new("correlation-approved-proposal").expect("correlation ID"),
+            MemoryOperationPayload::MemoryCreated {
+                scope: MemoryScope::User(UserId::new("user-1").expect("user ID")),
+                memory_kind: MemoryKind::Fact,
+                revision: proposal.clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create.clone(),
+                Some(MemoryRevisionContent::new(
+                    proposal.revision_id().clone(),
+                    content.clone(),
+                    Vec::new(),
+                )),
+            ))
+            .expect("append proposal");
+
+        let approved_draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-approved-proposal").expect("approved revision ID"),
+            MemoryRevisionNumber::new(2).expect("revision number"),
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(9_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("approved draft");
+        let approved = MemoryRevision::from_draft(
+            MemoryRevisionStatus::Proposed,
+            &approved_draft,
+            TimestampMillis::new(7),
+            Some(proposal.revision_id().clone()),
+        );
+        let approve = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-approve-proposal").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::new(2).expect("sequence"),
+            TimestampMillis::new(7),
+            autoharness_domain::MemoryCausation::Operation(create.operation_id().clone()),
+            create.correlation_id().clone(),
+            MemoryOperationPayload::ProposalApproved {
+                proposal_revision_id: proposal.revision_id().clone(),
+                approved_revision: approved.clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                1,
+                approve.clone(),
+                Some(MemoryRevisionContent::new(
+                    approved.revision_id().clone(),
+                    content,
+                    Vec::new(),
+                )),
+            ))
+            .expect("append approved revision");
+        let activate = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-activate-approved").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::new(3).expect("sequence"),
+            TimestampMillis::new(8),
+            autoharness_domain::MemoryCausation::Operation(approve.operation_id().clone()),
+            approve.correlation_id().clone(),
+            MemoryOperationPayload::RevisionActivated {
+                revision_id: approved.revision_id().clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(2, activate, None))
+            .expect("activate approved revision");
+        (
+            memory_id,
+            approved.with_status(MemoryRevisionStatus::Active),
+        )
     }
 
     fn memory_turn(
@@ -2922,6 +3038,50 @@ mod tests {
                 .load_context_turn(third_turn.context_turn_id())
                 .expect("load rejected third turn")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn first_turn_admits_an_approved_proposal_using_its_projected_active_state() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_dispatch_ready_attempt(&mut store);
+        let (memory_id, revision) = seed_approved_proposal_memory(&mut store);
+        let epoch = epoch_at(
+            "epoch-approved-proposal",
+            ContextEpochReason::NewAttempt,
+            None,
+            MemoryGeneration::new(1).expect("generation"),
+            20,
+        );
+        let (turn, content) = memory_turn(
+            "turn-approved-proposal",
+            "epoch-approved-proposal",
+            1,
+            5,
+            20,
+            &memory_id,
+            &revision,
+        );
+        let request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(Some(epoch), turn.clone(), content),
+            session_event(
+                6,
+                EventPayload::ContextTurnBound {
+                    attempt_id: turn.attempt_id().clone(),
+                    run_turn: 1,
+                    context_turn_id: turn.context_turn_id().clone(),
+                    manifest_hash: turn.manifest_hash().clone(),
+                },
+            ),
+        );
+
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&request)
+                .expect("bind approved proposal")
+                .disposition(),
+            ContextCommitDisposition::Committed
         );
     }
 
