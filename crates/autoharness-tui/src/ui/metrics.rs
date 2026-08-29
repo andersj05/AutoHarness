@@ -218,6 +218,8 @@ pub const MEMORY_FOOTER_MIN_HEIGHT: u16 = 12;
 pub const MEMORY_ROW_BADGE_MIN_WIDTH: u16 = 28;
 /// Maximum wrapped content rows shown before Memory metadata.
 pub const MEMORY_CONTENT_PREVIEW_ROWS: u16 = 3;
+/// Memory footer shows a context-specific direct action at or above this width.
+pub const MEMORY_ACTIONS_FULL_WIDTH: u16 = 72;
 /// Inline command palette shows at most this many grouped result rows.
 pub const INLINE_PALETTE_MAX_ROWS: u16 = 10;
 /// Inline palette left inset.

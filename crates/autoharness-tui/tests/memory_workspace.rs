@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use autoharness_domain::{ModelId, ModelRef, ProviderId};
+use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, MemoryAdmission, MemoryDetail, MemoryPane, MemoryProjection,
-    MemoryScope, MemoryStatus, MemoryStatusFilter, MemorySummary, MemoryTrust, Message, Model,
-    ModelSummary, MouseAction, Route, SessionProjection, SessionsProjection, SettingsProjection,
-    hit_test, update, view,
+    CatalogProjection, Focus, MemoryAdmission, MemoryAdmissionContext, MemoryDetail,
+    MemoryEvidence, MemoryFindingKind, MemoryLifecycleMode, MemoryOrigin, MemoryPane,
+    MemoryProjection, MemoryRelation, MemoryRelationKind, MemoryRevisionContext, MemoryScope,
+    MemorySensitivity, MemoryStatus, MemoryStatusFilter, MemorySummary, MemoryTrust,
+    MemoryValidationFinding, Message, Model, ModelSummary, MouseAction, OverlayKind, RetryPolicy,
+    Route, SessionProjection, SessionsProjection, SettingsProjection, UiEffect, UiFailure,
+    UiIntent, UiNotice, hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -87,7 +90,22 @@ fn memory_projection() -> MemoryProjection {
             1_725_100_000_000,
             1,
         )
-        .expect("admission"),
+        .expect("admission")
+        .with_context(
+            MemoryAdmissionContext::new(
+                "attempt-launch-1",
+                4,
+                "epoch-launch-a",
+                38,
+                "revision-concise-3",
+                "memory-renderer-v1",
+                vec![
+                    "workspace scope matched".to_owned(),
+                    "high confidence".to_owned(),
+                ],
+            )
+            .expect("admission context"),
+        ),
         MemoryAdmission::new(
             "session-review",
             "gemini-memory",
@@ -108,7 +126,30 @@ fn memory_projection() -> MemoryProjection {
             None,
             admissions,
         )
-        .expect("detail"),
+        .expect("detail")
+        .with_revision_context(
+            MemoryRevisionContext::new(
+                11,
+                "revision-concise-3",
+                None,
+                "workspace current-project",
+                MemoryOrigin::ExplicitUser,
+                MemorySensitivity::Internal,
+                vec![MemoryEvidence::new(
+                    "User instruction",
+                    "session launch",
+                    "Please keep implementation notes concise and verified.",
+                )
+                .expect("evidence")],
+                vec![MemoryRelation::new(
+                    MemoryRelationKind::DerivedFrom,
+                    "memory-style-source",
+                )
+                .expect("relation")],
+                vec![],
+            )
+            .expect("revision context"),
+        ),
         MemoryDetail::new(
             "memory-keyboard",
             1,
@@ -128,7 +169,35 @@ fn memory_projection() -> MemoryProjection {
                 .expect("admission"),
             ],
         )
-        .expect("detail"),
+        .expect("detail")
+        .with_revision_context(
+            MemoryRevisionContext::new(
+                17,
+                "revision-keyboard-1",
+                Some("proposal-keyboard-1".to_owned()),
+                "user current-account",
+                MemoryOrigin::ModelProposal,
+                MemorySensitivity::Internal,
+                vec![MemoryEvidence::new(
+                    "Observed preference",
+                    "session setup",
+                    "The user requested keyboard-first terminal workflows.",
+                )
+                .expect("evidence")],
+                vec![MemoryRelation::new(
+                    MemoryRelationKind::Contradicts,
+                    "memory-mouse-first",
+                )
+                .expect("relation")],
+                vec![MemoryValidationFinding::new(
+                    MemoryFindingKind::Contradiction,
+                    "memory-mouse-first",
+                    "An older preference may prioritize mouse-first controls.",
+                )
+                .expect("finding")],
+            )
+            .expect("revision context"),
+        ),
     ];
     MemoryProjection::ready(7, summaries, details, 3, false).expect("projection")
 }
@@ -145,6 +214,13 @@ fn key(key: Key) -> Input {
 fn alt(character: char) -> Input {
     Input {
         alt: true,
+        ..key(Key::Char(character))
+    }
+}
+
+fn ctrl(character: char) -> Input {
+    Input {
+        ctrl: true,
         ..key(Key::Char(character))
     }
 }
@@ -338,6 +414,287 @@ fn stale_memory_generations_cannot_roll_the_workspace_back() {
     assert_eq!(model.memory().generation(), 7);
     assert_eq!(model.memory().total(), 3);
     assert_eq!(model.memory_selection(), Some("memory-concise"));
+}
+
+#[test]
+fn remember_editor_is_bounded_redacted_pending_safe_and_restores_focus() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(alt('n')));
+    assert_eq!(model.overlay(), Some(OverlayKind::MemoryLifecycle));
+    assert_eq!(model.focus, Focus::MemoryLifecycle);
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Remember)
+    );
+
+    let compact = text(&render(&model, 40, 12));
+    assert!(compact.contains("Workspace fact"));
+    assert!(compact.contains("rejects secrets"));
+    type_text(&mut model, "Remember this exact preference.");
+    assert!(!format!("{model:?}").contains("exact preference"));
+
+    let effects = update(&mut model, Message::Input(ctrl('s')));
+    let [
+        UiEffect::Dispatch(UiIntent::RememberMemory {
+            request_id,
+            content,
+        }),
+    ] = effects.as_slice()
+    else {
+        panic!("expected typed remember intent");
+    };
+    assert_eq!(content.as_str(), "Remember this exact preference.");
+    let request_id = *request_id;
+    assert!(model.memory_lifecycle_pending());
+    assert!(update(&mut model, Message::Input(ctrl('s'))).is_empty());
+
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentRejected {
+            request_id,
+            failure: UiFailure::new(
+                ErrorClass::Validation,
+                "memory validation rejected the draft",
+                RetryPolicy::Never,
+            ),
+        }),
+    );
+    assert_eq!(model.overlay(), Some(OverlayKind::MemoryLifecycle));
+    assert!(!model.memory_lifecycle_pending());
+    assert!(text(&render(&model, 60, 18)).contains("Remember this exact preference."));
+
+    let effects = update(&mut model, Message::Input(ctrl('s')));
+    let [UiEffect::Dispatch(UiIntent::RememberMemory { request_id, .. })] = effects.as_slice()
+    else {
+        panic!("expected retried remember intent");
+    };
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted {
+            request_id: *request_id,
+        }),
+    );
+    assert!(model.overlay().is_none());
+    assert_eq!(model.route(), Route::Memory);
+    assert_eq!(model.focus, Focus::Memory);
+}
+
+#[test]
+fn correction_review_and_proposal_decisions_carry_exact_revision_guards() {
+    let mut correction = model();
+    let _ = update(&mut correction, Message::Input(alt('6')));
+    let _ = update(&mut correction, Message::Input(alt('e')));
+    type_text(&mut correction, " Corrected.");
+    let effects = update(&mut correction, Message::Input(ctrl('s')));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::ReviseMemory {
+            memory_id,
+            expected_last_sequence: 11,
+            content,
+            ..
+        })] if memory_id == "memory-concise" && content.as_str().ends_with(" Corrected.")
+    ));
+
+    let mut review = model();
+    let _ = update(&mut review, Message::Input(alt('6')));
+    let _ = update(&mut review, Message::Mouse(MouseAction::MemoryCycleStatus));
+    let _ = update(
+        &mut review,
+        Message::Mouse(MouseAction::MemorySelect("memory-keyboard".to_owned())),
+    );
+    let _ = update(&mut review, Message::Input(alt('v')));
+    assert_eq!(
+        review.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Review)
+    );
+    let rendered = text(&render(&review, 80, 24));
+    assert!(rendered.contains("Exact proposed content"));
+    assert!(rendered.contains("user current-account"));
+    assert!(rendered.contains("Observed preference"));
+    assert!(rendered.contains("possible contradiction"));
+    let compact = text(&render(&review, 40, 12));
+    assert!(compact.contains("Approve"));
+    assert!(compact.contains("Reject"));
+
+    let effects = update(&mut review, Message::Input(key(Key::Char('a'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::ApproveMemoryProposal {
+            memory_id,
+            expected_last_sequence: 17,
+            proposal_revision_id,
+            ..
+        })] if memory_id == "memory-keyboard" && proposal_revision_id == "proposal-keyboard-1"
+    ));
+
+    let mut reject = model();
+    let _ = update(&mut reject, Message::Input(alt('6')));
+    let _ = update(&mut reject, Message::Mouse(MouseAction::MemoryCycleStatus));
+    let _ = update(
+        &mut reject,
+        Message::Mouse(MouseAction::MemorySelect("memory-keyboard".to_owned())),
+    );
+    let _ = update(&mut reject, Message::Input(alt('v')));
+    let effects = update(&mut reject, Message::Input(key(Key::Char('r'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::RejectMemoryProposal {
+            memory_id,
+            expected_last_sequence: 17,
+            proposal_revision_id,
+            ..
+        })] if memory_id == "memory-keyboard" && proposal_revision_id == "proposal-keyboard-1"
+    ));
+}
+
+#[test]
+fn retract_delete_and_export_are_distinct_explicit_lifecycle_intents() {
+    let mut retract = model();
+    let _ = update(&mut retract, Message::Input(alt('6')));
+    let _ = update(&mut retract, Message::Input(alt('x')));
+    let retract_copy = text(&render(&retract, 60, 18));
+    assert!(retract_copy.contains("future admission"));
+    assert!(retract_copy.contains("cannot be recalled"));
+    assert!(update(&mut retract, Message::Input(key(Key::Char('n')))).is_empty());
+    assert!(retract.overlay().is_none());
+    let _ = update(&mut retract, Message::Input(alt('x')));
+    let effects = update(&mut retract, Message::Input(key(Key::Char('y'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::RetractMemory {
+            memory_id,
+            expected_last_sequence: 11,
+            revision_id,
+            ..
+        })] if memory_id == "memory-concise" && revision_id == "revision-concise-3"
+    ));
+
+    let mut delete = model();
+    let _ = update(&mut delete, Message::Input(alt('6')));
+    let _ = update(&mut delete, Message::Input(alt('d')));
+    assert!(update(&mut delete, Message::Input(key(Key::Char('q')))).is_empty());
+    let delete_copy = text(&render(&delete, 60, 18));
+    assert!(delete_copy.contains("Logical delete"));
+    assert!(delete_copy.contains("different from retraction"));
+    let effects = update(&mut delete, Message::Input(key(Key::Char('y'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::DeleteMemory {
+            memory_id,
+            expected_last_sequence: 11,
+            ..
+        })] if memory_id == "memory-concise"
+    ));
+
+    let mut export = model();
+    let _ = update(&mut export, Message::Input(alt('6')));
+    let _ = update(&mut export, Message::Input(alt('s')));
+    let effects = update(&mut export, Message::Input(key(Key::Enter)));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::ExportMemory { memory_id, .. })]
+            if memory_id == "memory-concise"
+    ));
+}
+
+#[test]
+fn lifecycle_metadata_remains_actionable_without_an_erasable_content_sidecar() {
+    let mut model = model();
+    let summary = MemorySummary::new(
+        "memory-erased-sidecar",
+        "Content unavailable; lifecycle metadata retained.",
+        MemoryStatus::Active,
+        MemoryScope::Workspace,
+        1_725_000_000_000,
+        Some(10_000),
+        0,
+    )
+    .expect("summary");
+    let detail = MemoryDetail::metadata_only(
+        "memory-erased-sidecar",
+        5,
+        "explicit user memory",
+        MemoryTrust::UserApproved,
+        1_725_000_000_000,
+        None,
+        vec![],
+    )
+    .expect("metadata-only detail")
+    .with_revision_context(
+        MemoryRevisionContext::new(
+            29,
+            "revision-erased-5",
+            None,
+            "workspace current-project",
+            MemoryOrigin::ExplicitUser,
+            MemorySensitivity::Internal,
+            vec![],
+            vec![],
+            vec![],
+        )
+        .expect("revision context"),
+    );
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(29, vec![summary], vec![detail], 1, false)
+            .expect("metadata-only projection"),
+    ));
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(alt('e')));
+    assert!(model.overlay().is_none(), "revision requires exact content");
+    let _ = update(&mut model, Message::Input(alt('x')));
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Retract)
+    );
+    assert!(text(&render(&model, 60, 18)).contains("content sidecar unavailable"));
+    let effects = update(&mut model, Message::Input(key(Key::Char('y'))));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::RetractMemory {
+            expected_last_sequence: 29,
+            revision_id,
+            ..
+        })] if revision_id == "revision-erased-5"
+    ));
+}
+
+#[test]
+fn lifecycle_actions_and_modal_controls_are_measured_at_every_target_size() {
+    for (width, height) in [(120, 50), (80, 24), (60, 18), (40, 12)] {
+        let mut model = model();
+        let _ = update(&mut model, Message::Input(alt('6')));
+        let mut actions = Vec::new();
+        for column in 0..width {
+            for row in 0..height {
+                if let Some(action) = hit_test(&model, width, height, column, row) {
+                    actions.push(action);
+                }
+            }
+        }
+        assert!(actions.contains(&MouseAction::MemoryRemember));
+        assert!(actions.contains(&MouseAction::MemoryActions));
+
+        let _ = update(&mut model, Message::Mouse(MouseAction::MemoryActions));
+        let rendered = text(&render(&model, width, height));
+        assert!(rendered.contains("Memory actions"));
+        let mut overlay_actions = Vec::new();
+        for column in 0..width {
+            for row in 0..height {
+                if let Some(action) = hit_test(&model, width, height, column, row) {
+                    overlay_actions.push(action);
+                }
+            }
+        }
+        assert!(overlay_actions.contains(&MouseAction::MemoryLifecycleSubmit));
+        assert!(overlay_actions.contains(&MouseAction::MemoryLifecycleCancel));
+        assert!(
+            overlay_actions
+                .iter()
+                .any(|action| { matches!(action, MouseAction::MemoryActionSelect(_)) })
+        );
+    }
 }
 
 #[test]

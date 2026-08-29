@@ -9,8 +9,9 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry, Focus,
-    LocalPreferenceChange, MODEL_THINKING_LEVELS, MemoryPane, MemoryScopeFilter,
-    MemoryStatusFilter, MemoryWorkspaceFocus, Message, Model, ModelDefaultStep, MouseAction,
+    LocalPreferenceChange, MODEL_THINKING_LEVELS, MemoryContent, MemoryDraftEditor,
+    MemoryLifecycleMode, MemoryLifecycleState, MemoryPane, MemoryScopeFilter, MemoryStatusFilter,
+    MemoryTargetSnapshot, MemoryWorkspaceFocus, Message, Model, ModelDefaultStep, MouseAction,
     Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
     ProfilesProjection, ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
@@ -149,6 +150,13 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
                 )
             }
             OverlayKind::TranscriptSearch => false,
+            OverlayKind::MemoryLifecycle => matches!(
+                action,
+                MouseAction::MemoryActionSelect(_)
+                    | MouseAction::MemoryLifecycleSubmit
+                    | MouseAction::MemoryProposalReject
+                    | MouseAction::MemoryLifecycleCancel
+            ),
         };
         if !allowed {
             return Vec::new();
@@ -327,6 +335,44 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             open_memory_admissions(model);
             Vec::new()
         }
+        MouseAction::MemoryRemember => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Remember);
+            Vec::new()
+        }
+        MouseAction::MemoryRevise => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Revise);
+            Vec::new()
+        }
+        MouseAction::MemoryReview => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Review);
+            Vec::new()
+        }
+        MouseAction::MemoryActions => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Actions);
+            Vec::new()
+        }
+        MouseAction::MemoryRetract => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Retract);
+            Vec::new()
+        }
+        MouseAction::MemoryDelete => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Delete);
+            Vec::new()
+        }
+        MouseAction::MemoryExport => {
+            open_memory_lifecycle(model, MemoryLifecycleMode::Export);
+            Vec::new()
+        }
+        MouseAction::MemoryActionSelect(index) => {
+            select_memory_lifecycle_action(model, index);
+            Vec::new()
+        }
+        MouseAction::MemoryLifecycleSubmit => submit_memory_lifecycle(model, true),
+        MouseAction::MemoryProposalReject => submit_memory_lifecycle(model, false),
+        MouseAction::MemoryLifecycleCancel => {
+            close_memory_lifecycle(model);
+            Vec::new()
+        }
         MouseAction::PickerSelect(selection) => {
             if model
                 .catalog
@@ -391,6 +437,9 @@ fn cancel_mouse_action(model: &mut Model) -> Vec<UiEffect> {
 fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     if model.overlay() == Some(OverlayKind::Permission) {
         return handle_permission_input(model, input);
+    }
+    if model.overlay() == Some(OverlayKind::MemoryLifecycle) {
+        return handle_memory_lifecycle_input(model, input);
     }
 
     if let Some(route) = direct_route(&input) {
@@ -532,6 +581,7 @@ fn handle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             OverlayKind::Permission => handle_permission_input(model, input),
             OverlayKind::ProfileCredential => handle_profile_credential_input(model, input),
             OverlayKind::UserProfile => handle_user_profile_input(model, input),
+            OverlayKind::MemoryLifecycle => handle_memory_lifecycle_input(model, input),
             OverlayKind::Confirmation => match model.route() {
                 Route::Sessions => handle_browser_input(model, input),
                 Route::Profiles => handle_profile_input(model, input),
@@ -578,6 +628,22 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
     ) {
         model.should_quit = true;
         return vec![UiEffect::Quit];
+    }
+    if input.alt {
+        let mode = match input.key {
+            Key::Char('n' | 'N') => Some(MemoryLifecycleMode::Remember),
+            Key::Char('e' | 'E') => Some(MemoryLifecycleMode::Revise),
+            Key::Char('v' | 'V') => Some(MemoryLifecycleMode::Review),
+            Key::Char('a' | 'A') => Some(MemoryLifecycleMode::Actions),
+            Key::Char('x' | 'X') => Some(MemoryLifecycleMode::Retract),
+            Key::Char('d' | 'D') => Some(MemoryLifecycleMode::Delete),
+            Key::Char('s' | 'S') => Some(MemoryLifecycleMode::Export),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            open_memory_lifecycle(model, mode);
+            return Vec::new();
+        }
     }
     match input {
         Input {
@@ -779,6 +845,476 @@ fn memory_back(model: &mut Model) {
         }
     }
     model.dirty = true;
+}
+
+fn open_memory_lifecycle(model: &mut Model, mode: MemoryLifecycleMode) {
+    if model.route() != Route::Memory || model.overlay().is_some() {
+        return;
+    }
+    let target = if mode == MemoryLifecycleMode::Remember {
+        None
+    } else {
+        let Some((summary, Some(detail))) = model.selected_memory() else {
+            model.notice = Some(Notice::Info(
+                "Select a memory with loaded revision detail first".to_owned(),
+            ));
+            model.dirty = true;
+            return;
+        };
+        let content = detail
+            .has_content()
+            .then(|| MemoryContent::new(detail.content()))
+            .transpose()
+            .ok()
+            .flatten();
+        Some(MemoryTargetSnapshot {
+            memory_id: summary.id().to_owned(),
+            status: summary.status(),
+            scope: summary.scope(),
+            revision: detail.revision(),
+            content,
+            source: detail.source().to_owned(),
+            trust: detail.trust(),
+            revision_context: detail.revision_context().cloned(),
+        })
+    };
+    if mode != MemoryLifecycleMode::Remember && mode != MemoryLifecycleMode::Actions {
+        let available = model.memory_actions();
+        if !available.contains(&mode) {
+            model.notice = Some(Notice::Info(
+                match mode {
+                    MemoryLifecycleMode::Review => {
+                        "This row is not a reviewable proposal with exact revision metadata"
+                    }
+                    MemoryLifecycleMode::Revise
+                    | MemoryLifecycleMode::Retract
+                    | MemoryLifecycleMode::Delete => {
+                        "Exact lifecycle metadata is not loaded for this action"
+                    }
+                    MemoryLifecycleMode::Export => {
+                        "Exact revision content is not loaded for export"
+                    }
+                    MemoryLifecycleMode::Remember | MemoryLifecycleMode::Actions => {
+                        "This memory action is unavailable"
+                    }
+                }
+                .to_owned(),
+            ));
+            model.dirty = true;
+            return;
+        }
+    }
+    if mode == MemoryLifecycleMode::Actions && model.memory_actions().is_empty() {
+        model.notice = Some(Notice::Info(
+            "No lifecycle actions are available for this row".to_owned(),
+        ));
+        model.dirty = true;
+        return;
+    }
+    let editor = match mode {
+        MemoryLifecycleMode::Remember => Some(MemoryDraftEditor::default()),
+        MemoryLifecycleMode::Revise => target
+            .as_ref()
+            .and_then(|target| target.content.as_ref())
+            .map(MemoryDraftEditor::from_content),
+        MemoryLifecycleMode::Review
+        | MemoryLifecycleMode::Actions
+        | MemoryLifecycleMode::Retract
+        | MemoryLifecycleMode::Delete
+        | MemoryLifecycleMode::Export => None,
+    };
+    if !model.open_overlay(OverlayKind::MemoryLifecycle) {
+        return;
+    }
+    model.memory_lifecycle = Some(MemoryLifecycleState {
+        mode,
+        target,
+        editor,
+        action_selected: 0,
+        pending_request: None,
+        scroll: 0,
+    });
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn close_memory_lifecycle(model: &mut Model) {
+    if model.memory_lifecycle_pending() {
+        return;
+    }
+    model.memory_lifecycle = None;
+    let _ = model.close_overlay(OverlayKind::MemoryLifecycle);
+    model.notice = None;
+    model.dirty = true;
+}
+
+fn select_memory_lifecycle_action(model: &mut Model, index: usize) {
+    let action_count = model.memory_actions().len();
+    let Some(state) = model.memory_lifecycle.as_mut() else {
+        return;
+    };
+    if state.mode == MemoryLifecycleMode::Actions && index < action_count {
+        state.action_selected = index;
+        model.dirty = true;
+    }
+}
+
+fn activate_selected_memory_action(model: &mut Model) {
+    let actions = model.memory_actions();
+    let Some(state) = model.memory_lifecycle.as_mut() else {
+        return;
+    };
+    if state.mode != MemoryLifecycleMode::Actions {
+        return;
+    }
+    let Some(mode) = actions.get(state.action_selected).copied() else {
+        return;
+    };
+    state.mode = mode;
+    state.scroll = 0;
+    state.editor = (mode == MemoryLifecycleMode::Revise)
+        .then(|| {
+            state
+                .target
+                .as_ref()
+                .and_then(|target| target.content.as_ref())
+                .map(MemoryDraftEditor::from_content)
+        })
+        .flatten();
+    model.dirty = true;
+}
+
+fn handle_memory_lifecycle_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        let _ = model.close_overlay(OverlayKind::MemoryLifecycle);
+        return Vec::new();
+    };
+    if state.pending_request.is_some() {
+        return Vec::new();
+    }
+    let mode = state.mode;
+    match mode {
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise => match input {
+            Input {
+                key: Key::Char('s' | 'S'),
+                ctrl: true,
+                ..
+            } => submit_memory_lifecycle(model, true),
+            Input { key: Key::Esc, .. } => {
+                close_memory_lifecycle(model);
+                Vec::new()
+            }
+            Input {
+                key: Key::Enter, ..
+            } => {
+                edit_memory_draft(model, Some('\n'));
+                Vec::new()
+            }
+            Input {
+                key: Key::Backspace,
+                ..
+            } => {
+                if let Some(editor) = model
+                    .memory_lifecycle
+                    .as_mut()
+                    .and_then(|state| state.editor.as_mut())
+                {
+                    editor.pop();
+                    model.notice = None;
+                    model.dirty = true;
+                }
+                Vec::new()
+            }
+            Input {
+                key: Key::Char(character),
+                ctrl: false,
+                alt: false,
+                ..
+            } if !character.is_control() => {
+                edit_memory_draft(model, Some(character));
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        MemoryLifecycleMode::Actions => match input {
+            Input { key: Key::Up, .. } => {
+                move_memory_action_selection(model, -1);
+                Vec::new()
+            }
+            Input { key: Key::Down, .. } => {
+                move_memory_action_selection(model, 1);
+                Vec::new()
+            }
+            Input {
+                key: Key::Enter, ..
+            } => {
+                activate_selected_memory_action(model);
+                Vec::new()
+            }
+            Input { key: Key::Esc, .. } => {
+                close_memory_lifecycle(model);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        MemoryLifecycleMode::Review => match input {
+            Input { key: Key::Up, .. } => {
+                scroll_memory_lifecycle(model, -1);
+                Vec::new()
+            }
+            Input { key: Key::Down, .. } => {
+                scroll_memory_lifecycle(model, 1);
+                Vec::new()
+            }
+            Input {
+                key: Key::Char('a' | 'A') | Key::Enter,
+                ..
+            } => submit_memory_lifecycle(model, true),
+            Input {
+                key: Key::Char('r' | 'R'),
+                ..
+            } => submit_memory_lifecycle(model, false),
+            Input { key: Key::Esc, .. } => {
+                close_memory_lifecycle(model);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        MemoryLifecycleMode::Retract
+        | MemoryLifecycleMode::Delete
+        | MemoryLifecycleMode::Export => match input {
+            Input { key: Key::Up, .. } => {
+                scroll_memory_lifecycle(model, -1);
+                Vec::new()
+            }
+            Input { key: Key::Down, .. } => {
+                scroll_memory_lifecycle(model, 1);
+                Vec::new()
+            }
+            Input {
+                key: Key::Char('y' | 'Y') | Key::Enter,
+                ..
+            } => submit_memory_lifecycle(model, true),
+            Input {
+                key: Key::Char('n' | 'N') | Key::Esc,
+                ..
+            } => {
+                close_memory_lifecycle(model);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+    }
+}
+
+fn scroll_memory_lifecycle(model: &mut Model, direction: i32) {
+    let Some(state) = model.memory_lifecycle.as_mut() else {
+        return;
+    };
+    if direction < 0 {
+        state.scroll = state.scroll.saturating_sub(1);
+    } else {
+        state.scroll = state.scroll.saturating_add(1);
+    }
+    model.dirty = true;
+}
+
+fn edit_memory_draft(model: &mut Model, character: Option<char>) {
+    let result = model
+        .memory_lifecycle
+        .as_mut()
+        .and_then(|state| state.editor.as_mut())
+        .map_or(Ok(()), |editor| {
+            character.map_or(Ok(()), |character| editor.append_character(character))
+        });
+    match result {
+        Ok(()) => model.notice = None,
+        Err(message) => {
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                message,
+                RetryPolicy::Never,
+            )));
+        }
+    }
+    model.dirty = true;
+}
+
+fn move_memory_action_selection(model: &mut Model, direction: i32) {
+    let count = model.memory_actions().len();
+    let Some(state) = model.memory_lifecycle.as_mut() else {
+        return;
+    };
+    if count == 0 {
+        return;
+    }
+    let last = i32::try_from(count.saturating_sub(1)).unwrap_or_default();
+    let current = i32::try_from(state.action_selected).unwrap_or_default();
+    state.action_selected = usize::try_from((current + direction).clamp(0, last)).unwrap_or(0);
+    model.dirty = true;
+}
+
+fn submit_memory_lifecycle(model: &mut Model, affirmative: bool) -> Vec<UiEffect> {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return Vec::new();
+    };
+    if state.pending_request.is_some() {
+        return Vec::new();
+    }
+    if state.mode == MemoryLifecycleMode::Actions {
+        activate_selected_memory_action(model);
+        return Vec::new();
+    }
+    let mode = state.mode;
+    let target = state.target.clone();
+    let content = state
+        .editor
+        .as_ref()
+        .map(MemoryDraftEditor::content)
+        .transpose();
+    let content = match content {
+        Ok(content) => content,
+        Err(message) => {
+            model.notice = Some(Notice::Failure(UiFailure::new(
+                ErrorClass::Validation,
+                message,
+                RetryPolicy::Never,
+            )));
+            model.dirty = true;
+            return Vec::new();
+        }
+    };
+    let request_id = model.allocate_request();
+    let (pending, intent, notice) = match mode {
+        MemoryLifecycleMode::Remember => {
+            let Some(content) = content else {
+                return Vec::new();
+            };
+            (
+                PendingKind::RememberMemory(content.clone()),
+                UiIntent::RememberMemory {
+                    request_id,
+                    content,
+                },
+                "Saving memory...",
+            )
+        }
+        MemoryLifecycleMode::Revise => {
+            let Some(target) = target else {
+                return Vec::new();
+            };
+            let Some(context) = target.revision_context.as_ref() else {
+                return Vec::new();
+            };
+            let Some(content) = content else {
+                return Vec::new();
+            };
+            (
+                PendingKind::ReviseMemory {
+                    memory_id: target.memory_id.clone(),
+                    content: content.clone(),
+                },
+                UiIntent::ReviseMemory {
+                    request_id,
+                    memory_id: target.memory_id,
+                    expected_last_sequence: context.expected_last_sequence(),
+                    content,
+                },
+                "Saving correction...",
+            )
+        }
+        MemoryLifecycleMode::Review => {
+            let Some(target) = target else {
+                return Vec::new();
+            };
+            let Some(context) = target.revision_context.as_ref() else {
+                return Vec::new();
+            };
+            let Some(proposal_revision_id) = context.proposal_revision_id().map(str::to_owned)
+            else {
+                return Vec::new();
+            };
+            if affirmative {
+                (
+                    PendingKind::ApproveMemoryProposal(target.memory_id.clone()),
+                    UiIntent::ApproveMemoryProposal {
+                        request_id,
+                        memory_id: target.memory_id,
+                        expected_last_sequence: context.expected_last_sequence(),
+                        proposal_revision_id,
+                    },
+                    "Approving exact proposal...",
+                )
+            } else {
+                (
+                    PendingKind::RejectMemoryProposal(target.memory_id.clone()),
+                    UiIntent::RejectMemoryProposal {
+                        request_id,
+                        memory_id: target.memory_id,
+                        expected_last_sequence: context.expected_last_sequence(),
+                        proposal_revision_id,
+                    },
+                    "Rejecting exact proposal...",
+                )
+            }
+        }
+        MemoryLifecycleMode::Retract => {
+            let Some(target) = target else {
+                return Vec::new();
+            };
+            let Some(context) = target.revision_context.as_ref() else {
+                return Vec::new();
+            };
+            (
+                PendingKind::RetractMemory(target.memory_id.clone()),
+                UiIntent::RetractMemory {
+                    request_id,
+                    memory_id: target.memory_id,
+                    expected_last_sequence: context.expected_last_sequence(),
+                    revision_id: context.revision_id().to_owned(),
+                },
+                "Retracting future admission...",
+            )
+        }
+        MemoryLifecycleMode::Delete => {
+            let Some(target) = target else {
+                return Vec::new();
+            };
+            let Some(context) = target.revision_context.as_ref() else {
+                return Vec::new();
+            };
+            (
+                PendingKind::DeleteMemory(target.memory_id.clone()),
+                UiIntent::DeleteMemory {
+                    request_id,
+                    memory_id: target.memory_id,
+                    expected_last_sequence: context.expected_last_sequence(),
+                },
+                "Recording logical deletion...",
+            )
+        }
+        MemoryLifecycleMode::Export => {
+            let Some(target) = target else {
+                return Vec::new();
+            };
+            (
+                PendingKind::ExportMemory(target.memory_id.clone()),
+                UiIntent::ExportMemory {
+                    request_id,
+                    memory_id: target.memory_id,
+                },
+                "Exporting memory...",
+            )
+        }
+        MemoryLifecycleMode::Actions => return Vec::new(),
+    };
+    model.pending.insert(request_id, pending);
+    if let Some(state) = model.memory_lifecycle.as_mut() {
+        state.pending_request = Some(request_id);
+    }
+    model.notice = Some(Notice::Info(notice.to_owned()));
+    model.dirty = true;
+    vec![UiEffect::Dispatch(intent)]
 }
 
 fn handle_chat_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
@@ -2405,6 +2941,12 @@ fn close_active_overlay_state(model: &mut Model) {
         OverlayKind::UserProfile => {
             model.user_profile.display_label_editor = None;
         }
+        OverlayKind::MemoryLifecycle => {
+            if model.memory_lifecycle_pending() {
+                return;
+            }
+            model.memory_lifecycle = None;
+        }
         OverlayKind::Confirmation => {
             model.browser.confirming_archive = None;
             model.browser.confirming_delete = None;
@@ -3537,7 +4079,14 @@ fn has_pending_lifecycle(model: &Model, session_id: &str) -> bool {
         | PendingKind::RetryAttempt(_)
         | PendingKind::AnswerPermission(_)
         | PendingKind::ExportTranscript
-        | PendingKind::CodexLogin => false,
+        | PendingKind::CodexLogin
+        | PendingKind::RememberMemory(_)
+        | PendingKind::ReviseMemory { .. }
+        | PendingKind::ApproveMemoryProposal(_)
+        | PendingKind::RejectMemoryProposal(_)
+        | PendingKind::RetractMemory(_)
+        | PendingKind::DeleteMemory(_)
+        | PendingKind::ExportMemory(_) => false,
     })
 }
 
@@ -3795,6 +4344,24 @@ fn handle_paste(model: &mut Model, text: &str) {
                 .query
                 .push_str(&editable_safe(text).replace('\n', " "));
             normalize_palette_selection(model);
+            model.dirty = true;
+        }
+        Some(OverlayKind::MemoryLifecycle) => {
+            let result = model
+                .memory_lifecycle
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+                .map_or(Ok(()), |editor| editor.append_text(&editable_safe(text)));
+            match result {
+                Ok(()) => model.notice = None,
+                Err(message) => {
+                    model.notice = Some(Notice::Failure(UiFailure::new(
+                        ErrorClass::Validation,
+                        message,
+                        RetryPolicy::Never,
+                    )));
+                }
+            }
             model.dirty = true;
         }
         Some(
@@ -4159,6 +4726,21 @@ fn apply_catalog(model: &mut Model, catalog: Arc<CatalogProjection>) {
     model.dirty = true;
 }
 
+fn finish_memory_lifecycle(model: &mut Model, request_id: crate::model::RequestId) {
+    let owns_request = model
+        .memory_lifecycle
+        .as_ref()
+        .is_some_and(|state| state.pending_request == Some(request_id));
+    if !owns_request {
+        return;
+    }
+    if let Some(state) = model.memory_lifecycle.as_mut() {
+        state.pending_request = None;
+    }
+    model.memory_lifecycle = None;
+    let _ = model.close_overlay(OverlayKind::MemoryLifecycle);
+}
+
 fn apply_notice(model: &mut Model, notice: UiNotice) {
     match notice {
         UiNotice::IntentCommitted { request_id } => {
@@ -4287,6 +4869,46 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                         model.profile_center.codex_login = CodexLoginState::Idle;
                         model.notice = Some(Notice::Info("Codex sign-in cancelled".to_owned()));
                     }
+                    PendingKind::RememberMemory(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Memory saved; waiting for the next ledger projection".to_owned(),
+                        ));
+                    }
+                    PendingKind::ReviseMemory { .. } => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Correction saved; prior revisions remain auditable".to_owned(),
+                        ));
+                    }
+                    PendingKind::ApproveMemoryProposal(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Proposal approved for future eligible turns".to_owned(),
+                        ));
+                    }
+                    PendingKind::RejectMemoryProposal(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info("Proposal rejected".to_owned()));
+                    }
+                    PendingKind::RetractMemory(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Memory retracted from future admission; dispatched turns cannot be recalled"
+                                .to_owned(),
+                        ));
+                    }
+                    PendingKind::DeleteMemory(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info(
+                            "Logical deletion recorded; audit history remains and dispatched turns cannot be recalled"
+                                .to_owned(),
+                        ));
+                    }
+                    PendingKind::ExportMemory(_) => {
+                        finish_memory_lifecycle(model, request_id);
+                        model.notice = Some(Notice::Info("Memory exported".to_owned()));
+                    }
                 }
             }
         }
@@ -4384,6 +5006,21 @@ fn apply_notice(model: &mut Model, notice: UiNotice) {
                 | None => {}
                 Some(PendingKind::CodexLogin) => {
                     model.profile_center.codex_login = CodexLoginState::Failed;
+                }
+                Some(
+                    PendingKind::RememberMemory(_)
+                    | PendingKind::ReviseMemory { .. }
+                    | PendingKind::ApproveMemoryProposal(_)
+                    | PendingKind::RejectMemoryProposal(_)
+                    | PendingKind::RetractMemory(_)
+                    | PendingKind::DeleteMemory(_)
+                    | PendingKind::ExportMemory(_),
+                ) => {
+                    if let Some(state) = model.memory_lifecycle.as_mut()
+                        && state.pending_request == Some(request_id)
+                    {
+                        state.pending_request = None;
+                    }
                 }
             }
             model.notice = Some(Notice::Failure(failure));
@@ -4858,7 +5495,14 @@ fn has_pending_attempt(model: &Model, attempt_id: &AttemptKey, cancellation: boo
             | PendingKind::DeleteSession(_)
             | PendingKind::OpenSession(_)
             | PendingKind::ExportTranscript
-            | PendingKind::CodexLogin => false,
+            | PendingKind::CodexLogin
+            | PendingKind::RememberMemory(_)
+            | PendingKind::ReviseMemory { .. }
+            | PendingKind::ApproveMemoryProposal(_)
+            | PendingKind::RejectMemoryProposal(_)
+            | PendingKind::RetractMemory(_)
+            | PendingKind::DeleteMemory(_)
+            | PendingKind::ExportMemory(_) => false,
         })
 }
 

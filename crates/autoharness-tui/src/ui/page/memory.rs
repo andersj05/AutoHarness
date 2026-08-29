@@ -3,25 +3,27 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout as Split, Rect};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::model::{
-    MemoryLoadState, MemoryPane, MemoryStatus, MemorySummary, MemoryWorkspaceFocus, Model,
-    MouseAction,
+    MemoryLifecycleMode, MemoryLoadState, MemoryPane, MemoryStatus, MemorySummary,
+    MemoryWorkspaceFocus, Model, MouseAction,
 };
 use crate::text::display_safe;
 use crate::time::{format_absolute_time, format_relative_age, relative_age};
 use crate::ui::component::paint::{self, wrap_cells};
 use crate::ui::component::{
-    Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, Panel,
-    SearchField, StatusBar, StatusSegment,
+    Button, ButtonRow, ButtonVariant, Chip, ChipVariant, KeyValue, KeyValueTable, Modal,
+    ModalIntent, Panel, SearchField, StatusBar, StatusSegment,
 };
 use crate::ui::layout::presentation;
 use crate::ui::metrics::{
-    MEMORY_ADMISSIONS_PERCENT_WIDE, MEMORY_CONTENT_PREVIEW_ROWS, MEMORY_DETAIL_PERCENT,
-    MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_MIN_HEIGHT, MEMORY_LIST_PERCENT,
-    MEMORY_LIST_PERCENT_WIDE, MEMORY_ROW_BADGE_MIN_WIDTH, MEMORY_TALL_HEADER_MIN_HEIGHT,
-    MEMORY_TALL_LIST_MIN_HEIGHT, MEMORY_THREE_PANE_MIN_WIDTH, MEMORY_TWO_PANE_MIN_WIDTH, ROW,
-    TWO_ROWS,
+    MEMORY_ACTIONS_FULL_WIDTH, MEMORY_ADMISSIONS_PERCENT_WIDE, MEMORY_CONTENT_PREVIEW_ROWS,
+    MEMORY_DETAIL_PERCENT, MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_MIN_HEIGHT,
+    MEMORY_LIST_PERCENT, MEMORY_LIST_PERCENT_WIDE, MEMORY_ROW_BADGE_MIN_WIDTH,
+    MEMORY_TALL_HEADER_MIN_HEIGHT, MEMORY_TALL_LIST_MIN_HEIGHT, MEMORY_THREE_PANE_MIN_WIDTH,
+    MEMORY_TWO_PANE_MIN_WIDTH, ROW, TWO_ROWS,
 };
 use crate::ui::{Icon, Token, normalized_t};
 
@@ -92,7 +94,7 @@ pub fn hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
                 .map(|(row, index)| (row, MouseAction::MemorySelectAdmission(index))),
         );
     }
-    let buttons = footer_buttons(model);
+    let buttons = footer_buttons(model, regions.footer.width);
     hits.extend(ButtonRow::new(model.theme(), &buttons).regions(regions.footer));
     hits
 }
@@ -261,7 +263,11 @@ fn render_search(buf: &mut Buffer, area: Rect, model: &Model) {
             x,
             area.y,
             area.right().saturating_sub(x).saturating_sub(TWO_ROWS),
-            "Search memories",
+            if model.memory().stale() {
+                "Search loaded page"
+            } else {
+                "Search memories"
+            },
             model.theme().style(Token::TextMuted),
         );
     }
@@ -318,6 +324,9 @@ fn render_list(buf: &mut Buffer, area: Rect, model: &Model) {
                 }),
             MemoryLoadState::Ready if model.memory().summaries().is_empty() => {
                 "No admitted memories yet."
+            }
+            MemoryLoadState::Ready if model.memory().stale() => {
+                "No matches in the loaded page; more memories exist."
             }
             MemoryLoadState::Ready => "No memories match these filters.",
         };
@@ -521,11 +530,40 @@ fn render_detail(buf: &mut Buffer, area: Rect, model: &Model) {
     let validity = detail
         .valid_until_ms()
         .map_or_else(|| "open ended".to_owned(), format_absolute_time);
-    let rows = [
+    let scope_identity = detail.revision_context().map_or_else(
+        || summary.scope().label().to_owned(),
+        |context| {
+            format!(
+                "{} - {}",
+                summary.scope().label(),
+                display_safe(context.scope_identity())
+            )
+        },
+    );
+    let origin = detail
+        .revision_context()
+        .map_or("not loaded", |context| context.origin().label());
+    let sensitivity = detail
+        .revision_context()
+        .map_or("not loaded", |context| context.sensitivity().label());
+    let evidence_count = detail
+        .revision_context()
+        .map_or(0, |context| context.evidence().len())
+        .to_string();
+    let finding_count = detail
+        .revision_context()
+        .map_or(0, |context| context.findings().len())
+        .to_string();
+    let rows = vec![
         KeyValue {
             label: "State",
             value: summary.status().label(),
-            chip: Some(summary.scope().label()),
+            chip: None,
+        },
+        KeyValue {
+            label: "Scope",
+            value: &scope_identity,
+            chip: None,
         },
         KeyValue {
             label: "Trust",
@@ -541,6 +579,16 @@ fn render_detail(buf: &mut Buffer, area: Rect, model: &Model) {
             label: "Revision",
             value: &revision,
             chip: Some(&confidence),
+        },
+        KeyValue {
+            label: "Origin",
+            value: origin,
+            chip: Some(sensitivity),
+        },
+        KeyValue {
+            label: "Review data",
+            value: &evidence_count,
+            chip: Some(&finding_count),
         },
         KeyValue {
             label: "Created",
@@ -699,42 +747,71 @@ fn admission_rows(area: Rect, model: &Model) -> Vec<(Rect, usize)> {
         .collect()
 }
 
-fn footer_buttons(model: &Model) -> Vec<Button<MouseAction>> {
-    match model.memory_workspace.pane {
-        MemoryPane::List => vec![Button::new(
-            "Open",
-            Some("Enter".to_owned()),
-            ButtonVariant::Primary,
-            MouseAction::MemoryOpen,
-        )],
-        MemoryPane::Detail => vec![
-            Button::new(
-                "Admissions",
-                Some("Enter".to_owned()),
-                ButtonVariant::Primary,
-                MouseAction::MemoryAdmissions,
-            ),
-            Button::new(
-                "Index",
-                Some("Esc".to_owned()),
+fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
+    let mut buttons = vec![Button::new(
+        "Remember",
+        None,
+        ButtonVariant::Primary,
+        MouseAction::MemoryRemember,
+    )];
+    if width >= MEMORY_ACTIONS_FULL_WIDTH {
+        let primary = model.memory_actions().into_iter().find(|mode| {
+            matches!(
+                mode,
+                MemoryLifecycleMode::Review | MemoryLifecycleMode::Revise
+            )
+        });
+        if let Some(mode) = primary {
+            buttons.push(Button::new(
+                if mode == MemoryLifecycleMode::Review {
+                    "Review"
+                } else {
+                    "Correct"
+                },
+                None,
                 ButtonVariant::Secondary,
-                MouseAction::MemoryBack,
-            ),
-        ],
-        MemoryPane::Admissions => vec![Button::new(
+                if mode == MemoryLifecycleMode::Review {
+                    MouseAction::MemoryReview
+                } else {
+                    MouseAction::MemoryRevise
+                },
+            ));
+        }
+    }
+    buttons.push(Button::new(
+        "Actions",
+        None,
+        ButtonVariant::Secondary,
+        MouseAction::MemoryActions,
+    ));
+    buttons.push(match model.memory_workspace.pane {
+        MemoryPane::List => Button::new(
+            "Open",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::MemoryOpen,
+        ),
+        MemoryPane::Detail => Button::new(
+            "Usage",
+            None,
+            ButtonVariant::Secondary,
+            MouseAction::MemoryAdmissions,
+        ),
+        MemoryPane::Admissions => Button::new(
             "Detail",
-            Some("Esc".to_owned()),
+            None,
             ButtonVariant::Secondary,
             MouseAction::MemoryBack,
-        )],
-    }
+        ),
+    });
+    buttons
 }
 
 fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let buttons = footer_buttons(model);
+    let buttons = footer_buttons(model, area.width);
     let button_row = ButtonRow::new(model.theme(), &buttons);
     let button_width = button_row.measure().min(area.width);
     let hint_width = area.width.saturating_sub(button_width).saturating_sub(ROW);
@@ -744,9 +821,495 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
             area.x,
             area.y,
             hint_width,
-            "Tab focus  / search",
+            "Alt+N remember  Alt+A actions",
             model.theme().style(Token::TextMuted),
         );
     }
     button_row.render(buf, area);
+}
+
+/// Buttons shared by Memory lifecycle rendering and paint-order hit testing.
+#[must_use]
+pub(crate) fn lifecycle_buttons(model: &Model) -> Vec<Button<MouseAction>> {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return Vec::new();
+    };
+    if state.pending_request.is_some() {
+        return Vec::new();
+    }
+    match state.mode {
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise => vec![
+            Button::new(
+                "Cancel",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Save",
+                Some("Ctrl+S".to_owned()),
+                ButtonVariant::Primary,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Review => vec![
+            Button::new(
+                "Close",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Reject",
+                None,
+                ButtonVariant::Danger,
+                MouseAction::MemoryProposalReject,
+            ),
+            Button::new(
+                "Approve",
+                None,
+                ButtonVariant::Primary,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Actions => vec![
+            Button::new(
+                "Close",
+                Some("Esc".to_owned()),
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Choose",
+                Some("Enter".to_owned()),
+                ButtonVariant::Primary,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Retract => vec![
+            Button::new(
+                "Cancel",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Retract",
+                None,
+                ButtonVariant::Danger,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Delete => vec![
+            Button::new(
+                "Cancel",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Delete",
+                None,
+                ButtonVariant::Danger,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+        MemoryLifecycleMode::Export => vec![
+            Button::new(
+                "Cancel",
+                None,
+                ButtonVariant::Secondary,
+                MouseAction::MemoryLifecycleCancel,
+            ),
+            Button::new(
+                "Export",
+                None,
+                ButtonVariant::Primary,
+                MouseAction::MemoryLifecycleSubmit,
+            ),
+        ],
+    }
+}
+
+/// Exact action-row regions inside the Memory action chooser.
+#[must_use]
+pub(crate) fn lifecycle_action_rows(popup: Rect, model: &Model) -> Vec<(Rect, usize)> {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return Vec::new();
+    };
+    if state.mode != MemoryLifecycleMode::Actions {
+        return Vec::new();
+    }
+    let panel = Panel::new(
+        model.theme(),
+        model.theme().icons(),
+        Some(Icon::RouteMemory),
+        Some(state.mode.label()),
+        None,
+        None,
+        true,
+    );
+    let inner = panel.content_rect(popup);
+    let body = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(ROW),
+    );
+    let start_y = body.y.saturating_add(TWO_ROWS);
+    model
+        .memory_actions()
+        .into_iter()
+        .enumerate()
+        .take(usize::from(body.bottom().saturating_sub(start_y)))
+        .map(|(index, _)| {
+            (
+                Rect::new(
+                    body.x,
+                    start_y.saturating_add(u16::try_from(index).unwrap_or(u16::MAX)),
+                    body.width,
+                    ROW,
+                ),
+                index,
+            )
+        })
+        .collect()
+}
+
+/// Renders the single Memory lifecycle overlay over the complete terminal host.
+pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model) {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return;
+    };
+    let popup = crate::ui::layout::popup_rect(host);
+    let buttons = lifecycle_buttons(model);
+    let icon = match state.mode {
+        MemoryLifecycleMode::Delete | MemoryLifecycleMode::Retract => Icon::Danger,
+        MemoryLifecycleMode::Review => Icon::Warning,
+        MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Revise
+        | MemoryLifecycleMode::Actions
+        | MemoryLifecycleMode::Export => Icon::RouteMemory,
+    };
+    let intent = match state.mode {
+        MemoryLifecycleMode::Delete => ModalIntent::Danger,
+        MemoryLifecycleMode::Retract | MemoryLifecycleMode::Review => ModalIntent::Warning,
+        MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Revise
+        | MemoryLifecycleMode::Actions
+        | MemoryLifecycleMode::Export => ModalIntent::Neutral,
+    };
+    let (inner, _) = Modal::new(
+        model.theme(),
+        model.theme().icons(),
+        state.mode.label(),
+        Some(icon),
+        &buttons,
+    )
+    .intent(intent)
+    .render(frame.buffer_mut(), host, popup.width, popup.height);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    match state.mode {
+        MemoryLifecycleMode::Remember | MemoryLifecycleMode::Revise => {
+            render_lifecycle_editor(frame.buffer_mut(), inner, model)
+        }
+        MemoryLifecycleMode::Actions => render_lifecycle_actions(frame.buffer_mut(), inner, model),
+        MemoryLifecycleMode::Review
+        | MemoryLifecycleMode::Retract
+        | MemoryLifecycleMode::Delete
+        | MemoryLifecycleMode::Export => {
+            let lines = lifecycle_review_lines(model);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .scroll((state.scroll, 0))
+                .render(inner, frame.buffer_mut());
+        }
+    }
+    if state.pending_request.is_some() && inner.height > 0 {
+        paint::put(
+            frame.buffer_mut(),
+            inner.x,
+            inner.bottom().saturating_sub(ROW),
+            inner.width,
+            "Saving durable change...",
+            model.theme().style(Token::Warning),
+        );
+    }
+}
+
+fn render_lifecycle_editor(buf: &mut Buffer, area: Rect, model: &Model) {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return;
+    };
+    let Some(editor) = state.editor.as_ref() else {
+        return;
+    };
+    let instruction = if state.mode == MemoryLifecycleMode::Remember {
+        format!(
+            "Workspace fact{}Internal{}explicit user",
+            model.theme().icons().separator(),
+            model.theme().icons().separator()
+        )
+    } else {
+        "Correct the exact revision below. Prior revisions remain auditable.".to_owned()
+    };
+    paint::put(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &instruction,
+        model.theme().style(Token::TextMuted),
+    );
+    if area.height <= ROW {
+        return;
+    }
+    let editor_offset = if state.mode == MemoryLifecycleMode::Remember {
+        paint::put(
+            buf,
+            area.x,
+            area.y.saturating_add(ROW),
+            area.width,
+            "Ordinary Remember rejects secrets. Enter adds a line; Ctrl+S saves.",
+            model.theme().style(Token::Warning),
+        );
+        TWO_ROWS
+    } else {
+        ROW
+    };
+    let count = format!("{} characters", editor.char_count());
+    paint::put(
+        buf,
+        area.x,
+        area.y.saturating_add(editor_offset),
+        area.width,
+        &count,
+        model.theme().style(Token::TextSecondary),
+    );
+    let editor_area = Rect::new(
+        area.x,
+        area.y.saturating_add(editor_offset).saturating_add(ROW),
+        area.width,
+        area.height
+            .saturating_sub(editor_offset.saturating_add(ROW)),
+    );
+    let content = if editor.text().is_empty() {
+        "Type memory content...".to_owned()
+    } else {
+        display_safe(editor.text())
+    };
+    Paragraph::new(content)
+        .style(if editor.text().is_empty() {
+            model.theme().style(Token::TextMuted)
+        } else {
+            model.theme().style(Token::TextPrimary)
+        })
+        .wrap(Wrap { trim: false })
+        .render(editor_area, buf);
+}
+
+fn render_lifecycle_actions(buf: &mut Buffer, area: Rect, model: &Model) {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return;
+    };
+    paint::put(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        "Choose what happens to this exact loaded revision.",
+        model.theme().style(Token::TextMuted),
+    );
+    for (offset, mode) in model.memory_actions().into_iter().enumerate() {
+        let y = area
+            .y
+            .saturating_add(TWO_ROWS)
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        if y >= area.bottom() {
+            break;
+        }
+        let selected = offset == state.action_selected;
+        if selected {
+            paint::fill(
+                buf,
+                Rect::new(area.x, y, area.width, ROW),
+                model.theme().style(Token::SurfaceSelectedMuted),
+                Some(' '),
+            );
+        }
+        let marker = if selected {
+            model.theme().icons().glyph(Icon::SelectionCaret)
+        } else {
+            " "
+        };
+        let description = match mode {
+            MemoryLifecycleMode::Revise => "write a corrected revision",
+            MemoryLifecycleMode::Review => "inspect and decide this proposal",
+            MemoryLifecycleMode::Retract => "stop future admission, keep audit history",
+            MemoryLifecycleMode::Delete => "record a logical tombstone",
+            MemoryLifecycleMode::Export => "save a user-owned artifact",
+            MemoryLifecycleMode::Remember | MemoryLifecycleMode::Actions => "",
+        };
+        let label = format!("{marker} {} - {description}", mode.label());
+        paint::put(
+            buf,
+            area.x,
+            y,
+            area.width,
+            &label,
+            if selected {
+                model.theme().style(Token::FocusRing)
+            } else {
+                model.theme().style(Token::TextPrimary)
+            },
+        );
+    }
+}
+
+fn lifecycle_review_lines(model: &Model) -> Vec<Line<'static>> {
+    let Some(state) = model.memory_lifecycle.as_ref() else {
+        return Vec::new();
+    };
+    let Some(target) = state.target.as_ref() else {
+        return Vec::new();
+    };
+    let primary = model.theme().style(Token::TextPrimary);
+    let muted = model.theme().style(Token::TextMuted);
+    let warning = model.theme().style(Token::Warning);
+    let danger = model.theme().style(Token::Danger);
+    let mut lines = Vec::new();
+    match state.mode {
+        MemoryLifecycleMode::Review => {
+            lines.push(Line::styled("Exact proposed content", warning));
+            lines.push(Line::styled(target_content_line(target), primary));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("State: ", muted),
+                Span::styled(target.status.label().to_owned(), primary),
+                Span::styled("  Scope: ", muted),
+                Span::styled(target.scope.label().to_owned(), primary),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Source: ", muted),
+                Span::styled(display_safe(&target.source), primary),
+                Span::styled("  Trust: ", muted),
+                Span::styled(target.trust.label().to_owned(), primary),
+            ]));
+            if let Some(context) = target.revision_context.as_ref() {
+                lines.push(Line::from(vec![
+                    Span::styled("Scope identity: ", muted),
+                    Span::styled(display_safe(context.scope_identity()), primary),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Origin: ", muted),
+                    Span::styled(context.origin().label().to_owned(), primary),
+                    Span::styled("  Sensitivity: ", muted),
+                    Span::styled(context.sensitivity().label().to_owned(), warning),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::styled("Evidence", muted));
+                if context.evidence().is_empty() {
+                    lines.push(Line::styled("No evidence was loaded.", warning));
+                }
+                for evidence in context.evidence() {
+                    lines.push(Line::styled(
+                        format!(
+                            "{} - {}",
+                            display_safe(evidence.label()),
+                            display_safe(evidence.source())
+                        ),
+                        primary,
+                    ));
+                    lines.push(Line::styled(display_safe(evidence.excerpt()), muted));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::styled("Duplicate and contradiction checks", muted));
+                if context.findings().is_empty() {
+                    lines.push(Line::styled(
+                        "No findings in the loaded validation.",
+                        primary,
+                    ));
+                }
+                for finding in context.findings() {
+                    lines.push(Line::styled(
+                        format!(
+                            "{} - {} - {}",
+                            finding.kind().label(),
+                            display_safe(finding.related_memory_id()),
+                            display_safe(finding.summary())
+                        ),
+                        warning,
+                    ));
+                }
+                if !context.relations().is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::styled("Relations", muted));
+                    for relation in context.relations() {
+                        lines.push(Line::styled(
+                            format!(
+                                "{} {}",
+                                relation.kind().label(),
+                                display_safe(relation.memory_id())
+                            ),
+                            primary,
+                        ));
+                    }
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "Approval is deliberate and only affects future eligible turns. Up/Down scrolls the complete review.",
+                warning,
+            ));
+        }
+        MemoryLifecycleMode::Retract => {
+            lines.push(Line::styled(target_content_line(target), primary));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "Retraction stops this revision from future admission. It keeps the memory and its audit history.",
+                warning,
+            ));
+            lines.push(Line::styled(
+                "Already dispatched provider turns cannot be recalled.",
+                danger,
+            ));
+        }
+        MemoryLifecycleMode::Delete => {
+            lines.push(Line::styled(target_content_line(target), primary));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "Logical delete records a tombstone and removes the memory from ordinary use.",
+                danger,
+            ));
+            lines.push(Line::styled(
+                "This is different from retraction and preserves audit history.",
+                danger,
+            ));
+            lines.push(Line::styled(
+                "Already dispatched provider turns cannot be recalled. Press Y or choose Delete to confirm this exact identity.",
+                warning,
+            ));
+        }
+        MemoryLifecycleMode::Export => {
+            lines.push(Line::styled(target_content_line(target), primary));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "Export writes this exact loaded revision and its safe provenance as a user-owned artifact.",
+                muted,
+            ));
+        }
+        MemoryLifecycleMode::Remember
+        | MemoryLifecycleMode::Revise
+        | MemoryLifecycleMode::Actions => {}
+    }
+    lines
+}
+
+fn target_content_line(target: &crate::model::MemoryTargetSnapshot) -> String {
+    target.content.as_ref().map_or_else(
+        || "Exact content sidecar unavailable; lifecycle metadata remains actionable.".to_owned(),
+        |content| display_safe(content.as_str()),
+    )
 }

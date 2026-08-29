@@ -804,6 +804,17 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::MemoryOpen => "MemoryOpen",
         MouseAction::MemoryBack => "MemoryBack",
         MouseAction::MemoryAdmissions => "MemoryAdmissions",
+        MouseAction::MemoryRemember => "MemoryRemember",
+        MouseAction::MemoryRevise => "MemoryRevise",
+        MouseAction::MemoryReview => "MemoryReview",
+        MouseAction::MemoryActions => "MemoryActions",
+        MouseAction::MemoryRetract => "MemoryRetract",
+        MouseAction::MemoryDelete => "MemoryDelete",
+        MouseAction::MemoryExport => "MemoryExport",
+        MouseAction::MemoryActionSelect(_) => "MemoryActionSelect",
+        MouseAction::MemoryLifecycleSubmit => "MemoryLifecycleSubmit",
+        MouseAction::MemoryProposalReject => "MemoryProposalReject",
+        MouseAction::MemoryLifecycleCancel => "MemoryLifecycleCancel",
     }
 }
 

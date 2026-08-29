@@ -20,9 +20,14 @@ const MAX_MEMORY_PREVIEW_CHARS: usize = 240;
 const MAX_MEMORY_CONTENT_CHARS: usize = 16_384;
 const MAX_MEMORY_SOURCE_CHARS: usize = 512;
 const MAX_MEMORY_ADMISSION_TEXT_CHARS: usize = 256;
+const MAX_MEMORY_CONTEXT_TEXT_CHARS: usize = 512;
 const MAX_MEMORY_SUMMARIES: usize = 100;
 const MAX_MEMORY_DETAILS: usize = 100;
 const MAX_MEMORY_ADMISSIONS: usize = 64;
+const MAX_MEMORY_EVIDENCE: usize = 16;
+const MAX_MEMORY_RELATIONS: usize = 16;
+const MAX_MEMORY_FINDINGS: usize = 16;
+const MAX_MEMORY_REASON_FACTORS: usize = 16;
 
 /// Monotonic, process-local identity used to correlate a UI request.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -453,6 +458,8 @@ pub enum Focus {
     Search,
     /// The Memory inspection workspace owns key input.
     Memory,
+    /// The single Memory lifecycle dialog owns key input.
+    MemoryLifecycle,
 }
 /// One primary destination in the terminal application shell.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -533,6 +540,7 @@ pub enum OverlayKind {
     ProfileCredential,
     UserProfile,
     Confirmation,
+    MemoryLifecycle,
 }
 
 impl OverlayKind {
@@ -547,6 +555,7 @@ impl OverlayKind {
             Self::Permission => Focus::Permission,
             Self::UserProfile => Focus::UserProfile,
             Self::Confirmation => Focus::Confirmation,
+            Self::MemoryLifecycle => Focus::MemoryLifecycle,
         }
     }
 }
@@ -697,6 +706,412 @@ impl MemoryTrust {
     }
 }
 
+/// Bounded memory content transferred without appearing in diagnostics.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryContent {
+    raw: Zeroizing<String>,
+}
+
+impl MemoryContent {
+    /// Creates exact, bounded memory content with safe terminal controls only.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = bounded_text(value.into(), MAX_MEMORY_CONTENT_CHARS, "memory content")?;
+        if value.trim().is_empty() {
+            return Err("memory content must not be blank");
+        }
+        Ok(Self {
+            raw: Zeroizing::new(value),
+        })
+    }
+
+    /// Borrows the exact content for application-owned validation and dispatch.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    /// Moves the exact content into application composition.
+    #[must_use]
+    pub fn into_string(mut self) -> String {
+        std::mem::take(&mut *self.raw)
+    }
+}
+
+impl Debug for MemoryContent {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("MemoryContent([REDACTED])")
+    }
+}
+
+/// Durable origin class shown during inspection and proposal review.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryOrigin {
+    ExplicitUser,
+    VerifiedTool,
+    ImportedDocument,
+    ModelProposal,
+    Compaction,
+}
+
+impl MemoryOrigin {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ExplicitUser => "explicit user",
+            Self::VerifiedTool => "verified tool",
+            Self::ImportedDocument => "imported document",
+            Self::ModelProposal => "model proposal",
+            Self::Compaction => "compaction",
+        }
+    }
+}
+
+/// Sensitivity classification used by memory admission policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemorySensitivity {
+    Public,
+    Internal,
+    Sensitive,
+    Secret,
+}
+
+impl MemorySensitivity {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Internal => "internal",
+            Self::Sensitive => "sensitive",
+            Self::Secret => "secret",
+        }
+    }
+}
+
+/// One exact, bounded evidence excerpt supporting a memory revision.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryEvidence {
+    label: String,
+    source: String,
+    excerpt: String,
+}
+
+impl MemoryEvidence {
+    pub fn new(
+        label: impl Into<String>,
+        source: impl Into<String>,
+        excerpt: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            label: bounded_single_line(
+                label.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory evidence label",
+            )?,
+            source: bounded_single_line(
+                source.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory evidence source",
+            )?,
+            excerpt: bounded_text(
+                excerpt.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory evidence excerpt",
+            )?,
+        })
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[must_use]
+    pub fn excerpt(&self) -> &str {
+        &self.excerpt
+    }
+}
+
+impl Debug for MemoryEvidence {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryEvidence")
+            .field("label", &"[REDACTED]")
+            .field("source", &"[REDACTED]")
+            .field("excerpt", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Typed relation between one memory and another ledger identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryRelationKind {
+    DuplicateOf,
+    Contradicts,
+    Supersedes,
+    DerivedFrom,
+}
+
+impl MemoryRelationKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::DuplicateOf => "duplicate of",
+            Self::Contradicts => "contradicts",
+            Self::Supersedes => "supersedes",
+            Self::DerivedFrom => "derived from",
+        }
+    }
+}
+
+/// One bounded relation shown without exposing its identity to diagnostics.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryRelation {
+    kind: MemoryRelationKind,
+    memory_id: String,
+}
+
+impl MemoryRelation {
+    pub fn new(
+        kind: MemoryRelationKind,
+        memory_id: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            kind,
+            memory_id: bounded_single_line(
+                memory_id.into(),
+                MAX_MEMORY_ID_CHARS,
+                "memory identity",
+            )?,
+        })
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> MemoryRelationKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn memory_id(&self) -> &str {
+        &self.memory_id
+    }
+}
+
+impl Debug for MemoryRelation {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryRelation")
+            .field("kind", &self.kind)
+            .field("memory_id", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Validation finding that needs deliberate review before proposal approval.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryFindingKind {
+    Duplicate,
+    Contradiction,
+}
+
+impl MemoryFindingKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Duplicate => "possible duplicate",
+            Self::Contradiction => "possible contradiction",
+        }
+    }
+}
+
+/// One bounded duplicate or contradiction finding.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryValidationFinding {
+    kind: MemoryFindingKind,
+    related_memory_id: String,
+    summary: String,
+}
+
+impl MemoryValidationFinding {
+    pub fn new(
+        kind: MemoryFindingKind,
+        related_memory_id: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            kind,
+            related_memory_id: bounded_single_line(
+                related_memory_id.into(),
+                MAX_MEMORY_ID_CHARS,
+                "memory identity",
+            )?,
+            summary: bounded_single_line(
+                summary.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory validation finding",
+            )?,
+        })
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> MemoryFindingKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn related_memory_id(&self) -> &str {
+        &self.related_memory_id
+    }
+
+    #[must_use]
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+impl Debug for MemoryValidationFinding {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryValidationFinding")
+            .field("kind", &self.kind)
+            .field("related_memory_id", &"[REDACTED]")
+            .field("summary", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Exact command and review metadata for a loaded memory revision.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryRevisionContext {
+    expected_last_sequence: u64,
+    revision_id: String,
+    proposal_revision_id: Option<String>,
+    scope_identity: String,
+    origin: MemoryOrigin,
+    sensitivity: MemorySensitivity,
+    evidence: Vec<MemoryEvidence>,
+    relations: Vec<MemoryRelation>,
+    findings: Vec<MemoryValidationFinding>,
+}
+
+impl MemoryRevisionContext {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        expected_last_sequence: u64,
+        revision_id: impl Into<String>,
+        proposal_revision_id: Option<String>,
+        scope_identity: impl Into<String>,
+        origin: MemoryOrigin,
+        sensitivity: MemorySensitivity,
+        evidence: Vec<MemoryEvidence>,
+        relations: Vec<MemoryRelation>,
+        findings: Vec<MemoryValidationFinding>,
+    ) -> Result<Self, &'static str> {
+        if evidence.len() > MAX_MEMORY_EVIDENCE {
+            return Err("too many memory evidence records");
+        }
+        if relations.len() > MAX_MEMORY_RELATIONS {
+            return Err("too many memory relations");
+        }
+        if findings.len() > MAX_MEMORY_FINDINGS {
+            return Err("too many memory validation findings");
+        }
+        let proposal_revision_id = proposal_revision_id
+            .map(|value| {
+                bounded_single_line(value, MAX_MEMORY_ID_CHARS, "memory proposal identity")
+            })
+            .transpose()?;
+        Ok(Self {
+            expected_last_sequence,
+            revision_id: bounded_single_line(
+                revision_id.into(),
+                MAX_MEMORY_ID_CHARS,
+                "memory revision identity",
+            )?,
+            proposal_revision_id,
+            scope_identity: bounded_single_line(
+                scope_identity.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory scope identity",
+            )?,
+            origin,
+            sensitivity,
+            evidence,
+            relations,
+            findings,
+        })
+    }
+
+    #[must_use]
+    pub const fn expected_last_sequence(&self) -> u64 {
+        self.expected_last_sequence
+    }
+
+    #[must_use]
+    pub fn revision_id(&self) -> &str {
+        &self.revision_id
+    }
+
+    #[must_use]
+    pub fn proposal_revision_id(&self) -> Option<&str> {
+        self.proposal_revision_id.as_deref()
+    }
+
+    #[must_use]
+    pub fn scope_identity(&self) -> &str {
+        &self.scope_identity
+    }
+
+    #[must_use]
+    pub const fn origin(&self) -> MemoryOrigin {
+        self.origin
+    }
+
+    #[must_use]
+    pub const fn sensitivity(&self) -> MemorySensitivity {
+        self.sensitivity
+    }
+
+    #[must_use]
+    pub fn evidence(&self) -> &[MemoryEvidence] {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn relations(&self) -> &[MemoryRelation] {
+        &self.relations
+    }
+
+    #[must_use]
+    pub fn findings(&self) -> &[MemoryValidationFinding] {
+        &self.findings
+    }
+}
+
+impl Debug for MemoryRevisionContext {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryRevisionContext")
+            .field("expected_last_sequence", &self.expected_last_sequence)
+            .field("revision_id", &"[REDACTED]")
+            .field(
+                "has_proposal_revision",
+                &self.proposal_revision_id.is_some(),
+            )
+            .field("scope_identity", &"[REDACTED]")
+            .field("origin", &self.origin)
+            .field("sensitivity", &self.sensitivity)
+            .field("evidence_count", &self.evidence.len())
+            .field("relation_count", &self.relations.len())
+            .field("finding_count", &self.findings.len())
+            .finish()
+    }
+}
+
 /// One bounded, display-safe row in the Memory index.
 #[derive(Clone, Eq, PartialEq)]
 pub struct MemorySummary {
@@ -796,6 +1211,7 @@ pub struct MemoryAdmission {
     reason: String,
     admitted_at_ms: i64,
     rank: u32,
+    context: Option<MemoryAdmissionContext>,
 }
 
 impl MemoryAdmission {
@@ -824,7 +1240,15 @@ impl MemoryAdmission {
             )?,
             admitted_at_ms,
             rank,
+            context: None,
         })
+    }
+
+    /// Attaches exact provider-turn admission context when the projection loaded it.
+    #[must_use]
+    pub fn with_context(mut self, context: MemoryAdmissionContext) -> Self {
+        self.context = Some(context);
+        self
     }
 
     #[must_use]
@@ -851,6 +1275,11 @@ impl MemoryAdmission {
     pub const fn rank(&self) -> u32 {
         self.rank
     }
+
+    #[must_use]
+    pub fn context(&self) -> Option<&MemoryAdmissionContext> {
+        self.context.as_ref()
+    }
 }
 
 impl Debug for MemoryAdmission {
@@ -862,6 +1291,121 @@ impl Debug for MemoryAdmission {
             .field("reason", &"[REDACTED]")
             .field("admitted_at_ms", &self.admitted_at_ms)
             .field("rank", &self.rank)
+            .field("context", &self.context)
+            .finish()
+    }
+}
+
+/// Exact, bounded coordinates explaining one provider-turn admission.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryAdmissionContext {
+    provider_attempt: String,
+    run_turn: u32,
+    epoch: String,
+    token_count: u32,
+    source_revision: String,
+    renderer_version: String,
+    reason_factors: Vec<String>,
+}
+
+impl MemoryAdmissionContext {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider_attempt: impl Into<String>,
+        run_turn: u32,
+        epoch: impl Into<String>,
+        token_count: u32,
+        source_revision: impl Into<String>,
+        renderer_version: impl Into<String>,
+        reason_factors: Vec<String>,
+    ) -> Result<Self, &'static str> {
+        if reason_factors.len() > MAX_MEMORY_REASON_FACTORS {
+            return Err("too many memory admission reason factors");
+        }
+        let reason_factors = reason_factors
+            .into_iter()
+            .map(|factor| {
+                bounded_single_line(
+                    factor,
+                    MAX_MEMORY_ADMISSION_TEXT_CHARS,
+                    "memory admission factor",
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            provider_attempt: bounded_single_line(
+                provider_attempt.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory provider attempt",
+            )?,
+            run_turn,
+            epoch: bounded_single_line(
+                epoch.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory context epoch",
+            )?,
+            token_count,
+            source_revision: bounded_single_line(
+                source_revision.into(),
+                MAX_MEMORY_ID_CHARS,
+                "memory revision identity",
+            )?,
+            renderer_version: bounded_single_line(
+                renderer_version.into(),
+                MAX_MEMORY_CONTEXT_TEXT_CHARS,
+                "memory renderer version",
+            )?,
+            reason_factors,
+        })
+    }
+
+    #[must_use]
+    pub fn provider_attempt(&self) -> &str {
+        &self.provider_attempt
+    }
+
+    #[must_use]
+    pub const fn run_turn(&self) -> u32 {
+        self.run_turn
+    }
+
+    #[must_use]
+    pub fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
+    #[must_use]
+    pub const fn token_count(&self) -> u32 {
+        self.token_count
+    }
+
+    #[must_use]
+    pub fn source_revision(&self) -> &str {
+        &self.source_revision
+    }
+
+    #[must_use]
+    pub fn renderer_version(&self) -> &str {
+        &self.renderer_version
+    }
+
+    #[must_use]
+    pub fn reason_factors(&self) -> &[String] {
+        &self.reason_factors
+    }
+}
+
+impl Debug for MemoryAdmissionContext {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryAdmissionContext")
+            .field("provider_attempt", &"[REDACTED]")
+            .field("run_turn", &self.run_turn)
+            .field("epoch", &"[REDACTED]")
+            .field("token_count", &self.token_count)
+            .field("source_revision", &"[REDACTED]")
+            .field("renderer_version", &"[REDACTED]")
+            .field("reason_factor_count", &self.reason_factors.len())
             .finish()
     }
 }
@@ -877,6 +1421,7 @@ pub struct MemoryDetail {
     created_at_ms: i64,
     valid_until_ms: Option<i64>,
     admissions: Vec<MemoryAdmission>,
+    revision_context: Option<MemoryRevisionContext>,
 }
 
 impl MemoryDetail {
@@ -907,7 +1452,45 @@ impl MemoryDetail {
             created_at_ms,
             valid_until_ms,
             admissions,
+            revision_context: None,
         })
+    }
+
+    /// Creates lifecycle metadata for a revision whose erasable content sidecar is unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn metadata_only(
+        memory_id: impl Into<String>,
+        revision: u32,
+        source: impl Into<String>,
+        trust: MemoryTrust,
+        created_at_ms: i64,
+        valid_until_ms: Option<i64>,
+        admissions: Vec<MemoryAdmission>,
+    ) -> Result<Self, &'static str> {
+        let memory_id =
+            bounded_single_line(memory_id.into(), MAX_MEMORY_ID_CHARS, "memory identity")?;
+        let source = bounded_single_line(source.into(), MAX_MEMORY_SOURCE_CHARS, "memory source")?;
+        if admissions.len() > MAX_MEMORY_ADMISSIONS {
+            return Err("too many memory admissions");
+        }
+        Ok(Self {
+            memory_id,
+            revision,
+            content: String::new(),
+            source,
+            trust,
+            created_at_ms,
+            valid_until_ms,
+            admissions,
+            revision_context: None,
+        })
+    }
+
+    /// Attaches exact lifecycle and review metadata when loaded by the projection.
+    #[must_use]
+    pub fn with_revision_context(mut self, context: MemoryRevisionContext) -> Self {
+        self.revision_context = Some(context);
+        self
     }
 
     #[must_use]
@@ -923,6 +1506,12 @@ impl MemoryDetail {
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// Returns whether the erasable exact-content sidecar is loaded.
+    #[must_use]
+    pub fn has_content(&self) -> bool {
+        !self.content.is_empty()
     }
 
     #[must_use]
@@ -949,6 +1538,11 @@ impl MemoryDetail {
     pub fn admissions(&self) -> &[MemoryAdmission] {
         &self.admissions
     }
+
+    #[must_use]
+    pub fn revision_context(&self) -> Option<&MemoryRevisionContext> {
+        self.revision_context.as_ref()
+    }
 }
 
 impl Debug for MemoryDetail {
@@ -963,6 +1557,7 @@ impl Debug for MemoryDetail {
             .field("created_at_ms", &self.created_at_ms)
             .field("valid_until_ms", &self.valid_until_ms)
             .field("admission_count", &self.admissions.len())
+            .field("revision_context", &self.revision_context)
             .finish()
     }
 }
@@ -1449,6 +2044,23 @@ pub enum PendingKind {
     DeleteProfile(String),
     /// Native Codex browser authentication.
     CodexLogin,
+    /// Explicit user-authored memory creation.
+    RememberMemory(MemoryContent),
+    /// Explicit correction of one exact memory revision.
+    ReviseMemory {
+        memory_id: String,
+        content: MemoryContent,
+    },
+    /// Deliberate approval of one exact proposed revision.
+    ApproveMemoryProposal(String),
+    /// Deliberate rejection of one exact proposed revision.
+    RejectMemoryProposal(String),
+    /// Stop admitting one exact active revision into future turns.
+    RetractMemory(String),
+    /// Logical deletion of one memory ledger identity.
+    DeleteMemory(String),
+    /// Export one exact loaded memory as a user-owned artifact.
+    ExportMemory(String),
 }
 
 /// Runner-side side effects the pure update layer cannot perform itself.
@@ -1595,6 +2207,50 @@ pub enum UiIntent {
         request_id: RequestId,
         session_id: String,
     },
+    /// Create an explicit user-authored memory.
+    RememberMemory {
+        request_id: RequestId,
+        content: MemoryContent,
+    },
+    /// Correct one exact memory with optimistic sequence protection.
+    ReviseMemory {
+        request_id: RequestId,
+        memory_id: String,
+        expected_last_sequence: u64,
+        content: MemoryContent,
+    },
+    /// Deliberately approve one exact proposed revision.
+    ApproveMemoryProposal {
+        request_id: RequestId,
+        memory_id: String,
+        expected_last_sequence: u64,
+        proposal_revision_id: String,
+    },
+    /// Deliberately reject one exact proposed revision.
+    RejectMemoryProposal {
+        request_id: RequestId,
+        memory_id: String,
+        expected_last_sequence: u64,
+        proposal_revision_id: String,
+    },
+    /// Stop one exact revision from admission into future turns.
+    RetractMemory {
+        request_id: RequestId,
+        memory_id: String,
+        expected_last_sequence: u64,
+        revision_id: String,
+    },
+    /// Logically delete one exact memory identity.
+    DeleteMemory {
+        request_id: RequestId,
+        memory_id: String,
+        expected_last_sequence: u64,
+    },
+    /// Export one exact memory as a user-owned artifact.
+    ExportMemory {
+        request_id: RequestId,
+        memory_id: String,
+    },
 }
 
 impl UiIntent {
@@ -1628,7 +2284,14 @@ impl UiIntent {
             | Self::UnarchiveSession { request_id, .. }
             | Self::DeleteSession { request_id, .. }
             | Self::UpdateLocalPreference { request_id, .. }
-            | Self::ExportTranscript { request_id, .. } => *request_id,
+            | Self::ExportTranscript { request_id, .. }
+            | Self::RememberMemory { request_id, .. }
+            | Self::ReviseMemory { request_id, .. }
+            | Self::ApproveMemoryProposal { request_id, .. }
+            | Self::RejectMemoryProposal { request_id, .. }
+            | Self::RetractMemory { request_id, .. }
+            | Self::DeleteMemory { request_id, .. }
+            | Self::ExportMemory { request_id, .. } => *request_id,
         }
     }
 }
@@ -1723,6 +2386,28 @@ pub enum MouseAction {
     MemoryBack,
     /// Inspect admissions for the selected memory.
     MemoryAdmissions,
+    /// Open explicit memory creation.
+    MemoryRemember,
+    /// Open correction for the selected revision.
+    MemoryRevise,
+    /// Open deliberate review for the selected proposal.
+    MemoryReview,
+    /// Open the compact lifecycle action chooser.
+    MemoryActions,
+    /// Open retraction confirmation for the selected revision.
+    MemoryRetract,
+    /// Open logical-delete confirmation for the selected identity.
+    MemoryDelete,
+    /// Export the selected memory.
+    MemoryExport,
+    /// Choose one row in the Memory action overlay.
+    MemoryActionSelect(usize),
+    /// Submit the primary action in the Memory lifecycle overlay.
+    MemoryLifecycleSubmit,
+    /// Deliberately reject the proposal in review.
+    MemoryProposalReject,
+    /// Close the Memory lifecycle overlay and restore focus.
+    MemoryLifecycleCancel,
 }
 
 /// Input to the deterministic update function.
@@ -1938,6 +2623,141 @@ pub(crate) struct MemoryState {
     pub pane: MemoryPane,
     pub focus: MemoryWorkspaceFocus,
     pub admission_selected: usize,
+}
+
+/// Workflow shown by the single Memory lifecycle overlay owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryLifecycleMode {
+    Remember,
+    Revise,
+    Review,
+    Actions,
+    Retract,
+    Delete,
+    Export,
+}
+
+impl MemoryLifecycleMode {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Remember => "Remember",
+            Self::Revise => "Correct memory",
+            Self::Review => "Review proposal",
+            Self::Actions => "Memory actions",
+            Self::Retract => "Retract memory",
+            Self::Delete => "Delete memory",
+            Self::Export => "Export memory",
+        }
+    }
+}
+
+/// Exact selected revision captured when a lifecycle workflow opens.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct MemoryTargetSnapshot {
+    pub memory_id: String,
+    pub status: MemoryStatus,
+    pub scope: MemoryScope,
+    pub revision: u32,
+    pub content: Option<MemoryContent>,
+    pub source: String,
+    pub trust: MemoryTrust,
+    pub revision_context: Option<MemoryRevisionContext>,
+}
+
+impl Debug for MemoryTargetSnapshot {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryTargetSnapshot")
+            .field("memory_id", &"[REDACTED]")
+            .field("status", &self.status)
+            .field("scope", &self.scope)
+            .field("revision", &self.revision)
+            .field("content", &self.content)
+            .field("source", &"[REDACTED]")
+            .field("trust", &self.trust)
+            .field("revision_context", &self.revision_context)
+            .finish()
+    }
+}
+
+/// Bounded append-only editor state that redacts exact memory content from Debug.
+#[derive(Default)]
+pub(crate) struct MemoryDraftEditor {
+    raw: Zeroizing<String>,
+}
+
+impl MemoryDraftEditor {
+    pub fn from_content(content: &MemoryContent) -> Self {
+        Self {
+            raw: Zeroizing::new(content.as_str().to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.raw
+    }
+
+    #[must_use]
+    pub fn char_count(&self) -> usize {
+        self.raw.chars().count()
+    }
+
+    pub fn append_character(&mut self, character: char) -> Result<(), &'static str> {
+        if character.is_control() && character != '\n' {
+            return Err("memory content contains unsafe control characters");
+        }
+        if self.char_count() >= MAX_MEMORY_CONTENT_CHARS {
+            return Err("memory content is too long");
+        }
+        self.raw.push(character);
+        Ok(())
+    }
+
+    pub fn append_text(&mut self, value: &str) -> Result<(), &'static str> {
+        let value = value.replace("\r\n", "\n").replace('\r', "\n");
+        if value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+        {
+            return Err("memory content contains unsafe control characters");
+        }
+        if self.char_count().saturating_add(value.chars().count()) > MAX_MEMORY_CONTENT_CHARS {
+            return Err("memory content is too long");
+        }
+        self.raw.push_str(&value);
+        Ok(())
+    }
+
+    pub fn pop(&mut self) {
+        self.raw.pop();
+    }
+
+    pub fn content(&self) -> Result<MemoryContent, &'static str> {
+        MemoryContent::new(self.raw.as_str())
+    }
+}
+
+impl Debug for MemoryDraftEditor {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryDraftEditor")
+            .field("content", &"[REDACTED]")
+            .field("character_count", &self.char_count())
+            .finish()
+    }
+}
+
+/// Local, mutually exclusive Memory lifecycle dialog state.
+#[derive(Debug)]
+pub(crate) struct MemoryLifecycleState {
+    pub mode: MemoryLifecycleMode,
+    pub target: Option<MemoryTargetSnapshot>,
+    pub editor: Option<MemoryDraftEditor>,
+    pub action_selected: usize,
+    pub pending_request: Option<RequestId>,
+    pub scroll: u16,
 }
 
 /// Profile editor operation currently shown inside the profile center.
@@ -3077,6 +3897,8 @@ pub struct Model {
     pub(crate) search: SearchState,
     /// Local Memory workspace search, filter, and drill-down state.
     pub(crate) memory_workspace: MemoryState,
+    /// State owned by the one Memory lifecycle overlay.
+    pub(crate) memory_lifecycle: Option<MemoryLifecycleState>,
     /// Whether transcript tool rows render expanded with resources.
     pub(crate) tools_expanded: bool,
     /// Wrapped transcript row pinned into view by an active search jump.
@@ -3210,6 +4032,7 @@ impl Model {
             history: ComposerHistory::default(),
             search: SearchState::default(),
             memory_workspace: MemoryState::default(),
+            memory_lifecycle: None,
             tools_expanded: false,
             search_pinned_row: None,
             undoable: None,
@@ -3367,6 +4190,54 @@ impl Model {
     #[must_use]
     pub const fn memory_pane(&self) -> MemoryPane {
         self.memory_workspace.pane
+    }
+
+    /// Returns the active Memory lifecycle workflow, when its overlay owns input.
+    #[must_use]
+    pub fn memory_lifecycle_mode(&self) -> Option<MemoryLifecycleMode> {
+        self.memory_lifecycle.as_ref().map(|state| state.mode)
+    }
+
+    /// Returns whether a Memory lifecycle request is awaiting acknowledgement.
+    #[must_use]
+    pub fn memory_lifecycle_pending(&self) -> bool {
+        self.memory_lifecycle
+            .as_ref()
+            .is_some_and(|state| state.pending_request.is_some())
+    }
+
+    /// Returns lifecycle actions supported by the selected loaded projection row.
+    #[must_use]
+    pub(crate) fn memory_actions(&self) -> Vec<MemoryLifecycleMode> {
+        let Some((summary, detail)) = self.selected_memory() else {
+            return Vec::new();
+        };
+        let mut actions = Vec::new();
+        if detail.is_some_and(|detail| detail.revision_context().is_some()) {
+            match summary.status() {
+                MemoryStatus::Proposed if detail.is_some_and(MemoryDetail::has_content) => {
+                    actions.push(MemoryLifecycleMode::Review);
+                }
+                MemoryStatus::Proposed => {}
+                MemoryStatus::Active => {
+                    if detail.is_some_and(MemoryDetail::has_content) {
+                        actions.push(MemoryLifecycleMode::Revise);
+                    }
+                    actions.push(MemoryLifecycleMode::Retract);
+                }
+                MemoryStatus::Superseded
+                | MemoryStatus::Rejected
+                | MemoryStatus::Retracted
+                | MemoryStatus::Deleted => {}
+            }
+            if summary.status() != MemoryStatus::Deleted {
+                actions.push(MemoryLifecycleMode::Delete);
+            }
+        }
+        if detail.is_some_and(MemoryDetail::has_content) {
+            actions.push(MemoryLifecycleMode::Export);
+        }
+        actions
     }
 
     /// Returns locally filtered memories in projection order.

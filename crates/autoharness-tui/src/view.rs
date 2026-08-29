@@ -133,6 +133,9 @@ pub fn view(frame: &mut Frame<'_>, model: &Model) {
         Some(OverlayKind::Confirmation) => render_confirmation(frame, area, model),
         Some(OverlayKind::UserProfile) => render_user_profile(frame, area, model),
         Some(OverlayKind::ProfileCredential) => render_profile_credential(frame, area, model),
+        Some(OverlayKind::MemoryLifecycle) => {
+            crate::ui::page::memory::render_lifecycle(frame, area, model)
+        }
         Some(OverlayKind::TranscriptSearch) | None => {}
     }
 }

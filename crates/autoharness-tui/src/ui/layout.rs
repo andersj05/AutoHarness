@@ -568,6 +568,7 @@ fn overlay_rect(area: Rect, model: &Model) -> Option<Rect> {
             Some(credential_rect(area))
         }
         Some(OverlayKind::ProfileCredential) => Some(popup_rect(area)),
+        Some(OverlayKind::MemoryLifecycle) => Some(popup_rect(area)),
         Some(OverlayKind::TranscriptSearch) | None => None,
     }
 }
@@ -1058,6 +1059,13 @@ fn push_overlay_hits(
                 ];
                 push_modal_buttons(hits, popup, model, &buttons);
             }
+        }
+        OverlayKind::MemoryLifecycle => {
+            for (row, index) in crate::ui::page::memory::lifecycle_action_rows(popup, model) {
+                hits.push((row, MouseAction::MemoryActionSelect(index)));
+            }
+            let buttons = crate::ui::page::memory::lifecycle_buttons(model);
+            push_modal_buttons(hits, popup, model, &buttons);
         }
         OverlayKind::TranscriptSearch => {}
     }
