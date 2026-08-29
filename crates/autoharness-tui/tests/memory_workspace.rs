@@ -893,6 +893,7 @@ fn correction_review_and_proposal_decisions_carry_exact_revision_guards() {
     assert!(rendered.contains("user current-account"));
     assert!(rendered.contains("Observed preference"));
     assert!(rendered.contains("possible contradiction"));
+    assert!(rendered.contains("memory-mouse-first"));
     let compact = text(&render(&review, 40, 12));
     assert!(compact.contains("Approve"));
     assert!(compact.contains("Reject"));
