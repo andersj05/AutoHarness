@@ -3,20 +3,22 @@ use std::process::Command;
 use std::sync::Arc;
 
 use autoharness_domain::{
-    AttemptFailure, AttemptId, ClassifiedError, CommandPayload, ConfidenceBasisPoints,
-    ContextTokenBudget, DeliveryMode, ErrorClass, ErrorCode, EstimatedTokens, MemoryCommandPayload,
-    MemoryContent, MemoryId, MemoryKind, MemoryOrigin, MemoryRejectionReason, MemoryRelationKind,
-    MemoryRevision, MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionNumber,
-    MemoryRevisionStatus, MemoryScope as DomainMemoryScope, MemorySequence, MemoryValidity,
-    PermissionAnswer, PermissionOutcome, PromptText, PublicMessage, ResponseText, RetryAdvice,
-    RunLimits, Sensitivity, SessionId, SessionTitle, ToolCallId, ToolOutput, TrustClass,
-    UsageSnapshot as DomainUsage,
+    AttemptFailure, AttemptId, ClassifiedError, CommandId, CommandPayload, ConfidenceBasisPoints,
+    ContextEpochId, ContextTokenBudget, CorrelationId, DeliveryMode, ErrorClass, ErrorCode,
+    EstimatedTokens, MemoryCommandEnvelope, MemoryCommandPayload, MemoryContent, MemoryEvidence,
+    MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource, MemoryId, MemoryKind,
+    MemoryOrigin, MemoryRejectionReason, MemoryRelationKind, MemoryRevision, MemoryRevisionDraft,
+    MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus, MemoryScope as DomainMemoryScope,
+    MemorySequence, MemoryValidity, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage,
+    ResponseText, RetryAdvice, RunLimits, Sensitivity, SessionId, SessionSequence, SessionTitle,
+    ToolCallId, ToolOutput, TrustClass, UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
 };
 use autoharness_memory::{
-    MemoryCandidate, RetainedContextSource, normalized_content_hash, verify_admission_rendered_hash,
+    MAX_CONTEXT_SOURCE_VALUE_BYTES, MemoryCandidate, RetainedContextSource,
+    normalized_content_hash, verify_admission_rendered_hash,
 };
 use autoharness_provider::{
     CancellationToken, CatalogRequest, ChatContent, ChatMessage, ChatRequest, ChatRole,
@@ -28,8 +30,9 @@ use autoharness_provider_codex_cli::{CodexAuthProgress, login_with_browser};
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_settings::{DisplayLabel, ProfileId, ProviderKind, ProviderProfile};
 use autoharness_store::{
-    ContextAdmissionContent, ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery,
-    MemoryContentState, MemoryInspectionQuery, MemorySearchQuery, SessionStatus,
+    ContextAdmissionContent, ContextCompactionBoundary, ContextCompactionCheckpoint,
+    ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryContentState,
+    MemoryInspectionQuery, MemorySearchQuery, SessionStatus,
 };
 use autoharness_tool::{
     IncomingToolCall, MemoryProposal, RunBudget, ToolError, ToolRuntime, definitions, plan, replan,
@@ -46,9 +49,11 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use crate::context_runtime::{
-    ContextEpochMode, ContextPreparationInput, ContextScope, EpochCompatibility,
-    FrozenContinuationInput, PreparedContextTurn, context_epoch_id, is_workspace_agents_admission,
-    observe_workspace_agents, prepare_context_turn, prepare_frozen_continuation,
+    CompactedHistoryGroup, CompactedHistoryV1, ContextEpochMode, ContextPreparationInput,
+    ContextScope, EpochCompatibility, FrozenContinuationInput, PreparedContextTurn,
+    compact_history, compaction_epoch_id, is_compacted_history_admission,
+    is_workspace_agents_admission, observe_compacted_history, observe_workspace_agents,
+    prepare_context_turn, prepare_frozen_continuation, retained_compacted_history,
     retained_workspace_agents, workspace_locator_digest,
 };
 use crate::engine_actor::EngineHandle;
@@ -209,6 +214,24 @@ enum StartAttemptError {
 enum MemoryProposalPersistenceError {
     Safe(ToolError),
     Ambiguous(AppError),
+}
+
+struct FrozenContextBaseline {
+    epoch: autoharness_domain::ContextEpochManifest,
+    turn: autoharness_domain::ContextTurnManifest,
+    content: ContextTurnContent,
+}
+
+struct PreparedContextSnapshot {
+    turn: PreparedContextTurn,
+    compaction_boundary: Option<ContextCompactionBoundary>,
+}
+
+struct CompactionCandidate {
+    history: CompactedHistoryV1,
+    request: ChatRequest,
+    predecessor_epoch_id: ContextEpochId,
+    epoch_id: ContextEpochId,
 }
 
 /// Owns application orchestration while the terminal runner owns UI state.
@@ -2672,20 +2695,17 @@ impl Coordinator {
             .session
             .attempt(&attempt_id)
             .is_some_and(|attempt| self.model_supports_tools(attempt.model()));
-        let base_request = match build_request(&self.session, &attempt_id, advertise_tools) {
-            Ok(request) => request,
-            Err(error) => {
-                self.execute(CommandPayload::FailAttempt {
-                    session_id: self.session_id.clone(),
-                    attempt_id,
-                    failure: attempt_failure(&error),
-                })
-                .await
-                .map_err(StartAttemptError::Engine)?;
-                telemetry::attempt_settled("failed", Some(&error));
-                return Err(StartAttemptError::Provider(error));
-            }
-        };
+        if let Err(error) = build_request(&self.session, &attempt_id, advertise_tools) {
+            self.execute(CommandPayload::FailAttempt {
+                session_id: self.session_id.clone(),
+                attempt_id,
+                failure: attempt_failure(&error),
+            })
+            .await
+            .map_err(StartAttemptError::Engine)?;
+            telemetry::attempt_settled("failed", Some(&error));
+            return Err(StartAttemptError::Provider(error));
+        }
         self.execute(CommandPayload::ConfigureRunBudget {
             session_id: self.session_id.clone(),
             attempt_id: attempt_id.clone(),
@@ -2718,7 +2738,7 @@ impl Coordinator {
             return Err(StartAttemptError::Provider(provider_error));
         }
         let prepared = match self
-            .prepare_and_bind_context(&attempt_id, base_request)
+            .prepare_and_bind_context(&attempt_id, advertise_tools)
             .await
         {
             Ok(prepared) => prepared,
@@ -2761,12 +2781,13 @@ impl Coordinator {
     async fn prepare_and_bind_context(
         &mut self,
         attempt_id: &AttemptId,
-        request: ChatRequest,
+        advertise_tools: bool,
     ) -> Result<PreparedContextTurn, AppError> {
         for attempt_index in 0..CONTEXT_SNAPSHOT_ATTEMPTS {
-            let prepared = self
-                .prepare_context_snapshot(attempt_id, request.clone())
+            let snapshot = self
+                .prepare_context_snapshot(attempt_id, advertise_tools)
                 .await?;
+            let prepared = &snapshot.turn;
             let binding = ids::command(CommandPayload::BindContextTurn {
                 session_id: self.session_id.clone(),
                 attempt_id: attempt_id.clone(),
@@ -2774,11 +2795,23 @@ impl Coordinator {
                 context_turn_id: prepared.manifest().context_turn_id().clone(),
                 manifest_hash: prepared.manifest().manifest_hash().clone(),
             });
-            match self
-                .engine
-                .commit_context_turn_and_bind(prepared.commit().clone(), binding)
-                .await
-            {
+            let result = match snapshot.compaction_boundary.clone() {
+                Some(boundary) => {
+                    self.engine
+                        .commit_compaction_context_turn_and_bind(
+                            prepared.commit().clone(),
+                            boundary,
+                            binding,
+                        )
+                        .await
+                }
+                None => {
+                    self.engine
+                        .commit_context_turn_and_bind(prepared.commit().clone(), binding)
+                        .await
+                }
+            };
+            match result {
                 Ok(reply) => {
                     if reply.session.session_id() != &self.session_id {
                         return Err(AppError::Configuration);
@@ -2798,12 +2831,24 @@ impl Coordinator {
                     if &persisted != prepared.manifest() {
                         return Err(AppError::Configuration);
                     }
-                    return Ok(prepared);
+                    return Ok(snapshot.turn);
                 }
                 Err(error)
                     if attempt_index + 1 < CONTEXT_SNAPSHOT_ATTEMPTS
                         && context_snapshot_conflict(&error) =>
                 {
+                    let fresh = self
+                        .engine
+                        .load_session(self.session_id.clone())
+                        .await?
+                        .ok_or(AppError::Configuration)?;
+                    if fresh.session_id() != &self.session_id {
+                        return Err(AppError::Configuration);
+                    }
+                    self.session = fresh;
+                    self.ports
+                        .sessions
+                        .send_replace(Arc::new(projection::session(&self.session)));
                     continue;
                 }
                 Err(error) => return Err(AppError::Engine(error)),
@@ -2813,61 +2858,269 @@ impl Coordinator {
     }
 
     async fn prepare_context_snapshot(
-        &self,
+        &mut self,
         attempt_id: &AttemptId,
-        request: ChatRequest,
-    ) -> Result<PreparedContextTurn, AppError> {
-        let attempt = self
-            .session
-            .attempt(attempt_id)
-            .ok_or(AppError::Configuration)?;
-        let run_turn = attempt
-            .turns_started()
-            .checked_add(1)
-            .ok_or(AppError::Configuration)?;
+        advertise_tools: bool,
+    ) -> Result<PreparedContextSnapshot, AppError> {
+        let (run_turn, model, explicit_retry) = {
+            let attempt = self
+                .session
+                .attempt(attempt_id)
+                .ok_or(AppError::Configuration)?;
+            (
+                attempt
+                    .turns_started()
+                    .checked_add(1)
+                    .ok_or(AppError::Configuration)?,
+                attempt.model().clone(),
+                attempt.retry_of().is_some(),
+            )
+        };
         let expected_session_sequence = self
             .session
             .last_sequence()
             .ok_or(AppError::Configuration)?;
-        let descriptor = self.catalog_models.iter().find(|descriptor| {
-            descriptor.provider_id == *attempt.model().provider_id()
-                && descriptor.model_id == *attempt.model().model_id()
-        });
-        if run_turn > 1 {
-            let epoch = self
-                .engine
-                .load_context_epoch(context_epoch_id(attempt_id))
-                .await?
-                .ok_or(AppError::Configuration)?;
-            let baseline_turn = self
-                .engine
-                .load_attempt_context_turn(attempt_id.clone(), 1)
-                .await?
-                .ok_or(AppError::Configuration)?;
-            let baseline_content = self.load_frozen_context_content(&baseline_turn).await?;
+        let descriptor = self
+            .catalog_models
+            .iter()
+            .find(|descriptor| {
+                descriptor.provider_id == *model.provider_id()
+                    && descriptor.model_id == *model.model_id()
+            })
+            .cloned();
+        let checkpoint = self
+            .engine
+            .load_latest_compaction_checkpoint(self.session_id.clone())
+            .await?;
+        let retained_history = match checkpoint.as_ref() {
+            Some(checkpoint) => Some(self.load_compacted_history(checkpoint).await?),
+            None => None,
+        };
+        let compacted_through = retained_history
+            .as_ref()
+            .map(CompactedHistoryV1::cutoff_sequence)
+            .map(SessionSequence::new)
+            .transpose()
+            .map_err(|_| AppError::Configuration)?;
+        let request = build_request_after_cutoff(
+            &self.session,
+            attempt_id,
+            advertise_tools,
+            compacted_through,
+        )?;
+        let frozen = if run_turn > 1 {
+            Some(
+                self.load_frozen_context_baseline(attempt_id, run_turn)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let token_budget = frozen.as_ref().map_or_else(
+            || context_token_budget(descriptor.as_ref()),
+            |baseline| Ok(baseline.epoch.token_budget()),
+        )?;
+        let durable_memory_limit = frozen.as_ref().map_or_else(
+            || EstimatedTokens::new(token_budget.get() / 4).map_err(|_| AppError::Configuration),
+            |baseline| Ok(baseline.turn.budget().durable_memory_limit()),
+        )?;
+        let ordinary = if let Some(baseline) = frozen.as_ref() {
             let retrieval_scope = self
                 .context_scope()?
-                .retrieval_scope(self.session_id.clone(), epoch.started_at());
+                .retrieval_scope(self.session_id.clone(), baseline.epoch.started_at());
             let compatibility = EpochCompatibility::new(
                 &request,
-                descriptor,
+                descriptor.as_ref(),
                 &retrieval_scope,
-                epoch.token_budget(),
-                baseline_turn.budget().durable_memory_limit(),
+                token_budget,
+                durable_memory_limit,
             )?;
-            return prepare_frozen_continuation(FrozenContinuationInput {
-                request,
+            prepare_frozen_continuation(FrozenContinuationInput {
+                request: request.clone(),
                 expected_session_sequence,
                 run_turn,
                 committed_at: ids::now(),
-                epoch,
-                baseline_turn,
-                baseline_content,
+                epoch: baseline.epoch.clone(),
+                baseline_turn: baseline.turn.clone(),
+                baseline_content: baseline.content.clone(),
                 compatibility,
-            });
+            })
+        } else {
+            self.prepare_new_context_epoch(
+                attempt_id,
+                run_turn,
+                expected_session_sequence,
+                &model,
+                request.clone(),
+                descriptor.as_ref(),
+                token_budget,
+                durable_memory_limit,
+                ContextEpochMode::NewAttempt { explicit_retry },
+                retained_history.as_ref(),
+                ids::now(),
+            )
+            .await
+        };
+        match ordinary {
+            Ok(turn) if exact_request_fits(turn.request(), token_budget)? => {
+                return Ok(PreparedContextSnapshot {
+                    turn,
+                    compaction_boundary: None,
+                });
+            }
+            Ok(_) | Err(AppError::Memory(autoharness_memory::MemoryError::BudgetExceeded)) => {}
+            Err(error) => return Err(error),
         }
 
+        let candidate = self
+            .select_compaction_candidate(
+                attempt_id,
+                run_turn,
+                expected_session_sequence,
+                &model,
+                advertise_tools,
+                descriptor.as_ref(),
+                token_budget,
+                durable_memory_limit,
+                checkpoint.as_ref(),
+                retained_history.as_ref(),
+            )
+            .await?
+            .ok_or(AppError::Memory(
+                autoharness_memory::MemoryError::BudgetExceeded,
+            ))?;
+        let proposal = self.build_compaction_proposal_command(&candidate).await?;
+        let summary_revision_id = compaction_proposal_revision(&proposal)?.clone();
+        self.ensure_compaction_proposal(&proposal).await?;
+
         let committed_at = ids::now();
+        let turn = self
+            .prepare_new_context_epoch(
+                attempt_id,
+                run_turn,
+                expected_session_sequence,
+                &model,
+                candidate.request,
+                descriptor.as_ref(),
+                token_budget,
+                durable_memory_limit,
+                ContextEpochMode::Compaction {
+                    epoch_id: candidate.epoch_id.clone(),
+                    predecessor_epoch_id: candidate.predecessor_epoch_id.clone(),
+                },
+                Some(&candidate.history),
+                committed_at,
+            )
+            .await?;
+        if !exact_request_fits(turn.request(), token_budget)? {
+            return Err(AppError::Memory(
+                autoharness_memory::MemoryError::BudgetExceeded,
+            ));
+        }
+        let epoch = turn
+            .commit()
+            .epoch()
+            .cloned()
+            .ok_or(AppError::Configuration)?;
+        let facts = self
+            .engine
+            .load_compaction_facts_snapshot(epoch, turn.manifest().clone())
+            .await?;
+        if facts.epoch_id() != &candidate.epoch_id
+            || facts.session_id() != &self.session_id
+            || facts.expected_session_sequence() != expected_session_sequence
+        {
+            return Err(AppError::Configuration);
+        }
+        let boundary = ContextCompactionBoundary::new(
+            candidate.epoch_id,
+            candidate.predecessor_epoch_id,
+            self.session_id.clone(),
+            facts.expected_session_sequence(),
+            facts.memory_generation(),
+            facts.facts_version(),
+            facts.facts_hash().clone(),
+            facts.memory_fact_count(),
+            facts.pending_session_fact_count(),
+            Some(summary_revision_id),
+            committed_at,
+        );
+        Ok(PreparedContextSnapshot {
+            turn,
+            compaction_boundary: Some(boundary),
+        })
+    }
+
+    async fn load_frozen_context_baseline(
+        &self,
+        attempt_id: &AttemptId,
+        run_turn: u32,
+    ) -> Result<FrozenContextBaseline, AppError> {
+        let prior_turn = run_turn.checked_sub(1).ok_or(AppError::Configuration)?;
+        let prior = self
+            .engine
+            .load_attempt_context_turn(attempt_id.clone(), prior_turn)
+            .await?
+            .ok_or(AppError::Configuration)?;
+        let epoch = self
+            .engine
+            .load_context_epoch(prior.epoch_id().clone())
+            .await?
+            .ok_or(AppError::Configuration)?;
+        let turn = self
+            .engine
+            .load_context_epoch_baseline(epoch.epoch_id().clone())
+            .await?
+            .ok_or(AppError::Configuration)?;
+        let content = self.load_frozen_context_content(&turn).await?;
+        Ok(FrozenContextBaseline {
+            epoch,
+            turn,
+            content,
+        })
+    }
+
+    async fn load_compacted_history(
+        &self,
+        checkpoint: &ContextCompactionCheckpoint,
+    ) -> Result<CompactedHistoryV1, AppError> {
+        let mut retained = None;
+        for admission in checkpoint.baseline_turn().admissions() {
+            if !is_compacted_history_admission(admission) {
+                continue;
+            }
+            if retained.is_some() {
+                return Err(AppError::Configuration);
+            }
+            let rendered = self
+                .engine
+                .load_context_admission_content(admission.admission_id().clone())
+                .await?
+                .ok_or(AppError::Configuration)?;
+            retained = retained_compacted_history(admission, &rendered)?;
+        }
+        let retained = retained.ok_or(AppError::Configuration)?;
+        if retained.cutoff_sequence() > checkpoint.boundary().expected_session_sequence().get() {
+            return Err(AppError::Configuration);
+        }
+        Ok(retained)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_new_context_epoch(
+        &self,
+        attempt_id: &AttemptId,
+        run_turn: u32,
+        expected_session_sequence: SessionSequence,
+        model: &autoharness_domain::ModelRef,
+        request: ChatRequest,
+        descriptor: Option<&ModelDescriptor>,
+        token_budget: ContextTokenBudget,
+        durable_memory_limit: EstimatedTokens,
+        epoch: ContextEpochMode,
+        compacted_history: Option<&CompactedHistoryV1>,
+        committed_at: autoharness_domain::TimestampMillis,
+    ) -> Result<PreparedContextTurn, AppError> {
         let retrieval_scope = self
             .context_scope()?
             .retrieval_scope(self.session_id.clone(), committed_at);
@@ -2887,15 +3140,6 @@ impl Coordinator {
             .iter()
             .map(|candidate| memory_candidate(candidate, &memory_query))
             .collect();
-        let reported_token_limit = descriptor
-            .and_then(|descriptor| descriptor.input_token_limit)
-            .unwrap_or(DEFAULT_CONTEXT_TOKEN_BUDGET);
-        let token_budget = ContextTokenBudget::new(
-            reported_token_limit.saturating_mul(CONTEXT_SIZER_BYTES_PER_TOKEN),
-        )
-        .map_err(|_| AppError::Configuration)?;
-        let durable_memory_limit =
-            EstimatedTokens::new(token_budget.get() / 4).map_err(|_| AppError::Configuration)?;
         let compatibility = EpochCompatibility::new(
             &request,
             descriptor,
@@ -2905,30 +3149,272 @@ impl Coordinator {
         )?;
         let retained_sources = self.retained_workspace_agents(attempt_id).await?;
         let environment_secrets = self.environment_credential_sentinels();
-        let observed_sources = observe_workspace_agents(
+        let mut observed_sources = observe_workspace_agents(
             &self.workspace,
             self.provider.as_deref(),
             &environment_secrets,
             committed_at,
             retained_sources,
         )?;
+        if let Some(history) = compacted_history {
+            observed_sources.push(observe_compacted_history(
+                history,
+                self.provider.as_deref(),
+                &environment_secrets,
+                committed_at,
+            )?);
+        }
         prepare_context_turn(ContextPreparationInput {
             session_id: self.session_id.clone(),
             attempt_id: attempt_id.clone(),
             run_turn,
             expected_session_sequence,
             memory_generation: candidate_batch.generation(),
-            model: attempt.model().clone(),
+            model: model.clone(),
             request,
             retrieval_scope,
             compatibility,
-            epoch: ContextEpochMode::NewAttempt {
-                explicit_retry: attempt.retry_of().is_some(),
-            },
+            epoch,
             observed_sources,
             memory_candidates: candidates,
             committed_at,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn select_compaction_candidate(
+        &self,
+        attempt_id: &AttemptId,
+        run_turn: u32,
+        expected_session_sequence: SessionSequence,
+        model: &autoharness_domain::ModelRef,
+        advertise_tools: bool,
+        descriptor: Option<&ModelDescriptor>,
+        token_budget: ContextTokenBudget,
+        durable_memory_limit: EstimatedTokens,
+        checkpoint: Option<&ContextCompactionCheckpoint>,
+        prior_history: Option<&CompactedHistoryV1>,
+    ) -> Result<Option<CompactionCandidate>, AppError> {
+        let prior_cutoff = prior_history.map(CompactedHistoryV1::cutoff_sequence);
+        for cutoff in compaction_cutoffs(&self.session, prior_cutoff) {
+            let request = build_request_after_cutoff(
+                &self.session,
+                attempt_id,
+                advertise_tools,
+                Some(cutoff),
+            )?;
+            let Some(predecessor_epoch_id) = self
+                .compaction_predecessor_epoch(attempt_id, run_turn, cutoff, checkpoint)
+                .await?
+            else {
+                continue;
+            };
+            let groups = compaction_groups(&self.session, prior_cutoff, cutoff)?;
+            let history = match compact_history(
+                &self.session_id,
+                cutoff,
+                prior_history,
+                groups,
+                MemoryContent::MAX_BYTES.min(MAX_CONTEXT_SOURCE_VALUE_BYTES),
+            ) {
+                Ok(history) => history,
+                Err(AppError::Configuration) => continue,
+                Err(error) => return Err(error),
+            };
+            let epoch_id = compaction_epoch_id(attempt_id, run_turn, &predecessor_epoch_id, cutoff);
+            let preflight = self
+                .prepare_new_context_epoch(
+                    attempt_id,
+                    run_turn,
+                    expected_session_sequence,
+                    model,
+                    request.clone(),
+                    descriptor,
+                    token_budget,
+                    durable_memory_limit,
+                    ContextEpochMode::Compaction {
+                        epoch_id: epoch_id.clone(),
+                        predecessor_epoch_id: predecessor_epoch_id.clone(),
+                    },
+                    Some(&history),
+                    ids::now(),
+                )
+                .await;
+            match preflight {
+                Ok(turn) if exact_request_fits(turn.request(), token_budget)? => {
+                    return Ok(Some(CompactionCandidate {
+                        history,
+                        request,
+                        predecessor_epoch_id,
+                        epoch_id,
+                    }));
+                }
+                Ok(_) | Err(AppError::Memory(autoharness_memory::MemoryError::BudgetExceeded)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
+    async fn compaction_predecessor_epoch(
+        &self,
+        attempt_id: &AttemptId,
+        run_turn: u32,
+        cutoff: SessionSequence,
+        checkpoint: Option<&ContextCompactionCheckpoint>,
+    ) -> Result<Option<ContextEpochId>, AppError> {
+        if run_turn > 1 {
+            let prior = self
+                .engine
+                .load_attempt_context_turn(
+                    attempt_id.clone(),
+                    run_turn.checked_sub(1).ok_or(AppError::Configuration)?,
+                )
+                .await?
+                .ok_or(AppError::Configuration)?;
+            return Ok(Some(prior.epoch_id().clone()));
+        }
+        if let Some(checkpoint) = checkpoint {
+            return Ok(Some(checkpoint.epoch().epoch_id().clone()));
+        }
+        let mut attempts = self
+            .session
+            .attempts()
+            .iter()
+            .filter_map(|attempt| {
+                attempt
+                    .completed_sequence()
+                    .filter(|completed| *completed <= cutoff)
+                    .map(|completed| (completed, attempt))
+            })
+            .collect::<Vec<_>>();
+        attempts.sort_by(|left, right| right.0.cmp(&left.0));
+        for (_, attempt) in attempts {
+            let Some(binding) = attempt.context_turn_bindings().last() else {
+                continue;
+            };
+            let Some(turn) = self
+                .engine
+                .load_attempt_context_turn(attempt.attempt_id().clone(), binding.run_turn())
+                .await?
+            else {
+                continue;
+            };
+            if self
+                .engine
+                .load_context_epoch(turn.epoch_id().clone())
+                .await?
+                .is_some()
+            {
+                return Ok(Some(turn.epoch_id().clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn build_compaction_proposal_command(
+        &self,
+        candidate: &CompactionCandidate,
+    ) -> Result<MemoryCommandEnvelope, AppError> {
+        let content = MemoryContent::new(candidate.history.content()?)
+            .map_err(|_| AppError::Configuration)?;
+        let content_hash = normalized_content_hash(content.as_str())?;
+        let identity = format!(
+            "{}\0{}\0{}\0{}",
+            self.session_id.as_str(),
+            candidate.predecessor_epoch_id.as_str(),
+            candidate.history.cutoff_sequence(),
+            content_hash.as_str(),
+        );
+        let cutoff = SessionSequence::new(candidate.history.cutoff_sequence())
+            .map_err(|_| AppError::Configuration)?;
+        let event = self
+            .engine
+            .load_events(self.session_id.clone())
+            .await?
+            .into_iter()
+            .find(|event| event.sequence() == cutoff)
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    autoharness_domain::EventPayload::AttemptCompleted { .. }
+                )
+            })
+            .ok_or(AppError::Configuration)?;
+        let evidence = MemoryEvidence::new(
+            MemoryEvidenceId::new(deterministic_compaction_tag(
+                "memory-compaction-evidence",
+                &identity,
+            ))
+            .map_err(|_| AppError::Configuration)?,
+            MemoryEvidenceSource::SessionEvent {
+                session_id: self.session_id.clone(),
+                event_id: event.event_id().clone(),
+            },
+            MemoryEvidenceRelation::DerivedFrom,
+            None,
+            None,
+        )
+        .map_err(|_| AppError::Configuration)?;
+        let revision_id = MemoryRevisionId::new(deterministic_compaction_tag(
+            "memory-compaction-revision",
+            &identity,
+        ))
+        .map_err(|_| AppError::Configuration)?;
+        let revision = MemoryRevisionDraft::new(
+            revision_id,
+            MemoryRevisionNumber::FIRST,
+            None,
+            content,
+            content_hash,
+            MemoryOrigin::Compaction,
+            TrustClass::UntrustedProposal,
+            ConfidenceBasisPoints::new(7_500).expect("static compaction confidence is valid"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            vec![evidence],
+            Vec::new(),
+        )
+        .map_err(|_| AppError::Configuration)?;
+        MemoryCommandEnvelope::new_v1(
+            CommandId::new(deterministic_compaction_tag(
+                "memory-compaction-command",
+                &identity,
+            ))
+            .map_err(|_| AppError::Configuration)?,
+            MemoryId::new(deterministic_compaction_tag("memory-compaction", &identity))
+                .map_err(|_| AppError::Configuration)?,
+            None,
+            CorrelationId::new(deterministic_compaction_tag(
+                "memory-compaction-correlation",
+                &identity,
+            ))
+            .map_err(|_| AppError::Configuration)?,
+            MemoryCommandPayload::CreateMemory {
+                scope: DomainMemoryScope::Session(self.session_id.clone()),
+                memory_kind: MemoryKind::Lesson,
+                revision,
+            },
+        )
+        .map_err(|_| AppError::Configuration)
+    }
+
+    async fn ensure_compaction_proposal(
+        &self,
+        command: &MemoryCommandEnvelope,
+    ) -> Result<(), AppError> {
+        if self.memory_command_contains_configured_secret(command) {
+            return Err(AppError::Configuration);
+        }
+        if let Err(error) = self.engine.execute_memory_command(command.clone()).await
+            && !self.exact_memory_proposal_committed(command).await?
+        {
+            return Err(error);
+        }
+        if !self.exact_memory_proposal_committed(command).await? {
+            return Err(AppError::Configuration);
+        }
+        Ok(())
     }
 
     async fn load_frozen_context_content(
@@ -2978,28 +3464,38 @@ impl Coordinator {
         current_attempt_id: &AttemptId,
     ) -> Result<Vec<RetainedContextSource>, AppError> {
         for attempt in self.session.attempts().iter().rev() {
-            if attempt.attempt_id() == current_attempt_id {
+            let last_turn = if attempt.attempt_id() == current_attempt_id {
+                attempt.turns_started()
+            } else {
+                attempt
+                    .context_turn_bindings()
+                    .last()
+                    .map_or(0, autoharness_engine::ContextTurnBinding::run_turn)
+            };
+            if last_turn == 0 {
                 continue;
             }
-            let Some(turn) = self
-                .engine
-                .load_attempt_context_turn(attempt.attempt_id().clone(), 1)
-                .await?
-            else {
-                continue;
-            };
-            for admission in turn.admissions() {
-                if !is_workspace_agents_admission(admission) {
-                    continue;
-                }
-                let rendered = self
+            for run_turn in (1..=last_turn).rev() {
+                let Some(turn) = self
                     .engine
-                    .load_context_admission_content(admission.admission_id().clone())
+                    .load_attempt_context_turn(attempt.attempt_id().clone(), run_turn)
                     .await?
-                    .ok_or(AppError::Configuration)?;
-                let source = retained_workspace_agents(admission, &rendered)?
-                    .ok_or(AppError::Configuration)?;
-                return Ok(vec![source]);
+                else {
+                    continue;
+                };
+                for admission in turn.admissions() {
+                    if !is_workspace_agents_admission(admission) {
+                        continue;
+                    }
+                    let rendered = self
+                        .engine
+                        .load_context_admission_content(admission.admission_id().clone())
+                        .await?
+                        .ok_or(AppError::Configuration)?;
+                    let source = retained_workspace_agents(admission, &rendered)?
+                        .ok_or(AppError::Configuration)?;
+                    return Ok(vec![source]);
+                }
             }
             // A newer attempt may have observed the optional source as absent.
             // Keep searching for the latest retained value so an unavailable
@@ -3795,16 +4291,8 @@ impl Coordinator {
             .session
             .attempt(&attempt_id)
             .is_some_and(|attempt| self.model_supports_tools(attempt.model()));
-        let base_request = match build_request(&self.session, &attempt_id, advertise_tools) {
-            Ok(request) => request,
-            Err(_) => {
-                self.fail_context_preparation(&attempt_id).await?;
-                self.active = None;
-                return Ok(());
-            }
-        };
         let prepared = match self
-            .prepare_and_bind_context(&attempt_id, base_request)
+            .prepare_and_bind_context(&attempt_id, advertise_tools)
             .await
         {
             Ok(prepared) => prepared,
@@ -4227,6 +4715,106 @@ fn context_snapshot_conflict(error: &DurableEngineError) -> bool {
     )
 }
 
+fn context_token_budget(
+    descriptor: Option<&ModelDescriptor>,
+) -> Result<ContextTokenBudget, AppError> {
+    let reported_token_limit = descriptor
+        .and_then(|descriptor| descriptor.input_token_limit)
+        .unwrap_or(DEFAULT_CONTEXT_TOKEN_BUDGET);
+    ContextTokenBudget::new(reported_token_limit.saturating_mul(CONTEXT_SIZER_BYTES_PER_TOKEN))
+        .map_err(|_| AppError::Configuration)
+}
+
+fn exact_request_fits(
+    request: &ChatRequest,
+    token_budget: ContextTokenBudget,
+) -> Result<bool, AppError> {
+    let bytes =
+        u64::try_from(serde_json::to_vec(request)?.len()).map_err(|_| AppError::Configuration)?;
+    Ok(bytes <= token_budget.get())
+}
+
+fn compaction_cutoffs(
+    session: &SessionAggregate,
+    compacted_through: Option<u64>,
+) -> Vec<SessionSequence> {
+    let mut cutoffs = session
+        .attempts()
+        .iter()
+        .filter_map(autoharness_engine::AttemptProjection::completed_sequence)
+        .filter(|completed| compacted_through.is_none_or(|cutoff| completed.get() > cutoff))
+        .collect::<Vec<_>>();
+    cutoffs.sort();
+    cutoffs.dedup();
+    cutoffs
+}
+
+fn compaction_groups(
+    session: &SessionAggregate,
+    compacted_through: Option<u64>,
+    cutoff: SessionSequence,
+) -> Result<Vec<CompactedHistoryGroup>, AppError> {
+    let mut attempts = session
+        .attempts()
+        .iter()
+        .filter_map(|attempt| {
+            attempt
+                .completed_sequence()
+                .filter(|completed| {
+                    *completed <= cutoff
+                        && compacted_through.is_none_or(|prior| completed.get() > prior)
+                })
+                .map(|completed| (completed, attempt))
+        })
+        .collect::<Vec<_>>();
+    attempts.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.attempt_id().cmp(right.1.attempt_id()))
+    });
+    attempts
+        .into_iter()
+        .map(|(completed, attempt)| {
+            let messages = complete_attempt_messages(session, attempt)?;
+            let group = CompactedHistoryGroup::new(attempt.attempt_id(), completed, &messages)?;
+            if group.completed_sequence() != completed.get() {
+                return Err(AppError::Configuration);
+            }
+            Ok(group)
+        })
+        .collect()
+}
+
+fn deterministic_compaction_tag(prefix: &str, identity: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"autoharness-compaction-id-v1\0");
+    hasher.update(prefix.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(identity.as_bytes());
+    let encoded = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{prefix}-{encoded}")
+}
+
+fn compaction_proposal_revision(
+    command: &MemoryCommandEnvelope,
+) -> Result<&MemoryRevisionId, AppError> {
+    match command.payload() {
+        MemoryCommandPayload::CreateMemory { revision, .. }
+            if revision.origin() == MemoryOrigin::Compaction
+                && revision.trust_class() == TrustClass::UntrustedProposal =>
+        {
+            Ok(revision.revision_id())
+        }
+        _ => Err(AppError::Configuration),
+    }
+}
+
 fn memory_candidate(
     candidate: &autoharness_store::MemorySearchCandidate,
     query: &MemoryContent,
@@ -4309,32 +4897,7 @@ fn build_request_after_cutoff(
                             .iter()
                             .any(|call| call.attempt_id() == attempt_id)))
         }) {
-            let text = response.response_text();
-            if !text.trim().is_empty() {
-                messages.push(ChatMessage::text(
-                    ChatRole::Assistant,
-                    ChatContent::new(text)?,
-                ));
-            }
-            for tool_call in session
-                .tool_calls()
-                .iter()
-                .filter(|call| call.attempt_id() == response.attempt_id())
-            {
-                messages.push(ChatMessage::ToolCall(ProviderToolCall {
-                    provider_call_id: tool_call.call().provider_call_id.clone(),
-                    tool_name: tool_call.call().tool_name.clone(),
-                    arguments: tool_call.call().arguments.clone(),
-                }));
-                if tool_call.status().is_settled() {
-                    let result = tool_result_content(tool_call);
-                    messages.push(ChatMessage::ToolResult {
-                        provider_call_id: tool_call.call().provider_call_id.clone(),
-                        tool_name: tool_call.call().tool_name.clone(),
-                        content: ChatContent::new(result)?,
-                    });
-                }
-            }
+            append_attempt_output(session, response, &mut messages)?;
         }
     }
     let tools = definitions()
@@ -4354,6 +4917,60 @@ fn build_request_after_cutoff(
             request
         }
     })
+}
+
+fn append_attempt_output(
+    session: &SessionAggregate,
+    attempt: &autoharness_engine::AttemptProjection,
+    messages: &mut Vec<ChatMessage>,
+) -> Result<(), ProviderError> {
+    let text = attempt.response_text();
+    if !text.trim().is_empty() {
+        messages.push(ChatMessage::text(
+            ChatRole::Assistant,
+            ChatContent::new(text)?,
+        ));
+    }
+    for tool_call in session
+        .tool_calls()
+        .iter()
+        .filter(|call| call.attempt_id() == attempt.attempt_id())
+    {
+        messages.push(ChatMessage::ToolCall(ProviderToolCall {
+            provider_call_id: tool_call.call().provider_call_id.clone(),
+            tool_name: tool_call.call().tool_name.clone(),
+            arguments: tool_call.call().arguments.clone(),
+        }));
+        if tool_call.status().is_settled() {
+            messages.push(ChatMessage::ToolResult {
+                provider_call_id: tool_call.call().provider_call_id.clone(),
+                tool_name: tool_call.call().tool_name.clone(),
+                content: ChatContent::new(tool_result_content(tool_call))?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn complete_attempt_messages(
+    session: &SessionAggregate,
+    attempt: &autoharness_engine::AttemptProjection,
+) -> Result<Vec<ChatMessage>, AppError> {
+    if attempt.status() != EngineAttemptStatus::Completed || attempt.completed_sequence().is_none()
+    {
+        return Err(AppError::Configuration);
+    }
+    let input = session
+        .admitted_inputs()
+        .iter()
+        .find(|input| input.input_id() == attempt.input_id() && input.promoted_by().is_some())
+        .ok_or(AppError::Configuration)?;
+    let mut messages = vec![ChatMessage::text(
+        ChatRole::User,
+        ChatContent::new(input.prompt().as_str())?,
+    )];
+    append_attempt_output(session, attempt, &mut messages)?;
+    Ok(messages)
 }
 
 fn recover_active_attempt(
