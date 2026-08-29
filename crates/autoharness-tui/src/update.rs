@@ -1908,6 +1908,10 @@ fn activate_selected_setting(model: &mut Model) -> Vec<UiEffect> {
             navigate_to_route(model, Route::Sessions);
             Vec::new()
         }
+        SettingsPreference::OpenMemory => {
+            navigate_to_route(model, Route::Memory);
+            Vec::new()
+        }
         SettingsPreference::ReducedMotion => change_selected_preference(model, 1),
         preference if preference.editable() => change_selected_preference(model, 1),
         _ => Vec::new(),
@@ -1959,7 +1963,8 @@ fn change_selected_preference(model: &mut Model, direction: isize) -> Vec<UiEffe
         | SettingsPreference::ManageProviders
         | SettingsPreference::ConnectCredential
         | SettingsPreference::ConfigureModels
-        | SettingsPreference::OpenSessions => return Vec::new(),
+        | SettingsPreference::OpenSessions
+        | SettingsPreference::OpenMemory => return Vec::new(),
         SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(Some(cycle(
             *preferences.theme_preset().value(),
             &[
@@ -2063,7 +2068,8 @@ fn reset_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             | SettingsPreference::ManageProviders
             | SettingsPreference::ConnectCredential
             | SettingsPreference::ConfigureModels
-            | SettingsPreference::OpenSessions => return Vec::new(),
+            | SettingsPreference::OpenSessions
+            | SettingsPreference::OpenMemory => return Vec::new(),
             SettingsPreference::ThemePreset => LocalPreferenceChange::ThemePreset(None),
             SettingsPreference::ColorMode => LocalPreferenceChange::ColorMode(None),
             SettingsPreference::GlyphMode => LocalPreferenceChange::GlyphMode(None),
@@ -2106,7 +2112,8 @@ fn default_selected_preference(model: &mut Model) -> Vec<UiEffect> {
             | SettingsPreference::ManageProviders
             | SettingsPreference::ConnectCredential
             | SettingsPreference::ConfigureModels
-            | SettingsPreference::OpenSessions => return Vec::new(),
+            | SettingsPreference::OpenSessions
+            | SettingsPreference::OpenMemory => return Vec::new(),
             SettingsPreference::ThemePreset => {
                 LocalPreferenceChange::ThemePreset(Some(ThemePreset::System))
             }
@@ -2280,6 +2287,21 @@ pub(crate) fn execute_command(model: &mut Model, entry: CommandEntry) -> Vec<UiE
         }
         "memory" => {
             navigate_to_route(model, Route::Memory);
+            Vec::new()
+        }
+        "remember" => {
+            navigate_to_route(model, Route::Memory);
+            open_memory_lifecycle(model, MemoryLifecycleMode::Remember);
+            Vec::new()
+        }
+        "memory-actions" => {
+            navigate_to_route(model, Route::Memory);
+            open_memory_lifecycle(model, MemoryLifecycleMode::Actions);
+            Vec::new()
+        }
+        "memory-export" => {
+            navigate_to_route(model, Route::Memory);
+            open_memory_lifecycle(model, MemoryLifecycleMode::Export);
             Vec::new()
         }
         "profile" => {

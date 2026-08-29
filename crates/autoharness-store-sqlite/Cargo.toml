@@ -10,8 +10,10 @@ publish.workspace = true
 
 [dependencies]
 autoharness-domain = { path = "../autoharness-domain" }
+autoharness-memory = { path = "../autoharness-memory" }
 autoharness-store = { path = "../autoharness-store" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = "1.0"
 serde_json = "1.0"
 sha2 = "0.11.0"
 

@@ -403,6 +403,29 @@ fn memory_projection_bounds_and_debug_redaction_are_enforced() {
     assert!(!debug.contains("session-launch"));
     assert!(!debug.contains("workspace instruction"));
     assert!(debug.contains("summary_count"));
+    let detail = projection.detail("memory-concise").expect("detail");
+    let admission_debug = format!("{:?}", &detail.admissions()[0]);
+    assert!(!admission_debug.contains("attempt-launch-1"));
+    assert!(!admission_debug.contains("epoch-launch-a"));
+    assert!(!admission_debug.contains("workspace scope matched"));
+    let revision_debug = format!("{:?}", detail.revision_context().expect("context"));
+    assert!(!revision_debug.contains("workspace current-project"));
+    assert!(!revision_debug.contains("revision-concise-3"));
+    assert_eq!(MemorySensitivity::Secret.label(), "secret");
+}
+
+#[test]
+fn expanded_admission_pane_shows_exact_turn_coordinates_and_reason_factors() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut model, Message::Mouse(MouseAction::MemoryAdmissions));
+    let rendered = text(&render(&model, 80, 24));
+    assert!(rendered.contains("attempt-launch-1"));
+    assert!(rendered.contains("epoch-launch-a"));
+    assert!(rendered.contains("revision-concise-3"));
+    assert!(rendered.contains("memory-renderer-v1"));
+    assert!(rendered.contains("workspace scope matched"));
 }
 
 #[test]
@@ -414,6 +437,31 @@ fn stale_memory_generations_cannot_roll_the_workspace_back() {
     assert_eq!(model.memory().generation(), 7);
     assert_eq!(model.memory().total(), 3);
     assert_eq!(model.memory_selection(), Some("memory-concise"));
+}
+
+#[test]
+fn partial_memory_page_never_claims_a_global_search_miss() {
+    let mut model = model();
+    let summary = MemorySummary::new(
+        "memory-page-one",
+        "A row from the first loaded page.",
+        MemoryStatus::Active,
+        MemoryScope::Workspace,
+        1_725_000_000_000,
+        Some(9_000),
+        0,
+    )
+    .expect("summary");
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(30, vec![summary], vec![], 101, true).expect("partial projection"),
+    ));
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(key(Key::Char('/'))));
+    type_text(&mut model, "not-on-first-page");
+    let rendered = text(&render(&model, 60, 18));
+    assert!(rendered.contains("loaded page"));
+    assert!(rendered.contains("No matches in the loaded page"));
+    assert!(!rendered.contains("No memories match these filters"));
 }
 
 #[test]
@@ -429,7 +477,7 @@ fn remember_editor_is_bounded_redacted_pending_safe_and_restores_focus() {
     );
 
     let compact = text(&render(&model, 40, 12));
-    assert!(compact.contains("Workspace fact"));
+    assert!(compact.contains("Scope: Workspace"));
     assert!(compact.contains("rejects secrets"));
     type_text(&mut model, "Remember this exact preference.");
     assert!(!format!("{model:?}").contains("exact preference"));
@@ -577,7 +625,8 @@ fn retract_delete_and_export_are_distinct_explicit_lifecycle_intents() {
     assert!(update(&mut delete, Message::Input(key(Key::Char('q')))).is_empty());
     let delete_copy = text(&render(&delete, 60, 18));
     assert!(delete_copy.contains("Logical delete"));
-    assert!(delete_copy.contains("different from retraction"));
+    assert!(delete_copy.contains("retraction only"));
+    assert!(delete_copy.contains("cannot be recalled"));
     let effects = update(&mut delete, Message::Input(key(Key::Char('y'))));
     assert!(matches!(
         effects.as_slice(),
@@ -641,6 +690,17 @@ fn lifecycle_metadata_remains_actionable_without_an_erasable_content_sidecar() {
             .expect("metadata-only projection"),
     ));
     let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(alt('s')));
+    let effects = update(&mut model, Message::Input(key(Key::Enter)));
+    let [UiEffect::Dispatch(UiIntent::ExportMemory { request_id, .. })] = effects.as_slice() else {
+        panic!("metadata-only export should dispatch");
+    };
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted {
+            request_id: *request_id,
+        }),
+    );
     let _ = update(&mut model, Message::Input(alt('e')));
     assert!(model.overlay().is_none(), "revision requires exact content");
     let _ = update(&mut model, Message::Input(alt('x')));
@@ -650,13 +710,29 @@ fn lifecycle_metadata_remains_actionable_without_an_erasable_content_sidecar() {
     );
     assert!(text(&render(&model, 60, 18)).contains("content sidecar unavailable"));
     let effects = update(&mut model, Message::Input(key(Key::Char('y'))));
+    let request_id = match effects.as_slice() {
+        [
+            UiEffect::Dispatch(UiIntent::RetractMemory {
+                request_id,
+                expected_last_sequence: 29,
+                revision_id,
+                ..
+            }),
+        ] if revision_id == "revision-erased-5" => *request_id,
+        _ => panic!("metadata-only retract should dispatch"),
+    };
+    let _ = update(
+        &mut model,
+        Message::Notice(UiNotice::IntentCommitted { request_id }),
+    );
+    let _ = update(&mut model, Message::Input(alt('d')));
+    let effects = update(&mut model, Message::Input(key(Key::Char('y'))));
     assert!(matches!(
         effects.as_slice(),
-        [UiEffect::Dispatch(UiIntent::RetractMemory {
+        [UiEffect::Dispatch(UiIntent::DeleteMemory {
             expected_last_sequence: 29,
-            revision_id,
             ..
-        })] if revision_id == "revision-erased-5"
+        })]
     ));
 }
 
@@ -698,24 +774,131 @@ fn lifecycle_actions_and_modal_controls_are_measured_at_every_target_size() {
 }
 
 #[test]
-#[ignore = "visual review harness for the read-only Memory workspace"]
-fn render_memory_review_matrix() {
+fn slash_commands_and_settings_cross_link_converge_on_memory_workflows() {
+    let mut remember = model();
+    type_text(&mut remember, "/remember");
+    let effects = update(&mut remember, Message::Input(key(Key::Enter)));
+    assert!(effects.is_empty());
+    assert_eq!(remember.route(), Route::Memory);
+    assert_eq!(
+        remember.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Remember)
+    );
+
+    let mut export = model();
+    type_text(&mut export, "/memory-export");
+    let effects = update(&mut export, Message::Input(key(Key::Enter)));
+    assert!(effects.is_empty());
+    assert_eq!(export.route(), Route::Memory);
+    assert_eq!(
+        export.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Export)
+    );
+
+    let mut settings = model();
+    let _ = update(&mut settings, Message::Input(alt('4')));
+    let _ = update(&mut settings, Message::Mouse(MouseAction::SettingsTab(6)));
+    let _ = update(&mut settings, Message::Mouse(MouseAction::SettingsRow(3)));
+    let _ = update(&mut settings, Message::Input(key(Key::Enter)));
+    assert_eq!(settings.route(), Route::Memory);
+    assert_eq!(settings.focus, Focus::Memory);
+}
+
+#[test]
+fn ascii_no_color_reduced_motion_lifecycle_overlay_keeps_redundant_semantics() {
     let mut model = model();
+    let resolved = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{
+                "schema_version": 4,
+                "local_profile": { "preferences": {
+                    "glyph_mode": "ascii",
+                    "color_mode": "no_color",
+                    "reduced_motion": true
+                } }
+            }"#,
+        )
+        .resolve()
+        .expect("accessible settings");
+    model.apply_settings(Arc::new(SettingsProjection {
+        local_profile: resolved.local_profile().clone(),
+        ..SettingsProjection::default()
+    }));
     let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Input(alt('n')));
+    let backend = render(&model, 40, 12);
+    let rendered = text(&backend);
+    assert!(rendered.is_ascii());
+    assert!(rendered.contains("Scope: Workspace"));
+    assert!(rendered.contains("Sensitivity: Internal"));
+    assert!(rendered.contains("rejects secrets"));
+    assert!(!model.motion().animating());
+    assert!(
+        backend
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
+    );
+}
+
+#[test]
+#[ignore = "visual review harness for the complete Memory lifecycle workspace"]
+fn render_memory_review_matrix() {
+    let mut workspace = model();
+    let _ = update(&mut workspace, Message::Input(alt('6')));
     for (width, height) in [(120, 50), (80, 24), (60, 18), (40, 12)] {
         println!(
             "=== Memory {width}x{height} ===\n{}",
-            text(&render(&model, width, height))
+            text(&render(&workspace, width, height))
         );
     }
-    let _ = update(&mut model, Message::Input(key(Key::Enter)));
+    let _ = update(&mut workspace, Message::Input(key(Key::Enter)));
     println!(
         "=== Memory detail 40x12 ===\n{}",
-        text(&render(&model, 40, 12))
+        text(&render(&workspace, 40, 12))
     );
-    let _ = update(&mut model, Message::Mouse(MouseAction::MemoryAdmissions));
+    let _ = update(
+        &mut workspace,
+        Message::Mouse(MouseAction::MemoryAdmissions),
+    );
     println!(
         "=== Memory admissions 60x18 ===\n{}",
-        text(&render(&model, 60, 18))
+        text(&render(&workspace, 60, 18))
+    );
+
+    let mut remember = model();
+    let _ = update(&mut remember, Message::Input(alt('6')));
+    let _ = update(&mut remember, Message::Input(alt('n')));
+    type_text(&mut remember, "A carefully reviewed workspace fact.");
+    for (width, height) in [(120, 50), (80, 24), (60, 18), (40, 12)] {
+        println!(
+            "=== Remember {width}x{height} ===\n{}",
+            text(&render(&remember, width, height))
+        );
+    }
+
+    let mut review = model();
+    let _ = update(&mut review, Message::Input(alt('6')));
+    let _ = update(&mut review, Message::Mouse(MouseAction::MemoryCycleStatus));
+    let _ = update(
+        &mut review,
+        Message::Mouse(MouseAction::MemorySelect("memory-keyboard".to_owned())),
+    );
+    let _ = update(&mut review, Message::Input(alt('v')));
+    for (width, height) in [(80, 24), (40, 12)] {
+        println!(
+            "=== Proposal review {width}x{height} ===\n{}",
+            text(&render(&review, width, height))
+        );
+    }
+
+    let mut delete = model();
+    let _ = update(&mut delete, Message::Input(alt('6')));
+    let _ = update(&mut delete, Message::Input(alt('d')));
+    println!(
+        "=== Logical delete 40x12 ===\n{}",
+        text(&render(&delete, 40, 12))
     );
 }

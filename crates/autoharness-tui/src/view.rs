@@ -1150,7 +1150,7 @@ fn settings_category_description(category: SettingsCategory) -> &'static str {
         SettingsCategory::Providers => "Safe connection facts and provider actions.",
         SettingsCategory::ModelsThinking => "Active model and profile thinking defaults.",
         SettingsCategory::Profile => "Local identity and workspace defaults.",
-        SettingsCategory::SessionsData => "Durability, redaction, and session access.",
+        SettingsCategory::SessionsData => "Durability, redaction, sessions, and memory access.",
         SettingsCategory::Shortcuts => "Keyboard reference generated from the command table.",
         SettingsCategory::About => "Runtime capabilities and policy facts.",
     }
@@ -1191,7 +1191,8 @@ fn render_typed_settings_row(
         SettingsPreference::ManageProviders
         | SettingsPreference::ConnectCredential
         | SettingsPreference::ConfigureModels
-        | SettingsPreference::OpenSessions => SettingKind::Action { label: &value },
+        | SettingsPreference::OpenSessions
+        | SettingsPreference::OpenMemory => SettingKind::Action { label: &value },
         _ => SettingKind::Info { value: &value },
     };
     let row = SettingRow::new(
@@ -1424,6 +1425,9 @@ fn settings_row_description(preference: SettingsPreference) -> &'static str {
         SettingsPreference::ConnectCredential => "Open the existing zeroizing credential editor.",
         SettingsPreference::ConfigureModels => "Choose a profile default model and thinking level.",
         SettingsPreference::OpenSessions => "Open durable session search and lifecycle controls.",
+        SettingsPreference::OpenMemory => {
+            "Open searchable memory inspection, review, correction, and lifecycle controls."
+        }
     }
 }
 
@@ -1557,7 +1561,8 @@ fn settings_footer_controls(model: &Model, selected: Option<SettingsPreference>)
         SettingsPreference::ManageProviders
         | SettingsPreference::ConnectCredential
         | SettingsPreference::ConfigureModels
-        | SettingsPreference::OpenSessions => "Enter activate".to_owned(),
+        | SettingsPreference::OpenSessions
+        | SettingsPreference::OpenMemory => "Enter activate".to_owned(),
         SettingsPreference::ReducedMotion => "Left/Right or Space toggle".to_owned(),
         _ => "Left/Right change".to_owned(),
     };

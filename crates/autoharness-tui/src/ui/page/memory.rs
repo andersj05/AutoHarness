@@ -1,4 +1,4 @@
-//! Read-only Memory workspace: index, revision detail, and admission provenance.
+//! Memory workspace: bounded inspection plus deliberate lifecycle workflows.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -19,11 +19,12 @@ use crate::ui::component::{
 };
 use crate::ui::layout::presentation;
 use crate::ui::metrics::{
-    MEMORY_ACTIONS_FULL_WIDTH, MEMORY_ADMISSIONS_PERCENT_WIDE, MEMORY_CONTENT_PREVIEW_ROWS,
-    MEMORY_DETAIL_PERCENT, MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_MIN_HEIGHT,
-    MEMORY_LIST_PERCENT, MEMORY_LIST_PERCENT_WIDE, MEMORY_ROW_BADGE_MIN_WIDTH,
-    MEMORY_TALL_HEADER_MIN_HEIGHT, MEMORY_TALL_LIST_MIN_HEIGHT, MEMORY_THREE_PANE_MIN_WIDTH,
-    MEMORY_TWO_PANE_MIN_WIDTH, ROW, TWO_ROWS,
+    MEMORY_ACTIONS_FULL_WIDTH, MEMORY_ADMISSION_CONTEXT_MIN_HEIGHT, MEMORY_ADMISSION_CONTEXT_ROWS,
+    MEMORY_ADMISSIONS_PERCENT_WIDE, MEMORY_CONTENT_PREVIEW_ROWS, MEMORY_DETAIL_PERCENT,
+    MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_HINT_MIN_WIDTH, MEMORY_FOOTER_MIN_HEIGHT,
+    MEMORY_LIST_PERCENT, MEMORY_LIST_PERCENT_WIDE, MEMORY_REMEMBER_EDITOR_CHROME_ROWS,
+    MEMORY_ROW_BADGE_MIN_WIDTH, MEMORY_TALL_HEADER_MIN_HEIGHT, MEMORY_TALL_LIST_MIN_HEIGHT,
+    MEMORY_THREE_PANE_MIN_WIDTH, MEMORY_TWO_PANE_MIN_WIDTH, ROW, TWO_ROWS,
 };
 use crate::ui::{Icon, Token, normalized_t};
 
@@ -185,7 +186,7 @@ fn render_header(buf: &mut Buffer, area: Rect, model: &Model) {
     let total_label = format!("{} total", model.memory().total());
     let state_label = match model.memory().state() {
         MemoryLoadState::Loading => "loading",
-        MemoryLoadState::Ready if model.memory().stale() => "stale snapshot",
+        MemoryLoadState::Ready if model.memory().stale() => "loaded page only",
         MemoryLoadState::Ready => "ready",
         MemoryLoadState::Failed(_) => "unavailable",
     };
@@ -685,13 +686,27 @@ fn render_admissions(buf: &mut Buffer, area: Rect, model: &Model) {
             style,
         );
         if row.height >= TWO_ROWS {
-            let metadata = format!(
-                "{}{}{}{}rank {}",
-                display_safe(admission.session()),
-                icons.separator(),
-                display_safe(admission.model()),
-                icons.separator(),
-                admission.rank()
+            let metadata = admission.context().map_or_else(
+                || {
+                    format!(
+                        "{}{}{}{}rank {}",
+                        display_safe(admission.session()),
+                        icons.separator(),
+                        display_safe(admission.model()),
+                        icons.separator(),
+                        admission.rank()
+                    )
+                },
+                |context| {
+                    format!(
+                        "{}{}{}{}turn {}",
+                        display_safe(admission.session()),
+                        icons.separator(),
+                        display_safe(context.provider_attempt()),
+                        icons.separator(),
+                        context.run_turn()
+                    )
+                },
             );
             let metadata = paint::ellipsize_words_with(
                 &metadata,
@@ -708,10 +723,14 @@ fn render_admissions(buf: &mut Buffer, area: Rect, model: &Model) {
             );
         }
     }
+    let (_, context_area) = admission_areas(area, model);
+    if let Some(context_area) = context_area {
+        render_admission_context(buf, context_area, model);
+    }
 }
 
 fn admission_rows(area: Rect, model: &Model) -> Vec<(Rect, usize)> {
-    let inner = admissions_panel(model).content_rect(area);
+    let (inner, _) = admission_areas(area, model);
     let Some((_, Some(detail))) = model.selected_memory() else {
         return Vec::new();
     };
@@ -745,6 +764,92 @@ fn admission_rows(area: Rect, model: &Model) -> Vec<(Rect, usize)> {
             )
         })
         .collect()
+}
+
+fn admission_areas(area: Rect, model: &Model) -> (Rect, Option<Rect>) {
+    let inner = admissions_panel(model).content_rect(area);
+    let context_loaded = model
+        .selected_memory()
+        .and_then(|(_, detail)| detail)
+        .and_then(|detail| {
+            detail
+                .admissions()
+                .get(model.memory_workspace.admission_selected)
+        })
+        .and_then(|admission| admission.context())
+        .is_some();
+    if !context_loaded || inner.height < MEMORY_ADMISSION_CONTEXT_MIN_HEIGHT {
+        return (inner, None);
+    }
+    let rows = Split::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(ROW),
+            Constraint::Length(MEMORY_ADMISSION_CONTEXT_ROWS),
+        ])
+        .split(inner);
+    (rows[0], Some(rows[1]))
+}
+
+fn render_admission_context(buf: &mut Buffer, area: Rect, model: &Model) {
+    let Some((_, Some(detail))) = model.selected_memory() else {
+        return;
+    };
+    let Some(admission) = detail
+        .admissions()
+        .get(model.memory_workspace.admission_selected)
+    else {
+        return;
+    };
+    let Some(context) = admission.context() else {
+        return;
+    };
+    let turn = context.run_turn().to_string();
+    let tokens = context.token_count().to_string();
+    let rank = admission.rank().to_string();
+    let factors = if context.reason_factors().is_empty() {
+        "none loaded".to_owned()
+    } else {
+        context
+            .reason_factors()
+            .iter()
+            .map(|factor| display_safe(factor))
+            .collect::<Vec<_>>()
+            .join(model.theme().icons().separator())
+    };
+    let rows = [
+        KeyValue {
+            label: "Attempt",
+            value: context.provider_attempt(),
+            chip: Some(admission.model()),
+        },
+        KeyValue {
+            label: "Turn",
+            value: &turn,
+            chip: Some(context.epoch()),
+        },
+        KeyValue {
+            label: "Tokens",
+            value: &tokens,
+            chip: Some(&rank),
+        },
+        KeyValue {
+            label: "Revision",
+            value: context.source_revision(),
+            chip: None,
+        },
+        KeyValue {
+            label: "Renderer",
+            value: context.renderer_version(),
+            chip: None,
+        },
+        KeyValue {
+            label: "Reasons",
+            value: &factors,
+            chip: None,
+        },
+    ];
+    KeyValueTable::new(model.theme(), &rows).render(buf, area);
 }
 
 fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
@@ -815,7 +920,7 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
     let button_row = ButtonRow::new(model.theme(), &buttons);
     let button_width = button_row.measure().min(area.width);
     let hint_width = area.width.saturating_sub(button_width).saturating_sub(ROW);
-    if hint_width > 0 {
+    if hint_width >= MEMORY_FOOTER_HINT_MIN_WIDTH {
         paint::put(
             buf,
             area.x,
@@ -999,10 +1104,15 @@ pub(crate) fn render_lifecycle(frame: &mut Frame<'_>, host: Rect, model: &Model)
         | MemoryLifecycleMode::Actions
         | MemoryLifecycleMode::Export => ModalIntent::Neutral,
     };
+    let title = if state.mode == MemoryLifecycleMode::Review {
+        "Review proposal - Up/Down"
+    } else {
+        state.mode.label()
+    };
     let (inner, _) = Modal::new(
         model.theme(),
         model.theme().icons(),
-        state.mode.label(),
+        title,
         Some(icon),
         &buttons,
     )
@@ -1048,8 +1158,7 @@ fn render_lifecycle_editor(buf: &mut Buffer, area: Rect, model: &Model) {
     };
     let instruction = if state.mode == MemoryLifecycleMode::Remember {
         format!(
-            "Workspace fact{}Internal{}explicit user",
-            model.theme().icons().separator(),
+            "Scope: Workspace{}Kind: Fact",
             model.theme().icons().separator()
         )
     } else {
@@ -1072,10 +1181,26 @@ fn render_lifecycle_editor(buf: &mut Buffer, area: Rect, model: &Model) {
             area.x,
             area.y.saturating_add(ROW),
             area.width,
-            "Ordinary Remember rejects secrets. Enter adds a line; Ctrl+S saves.",
+            "Sensitivity: Internal",
             model.theme().style(Token::Warning),
         );
-        TWO_ROWS
+        paint::put(
+            buf,
+            area.x,
+            area.y.saturating_add(TWO_ROWS),
+            area.width,
+            "Ordinary Remember rejects secrets.",
+            model.theme().style(Token::Warning),
+        );
+        paint::put(
+            buf,
+            area.x,
+            area.y.saturating_add(TWO_ROWS).saturating_add(ROW),
+            area.width,
+            "Enter adds a line; Ctrl+S saves.",
+            model.theme().style(Token::TextMuted),
+        );
+        MEMORY_REMEMBER_EDITOR_CHROME_ROWS
     } else {
         ROW
     };
@@ -1280,16 +1405,17 @@ fn lifecycle_review_lines(model: &Model) -> Vec<Line<'static>> {
             lines.push(Line::styled(target_content_line(target), primary));
             lines.push(Line::from(""));
             lines.push(Line::styled(
-                "Logical delete records a tombstone and removes the memory from ordinary use.",
+                "Logical delete records a tombstone; retraction only stops future admission.",
                 danger,
             ));
+            lines.push(Line::styled("Audit history remains.", warning));
             lines.push(Line::styled(
-                "This is different from retraction and preserves audit history.",
-                danger,
-            ));
-            lines.push(Line::styled(
-                "Already dispatched provider turns cannot be recalled. Press Y or choose Delete to confirm this exact identity.",
+                "Dispatched turns cannot be recalled.",
                 warning,
+            ));
+            lines.push(Line::styled(
+                "Press Y or choose Delete to confirm this exact identity.",
+                muted,
             ));
         }
         MemoryLifecycleMode::Export => {

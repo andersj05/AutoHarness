@@ -110,6 +110,7 @@ pub struct SqliteConfiguration {
     synchronous_level: i64,
     foreign_keys: bool,
     trusted_schema: bool,
+    fts5: bool,
     busy_timeout_ms: u64,
 }
 
@@ -138,6 +139,12 @@ impl SqliteConfiguration {
         self.trusted_schema
     }
 
+    /// Returns whether the bundled SQLite engine provides FTS5.
+    #[must_use]
+    pub const fn fts5(&self) -> bool {
+        self.fts5
+    }
+
     /// Returns the verified busy timeout in milliseconds.
     #[must_use]
     pub const fn busy_timeout_ms(&self) -> u64 {
@@ -157,7 +164,7 @@ enum FailurePoint {
 /// The application should own this synchronous adapter on one storage task or
 /// thread. The type is not a cross-process session-writer lease.
 pub struct SqliteStore {
-    connection: Connection,
+    pub(crate) connection: Connection,
     configuration: SqliteConfiguration,
     failure_point: Option<FailurePoint>,
 }
@@ -599,7 +606,8 @@ impl SessionStore for SqliteStore {
 
         transaction
             .execute_batch(
-                "DELETE FROM transcript_segments; \
+                "DELETE FROM context_turn_bindings; \
+                 DELETE FROM transcript_segments; \
                  DELETE FROM transcript_messages; \
                  DELETE FROM provider_attempts; \
                  DELETE FROM admitted_inputs; \
@@ -657,15 +665,15 @@ impl SessionStore for SqliteStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(map_sqlite_error)?;
 
-        let existing: Option<(i64, String)> = transaction
+        let existing: Option<(i64, String, i64)> = transaction
             .query_row(
-                "SELECT last_sequence, status FROM sessions WHERE session_id = ?1",
+                "SELECT last_sequence, status, updated_at_ms FROM sessions WHERE session_id = ?1",
                 params![session_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(map_sqlite_error)?;
-        let Some((last_sequence, _status)) = existing else {
+        let Some((last_sequence, _status, updated_at_ms)) = existing else {
             return Ok(DeletionDisposition::NotFound);
         };
         let actual_version = u64::try_from(last_sequence).map_err(|_| StoreError::CorruptData {
@@ -691,11 +699,33 @@ impl SessionStore for SqliteStore {
             return Err(StoreError::InvalidSessionTransition);
         }
 
+        crate::memory_store::erase_session_memory_and_evidence(
+            &transaction,
+            session_id,
+            actual_version,
+            updated_at_ms,
+        )?;
+
         // Delete every dependent row inside this transaction, deepest first,
         // so a crash can never leave orphaned projections or events behind.
         // The retained event stream is authoritative history; deletion is an
         // explicit user request and removes replay data irreversibly.
         for statement in [
+            "DELETE FROM context_turn_bindings WHERE session_id = ?1",
+            "DELETE FROM context_admission_reasons WHERE admission_id IN (\
+                SELECT a.admission_id FROM context_admissions AS a \
+                JOIN context_turns AS t ON t.context_turn_id = a.context_turn_id \
+                WHERE t.session_id = ?1\
+             )",
+            "DELETE FROM context_admissions WHERE context_turn_id IN (\
+                SELECT context_turn_id FROM context_turns WHERE session_id = ?1\
+             )",
+            "DELETE FROM context_turn_sources WHERE context_turn_id IN (\
+                SELECT context_turn_id FROM context_turns WHERE session_id = ?1\
+             )",
+            "DELETE FROM context_turns WHERE session_id = ?1",
+            "DELETE FROM context_compaction_boundaries WHERE session_id = ?1",
+            "DELETE FROM context_epochs WHERE session_id = ?1",
             "DELETE FROM transcript_segments WHERE session_id = ?1",
             "DELETE FROM transcript_messages WHERE session_id = ?1",
             "DELETE FROM provider_attempts WHERE session_id = ?1",
@@ -1350,8 +1380,13 @@ fn apply_projection(
         EventPayload::AttemptMarkedUnknown { attempt_id } => {
             settle_attempt(transaction, event, attempt_id, "unknown", None, mode)?;
         }
+        EventPayload::ContextTurnBound { .. } => {
+            crate::context_store::apply_context_turn_binding(transaction, event)?;
+        }
+        EventPayload::RunTurnStarted { .. } => {
+            crate::context_store::validate_run_turn_binding(transaction, event)?;
+        }
         EventPayload::RunBudgetConfigured { .. }
-        | EventPayload::RunTurnStarted { .. }
         | EventPayload::ToolCallProposed { .. }
         | EventPayload::ToolPermissionRecorded { .. }
         | EventPayload::ToolPermissionAnswered { .. }
@@ -1515,6 +1550,7 @@ fn validate_complete_streams(
                 | EventPayload::AttemptCancelled { .. }
                 | EventPayload::AttemptMarkedUnknown { .. }
                 | EventPayload::RunBudgetConfigured { .. }
+                | EventPayload::ContextTurnBound { .. }
                 | EventPayload::RunTurnStarted { .. }
                 | EventPayload::ToolCallProposed { .. }
                 | EventPayload::ToolPermissionRecorded { .. }
@@ -1545,6 +1581,7 @@ fn validate_complete_streams(
                 | EventPayload::AttemptCancelled { .. }
                 | EventPayload::AttemptMarkedUnknown { .. }
                 | EventPayload::RunBudgetConfigured { .. }
+                | EventPayload::ContextTurnBound { .. }
                 | EventPayload::RunTurnStarted { .. }
                 | EventPayload::ToolCallProposed { .. }
                 | EventPayload::ToolPermissionRecorded { .. }
@@ -2338,6 +2375,7 @@ fn event_kind(payload: &EventPayload) -> &'static str {
         EventPayload::AttemptCancelled { .. } => "attempt_cancelled",
         EventPayload::AttemptMarkedUnknown { .. } => "attempt_marked_unknown",
         EventPayload::RunBudgetConfigured { .. } => "run_budget_configured",
+        EventPayload::ContextTurnBound { .. } => "context_turn_bound",
         EventPayload::RunTurnStarted { .. } => "run_turn_started",
         EventPayload::ToolCallProposed { .. } => "tool_call_proposed",
         EventPayload::ToolPermissionRecorded { .. } => "tool_permission_recorded",
@@ -2368,7 +2406,7 @@ fn parse_delivery_mode(value: &str) -> Result<DeliveryMode, StoreError> {
     }
 }
 
-fn to_sql_sequence(value: u64) -> Result<i64, StoreError> {
+pub(crate) fn to_sql_sequence(value: u64) -> Result<i64, StoreError> {
     i64::try_from(value).map_err(|_| StoreError::SequenceOutOfRange)
 }
 
@@ -2410,6 +2448,13 @@ fn configure(
     let trusted_schema = connection
         .pragma_query_value(None, "trusted_schema", |row| row.get::<_, i64>(0))
         .map_err(map_sqlite_error)?;
+    let fts5 = connection
+        .query_row(
+            "SELECT sqlite_compileoption_used('ENABLE_FTS5')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
     let verified_timeout_ms = connection
         .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
         .map_err(map_sqlite_error)?;
@@ -2420,6 +2465,7 @@ fn configure(
         || synchronous_level != FULL_SYNCHRONOUS_LEVEL
         || foreign_keys != 1
         || trusted_schema != 0
+        || fts5 != 1
         || verified_timeout_ms != timeout_ms
     {
         return Err(StoreError::Configuration);
@@ -2430,11 +2476,12 @@ fn configure(
         synchronous_level,
         foreign_keys: true,
         trusted_schema: false,
+        fts5: true,
         busy_timeout_ms: verified_timeout_ms,
     })
 }
 
-fn map_sqlite_error(error: rusqlite::Error) -> StoreError {
+pub(crate) fn map_sqlite_error(error: rusqlite::Error) -> StoreError {
     match error {
         rusqlite::Error::SqliteFailure(details, _)
             if matches!(

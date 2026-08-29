@@ -1,10 +1,27 @@
 //! Provider-neutral durable session storage ports and read models.
 
+mod context;
 mod error;
+mod memory;
 mod port;
 mod read_model;
 
+pub use context::{
+    BoundContextTurnCommitReceipt, BoundContextTurnCommitRequest, ContextAdmissionContent,
+    ContextCommitDisposition, ContextCompactionBoundary, ContextStore, ContextTurnCommitRequest,
+    ContextTurnContent, MAX_RENDERED_CONTEXT_BYTES, RenderedContextText,
+};
 pub use error::{CorruptionArea, IdentityKind, StoreError};
+pub use memory::{
+    ActiveMemoryHead, ActiveMemoryHeadCursor, ActiveMemoryHeadPageQuery, ActiveMemoryHeadQuery,
+    DEFAULT_MEMORY_PAGE_SIZE, MAX_MEMORY_INSPECTION_PAGE_SIZE, MAX_MEMORY_SEARCH_CANDIDATES,
+    MemoryAdmissionCursor, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryAdmissionRecord,
+    MemoryAppendBatchRequest, MemoryAppendDisposition, MemoryAppendOperation, MemoryAppendReceipt,
+    MemoryAppendRequest, MemoryCandidateBatch, MemoryContentState, MemoryEvidenceContent,
+    MemoryInspectionCursor, MemoryInspectionQuery, MemoryInspectionRecord,
+    MemoryMutationGeneration, MemoryRevisionContent, MemorySearchCandidate, MemorySearchQuery,
+    MemoryStore, StoredMemoryCandidate,
+};
 pub use port::{
     AppendDisposition, AppendReceipt, AppendRequest, DEFAULT_EVENT_PAGE_SIZE, DeletionDisposition,
     SessionStore,

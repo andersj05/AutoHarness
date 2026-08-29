@@ -130,13 +130,14 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
     assert_eq!(store.configuration().synchronous_level(), 2);
     assert!(store.configuration().foreign_keys());
     assert!(!store.configuration().trusted_schema());
+    assert!(store.configuration().fts5());
     assert_eq!(store.configuration().busy_timeout_ms(), 1_234);
     assert_eq!(
         store
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("read schema version"),
-        3
+        6
     );
     assert_eq!(
         store
@@ -145,7 +146,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations"),
-        3
+        6
     );
     drop(store);
 
@@ -157,7 +158,7 @@ fn opening_verifies_durable_pragmas_and_migrations_are_idempotent() {
                 row.get::<_, i64>(0)
             })
             .expect("count migrations after reopen"),
-        3
+        6
     );
 }
 
@@ -200,7 +201,7 @@ fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version"),
-        3
+        6
     );
     assert_eq!(
         store
@@ -209,7 +210,7 @@ fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
                 row.get::<_, i64>(0)
             })
             .expect("migration count"),
-        3
+        6
     );
 }
 
@@ -1017,15 +1018,15 @@ fn a_newer_database_schema_fails_closed() {
     let store = database.open();
     store
         .connection
-        .pragma_update(None, "user_version", 4)
+        .pragma_update(None, "user_version", 7)
         .expect("set future schema fixture");
     drop(store);
 
     assert_eq!(
         SqliteStore::open(&database.path).err(),
         Some(StoreError::NewerSchema {
-            found: 4,
-            supported: 3
+            found: 7,
+            supported: 6
         })
     );
 }

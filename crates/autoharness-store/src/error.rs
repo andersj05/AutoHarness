@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
-use autoharness_domain::{ClassifiedError, ErrorClass, RetryAdvice, SessionId};
+use autoharness_domain::{ClassifiedError, ErrorClass, MemoryId, RetryAdvice, SessionId};
 
 /// The durable identity whose uniqueness was violated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +14,18 @@ pub enum IdentityKind {
     Input,
     /// A provider-attempt identity was reused.
     Attempt,
+    /// A durable memory-item identity was reused.
+    Memory,
+    /// A durable memory-revision identity was reused.
+    MemoryRevision,
+    /// A durable memory-operation identity was reused.
+    MemoryOperation,
+    /// A context-epoch identity was reused.
+    ContextEpoch,
+    /// A provider-turn context identity was reused.
+    ContextTurn,
+    /// A context-admission identity was reused.
+    ContextAdmission,
     /// A backend constraint failed without a safely attributable identity.
     Constraint,
 }
@@ -37,6 +49,14 @@ pub enum CorruptionArea {
     CatalogCache,
     /// A migration record did not match the embedded migration set.
     MigrationHistory,
+    /// The authoritative memory ledger failed validation.
+    MemoryLedger,
+    /// A memory lifecycle projection failed validation.
+    MemoryProjection,
+    /// A context epoch, snapshot, turn, or admission failed validation.
+    ContextLedger,
+    /// The SQLite FTS memory candidate index failed validation.
+    MemorySearch,
 }
 
 /// A sanitized durable-store failure.
@@ -57,8 +77,19 @@ pub enum StoreError {
     InvalidCausation,
     /// An event payload was not valid for the durable session version.
     InvalidSessionTransition,
+    /// A memory mutation was not valid for the current durable lifecycle.
+    InvalidMemoryTransition,
+    /// A context manifest or admission violated its durable boundary.
+    InvalidContextTransition,
+    /// A bounded memory or context request exceeded a supported store limit.
+    LimitExceeded,
     /// A schema version is not supported by this store implementation.
     UnsupportedEventSchema {
+        /// Unsupported serialized schema value.
+        found: u16,
+    },
+    /// A memory-ledger schema version is not supported by this store implementation.
+    UnsupportedMemorySchema {
         /// Unsupported serialized schema value.
         found: u16,
     },
@@ -69,6 +100,22 @@ pub enum StoreError {
         /// Version supplied by the caller.
         expected: u64,
         /// Version currently stored, with zero representing an absent session.
+        actual: u64,
+    },
+    /// The current memory-item version did not match the caller's expectation.
+    MemoryVersionConflict {
+        /// Memory item whose logical writer was stale.
+        memory_id: MemoryId,
+        /// Version supplied by the caller.
+        expected: u64,
+        /// Version currently stored, with zero representing an absent item.
+        actual: u64,
+    },
+    /// The global memory generation changed while deterministic context was being built.
+    ContextGenerationConflict {
+        /// Generation frozen into the context manifest.
+        expected: u64,
+        /// Generation currently stored.
         actual: u64,
     },
     /// A stable identity conflicted with an existing durable record.
@@ -117,8 +164,20 @@ impl Display for StoreError {
             Self::InvalidSessionTransition => {
                 formatter.write_str("event append contains an invalid session transition")
             }
+            Self::InvalidMemoryTransition => {
+                formatter.write_str("memory mutation contains an invalid lifecycle transition")
+            }
+            Self::InvalidContextTransition => {
+                formatter.write_str("context mutation contains an invalid lifecycle transition")
+            }
+            Self::LimitExceeded => {
+                formatter.write_str("durable storage request exceeds a supported limit")
+            }
             Self::UnsupportedEventSchema { found } => {
                 write!(formatter, "event schema {found} is not supported")
+            }
+            Self::UnsupportedMemorySchema { found } => {
+                write!(formatter, "memory schema {found} is not supported")
             }
             Self::VersionConflict {
                 session_id,
@@ -127,6 +186,18 @@ impl Display for StoreError {
             } => write!(
                 formatter,
                 "session {session_id} is at version {actual}, expected {expected}"
+            ),
+            Self::MemoryVersionConflict {
+                memory_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "memory {memory_id} is at version {actual}, expected {expected}"
+            ),
+            Self::ContextGenerationConflict { expected, actual } => write!(
+                formatter,
+                "memory generation is {actual}, expected {expected} for context commit"
             ),
             Self::IdentityConflict { kind } => {
                 write!(formatter, "a durable {kind:?} identity already exists")
@@ -162,8 +233,15 @@ impl ClassifiedError for StoreError {
             | Self::NonContiguousBatch
             | Self::InvalidCausation
             | Self::InvalidSessionTransition
-            | Self::UnsupportedEventSchema { .. } => ErrorClass::Validation,
-            Self::VersionConflict { .. } | Self::IdentityConflict { .. } => ErrorClass::Conflict,
+            | Self::InvalidMemoryTransition
+            | Self::InvalidContextTransition
+            | Self::LimitExceeded
+            | Self::UnsupportedEventSchema { .. }
+            | Self::UnsupportedMemorySchema { .. } => ErrorClass::Validation,
+            Self::VersionConflict { .. }
+            | Self::MemoryVersionConflict { .. }
+            | Self::ContextGenerationConflict { .. }
+            | Self::IdentityConflict { .. } => ErrorClass::Conflict,
             Self::Busy => ErrorClass::Unavailable,
             Self::CorruptData { .. }
             | Self::NewerSchema { .. }
@@ -175,7 +253,9 @@ impl ClassifiedError for StoreError {
 
     fn retry_advice(&self) -> RetryAdvice {
         match self {
-            Self::VersionConflict { .. } => RetryAdvice::Immediate,
+            Self::VersionConflict { .. }
+            | Self::MemoryVersionConflict { .. }
+            | Self::ContextGenerationConflict { .. } => RetryAdvice::Immediate,
             Self::Busy => RetryAdvice::Backoff,
             Self::EmptyAppend
             | Self::MixedSessions
@@ -183,7 +263,11 @@ impl ClassifiedError for StoreError {
             | Self::NonContiguousBatch
             | Self::InvalidCausation
             | Self::InvalidSessionTransition
+            | Self::InvalidMemoryTransition
+            | Self::InvalidContextTransition
+            | Self::LimitExceeded
             | Self::UnsupportedEventSchema { .. }
+            | Self::UnsupportedMemorySchema { .. }
             | Self::IdentityConflict { .. }
             | Self::CorruptData { .. }
             | Self::NewerSchema { .. }

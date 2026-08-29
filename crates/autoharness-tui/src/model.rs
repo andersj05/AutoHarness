@@ -3068,6 +3068,7 @@ pub(crate) enum SettingsPreference {
     ConnectCredential,
     ConfigureModels,
     OpenSessions,
+    OpenMemory,
 }
 
 impl SettingsPreference {
@@ -3103,7 +3104,12 @@ impl SettingsPreference {
         Self::DisplayLabel,
         Self::ManageProviders,
     ];
-    const SESSIONS_DATA: [Self; 3] = [Self::Retention, Self::Logging, Self::OpenSessions];
+    const SESSIONS_DATA: [Self; 4] = [
+        Self::Retention,
+        Self::Logging,
+        Self::OpenSessions,
+        Self::OpenMemory,
+    ];
     const SHORTCUTS: [Self; 0] = [];
     const ABOUT: [Self; 3] = [Self::Approvals, Self::ColorDepth, Self::Version];
 
@@ -3154,6 +3160,7 @@ impl SettingsPreference {
             Self::ConnectCredential => "API credential",
             Self::ConfigureModels => "Model defaults",
             Self::OpenSessions => "Session browser",
+            Self::OpenMemory => "Memory workspace",
         }
     }
 
@@ -3328,6 +3335,24 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Up/Down", "choose a memory or admission"),
             ("Left/Right", "change the focused filter"),
             ("Enter", "open details or admission history"),
+            (
+                "Alt+N",
+                "remember a Workspace Fact with Internal sensitivity",
+            ),
+            (
+                "Alt+E / Alt+V",
+                "correct an active revision or review a proposal",
+            ),
+            (
+                "Alt+A",
+                "open every available action for the exact revision",
+            ),
+            (
+                "Alt+X / Alt+D",
+                "retract future admission or logically delete",
+            ),
+            ("Alt+S", "export the selected loaded memory"),
+            ("Ctrl+S", "save an open Remember or Correct editor"),
             ("Esc", "step back, clear search, or return to Chat"),
         ],
     },
@@ -3360,7 +3385,7 @@ impl HelpSection {
             "Profiles" => focus == Focus::Profiles,
             "Models" => focus == Focus::Picker,
             "Settings" => focus == Focus::Settings,
-            "Memory" => focus == Focus::Memory,
+            "Memory" => matches!(focus, Focus::Memory | Focus::MemoryLifecycle),
             "User profile" => focus == Focus::UserProfile,
             "Permission" => focus == Focus::Permission,
             _ => false,
@@ -3497,6 +3522,24 @@ pub const COMMANDS: &[CommandEntry] = &[
         label: "Memory",
         description: "Inspect admitted memories, provenance, and usage",
         key_hint: Some("Alt+6"),
+    },
+    CommandEntry {
+        id: "remember",
+        label: "Remember",
+        description: "Create an explicit workspace fact in Memory",
+        key_hint: Some("Alt+N in Memory"),
+    },
+    CommandEntry {
+        id: "memory-actions",
+        label: "Memory actions",
+        description: "Review, correct, retract, delete, or export the selected memory",
+        key_hint: Some("Alt+A in Memory"),
+    },
+    CommandEntry {
+        id: "memory-export",
+        label: "Export memory",
+        description: "Export the selected exact loaded memory revision",
+        key_hint: Some("Alt+S in Memory"),
     },
     CommandEntry {
         id: "copy",
@@ -4234,7 +4277,7 @@ impl Model {
                 actions.push(MemoryLifecycleMode::Delete);
             }
         }
-        if detail.is_some_and(MemoryDetail::has_content) {
+        if detail.is_some() {
             actions.push(MemoryLifecycleMode::Export);
         }
         actions
@@ -4500,6 +4543,7 @@ impl Model {
             SettingsPreference::ConnectCredential => "Connect API key".to_owned(),
             SettingsPreference::ConfigureModels => "Choose model and thinking".to_owned(),
             SettingsPreference::OpenSessions => "Open sessions".to_owned(),
+            SettingsPreference::OpenMemory => "Inspect and manage memory".to_owned(),
         }
     }
 

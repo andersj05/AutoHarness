@@ -1,0 +1,2048 @@
+use autoharness_domain::{
+    AgentId, Causation, ContextAdmission, ContextAdmissionFactor, ContextEpochId,
+    ContextEpochManifest, ContextEpochReason, ContextObservationState, ContextSection,
+    ContextTurnId, ContextTurnManifest, EVENT_SCHEMA_V1, EventEnvelope, EventPayload, MemoryId,
+    MemoryRevision, MemoryRevisionStatus, MemoryScope, MemoryValidity, Sensitivity, SessionId,
+    SessionSequence, Sha256Digest, UserId, WorkspaceId,
+};
+use autoharness_memory::{
+    COMPACTION_FACTS_VERSION, verify_admission_rendered_hash, verify_context_manifest_hash,
+    verify_rendered_context_hash,
+};
+use autoharness_store::{
+    BoundContextTurnCommitReceipt, BoundContextTurnCommitRequest, ContextCommitDisposition,
+    ContextCompactionBoundary, ContextStore, ContextTurnCommitRequest, CorruptionArea,
+    IdentityKind, RenderedContextText, StoreError,
+};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
+
+use crate::sqlite_store::{SqliteStore, map_sqlite_error, to_sql_sequence};
+
+impl ContextStore for SqliteStore {
+    fn commit_context_turn(
+        &mut self,
+        request: &ContextTurnCommitRequest,
+    ) -> Result<ContextCommitDisposition, StoreError> {
+        validate_context_sidecars(request)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
+        let disposition = commit_context_in_transaction(&transaction, request)?;
+        transaction.commit().map_err(map_sqlite_error)?;
+        Ok(disposition)
+    }
+
+    fn commit_context_turn_and_bind(
+        &mut self,
+        request: &BoundContextTurnCommitRequest,
+    ) -> Result<BoundContextTurnCommitReceipt, StoreError> {
+        validate_context_sidecars(request.context())?;
+        validate_binding_request(request)?;
+        let event_json =
+            serde_json::to_vec(request.binding_event()).map_err(|_| StoreError::Backend)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
+
+        reconcile_unbound_turn_conflict(&transaction, request.context().turn())?;
+        let context_disposition = commit_context_in_transaction(&transaction, request.context())?;
+        persist_compaction_boundary(
+            &transaction,
+            request.context().turn(),
+            request.compaction_boundary(),
+        )?;
+        let binding_disposition = append_context_binding_event(
+            &transaction,
+            request.context().turn(),
+            request.binding_event(),
+            &event_json,
+        )?;
+        transaction.commit().map_err(map_sqlite_error)?;
+
+        let disposition = if context_disposition == ContextCommitDisposition::AlreadyCommitted
+            && binding_disposition == ContextCommitDisposition::AlreadyCommitted
+        {
+            ContextCommitDisposition::AlreadyCommitted
+        } else {
+            ContextCommitDisposition::Committed
+        };
+        Ok(BoundContextTurnCommitReceipt::new(
+            disposition,
+            request.binding_event().sequence().get(),
+        ))
+    }
+
+    fn load_context_epoch(
+        &self,
+        epoch_id: &ContextEpochId,
+    ) -> Result<Option<ContextEpochManifest>, StoreError> {
+        load_json_record(
+            &self.connection,
+            "SELECT manifest_json, manifest_json_sha256 FROM context_epochs WHERE epoch_id = ?1",
+            epoch_id.as_str(),
+        )
+    }
+
+    fn load_compaction_boundary(
+        &self,
+        epoch_id: &ContextEpochId,
+    ) -> Result<Option<ContextCompactionBoundary>, StoreError> {
+        load_compaction_boundary_record(&self.connection, epoch_id)
+    }
+
+    fn load_context_turn(
+        &self,
+        context_turn_id: &ContextTurnId,
+    ) -> Result<Option<ContextTurnManifest>, StoreError> {
+        load_json_record(
+            &self.connection,
+            "SELECT manifest_json, manifest_json_sha256 FROM context_turns \
+             WHERE context_turn_id = ?1",
+            context_turn_id.as_str(),
+        )
+    }
+
+    fn load_context_admissions(
+        &self,
+        context_turn_id: &ContextTurnId,
+    ) -> Result<Vec<ContextAdmission>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT admission_json, admission_json_sha256 FROM context_admissions \
+                 WHERE context_turn_id = ?1 ORDER BY rank ASC",
+            )
+            .map_err(map_sqlite_error)?;
+        let rows = statement
+            .query_map(params![context_turn_id.as_str()], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(map_sqlite_error)?;
+        let mut admissions = Vec::new();
+        for (index, row) in rows.enumerate() {
+            let (json, hash) = row.map_err(map_sqlite_error)?;
+            let admission: ContextAdmission = decode_context_json(&json, &hash)?;
+            if admission.context_turn_id() != context_turn_id
+                || usize::try_from(admission.rank()).ok() != Some(index + 1)
+            {
+                return Err(corrupt_context());
+            }
+            admissions.push(admission);
+        }
+        Ok(admissions)
+    }
+
+    fn load_context_turn_content(
+        &self,
+        context_turn_id: &ContextTurnId,
+    ) -> Result<Option<RenderedContextText>, StoreError> {
+        load_context_turn_rendered_content(&self.connection, context_turn_id)
+    }
+
+    fn load_context_admission_content(
+        &self,
+        admission_id: &autoharness_domain::ContextAdmissionId,
+    ) -> Result<Option<RenderedContextText>, StoreError> {
+        load_context_admission_rendered_content(&self.connection, admission_id)
+    }
+
+    fn load_attempt_context_turn(
+        &self,
+        attempt_id: &autoharness_domain::AttemptId,
+        turn: u32,
+    ) -> Result<Option<ContextTurnManifest>, StoreError> {
+        if turn == 0 {
+            return Err(StoreError::InvalidContextTransition);
+        }
+        let row = self
+            .connection
+            .query_row(
+                "SELECT manifest_json, manifest_json_sha256 FROM context_turns \
+                 WHERE attempt_id = ?1 AND run_turn = ?2",
+                params![attempt_id.as_str(), i64::from(turn)],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        row.map(|(json, hash)| decode_context_json(&json, &hash))
+            .transpose()
+    }
+}
+
+struct EncodedContext {
+    turn_json: Vec<u8>,
+    turn_json_hash: Vec<u8>,
+    epoch: Option<(Vec<u8>, Vec<u8>)>,
+}
+
+fn encode_context(request: &ContextTurnCommitRequest) -> Result<EncodedContext, StoreError> {
+    let turn_json = serde_json::to_vec(request.turn()).map_err(|_| StoreError::Backend)?;
+    let turn_json_hash = Sha256::digest(&turn_json).to_vec();
+    let epoch = request
+        .epoch()
+        .map(|epoch| {
+            serde_json::to_vec(epoch)
+                .map(|json| {
+                    let hash = Sha256::digest(&json).to_vec();
+                    (json, hash)
+                })
+                .map_err(|_| StoreError::Backend)
+        })
+        .transpose()?;
+    Ok(EncodedContext {
+        turn_json,
+        turn_json_hash,
+        epoch,
+    })
+}
+
+fn commit_context_in_transaction(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+) -> Result<ContextCommitDisposition, StoreError> {
+    let turn = request.turn();
+    let encoded = encode_context(request)?;
+    if let Some((existing_json, existing_hash)) = transaction
+        .query_row(
+            "SELECT manifest_json, manifest_json_sha256 FROM context_turns \
+             WHERE context_turn_id = ?1",
+            params![turn.context_turn_id().as_str()],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+    {
+        if Sha256::digest(&existing_json).as_slice() != existing_hash.as_slice() {
+            return Err(corrupt_context());
+        }
+        if existing_json != encoded.turn_json {
+            return Err(StoreError::IdentityConflict {
+                kind: IdentityKind::ContextTurn,
+            });
+        }
+        if let (Some(epoch), Some((epoch_json, _))) = (request.epoch(), encoded.epoch.as_ref()) {
+            let existing_epoch_json = transaction
+                .query_row(
+                    "SELECT manifest_json FROM context_epochs WHERE epoch_id = ?1",
+                    params![epoch.epoch_id().as_str()],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(map_sqlite_error)?;
+            if existing_epoch_json.as_deref() != Some(epoch_json.as_slice()) {
+                return Err(StoreError::IdentityConflict {
+                    kind: IdentityKind::ContextEpoch,
+                });
+            }
+        }
+        validate_existing_context_children(transaction, request)?;
+        return Ok(ContextCommitDisposition::AlreadyCommitted);
+    }
+
+    validate_context_boundary(transaction, request)?;
+    if let (Some(epoch), Some((epoch_json, epoch_json_hash))) =
+        (request.epoch(), encoded.epoch.as_ref())
+    {
+        insert_or_reconcile_epoch(transaction, epoch, epoch_json, epoch_json_hash)?;
+    }
+    validate_durable_epoch(transaction, turn)?;
+    insert_context_turn(
+        transaction,
+        request,
+        &encoded.turn_json,
+        &encoded.turn_json_hash,
+    )?;
+    insert_context_children(transaction, request)?;
+    Ok(ContextCommitDisposition::Committed)
+}
+
+fn persist_compaction_boundary(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+    boundary: Option<&ContextCompactionBoundary>,
+) -> Result<(), StoreError> {
+    let (epoch_json, epoch_hash) = transaction
+        .query_row(
+            "SELECT manifest_json, manifest_json_sha256 FROM context_epochs WHERE epoch_id = ?1",
+            params![turn.epoch_id().as_str()],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .map_err(map_sqlite_error)?;
+    let epoch: ContextEpochManifest = decode_context_json(&epoch_json, &epoch_hash)?;
+    if epoch.reason() != ContextEpochReason::Compaction {
+        return if boundary.is_none() {
+            Ok(())
+        } else {
+            Err(StoreError::InvalidContextTransition)
+        };
+    }
+    let boundary = boundary.ok_or(StoreError::InvalidContextTransition)?;
+    if boundary.epoch_id() != epoch.epoch_id()
+        || Some(boundary.predecessor_epoch_id()) != epoch.predecessor_epoch_id()
+        || boundary.session_id() != turn.session_id()
+        || boundary.expected_session_sequence() != turn.expected_session_sequence()
+        || boundary.memory_generation() != turn.memory_generation()
+        || boundary.facts_version() != COMPACTION_FACTS_VERSION
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+
+    if let Some(summary_revision_id) = boundary.summary_revision_id() {
+        let row = transaction
+            .query_row(
+                "SELECT metadata_json, metadata_sha256 FROM memory_revisions \
+                 WHERE revision_id = ?1",
+                params![summary_revision_id.as_str()],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((json, hash)) = row else {
+            return Err(StoreError::InvalidContextTransition);
+        };
+        let revision: MemoryRevision = decode_context_json(&json, &hash)?;
+        if revision.origin() != autoharness_domain::MemoryOrigin::Compaction
+            || revision.status() != MemoryRevisionStatus::Proposed
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+
+    if let Some(existing) = load_compaction_boundary_record(transaction, boundary.epoch_id())? {
+        return if &existing == boundary {
+            Ok(())
+        } else {
+            Err(StoreError::IdentityConflict {
+                kind: IdentityKind::ContextEpoch,
+            })
+        };
+    }
+    transaction
+        .execute(
+            "INSERT INTO context_compaction_boundaries (\
+                epoch_id, predecessor_epoch_id, session_id, expected_session_sequence, \
+                memory_generation, facts_version, facts_sha256, memory_fact_count, \
+                pending_session_fact_count, summary_revision_id, verified_at_ms\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                boundary.epoch_id().as_str(),
+                boundary.predecessor_epoch_id().as_str(),
+                boundary.session_id().as_str(),
+                to_sql_sequence(boundary.expected_session_sequence().get())?,
+                to_sql_sequence(boundary.memory_generation().get())?,
+                i64::from(boundary.facts_version()),
+                decode_digest(boundary.facts_hash().as_str())?.as_slice(),
+                i64::from(boundary.memory_fact_count()),
+                i64::from(boundary.pending_session_fact_count()),
+                boundary.summary_revision_id().map(|id| id.as_str()),
+                boundary.verified_at().get(),
+            ],
+        )
+        .map_err(|error| map_context_identity_error(error, IdentityKind::ContextEpoch))?;
+    Ok(())
+}
+
+fn load_compaction_boundary_record(
+    connection: &rusqlite::Connection,
+    epoch_id: &ContextEpochId,
+) -> Result<Option<ContextCompactionBoundary>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT predecessor_epoch_id, session_id, expected_session_sequence, \
+                    memory_generation, facts_version, facts_sha256, memory_fact_count, \
+                    pending_session_fact_count, summary_revision_id, verified_at_ms \
+             FROM context_compaction_boundaries WHERE epoch_id = ?1",
+            params![epoch_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((
+        predecessor_epoch_id,
+        session_id,
+        expected_session_sequence,
+        memory_generation,
+        facts_version,
+        facts_hash,
+        memory_fact_count,
+        pending_session_fact_count,
+        summary_revision_id,
+        verified_at,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let facts_version = u16::try_from(facts_version).map_err(|_| corrupt_context())?;
+    let memory_fact_count = u32::try_from(memory_fact_count).map_err(|_| corrupt_context())?;
+    let pending_session_fact_count =
+        u32::try_from(pending_session_fact_count).map_err(|_| corrupt_context())?;
+    Ok(Some(ContextCompactionBoundary::new(
+        epoch_id.clone(),
+        ContextEpochId::new(predecessor_epoch_id).map_err(|_| corrupt_context())?,
+        SessionId::new(session_id).map_err(|_| corrupt_context())?,
+        SessionSequence::new(
+            u64::try_from(expected_session_sequence).map_err(|_| corrupt_context())?,
+        )
+        .map_err(|_| corrupt_context())?,
+        autoharness_domain::MemoryGeneration::new(
+            u64::try_from(memory_generation).map_err(|_| corrupt_context())?,
+        )
+        .map_err(|_| corrupt_context())?,
+        facts_version,
+        digest_from_bytes(&facts_hash)?,
+        memory_fact_count,
+        pending_session_fact_count,
+        summary_revision_id
+            .map(autoharness_domain::MemoryRevisionId::new)
+            .transpose()
+            .map_err(|_| corrupt_context())?,
+        autoharness_domain::TimestampMillis::new(verified_at),
+    )))
+}
+
+fn digest_from_bytes(bytes: &[u8]) -> Result<Sha256Digest, StoreError> {
+    if bytes.len() != 32 {
+        return Err(corrupt_context());
+    }
+    let encoded = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Sha256Digest::new(encoded).map_err(|_| corrupt_context())
+}
+
+fn validate_binding_request(request: &BoundContextTurnCommitRequest) -> Result<(), StoreError> {
+    let turn = request.context().turn();
+    let event = request.binding_event();
+    let expected_sequence = turn
+        .expected_session_sequence()
+        .get()
+        .checked_add(1)
+        .ok_or(StoreError::SequenceOutOfRange)?;
+    if event.schema_version() != EVENT_SCHEMA_V1
+        || event.session_id() != turn.session_id()
+        || event.sequence().get() != expected_sequence
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    match event.payload() {
+        EventPayload::ContextTurnBound {
+            attempt_id,
+            run_turn,
+            context_turn_id,
+            manifest_hash,
+        } if attempt_id == turn.attempt_id()
+            && *run_turn == turn.run_turn()
+            && context_turn_id == turn.context_turn_id()
+            && manifest_hash == turn.manifest_hash() =>
+        {
+            Ok(())
+        }
+        _ => Err(StoreError::InvalidContextTransition),
+    }
+}
+
+fn reconcile_unbound_turn_conflict(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+) -> Result<(), StoreError> {
+    let conflict = transaction
+        .query_row(
+            "SELECT t.context_turn_id, t.epoch_id, b.context_turn_id IS NOT NULL \
+             FROM context_turns AS t \
+             LEFT JOIN context_turn_bindings AS b ON b.context_turn_id = t.context_turn_id \
+             WHERE t.attempt_id = ?1 AND t.run_turn = ?2",
+            params![turn.attempt_id().as_str(), i64::from(turn.run_turn())],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((context_turn_id, epoch_id, is_bound)) = conflict else {
+        return Ok(());
+    };
+    if context_turn_id == turn.context_turn_id().as_str() {
+        return Ok(());
+    }
+    if is_bound {
+        return Err(StoreError::IdentityConflict {
+            kind: IdentityKind::ContextTurn,
+        });
+    }
+
+    transaction
+        .execute(
+            "DELETE FROM context_admission_reasons WHERE admission_id IN (\
+                SELECT admission_id FROM context_admissions WHERE context_turn_id = ?1\
+             )",
+            params![context_turn_id],
+        )
+        .map_err(map_sqlite_error)?;
+    transaction
+        .execute(
+            "DELETE FROM context_admissions WHERE context_turn_id = ?1",
+            params![context_turn_id],
+        )
+        .map_err(map_sqlite_error)?;
+    transaction
+        .execute(
+            "DELETE FROM context_turn_sources WHERE context_turn_id = ?1",
+            params![context_turn_id],
+        )
+        .map_err(map_sqlite_error)?;
+    let changed = transaction
+        .execute(
+            "DELETE FROM context_turns WHERE context_turn_id = ?1",
+            params![context_turn_id],
+        )
+        .map_err(map_sqlite_error)?;
+    if changed != 1 {
+        return Err(corrupt_context());
+    }
+    transaction
+        .execute(
+            "DELETE FROM context_epochs \
+             WHERE epoch_id = ?1 \
+               AND NOT EXISTS (SELECT 1 FROM context_turns WHERE epoch_id = ?1) \
+               AND NOT EXISTS (\
+                    SELECT 1 FROM context_epochs WHERE predecessor_epoch_id = ?1\
+               )",
+            params![epoch_id],
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(())
+}
+
+fn append_context_binding_event(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+    event: &EventEnvelope,
+    event_json: &[u8],
+) -> Result<ContextCommitDisposition, StoreError> {
+    if let Some(existing_json) = transaction
+        .query_row(
+            "SELECT envelope_json FROM session_events WHERE event_id = ?1",
+            params![event.event_id().as_str()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+    {
+        if existing_json.as_slice() != event_json {
+            return Err(StoreError::IdentityConflict {
+                kind: IdentityKind::Event,
+            });
+        }
+        let existing_binding = validate_existing_binding(transaction, turn, event)?;
+        if !existing_binding {
+            apply_context_turn_binding(transaction, event)?;
+        }
+        let actual = current_context_session_version(transaction, turn.session_id())?;
+        if actual < event.sequence().get() {
+            return Err(corrupt_context());
+        }
+        return Ok(if existing_binding {
+            ContextCommitDisposition::AlreadyCommitted
+        } else {
+            ContextCommitDisposition::Committed
+        });
+    }
+
+    let actual = current_context_session_version(transaction, turn.session_id())?;
+    if actual != turn.expected_session_sequence().get() {
+        return Err(StoreError::VersionConflict {
+            session_id: turn.session_id().clone(),
+            expected: turn.expected_session_sequence().get(),
+            actual,
+        });
+    }
+    validate_binding_boundary(transaction, turn, event)?;
+    insert_binding_event(transaction, event, event_json)?;
+    apply_context_turn_binding(transaction, event)?;
+    let changed = transaction
+        .execute(
+            "UPDATE sessions SET last_sequence = ?2, updated_at_ms = ?3 \
+             WHERE session_id = ?1 AND last_sequence = ?4",
+            params![
+                event.session_id().as_str(),
+                to_sql_sequence(event.sequence().get())?,
+                event.occurred_at().get(),
+                to_sql_sequence(turn.expected_session_sequence().get())?
+            ],
+        )
+        .map_err(map_sqlite_error)?;
+    if changed != 1 {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    Ok(ContextCommitDisposition::Committed)
+}
+
+fn current_context_session_version(
+    transaction: &Transaction<'_>,
+    session_id: &SessionId,
+) -> Result<u64, StoreError> {
+    let value = transaction
+        .query_row(
+            "SELECT last_sequence FROM sessions WHERE session_id = ?1",
+            params![session_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+        .ok_or(StoreError::InvalidContextTransition)?;
+    u64::try_from(value).map_err(|_| corrupt_context())
+}
+
+fn insert_binding_event(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+    event_json: &[u8],
+) -> Result<(), StoreError> {
+    let (caused_by_command_id, caused_by_event_id) = match event.causation() {
+        Causation::Command(command_id) => (Some(command_id.as_str()), None),
+        Causation::Event(event_id) => (None, Some(event_id.as_str())),
+    };
+    transaction
+        .execute(
+            "INSERT INTO session_events (\
+                event_id, session_id, sequence, schema_version, occurred_at_ms, \
+                caused_by_command_id, caused_by_event_id, correlation_id, event_kind, envelope_json\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'context_turn_bound', ?9)",
+            params![
+                event.event_id().as_str(),
+                event.session_id().as_str(),
+                to_sql_sequence(event.sequence().get())?,
+                i64::from(event.schema_version()),
+                event.occurred_at().get(),
+                caused_by_command_id,
+                caused_by_event_id,
+                event.correlation_id().as_str(),
+                event_json
+            ],
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(())
+}
+
+fn validate_existing_binding(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+    event: &EventEnvelope,
+) -> Result<bool, StoreError> {
+    let row = transaction
+        .query_row(
+            "SELECT session_id, attempt_id, run_turn, bound_event_id, manifest_sha256 \
+             FROM context_turn_bindings WHERE context_turn_id = ?1",
+            params![turn.context_turn_id().as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((session_id, attempt_id, run_turn, bound_event_id, manifest_hash)) = row else {
+        return Ok(false);
+    };
+    if session_id != turn.session_id().as_str()
+        || attempt_id != turn.attempt_id().as_str()
+        || u32::try_from(run_turn).ok() != Some(turn.run_turn())
+        || bound_event_id != event.event_id().as_str()
+        || manifest_hash.as_slice() != decode_digest(turn.manifest_hash().as_str())?.as_slice()
+    {
+        return Err(corrupt_context());
+    }
+    Ok(true)
+}
+
+struct AttemptBindingState {
+    turns_started: u32,
+    dispatch_ready: bool,
+    pending_binding: bool,
+    max_turns: Option<u32>,
+}
+
+fn load_attempt_binding_state(
+    transaction: &Transaction<'_>,
+    session_id: &SessionId,
+    attempt_id: &autoharness_domain::AttemptId,
+    before_sequence: u64,
+) -> Result<AttemptBindingState, StoreError> {
+    let state = transaction
+        .query_row(
+            "SELECT state FROM provider_attempts WHERE session_id = ?1 AND attempt_id = ?2",
+            params![session_id.as_str(), attempt_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    if state.as_deref() != Some("in_flight") {
+        return Err(StoreError::InvalidContextTransition);
+    }
+
+    let mut statement = transaction
+        .prepare(
+            "SELECT envelope_json FROM session_events \
+             WHERE session_id = ?1 AND sequence < ?2 ORDER BY sequence ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(
+            params![session_id.as_str(), to_sql_sequence(before_sequence)?],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    let mut turns_started = 0_u32;
+    let mut dispatch_ready = false;
+    let mut pending_binding = false;
+    let mut max_turns = None;
+    for row in rows {
+        let json = row.map_err(map_sqlite_error)?;
+        let event: EventEnvelope = serde_json::from_slice(&json).map_err(|_| corrupt_context())?;
+        match event.payload() {
+            EventPayload::RunBudgetConfigured {
+                attempt_id: found,
+                limits,
+            } if found == attempt_id => max_turns = Some(limits.max_turns),
+            EventPayload::AttemptStarted { attempt_id: found } if found == attempt_id => {
+                dispatch_ready = true;
+            }
+            EventPayload::ContextTurnBound {
+                attempt_id: found, ..
+            } if found == attempt_id => pending_binding = true,
+            EventPayload::RunTurnStarted {
+                attempt_id: found,
+                turn,
+            } if found == attempt_id => {
+                turns_started = *turn;
+                dispatch_ready = false;
+                pending_binding = false;
+            }
+            EventPayload::AttemptPausedForTools { attempt_id: found } if found == attempt_id => {
+                dispatch_ready = false;
+            }
+            EventPayload::AttemptResumedAfterTools { attempt_id: found } if found == attempt_id => {
+                dispatch_ready = true;
+            }
+            _ => {}
+        }
+    }
+    Ok(AttemptBindingState {
+        turns_started,
+        dispatch_ready,
+        pending_binding,
+        max_turns,
+    })
+}
+
+fn validate_binding_boundary(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+    event: &EventEnvelope,
+) -> Result<(), StoreError> {
+    let state = load_attempt_binding_state(
+        transaction,
+        turn.session_id(),
+        turn.attempt_id(),
+        event.sequence().get(),
+    )?;
+    let expected_turn = state
+        .turns_started
+        .checked_add(1)
+        .ok_or(StoreError::InvalidContextTransition)?;
+    if !state.dispatch_ready
+        || state.pending_binding
+        || expected_turn != turn.run_turn()
+        || state.max_turns.is_some_and(|limit| expected_turn > limit)
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    match event.causation() {
+        Causation::Command(command_id) => {
+            let duplicate = transaction
+                .query_row(
+                    "SELECT 1 FROM session_events \
+                     WHERE caused_by_command_id = ?1 AND event_id <> ?2",
+                    params![command_id.as_str(), event.event_id().as_str()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(map_sqlite_error)?
+                .is_some();
+            if duplicate {
+                return Err(StoreError::IdentityConflict {
+                    kind: IdentityKind::Command,
+                });
+            }
+        }
+        Causation::Event(cause_id) => {
+            let sequence = transaction
+                .query_row(
+                    "SELECT sequence FROM session_events \
+                     WHERE session_id = ?1 AND event_id = ?2",
+                    params![event.session_id().as_str(), cause_id.as_str()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(map_sqlite_error)?;
+            if sequence.is_none_or(|sequence| {
+                u64::try_from(sequence).map_or(true, |sequence| sequence >= event.sequence().get())
+            }) {
+                return Err(StoreError::InvalidCausation);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_context_turn_binding(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), StoreError> {
+    let EventPayload::ContextTurnBound {
+        attempt_id,
+        run_turn,
+        context_turn_id,
+        manifest_hash,
+    } = event.payload()
+    else {
+        return Err(StoreError::InvalidContextTransition);
+    };
+    let row = transaction
+        .query_row(
+            "SELECT manifest_json, manifest_json_sha256 FROM context_turns \
+             WHERE context_turn_id = ?1 AND session_id = ?2 AND attempt_id = ?3 AND run_turn = ?4",
+            params![
+                context_turn_id.as_str(),
+                event.session_id().as_str(),
+                attempt_id.as_str(),
+                i64::from(*run_turn)
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((json, hash)) = row else {
+        return Err(StoreError::InvalidContextTransition);
+    };
+    let turn: ContextTurnManifest = decode_context_json(&json, &hash)?;
+    if turn.manifest_hash() != manifest_hash
+        || !verify_context_manifest_hash(&turn).map_err(|_| corrupt_context())?
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    validate_binding_boundary(transaction, &turn, event)?;
+    transaction
+        .execute(
+            "INSERT INTO context_turn_bindings (\
+                context_turn_id, session_id, attempt_id, run_turn, bound_event_id, \
+                manifest_sha256, bound_at_ms\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                context_turn_id.as_str(),
+                event.session_id().as_str(),
+                attempt_id.as_str(),
+                i64::from(*run_turn),
+                event.event_id().as_str(),
+                decode_digest(manifest_hash.as_str())?.as_slice(),
+                event.occurred_at().get()
+            ],
+        )
+        .map_err(|error| map_context_identity_error(error, IdentityKind::ContextTurn))?;
+    Ok(())
+}
+
+pub(crate) fn validate_run_turn_binding(
+    transaction: &Transaction<'_>,
+    event: &EventEnvelope,
+) -> Result<(), StoreError> {
+    let EventPayload::RunTurnStarted { attempt_id, turn } = event.payload() else {
+        return Err(StoreError::InvalidSessionTransition);
+    };
+    let prior_sequence = event
+        .sequence()
+        .get()
+        .checked_sub(1)
+        .ok_or(StoreError::InvalidSessionTransition)?;
+    let valid = transaction
+        .query_row(
+            "SELECT 1 FROM context_turn_bindings AS b \
+             JOIN session_events AS e ON e.session_id = b.session_id \
+                                      AND e.event_id = b.bound_event_id \
+             WHERE b.session_id = ?1 AND b.attempt_id = ?2 AND b.run_turn = ?3 \
+               AND e.sequence = ?4",
+            params![
+                event.session_id().as_str(),
+                attempt_id.as_str(),
+                i64::from(*turn),
+                to_sql_sequence(prior_sequence)?
+            ],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+        .is_some();
+    if valid {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidSessionTransition)
+    }
+}
+
+fn validate_existing_context_children(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+) -> Result<(), StoreError> {
+    let turn = request.turn();
+    let source_count = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM context_turn_sources WHERE context_turn_id = ?1",
+            params![turn.context_turn_id().as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    let admission_count = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM context_admissions WHERE context_turn_id = ?1",
+            params![turn.context_turn_id().as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    if usize::try_from(source_count).ok() != Some(turn.sources().len())
+        || usize::try_from(admission_count).ok() != Some(turn.admissions().len())
+    {
+        return Err(corrupt_context());
+    }
+    let mut statement = transaction
+        .prepare(
+            "SELECT admission_json, admission_json_sha256 FROM context_admissions \
+             WHERE context_turn_id = ?1 ORDER BY rank ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(params![turn.context_turn_id().as_str()], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(map_sqlite_error)?;
+    for (expected, row) in turn.admissions().iter().zip(rows) {
+        let (json, hash) = row.map_err(map_sqlite_error)?;
+        let actual: ContextAdmission = decode_context_json(&json, &hash)?;
+        if &actual != expected {
+            return Err(corrupt_context());
+        }
+    }
+    let persisted_prelude = transaction
+        .query_row(
+            "SELECT rendered_state, rendered_utf8, rendered_content_sha256 FROM context_turns \
+             WHERE context_turn_id = ?1",
+            params![turn.context_turn_id().as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            },
+        )
+        .map_err(map_sqlite_error)?;
+    validate_rendered_retry(persisted_prelude, request.content().prelude())?;
+    let mut statement = transaction
+        .prepare(
+            "SELECT rendered_state, rendered_utf8, rendered_content_sha256 FROM context_admissions \
+             WHERE context_turn_id = ?1 ORDER BY rank ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(params![turn.context_turn_id().as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<Vec<u8>>>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+            ))
+        })
+        .map_err(map_sqlite_error)?;
+    for (expected, row) in request.content().admissions().iter().zip(rows) {
+        validate_rendered_retry(row.map_err(map_sqlite_error)?, Some(expected.rendered()))?;
+    }
+    Ok(())
+}
+
+fn validate_context_sidecars(request: &ContextTurnCommitRequest) -> Result<(), StoreError> {
+    let turn = request.turn();
+    if turn.admissions().is_empty() != request.content().prelude().is_none()
+        || turn.admissions().len() != request.content().admissions().len()
+        || turn
+            .admissions()
+            .iter()
+            .zip(request.content().admissions())
+            .any(|(metadata, content)| metadata.admission_id() != content.admission_id())
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    if !verify_context_manifest_hash(turn).map_err(|_| StoreError::InvalidContextTransition)? {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    let prelude = request
+        .content()
+        .prelude()
+        .map_or("", RenderedContextText::as_str);
+    if !verify_rendered_context_hash(prelude, turn.rendered_hash())
+        .map_err(|_| StoreError::InvalidContextTransition)?
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    for (admission, content) in turn.admissions().iter().zip(request.content().admissions()) {
+        if admission.memory_revision_id().is_none()
+            && !verify_admission_rendered_hash(admission, None, content.rendered().as_str())
+                .map_err(|_| StoreError::InvalidContextTransition)?
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+    Ok(())
+}
+
+fn validate_rendered_retry(
+    persisted: (String, Option<Vec<u8>>, Option<Vec<u8>>),
+    expected: Option<&RenderedContextText>,
+) -> Result<(), StoreError> {
+    match (persisted, expected) {
+        ((state, None, None), None) if state == "absent" => Ok(()),
+        ((state, None, None), Some(_)) if state == "erased" => Ok(()),
+        ((state, Some(bytes), Some(hash)), Some(expected))
+            if state == "retained"
+                && Sha256::digest(&bytes).as_slice() == hash.as_slice()
+                && bytes.as_slice() == expected.as_str().as_bytes() =>
+        {
+            Ok(())
+        }
+        ((state, Some(_), Some(_)), Some(_)) if state == "retained" => {
+            Err(StoreError::IdentityConflict {
+                kind: IdentityKind::ContextTurn,
+            })
+        }
+        _ => Err(corrupt_context()),
+    }
+}
+
+fn validate_context_boundary(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+) -> Result<(), StoreError> {
+    let turn = request.turn();
+    let budget = turn.budget();
+    let durable_tokens = turn
+        .admissions()
+        .iter()
+        .filter(|admission| admission.section() == ContextSection::DurableMemory)
+        .try_fold(0_u64, |total, admission| {
+            total.checked_add(admission.token_count().get())
+        })
+        .ok_or(StoreError::InvalidContextTransition)?;
+    if turn.rendered_token_count().get() > budget.rendered_limit()
+        || durable_tokens > budget.durable_memory_limit().get()
+        || turn.eligibility().session_id() != turn.session_id()
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    if request
+        .epoch()
+        .is_some_and(|epoch| epoch.epoch_id() != turn.epoch_id())
+        || request
+            .epoch()
+            .is_some_and(|epoch| epoch.session_id() != turn.session_id())
+        || request
+            .epoch()
+            .is_some_and(|epoch| epoch.memory_generation() != turn.memory_generation())
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+
+    let generation = transaction
+        .query_row(
+            "SELECT generation FROM memory_store_state WHERE singleton = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    let generation = u64::try_from(generation).map_err(|_| corrupt_context())?;
+    if generation != turn.memory_generation().get() {
+        return Err(StoreError::ContextGenerationConflict {
+            expected: turn.memory_generation().get(),
+            actual: generation,
+        });
+    }
+
+    let session = transaction
+        .query_row(
+            "SELECT s.last_sequence, a.provider_id, a.model_id \
+             FROM sessions AS s JOIN provider_attempts AS a ON a.session_id = s.session_id \
+             WHERE s.session_id = ?1 AND a.attempt_id = ?2",
+            params![turn.session_id().as_str(), turn.attempt_id().as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((last_sequence, provider_id, model_id)) = session else {
+        return Err(StoreError::InvalidContextTransition);
+    };
+    let last_sequence = u64::try_from(last_sequence).map_err(|_| corrupt_context())?;
+    if last_sequence != turn.expected_session_sequence().get() {
+        return Err(StoreError::VersionConflict {
+            session_id: turn.session_id().clone(),
+            expected: turn.expected_session_sequence().get(),
+            actual: last_sequence,
+        });
+    }
+    if provider_id != turn.model().provider_id().as_str()
+        || model_id != turn.model().model_id().as_str()
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+
+    for admission in turn.admissions() {
+        let Some(revision_id) = admission.memory_revision_id() else {
+            continue;
+        };
+        let row = transaction
+            .query_row(
+                "SELECT r.state, r.metadata_json, r.metadata_sha256, r.content_id, \
+                        i.scope_type, i.scope_id, r.memory_id \
+                 FROM memory_revisions AS r \
+                 JOIN memory_items AS i ON i.memory_id = r.memory_id \
+                 WHERE r.revision_id = ?1",
+                params![revision_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((state, json, hash, content_id, scope_type, scope_id, memory_id)) = row else {
+            return Err(StoreError::InvalidContextTransition);
+        };
+        let metadata: MemoryRevision = decode_context_json(&json, &hash)?;
+        let scope = decode_scope(&scope_type, scope_id)?;
+        let memory_id = MemoryId::new(memory_id).map_err(|_| corrupt_context())?;
+        let rendered = request
+            .content()
+            .admissions()
+            .iter()
+            .find(|content| content.admission_id() == admission.admission_id())
+            .ok_or(StoreError::InvalidContextTransition)?;
+        if state != "active"
+            || content_id.is_none()
+            || metadata.status() != MemoryRevisionStatus::Active
+            || metadata.content_hash() != admission.source_revision()
+            || !valid_at(metadata.validity(), turn.committed_at().get())
+            || !turn.eligibility().permits_scope(&scope)
+            || !turn
+                .eligibility()
+                .permits_sensitivity(metadata.sensitivity())
+            || !verify_admission_rendered_hash(
+                admission,
+                Some(&memory_id),
+                rendered.rendered().as_str(),
+            )
+            .map_err(|_| StoreError::InvalidContextTransition)?
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+    Ok(())
+}
+
+fn valid_at(validity: MemoryValidity, at_ms: i64) -> bool {
+    match validity {
+        MemoryValidity::Indefinite => true,
+        MemoryValidity::From { valid_from } => valid_from.get() <= at_ms,
+        MemoryValidity::Until { valid_until } => at_ms < valid_until.get(),
+        MemoryValidity::Window(window) => {
+            window.valid_from().get() <= at_ms && at_ms < window.valid_until().get()
+        }
+    }
+}
+
+fn decode_scope(scope_type: &str, scope_id: String) -> Result<MemoryScope, StoreError> {
+    match scope_type {
+        "user" => UserId::new(scope_id).map(MemoryScope::User),
+        "workspace" => WorkspaceId::new(scope_id).map(MemoryScope::Workspace),
+        "session" => SessionId::new(scope_id).map(MemoryScope::Session),
+        "agent" => AgentId::new(scope_id).map(MemoryScope::Agent),
+        _ => return Err(corrupt_context()),
+    }
+    .map_err(|_| corrupt_context())
+}
+
+fn insert_or_reconcile_epoch(
+    transaction: &Transaction<'_>,
+    epoch: &ContextEpochManifest,
+    json: &[u8],
+    json_hash: &[u8],
+) -> Result<(), StoreError> {
+    if let Some(existing_json) = transaction
+        .query_row(
+            "SELECT manifest_json FROM context_epochs WHERE epoch_id = ?1",
+            params![epoch.epoch_id().as_str()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+    {
+        return if existing_json == json {
+            Ok(())
+        } else {
+            Err(StoreError::IdentityConflict {
+                kind: IdentityKind::ContextEpoch,
+            })
+        };
+    }
+    if let Some(predecessor_id) = epoch.predecessor_epoch_id() {
+        let predecessor_session = transaction
+            .query_row(
+                "SELECT session_id FROM context_epochs WHERE epoch_id = ?1",
+                params![predecessor_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        if predecessor_session.as_deref() != Some(epoch.session_id().as_str()) {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+    let versions = epoch.versions();
+    let hashes = epoch.hashes();
+    transaction
+        .execute(
+            "INSERT INTO context_epochs (epoch_id, session_id, memory_generation, reason, \
+             predecessor_epoch_id, baseline_sha256, builder_version, registry_version, \
+             ranker_version, renderer_version, sizer_version, config_sha256, catalog_sha256, \
+             model_capability_sha256, tool_registry_sha256, token_budget, started_at_ms, \
+             manifest_json, manifest_json_sha256) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                     ?16, ?17, ?18, ?19)",
+            params![
+                epoch.epoch_id().as_str(),
+                epoch.session_id().as_str(),
+                to_sql_sequence(epoch.memory_generation().get())?,
+                encode_epoch_reason(epoch.reason()),
+                epoch.predecessor_epoch_id().map(|id| id.as_str()),
+                decode_digest(epoch.baseline_hash().as_str())?.as_slice(),
+                i64::from(versions.builder_version()),
+                i64::from(versions.registry_version()),
+                i64::from(versions.ranker_version()),
+                i64::from(versions.renderer_version()),
+                i64::from(versions.sizer_version()),
+                decode_digest(hashes.config_hash().as_str())?.as_slice(),
+                decode_digest(hashes.catalog_hash().as_str())?.as_slice(),
+                decode_digest(hashes.model_capability_hash().as_str())?.as_slice(),
+                decode_digest(hashes.tool_registry_hash().as_str())?.as_slice(),
+                to_sql_sequence(epoch.token_budget().get())?,
+                epoch.started_at().get(),
+                json,
+                json_hash,
+            ],
+        )
+        .map_err(|error| map_context_identity_error(error, IdentityKind::ContextEpoch))?;
+    Ok(())
+}
+
+fn validate_durable_epoch(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+) -> Result<(), StoreError> {
+    let epoch = transaction
+        .query_row(
+            "SELECT session_id, memory_generation, token_budget FROM context_epochs \
+             WHERE epoch_id = ?1",
+            params![turn.epoch_id().as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((session_id, memory_generation, token_budget)) = epoch else {
+        return Err(StoreError::InvalidContextTransition);
+    };
+    if session_id != turn.session_id().as_str()
+        || u64::try_from(memory_generation).ok() != Some(turn.memory_generation().get())
+        || u64::try_from(token_budget).ok() != Some(turn.token_budget().get())
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+    Ok(())
+}
+
+fn insert_context_turn(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+    json: &[u8],
+    json_hash: &[u8],
+) -> Result<(), StoreError> {
+    let turn = request.turn();
+    let eligibility = turn.eligibility();
+    let budget = turn.budget();
+    let (rendered_state, rendered_utf8, rendered_content_hash) = match request.content().prelude() {
+        Some(prelude) => (
+            "retained",
+            Some(prelude.as_str().as_bytes()),
+            Some(Sha256::digest(prelude.as_str().as_bytes())),
+        ),
+        None => ("absent", None, None),
+    };
+    transaction
+        .execute(
+            "INSERT INTO context_turns (context_turn_id, session_id, attempt_id, run_turn, \
+             epoch_id, expected_session_sequence, memory_generation, provider_id, model_id, \
+             request_sha256, rendered_sha256, manifest_sha256, eligibility_user_id, \
+             eligibility_workspace_id, eligibility_agent_id, sensitivity_ceiling, token_budget, \
+             reserved_tokens, durable_memory_limit, rendered_token_count, committed_at_ms, \
+             rendered_state, rendered_utf8, \
+             rendered_content_sha256, manifest_json, manifest_json_sha256) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                     ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+            params![
+                turn.context_turn_id().as_str(),
+                turn.session_id().as_str(),
+                turn.attempt_id().as_str(),
+                i64::from(turn.run_turn()),
+                turn.epoch_id().as_str(),
+                to_sql_sequence(turn.expected_session_sequence().get())?,
+                to_sql_sequence(turn.memory_generation().get())?,
+                turn.model().provider_id().as_str(),
+                turn.model().model_id().as_str(),
+                decode_digest(turn.request_hash().as_str())?.as_slice(),
+                decode_digest(turn.rendered_hash().as_str())?.as_slice(),
+                decode_digest(turn.manifest_hash().as_str())?.as_slice(),
+                eligibility.user_id().as_str(),
+                eligibility.workspace_id().as_str(),
+                eligibility.agent_id().map(|id| id.as_str()),
+                encode_sensitivity(eligibility.sensitivity_ceiling()),
+                to_sql_sequence(budget.token_budget().get())?,
+                to_sql_sequence(budget.reserved_tokens().get())?,
+                to_sql_sequence(budget.durable_memory_limit().get())?,
+                to_sql_sequence(turn.rendered_token_count().get())?,
+                turn.committed_at().get(),
+                rendered_state,
+                rendered_utf8,
+                rendered_content_hash.as_ref().map(|hash| hash.as_slice()),
+                json,
+                json_hash,
+            ],
+        )
+        .map_err(|error| map_context_identity_error(error, IdentityKind::ContextTurn))?;
+    Ok(())
+}
+
+fn insert_context_children(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+) -> Result<(), StoreError> {
+    let turn = request.turn();
+    for (ordinal, snapshot) in turn.sources().iter().enumerate() {
+        let json = serde_json::to_vec(snapshot).map_err(|_| StoreError::Backend)?;
+        let json_hash = Sha256::digest(&json);
+        transaction
+            .execute(
+                "INSERT INTO context_turn_sources (context_turn_id, ordinal, source_key, \
+                 observation_state, source_revision_sha256, value_sha256, observed_at_ms, \
+                 snapshot_json, snapshot_json_sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    turn.context_turn_id().as_str(),
+                    i64::try_from(ordinal).map_err(|_| StoreError::LimitExceeded)?,
+                    snapshot.source_key().as_str(),
+                    encode_observation_state(snapshot.observation_state()),
+                    snapshot
+                        .source_revision()
+                        .map(|hash| decode_digest(hash.as_str()))
+                        .transpose()?,
+                    snapshot
+                        .value_hash()
+                        .map(|hash| decode_digest(hash.as_str()))
+                        .transpose()?,
+                    snapshot.observed_at().get(),
+                    json,
+                    json_hash.as_slice(),
+                ],
+            )
+            .map_err(map_sqlite_error)?;
+    }
+    for (admission, content) in turn.admissions().iter().zip(request.content().admissions()) {
+        insert_admission(transaction, admission, content.rendered())?;
+    }
+    Ok(())
+}
+
+fn insert_admission(
+    transaction: &Transaction<'_>,
+    admission: &ContextAdmission,
+    rendered: &RenderedContextText,
+) -> Result<(), StoreError> {
+    let json = serde_json::to_vec(admission).map_err(|_| StoreError::Backend)?;
+    let json_hash = Sha256::digest(&json);
+    let rendered_content_hash = Sha256::digest(rendered.as_str().as_bytes());
+    transaction
+        .execute(
+            "INSERT INTO context_admissions (admission_id, context_turn_id, rank, section, \
+             source_key, source_revision_sha256, memory_revision_id, renderer_version, \
+             rendered_sha256, rank_score, token_count, admitted_at_ms, rendered_state, \
+             rendered_utf8, rendered_content_sha256, admission_json, admission_json_sha256) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                    ?16, ?17)",
+            params![
+                admission.admission_id().as_str(),
+                admission.context_turn_id().as_str(),
+                i64::from(admission.rank()),
+                encode_section(admission.section()),
+                admission.source_key().as_str(),
+                decode_digest(admission.source_revision().as_str())?.as_slice(),
+                admission.memory_revision_id().map(|id| id.as_str()),
+                i64::from(admission.renderer_version()),
+                decode_digest(admission.rendered_hash().as_str())?.as_slice(),
+                admission.rank_score(),
+                to_sql_sequence(admission.token_count().get())?,
+                admission.admitted_at().get(),
+                "retained",
+                rendered.as_str().as_bytes(),
+                rendered_content_hash.as_slice(),
+                json,
+                json_hash.as_slice(),
+            ],
+        )
+        .map_err(|error| map_context_identity_error(error, IdentityKind::ContextAdmission))?;
+    for reason in admission.reasons() {
+        transaction
+            .execute(
+                "INSERT INTO context_admission_reasons \
+                 (admission_id, ordinal, factor, contribution) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    admission.admission_id().as_str(),
+                    i64::from(reason.ordinal()),
+                    encode_admission_factor(reason.factor()),
+                    reason.contribution(),
+                ],
+            )
+            .map_err(map_sqlite_error)?;
+    }
+    Ok(())
+}
+
+fn load_json_record<T: serde::de::DeserializeOwned>(
+    connection: &rusqlite::Connection,
+    sql: &str,
+    identity: &str,
+) -> Result<Option<T>, StoreError> {
+    let row = connection
+        .query_row(sql, params![identity], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .optional()
+        .map_err(map_sqlite_error)?;
+    row.map(|(json, hash)| decode_context_json(&json, &hash))
+        .transpose()
+}
+
+fn load_context_turn_rendered_content(
+    connection: &rusqlite::Connection,
+    context_turn_id: &ContextTurnId,
+) -> Result<Option<RenderedContextText>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT manifest_json, manifest_json_sha256, rendered_state, rendered_utf8, \
+                    rendered_content_sha256 \
+             FROM context_turns WHERE context_turn_id = ?1",
+            params![context_turn_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((json, json_hash, state, content, content_hash)) = row else {
+        return Ok(None);
+    };
+    let turn: ContextTurnManifest = decode_context_json(&json, &json_hash)?;
+    if turn.context_turn_id() != context_turn_id
+        || !verify_context_manifest_hash(&turn).map_err(|_| corrupt_context())?
+    {
+        return Err(corrupt_context());
+    }
+    let rendered = decode_rendered_content(&state, content, content_hash)?;
+    if let Some(rendered) = rendered.as_ref()
+        && !verify_rendered_context_hash(rendered.as_str(), turn.rendered_hash())
+            .map_err(|_| corrupt_context())?
+    {
+        return Err(corrupt_context());
+    }
+    Ok(rendered)
+}
+
+fn load_context_admission_rendered_content(
+    connection: &rusqlite::Connection,
+    admission_id: &autoharness_domain::ContextAdmissionId,
+) -> Result<Option<RenderedContextText>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT a.admission_json, a.admission_json_sha256, a.rendered_state, \
+                    a.rendered_utf8, a.rendered_content_sha256, r.memory_id \
+             FROM context_admissions AS a \
+             LEFT JOIN memory_revisions AS r ON r.revision_id = a.memory_revision_id \
+             WHERE a.admission_id = ?1",
+            params![admission_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((json, json_hash, state, content, content_hash, memory_id)) = row else {
+        return Ok(None);
+    };
+    let admission: ContextAdmission = decode_context_json(&json, &json_hash)?;
+    if admission.admission_id() != admission_id {
+        return Err(corrupt_context());
+    }
+    let memory_id = memory_id
+        .map(MemoryId::new)
+        .transpose()
+        .map_err(|_| corrupt_context())?;
+    let rendered = decode_rendered_content(&state, content, content_hash)?;
+    if let Some(rendered) = rendered.as_ref()
+        && !verify_admission_rendered_hash(&admission, memory_id.as_ref(), rendered.as_str())
+            .map_err(|_| corrupt_context())?
+    {
+        return Err(corrupt_context());
+    }
+    Ok(rendered)
+}
+
+fn decode_rendered_content(
+    state: &str,
+    content: Option<Vec<u8>>,
+    hash: Option<Vec<u8>>,
+) -> Result<Option<RenderedContextText>, StoreError> {
+    match (state, content, hash) {
+        ("absent" | "erased", None, None) => Ok(None),
+        ("retained", Some(content), Some(hash))
+            if Sha256::digest(&content).as_slice() == hash.as_slice() =>
+        {
+            let content = String::from_utf8(content).map_err(|_| corrupt_context())?;
+            RenderedContextText::new(content)
+                .map(Some)
+                .map_err(|_| corrupt_context())
+        }
+        _ => Err(corrupt_context()),
+    }
+}
+
+fn decode_context_json<T: serde::de::DeserializeOwned>(
+    json: &[u8],
+    hash: &[u8],
+) -> Result<T, StoreError> {
+    if Sha256::digest(json).as_slice() != hash {
+        return Err(corrupt_context());
+    }
+    serde_json::from_slice(json).map_err(|_| corrupt_context())
+}
+
+const fn encode_epoch_reason(reason: ContextEpochReason) -> &'static str {
+    match reason {
+        ContextEpochReason::NewAttempt => "new_attempt",
+        ContextEpochReason::ExplicitRetry => "explicit_retry",
+        ContextEpochReason::Compaction => "compaction",
+        ContextEpochReason::SourceIncompatibility => "source_incompatibility",
+        ContextEpochReason::PolicyChange => "policy_change",
+        ContextEpochReason::Recovery => "recovery",
+    }
+}
+
+const fn encode_observation_state(state: ContextObservationState) -> &'static str {
+    match state {
+        ContextObservationState::Available => "available",
+        ContextObservationState::RetainedStale => "retained_stale",
+        ContextObservationState::ObservedAbsent => "observed_absent",
+        ContextObservationState::Unavailable => "unavailable",
+    }
+}
+
+const fn encode_section(section: ContextSection) -> &'static str {
+    match section {
+        ContextSection::SafetyPolicy => "safety_policy",
+        ContextSection::CurrentInstruction => "current_instruction",
+        ContextSection::AuthorizedInstruction => "authorized_instruction",
+        ContextSection::ToolContract => "tool_contract",
+        ContextSection::ConversationHistory => "conversation_history",
+        ContextSection::DurableMemory => "durable_memory",
+    }
+}
+
+const fn encode_admission_factor(factor: ContextAdmissionFactor) -> &'static str {
+    match factor {
+        ContextAdmissionFactor::Pin => "pin",
+        ContextAdmissionFactor::Authority => "authority",
+        ContextAdmissionFactor::ExactMatch => "exact_match",
+        ContextAdmissionFactor::ScopeSpecificity => "scope_specificity",
+        ContextAdmissionFactor::LexicalOverlap => "lexical_overlap",
+        ContextAdmissionFactor::Freshness => "freshness",
+        ContextAdmissionFactor::Confidence => "confidence",
+        ContextAdmissionFactor::PriorUtility => "prior_utility",
+        ContextAdmissionFactor::Diversity => "diversity",
+        ContextAdmissionFactor::BudgetFit => "budget_fit",
+    }
+}
+
+const fn encode_sensitivity(sensitivity: Sensitivity) -> &'static str {
+    match sensitivity {
+        Sensitivity::Public => "public",
+        Sensitivity::Internal => "internal",
+        Sensitivity::Sensitive => "sensitive",
+        Sensitivity::Secret => "secret",
+    }
+}
+
+fn decode_digest(value: &str) -> Result<[u8; 32], StoreError> {
+    if value.len() != 64 {
+        return Err(corrupt_context());
+    }
+    let mut output = [0_u8; 32];
+    for (index, byte) in output.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte =
+            u8::from_str_radix(&value[offset..offset + 2], 16).map_err(|_| corrupt_context())?;
+    }
+    Ok(output)
+}
+
+fn map_context_identity_error(error: rusqlite::Error, kind: IdentityKind) -> StoreError {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::ConstraintViolation) => StoreError::IdentityConflict { kind },
+        _ => map_sqlite_error(error),
+    }
+}
+
+const fn corrupt_context() -> StoreError {
+    StoreError::CorruptData {
+        area: CorruptionArea::ContextLedger,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use autoharness_domain::{
+        AttemptId, ContextAdmissionId, ContextAdmissionReason, ContextBudgetAllocation,
+        ContextEligibility, ContextEpochHashes, ContextEpochVersions, ContextSourceKey,
+        ContextSourceSnapshot, ContextTokenBudget, EstimatedTokens, MemoryGeneration, ModelId,
+        ModelRef, ProviderId, SessionId, SessionSequence, Sha256Digest, TimestampMillis, UserId,
+        WorkspaceId,
+    };
+    use autoharness_memory::{
+        CONTEXT_RENDERER_VERSION, CanonicalEncoder, SOURCE_RENDERER_V1, context_manifest_hash,
+        rendered_context_hash,
+    };
+    use autoharness_store::{ContextAdmissionContent, ContextTurnContent, RenderedContextText};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    struct TestDatabase {
+        _directory: TempDir,
+        path: std::path::PathBuf,
+    }
+
+    impl TestDatabase {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let path = directory.path().join("context.sqlite3");
+            Self {
+                _directory: directory,
+                path,
+            }
+        }
+
+        fn open(&self) -> SqliteStore {
+            SqliteStore::open(&self.path).expect("open sqlite store")
+        }
+    }
+
+    fn digest(character: char) -> Sha256Digest {
+        Sha256Digest::new(character.to_string().repeat(64)).expect("digest")
+    }
+
+    fn seed_attempt(store: &SqliteStore) {
+        let zero_hash = [0_u8; 32];
+        store
+            .connection
+            .execute(
+                "INSERT INTO sessions (session_id, status, selected_provider_id, \
+                 selected_model_id, last_sequence, created_at_ms, updated_at_ms) \
+                 VALUES ('session-context', 'active', 'google-ai-studio', \
+                         'models/gemini-test', 2, 1, 2)",
+                [],
+            )
+            .expect("session");
+        store
+            .connection
+            .execute(
+                "INSERT INTO session_events (event_id, session_id, sequence, schema_version, \
+                 occurred_at_ms, caused_by_command_id, caused_by_event_id, correlation_id, \
+                 event_kind, envelope_json) \
+                 VALUES ('event-input', 'session-context', 1, 1, 1, 'command-input', NULL, \
+                         'correlation-input', 'input_admitted', x'01')",
+                [],
+            )
+            .expect("input event");
+        store
+            .connection
+            .execute(
+                "INSERT INTO admitted_inputs (session_id, input_id, admitted_event_id, \
+                 admitted_sequence, delivery_mode, state, prompt_utf8, content_sha256, admitted_at_ms) \
+                 VALUES ('session-context', 'input-context', 'event-input', 1, 'next_turn', \
+                         'admitted', x'61', ?1, 1)",
+                params![zero_hash.as_slice()],
+            )
+            .expect("input projection");
+        store
+            .connection
+            .execute(
+                "INSERT INTO session_events (event_id, session_id, sequence, schema_version, \
+                 occurred_at_ms, caused_by_command_id, caused_by_event_id, correlation_id, \
+                 event_kind, envelope_json) \
+                 VALUES ('event-attempt', 'session-context', 2, 1, 2, 'command-attempt', NULL, \
+                         'correlation-attempt', 'attempt_prepared', x'02')",
+                [],
+            )
+            .expect("attempt event");
+        store
+            .connection
+            .execute(
+                "INSERT INTO provider_attempts (attempt_id, session_id, input_id, provider_id, \
+                 model_id, state, prepared_event_id, prepared_sequence, prepared_at_ms) \
+                 VALUES ('attempt-context', 'session-context', 'input-context', \
+                         'google-ai-studio', 'models/gemini-test', 'prepared', \
+                         'event-attempt', 2, 2)",
+                [],
+            )
+            .expect("attempt projection");
+    }
+
+    fn model() -> ModelRef {
+        ModelRef::new(
+            ProviderId::new("google-ai-studio").expect("provider ID"),
+            ModelId::new("models/gemini-test").expect("model ID"),
+        )
+    }
+
+    fn epoch(
+        epoch_id: &str,
+        reason: ContextEpochReason,
+        predecessor: Option<&str>,
+    ) -> ContextEpochManifest {
+        ContextEpochManifest::new(
+            ContextEpochId::new(epoch_id).expect("epoch ID"),
+            SessionId::new("session-context").expect("session ID"),
+            MemoryGeneration::INITIAL,
+            reason,
+            predecessor.map(|id| ContextEpochId::new(id).expect("predecessor ID")),
+            digest('a'),
+            ContextEpochVersions::new(1, 1, 1, 1, 1).expect("versions"),
+            ContextEpochHashes::new(digest('b'), digest('c'), digest('d'), digest('e')),
+            ContextTokenBudget::new(4_096).expect("budget"),
+            TimestampMillis::new(3),
+        )
+        .expect("epoch")
+    }
+
+    fn turn(turn_id: &str, epoch_id: &str, run_turn: u32) -> ContextTurnManifest {
+        const RENDERED_ADMISSION: &str = "<source>workspace agents</source>";
+        const RENDERED_PRELUDE: &str = "<context>workspace agents</context>";
+        let snapshot = ContextSourceSnapshot::new(
+            ContextSourceKey::new("workspace:agents").expect("source key"),
+            ContextObservationState::Available,
+            Some(digest('f')),
+            Some(digest('1')),
+            TimestampMillis::new(4),
+        )
+        .expect("snapshot");
+        let mut rendered_encoder = CanonicalEncoder::new();
+        rendered_encoder
+            .field("renderer", SOURCE_RENDERER_V1.as_bytes())
+            .expect("renderer field");
+        rendered_encoder
+            .field("source_key", b"workspace:agents")
+            .expect("source key field");
+        rendered_encoder
+            .field("source_revision", digest('f').as_str().as_bytes())
+            .expect("source revision field");
+        rendered_encoder
+            .field("section", b"authorized_instruction")
+            .expect("section field");
+        rendered_encoder
+            .field("rendered", RENDERED_ADMISSION.as_bytes())
+            .expect("rendered field");
+        let admission = ContextAdmission::new(
+            ContextAdmissionId::new(format!("admission-{run_turn}")).expect("admission ID"),
+            ContextTurnId::new(turn_id).expect("turn ID"),
+            ContextSection::AuthorizedInstruction,
+            ContextSourceKey::new("workspace:agents").expect("source key"),
+            digest('f'),
+            None,
+            CONTEXT_RENDERER_VERSION,
+            rendered_encoder.finish().expect("rendered hash"),
+            1,
+            100,
+            EstimatedTokens::new(32).expect("tokens"),
+            TimestampMillis::new(5),
+            vec![
+                ContextAdmissionReason::new(1, ContextAdmissionFactor::Authority, 100)
+                    .expect("reason"),
+            ],
+        )
+        .expect("admission");
+        let placeholder = ContextTurnManifest::new(
+            ContextTurnId::new(turn_id).expect("turn ID"),
+            ContextEpochId::new(epoch_id).expect("epoch ID"),
+            SessionId::new("session-context").expect("session ID"),
+            AttemptId::new("attempt-context").expect("attempt ID"),
+            run_turn,
+            SessionSequence::new(2).expect("sequence"),
+            MemoryGeneration::INITIAL,
+            model(),
+            digest('3'),
+            rendered_context_hash(RENDERED_PRELUDE).expect("context hash"),
+            digest('5'),
+            ContextEligibility::new(
+                UserId::new("user-1").expect("user ID"),
+                WorkspaceId::new("workspace-1").expect("workspace ID"),
+                SessionId::new("session-context").expect("session ID"),
+                None,
+                Sensitivity::Internal,
+            ),
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(0).expect("reserved tokens"),
+                EstimatedTokens::new(2_048).expect("memory limit"),
+            )
+            .expect("budget allocation"),
+            EstimatedTokens::new(32).expect("tokens"),
+            TimestampMillis::new(6 + i64::from(run_turn)),
+            vec![snapshot],
+            vec![admission],
+        )
+        .expect("turn placeholder");
+        let manifest_hash = context_manifest_hash(&placeholder).expect("manifest hash");
+        ContextTurnManifest::new(
+            placeholder.context_turn_id().clone(),
+            placeholder.epoch_id().clone(),
+            placeholder.session_id().clone(),
+            placeholder.attempt_id().clone(),
+            placeholder.run_turn(),
+            placeholder.expected_session_sequence(),
+            placeholder.memory_generation(),
+            placeholder.model().clone(),
+            placeholder.request_hash().clone(),
+            placeholder.rendered_hash().clone(),
+            manifest_hash,
+            placeholder.eligibility().clone(),
+            placeholder.budget(),
+            placeholder.rendered_token_count(),
+            placeholder.committed_at(),
+            placeholder.sources().to_vec(),
+            placeholder.admissions().to_vec(),
+        )
+        .expect("turn")
+    }
+
+    fn turn_content(turn: &ContextTurnManifest) -> ContextTurnContent {
+        ContextTurnContent::new(
+            Some(RenderedContextText::new("<context>workspace agents</context>").expect("prelude")),
+            turn.admissions()
+                .iter()
+                .map(|admission| {
+                    ContextAdmissionContent::new(
+                        admission.admission_id().clone(),
+                        RenderedContextText::new("<source>workspace agents</source>")
+                            .expect("rendered admission"),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn context_turn_commit_is_atomic_idempotent_and_restart_safe() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_attempt(&store);
+        let epoch = epoch("epoch-1", ContextEpochReason::NewAttempt, None);
+        let turn = turn("turn-1", "epoch-1", 1);
+        let request =
+            ContextTurnCommitRequest::new(Some(epoch.clone()), turn.clone(), turn_content(&turn));
+        assert_eq!(
+            store.commit_context_turn(&request).expect("commit context"),
+            ContextCommitDisposition::Committed
+        );
+        assert_eq!(
+            store.commit_context_turn(&request).expect("retry context"),
+            ContextCommitDisposition::AlreadyCommitted
+        );
+        drop(store);
+
+        let reopened = database.open();
+        assert_eq!(
+            reopened
+                .load_context_epoch(epoch.epoch_id())
+                .expect("load epoch"),
+            Some(epoch)
+        );
+        assert_eq!(
+            reopened
+                .load_context_turn(turn.context_turn_id())
+                .expect("load turn"),
+            Some(turn.clone())
+        );
+        assert_eq!(
+            reopened
+                .load_attempt_context_turn(turn.attempt_id(), 1)
+                .expect("load attempt turn"),
+            Some(turn.clone())
+        );
+        assert_eq!(
+            reopened
+                .load_context_admissions(turn.context_turn_id())
+                .expect("load admissions"),
+            turn.admissions()
+        );
+        assert_eq!(
+            reopened
+                .load_context_turn_content(turn.context_turn_id())
+                .expect("load rendered turn")
+                .expect("retained rendered turn")
+                .as_str(),
+            "<context>workspace agents</context>"
+        );
+    }
+
+    #[test]
+    fn compaction_epoch_links_predecessor_and_failed_generation_writes_nothing() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_attempt(&store);
+        let first_epoch = epoch("epoch-first", ContextEpochReason::NewAttempt, None);
+        let first_turn = turn("turn-first", "epoch-first", 1);
+        store
+            .commit_context_turn(&ContextTurnCommitRequest::new(
+                Some(first_epoch),
+                first_turn.clone(),
+                turn_content(&first_turn),
+            ))
+            .expect("first context");
+
+        let compacted = epoch(
+            "epoch-compacted",
+            ContextEpochReason::Compaction,
+            Some("epoch-first"),
+        );
+        let compacted_turn = turn("turn-compacted", "epoch-compacted", 2);
+        store
+            .commit_context_turn(&ContextTurnCommitRequest::new(
+                Some(compacted.clone()),
+                compacted_turn.clone(),
+                turn_content(&compacted_turn),
+            ))
+            .expect("compacted context");
+        assert_eq!(
+            store
+                .load_context_epoch(compacted.epoch_id())
+                .expect("load compacted epoch"),
+            Some(compacted)
+        );
+
+        store
+            .connection
+            .execute(
+                "UPDATE memory_store_state SET generation = 1 WHERE singleton = 1",
+                [],
+            )
+            .expect("advance generation");
+        let stale_epoch = epoch("epoch-stale", ContextEpochReason::Recovery, None);
+        let stale_turn = turn("turn-stale", "epoch-stale", 3);
+        assert_eq!(
+            store.commit_context_turn(&ContextTurnCommitRequest::new(
+                Some(stale_epoch),
+                stale_turn.clone(),
+                turn_content(&stale_turn),
+            )),
+            Err(StoreError::ContextGenerationConflict {
+                expected: 0,
+                actual: 1,
+            })
+        );
+        let stale_count = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM context_epochs WHERE epoch_id = 'epoch-stale'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("stale epoch count");
+        assert_eq!(stale_count, 0);
+    }
+}
