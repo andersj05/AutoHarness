@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use autoharness_domain::{
     AgentId, ContextAdmission, ContextTurnManifest, MEMORY_SCHEMA_V1, MemoryCausation,
-    MemoryContent, MemoryEvidenceSource, MemoryGeneration, MemoryId, MemoryKind,
-    MemoryOperationEnvelope, MemoryOperationPayload, MemoryOrigin, MemoryRevision,
+    MemoryContent, MemoryEvidenceExcerpt, MemoryEvidenceSource, MemoryGeneration, MemoryId,
+    MemoryKind, MemoryOperationEnvelope, MemoryOperationPayload, MemoryOrigin, MemoryRevision,
     MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidationStatus, MemoryValidity,
     Sensitivity, SessionId, TrustClass, UserId, WorkspaceId,
 };
@@ -15,9 +15,9 @@ use autoharness_store::{
     IdentityKind, MAX_MEMORY_SEARCH_CANDIDATES, MemoryAdmissionKey, MemoryAdmissionQuery,
     MemoryAdmissionRecord, MemoryAppendBatchRequest, MemoryAppendDisposition,
     MemoryAppendOperation, MemoryAppendReceipt, MemoryAppendRequest, MemoryCandidateBatch,
-    MemoryContentState, MemoryInspectionPage, MemoryInspectionQuery, MemoryInspectionRecord,
-    MemoryMutationGeneration, MemorySearchCandidate, MemorySearchQuery, MemoryStore, StoreError,
-    StoredMemoryCandidate,
+    MemoryContentState, MemoryEvidenceExcerptState, MemoryInspectionPage, MemoryInspectionQuery,
+    MemoryInspectionRecord, MemoryMutationGeneration, MemorySearchCandidate, MemorySearchQuery,
+    MemoryStore, StoreError, StoredMemoryCandidate, StoredMemoryEvidenceContent,
 };
 use rusqlite::types::Value;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter};
@@ -297,6 +297,150 @@ impl MemoryStore for SqliteStore {
             .map_err(|_| StoreError::CorruptData {
                 area: CorruptionArea::MemoryProjection,
             })
+    }
+
+    fn load_memory_evidence_content(
+        &self,
+        revision_id: &MemoryRevisionId,
+    ) -> Result<Option<Vec<StoredMemoryEvidenceContent>>, StoreError> {
+        let revision_row = self
+            .connection
+            .query_row(
+                "SELECT r.state, r.metadata_json, r.metadata_sha256, i.lifecycle \
+                 FROM memory_revisions AS r \
+                 JOIN memory_items AS i ON i.memory_id = r.memory_id \
+                 WHERE r.revision_id = ?1",
+                params![revision_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite_error)?;
+        let Some((state, metadata_json, metadata_hash, item_lifecycle)) = revision_row else {
+            return Ok(None);
+        };
+        let revision = decode_projected_revision(&state, &metadata_json, &metadata_hash)?;
+        if revision.revision_id() != revision_id {
+            return Err(corrupt_memory_projection());
+        }
+
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT e.ordinal, e.evidence_id, e.source_json, e.relation, \
+                        e.excerpt_content_id, e.excerpt_sha256, e.erased_by_session_id, \
+                        e.erased_at_ms, b.content_utf8, b.content_sha256 \
+                 FROM memory_evidence AS e \
+                 LEFT JOIN memory_content_blobs AS b ON b.content_id = e.excerpt_content_id \
+                 WHERE e.revision_id = ?1 ORDER BY e.ordinal",
+            )
+            .map_err(map_sqlite_error)?;
+        let rows = statement
+            .query_map(params![revision_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<Vec<u8>>>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(9)?,
+                ))
+            })
+            .map_err(map_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_sqlite_error)?;
+        if rows.len() != revision.evidence().len() {
+            return Err(corrupt_memory_projection());
+        }
+
+        revision
+            .evidence()
+            .iter()
+            .zip(rows)
+            .enumerate()
+            .map(|(index, (metadata, row))| {
+                let (
+                    ordinal,
+                    evidence_id,
+                    source_json,
+                    relation,
+                    content_id,
+                    excerpt_hash,
+                    erased_by_session_id,
+                    erased_at_ms,
+                    content,
+                    content_hash,
+                ) = row;
+                let expected_ordinal =
+                    i64::try_from(index).map_err(|_| StoreError::LimitExceeded)?;
+                let expected_source =
+                    serde_json::to_vec(metadata.source()).map_err(|_| StoreError::Backend)?;
+                if ordinal != expected_ordinal
+                    || evidence_id != metadata.evidence_id().as_str()
+                    || source_json != expected_source
+                    || relation != encode_evidence_relation(metadata.relation())
+                {
+                    return Err(corrupt_memory_projection());
+                }
+
+                let excerpt = match (
+                    metadata.excerpt_hash(),
+                    content_id,
+                    excerpt_hash,
+                    erased_by_session_id,
+                    erased_at_ms,
+                    content,
+                    content_hash,
+                ) {
+                    (None, None, None, None, None, None, None) => {
+                        MemoryEvidenceExcerptState::Absent
+                    }
+                    (Some(_), None, None, erased_by, erased_at, None, None)
+                        if item_lifecycle == "deleted"
+                            || (erased_by.is_some() && erased_at.is_some()) =>
+                    {
+                        MemoryEvidenceExcerptState::Erased
+                    }
+                    (
+                        Some(expected_hash),
+                        Some(content_id),
+                        Some(indexed_hash),
+                        None,
+                        None,
+                        Some(content),
+                        Some(blob_hash),
+                    ) if content_id == format!("memory-evidence:{evidence_id}")
+                        && indexed_hash.as_slice()
+                            == digest_bytes(expected_hash.as_str())?.as_slice()
+                        && blob_hash == indexed_hash
+                        && Sha256::digest(&content).as_slice() == indexed_hash.as_slice() =>
+                    {
+                        let excerpt =
+                            String::from_utf8(content).map_err(|_| corrupt_memory_projection())?;
+                        MemoryEvidenceExcerptState::Retained(
+                            MemoryEvidenceExcerpt::new(excerpt)
+                                .map_err(|_| corrupt_memory_projection())?,
+                        )
+                    }
+                    _ => return Err(corrupt_memory_projection()),
+                };
+                Ok(StoredMemoryEvidenceContent::new(
+                    metadata.evidence_id().clone(),
+                    excerpt,
+                ))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
+            .map(Some)
     }
 
     fn load_memory_candidate(
@@ -2765,6 +2909,103 @@ mod tests {
                 .as_str(),
             "Alpha release readiness checklist"
         );
+    }
+
+    #[test]
+    fn evidence_content_read_distinguishes_absent_retained_and_erased_without_debug_leaks() {
+        const SECRET_SENTINEL: &str = "authorization: bearer configured-secret-sentinel";
+
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let session_id = SessionId::new("session-evidence").expect("session ID");
+        let excerpt = MemoryEvidenceExcerpt::new(SECRET_SENTINEL).expect("evidence excerpt");
+        let retained_evidence = MemoryEvidence::new(
+            MemoryEvidenceId::new("evidence-retained").expect("evidence ID"),
+            MemoryEvidenceSource::UserInput {
+                session_id: session_id.clone(),
+                input_id: InputId::new("input-retained").expect("input ID"),
+            },
+            MemoryEvidenceRelation::Supports,
+            Some(excerpt.clone()),
+            Some(raw_digest(excerpt.as_str())),
+        )
+        .expect("retained evidence");
+        let absent_evidence = MemoryEvidence::new(
+            MemoryEvidenceId::new("evidence-absent").expect("evidence ID"),
+            MemoryEvidenceSource::UserInput {
+                session_id,
+                input_id: InputId::new("input-absent").expect("input ID"),
+            },
+            MemoryEvidenceRelation::DerivedFrom,
+            None,
+            None,
+        )
+        .expect("evidence without excerpt");
+        let (revision, sidecar) = revision_with(
+            "revision-evidence-content",
+            1,
+            "Evidence read models do not follow source references.",
+            MemoryRevisionStatus::Active,
+            None,
+            Sensitivity::Internal,
+            vec![retained_evidence, absent_evidence],
+        );
+        let create = create_operation(
+            "memory-evidence-content",
+            "operation-evidence-content",
+            revision.clone(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(0, create, Some(sidecar)))
+            .expect("append evidence memory");
+
+        let retained = store
+            .load_memory_evidence_content(revision.revision_id())
+            .expect("load evidence content")
+            .expect("known revision");
+        assert_eq!(retained.len(), 2);
+        assert_eq!(retained[0].evidence_id().as_str(), "evidence-retained");
+        assert_eq!(
+            retained[0]
+                .excerpt()
+                .retained()
+                .expect("retained excerpt")
+                .as_str(),
+            SECRET_SENTINEL
+        );
+        assert_eq!(retained[1].excerpt(), &MemoryEvidenceExcerptState::Absent);
+        assert!(!format!("{retained:?}").contains(SECRET_SENTINEL));
+        assert!(
+            store
+                .load_memory_evidence_content(
+                    &MemoryRevisionId::new("revision-unknown").expect("revision ID")
+                )
+                .expect("load unknown evidence")
+                .is_none()
+        );
+
+        let delete = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-evidence-delete").expect("operation ID"),
+            MemoryId::new("memory-evidence-content").expect("memory ID"),
+            MemorySequence::new(2).expect("memory sequence"),
+            TimestampMillis::new(20),
+            MemoryCausation::Command(
+                CommandId::new("command-evidence-delete").expect("command ID"),
+            ),
+            CorrelationId::new("correlation-evidence-delete").expect("correlation ID"),
+            MemoryOperationPayload::MemoryDeleted {
+                revision_id: revision.revision_id().clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(1, delete, None))
+            .expect("delete evidence memory");
+        let erased = store
+            .load_memory_evidence_content(revision.revision_id())
+            .expect("load erased evidence")
+            .expect("known tombstone");
+        assert_eq!(erased[0].excerpt(), &MemoryEvidenceExcerptState::Erased);
+        assert_eq!(erased[1].excerpt(), &MemoryEvidenceExcerptState::Absent);
     }
 
     #[test]

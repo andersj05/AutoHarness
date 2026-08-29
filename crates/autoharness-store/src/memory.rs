@@ -149,6 +149,64 @@ impl MemoryEvidenceContent {
     }
 }
 
+/// Exact availability of one independently erasable evidence excerpt.
+///
+/// This type deliberately does not implement serialization. Callers must make an explicit
+/// policy decision before copying retained evidence bytes into another authority such as export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryEvidenceExcerptState {
+    /// The immutable evidence metadata never named an excerpt.
+    Absent,
+    /// The exact hash-verified excerpt sidecar remains available.
+    Retained(MemoryEvidenceExcerpt),
+    /// Metadata proves an excerpt once existed, but its sidecar was logically erased.
+    Erased,
+}
+
+impl MemoryEvidenceExcerptState {
+    /// Returns retained exact bytes without conflating absent and erased states.
+    #[must_use]
+    pub const fn retained(&self) -> Option<&MemoryEvidenceExcerpt> {
+        match self {
+            Self::Retained(excerpt) => Some(excerpt),
+            Self::Absent | Self::Erased => None,
+        }
+    }
+}
+
+/// One evidence identity and the exact availability of its own excerpt sidecar.
+///
+/// Loading this record never follows the typed evidence source into another session, event,
+/// tool result, document, or memory revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredMemoryEvidenceContent {
+    evidence_id: MemoryEvidenceId,
+    excerpt: MemoryEvidenceExcerptState,
+}
+
+impl StoredMemoryEvidenceContent {
+    /// Constructs one integrity-checked evidence sidecar read model.
+    #[must_use]
+    pub const fn new(evidence_id: MemoryEvidenceId, excerpt: MemoryEvidenceExcerptState) -> Self {
+        Self {
+            evidence_id,
+            excerpt,
+        }
+    }
+
+    /// Returns the identity declared by immutable revision metadata.
+    #[must_use]
+    pub const fn evidence_id(&self) -> &MemoryEvidenceId {
+        &self.evidence_id
+    }
+
+    /// Returns whether the exact excerpt is absent, retained, or erased.
+    #[must_use]
+    pub const fn excerpt(&self) -> &MemoryEvidenceExcerptState {
+        &self.excerpt
+    }
+}
+
 /// Erasable content sidecar for one immutable revision metadata record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryRevisionContent {
@@ -1235,6 +1293,15 @@ pub trait MemoryStore {
         &self,
         revision_id: &MemoryRevisionId,
     ) -> Result<Option<MemoryContent>, StoreError>;
+
+    /// Loads exact evidence excerpt availability for one immutable revision.
+    ///
+    /// The read is bounded by the domain evidence limit and never follows evidence source
+    /// references into content owned by another scope.
+    fn load_memory_evidence_content(
+        &self,
+        revision_id: &MemoryRevisionId,
+    ) -> Result<Option<Vec<StoredMemoryEvidenceContent>>, StoreError>;
 
     /// Loads one exact revision and owning identity for frozen context reconstruction.
     fn load_memory_candidate(

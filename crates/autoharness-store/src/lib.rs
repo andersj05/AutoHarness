@@ -18,9 +18,10 @@ pub use memory::{
     MemoryAdmissionCursor, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryAdmissionRecord,
     MemoryAppendBatchRequest, MemoryAppendDisposition, MemoryAppendOperation, MemoryAppendReceipt,
     MemoryAppendRequest, MemoryCandidateBatch, MemoryContentState, MemoryEvidenceContent,
-    MemoryInspectionCursor, MemoryInspectionPage, MemoryInspectionQuery, MemoryInspectionRecord,
-    MemoryMutationGeneration, MemoryRevisionContent, MemorySearchCandidate, MemorySearchQuery,
-    MemoryStore, StoredMemoryCandidate,
+    MemoryEvidenceExcerptState, MemoryInspectionCursor, MemoryInspectionPage,
+    MemoryInspectionQuery, MemoryInspectionRecord, MemoryMutationGeneration, MemoryRevisionContent,
+    MemorySearchCandidate, MemorySearchQuery, MemoryStore, StoredMemoryCandidate,
+    StoredMemoryEvidenceContent,
 };
 pub use port::{
     AppendDisposition, AppendReceipt, AppendRequest, DEFAULT_EVENT_PAGE_SIZE, DeletionDisposition,
