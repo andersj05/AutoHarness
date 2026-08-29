@@ -569,6 +569,10 @@ impl Coordinator {
             } => {
                 self.export_transcript(request_id, session_id).await?;
             }
+            UiIntent::QueryMemory { request_id, .. } => {
+                self.publish_memories().await?;
+                self.commit(request_id).await?;
+            }
             UiIntent::RememberMemory {
                 request_id,
                 content,
@@ -683,11 +687,10 @@ impl Coordinator {
             None,
             projection::memory_projection_page_size(),
         )?;
-        let records = self.engine.inspect_memories(query).await?;
-        let stale = records.len()
-            == usize::try_from(projection::memory_projection_page_size()).unwrap_or(usize::MAX);
-        let mut rows = Vec::with_capacity(records.len());
-        for record in records {
+        let page = self.engine.inspect_memories(query).await?;
+        let stale = page.has_more();
+        let mut rows = Vec::with_capacity(page.records().len());
+        for record in page.into_records() {
             let query = MemoryAdmissionQuery::new(
                 MemoryAdmissionKey::Memory(record.memory_id().clone()),
                 None,
