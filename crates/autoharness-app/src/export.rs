@@ -863,6 +863,8 @@ mod tests {
 
     #[test]
     fn schema_v2_exports_context_memory_lifecycles_and_privacy_states() {
+        // Seed the evidence sidecar directly to model a configured credential that an ingress
+        // guard must reject. The exporter has no evidence-content read and must not leak it.
         const CONFIGURED_SECRET_SENTINEL: &str = "configured-credential-never-export";
 
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -1012,8 +1014,13 @@ mod tests {
             active_row["admissions"][0]["rendered_content_state"],
             "retained"
         );
+        assert_eq!(active_row["revisions"][0]["metadata"]["status"], "active");
         let proposed_row = session_memory(&document, "memory-proposed");
         assert_eq!(proposed_row["lifecycle"], "proposed");
+        assert_eq!(
+            proposed_row["revisions"][0]["metadata"]["status"],
+            "proposed"
+        );
         assert_eq!(
             proposed_row["revisions"][0]["metadata"]["origin"],
             "model_proposal"
@@ -1022,12 +1029,15 @@ mod tests {
             proposed_row["revisions"][0]["metadata"]["trust_class"],
             "untrusted_proposal"
         );
+        let retracted_row = session_memory(&document, "memory-retracted");
+        assert_eq!(retracted_row["lifecycle"], "retracted");
         assert_eq!(
-            session_memory(&document, "memory-retracted")["lifecycle"],
+            retracted_row["revisions"][0]["metadata"]["status"],
             "retracted"
         );
         let deleted_row = session_memory(&document, "memory-deleted");
         assert_eq!(deleted_row["lifecycle"], "deleted");
+        assert_eq!(deleted_row["revisions"][0]["metadata"]["status"], "deleted");
         assert_eq!(deleted_row["revisions"][0]["content_state"], "unavailable");
         assert!(deleted_row["revisions"][0]["content"].is_null());
         assert_eq!(
@@ -1058,7 +1068,11 @@ mod tests {
                 .get()
                 > mutation_before.get()
         );
-        assert!(first.exists(), "pre-deletion archive remains readable");
+        assert_eq!(
+            std::fs::read(&first).expect("read preserved archive"),
+            first_bytes,
+            "session deletion must not mutate the independent archive"
+        );
 
         let cross_scope_path = export_memory(
             &mut store,
@@ -1081,6 +1095,10 @@ mod tests {
         assert_eq!(
             cross_scope_document["revisions"][0]["metadata"]["evidence"][0]["source"]["payload"]["session_id"],
             "session-x"
+        );
+        assert_eq!(
+            cross_scope_document["revisions"][0]["metadata"]["evidence"][0]["excerpt_hash"],
+            raw_digest(CONFIGURED_SECRET_SENTINEL).as_str()
         );
         assert_eq!(
             cross_scope.revision_id().as_str(),
