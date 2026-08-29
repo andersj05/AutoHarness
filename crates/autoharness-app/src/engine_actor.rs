@@ -1387,11 +1387,12 @@ mod tests {
                 request,
                 retrieval_scope,
                 compatibility,
-                existing_epoch: None,
+                epoch: crate::context_runtime::ContextEpochMode::NewAttempt {
+                    explicit_retry: false,
+                },
                 observed_sources: Vec::new(),
                 memory_candidates: Vec::new(),
                 committed_at,
-                explicit_retry: false,
             },
         )
         .expect("prepared context");

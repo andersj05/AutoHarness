@@ -26,7 +26,8 @@ use crate::error::AppError;
 
 const CONTEXT_RANKER_VERSION: u16 = 1;
 const CONTEXT_SIZER_VERSION: u16 = 1;
-const CONTEXT_CONFIG_VERSION: &[u8] = b"autoharness-context-config-v1";
+const CONTEXT_CONFIG_VERSION: &[u8] = b"autoharness-context-config-v2";
+const COMPACTED_HISTORY_VERSION: u16 = 1;
 const LOCAL_USER_ID: &str = "user:local-v1";
 const DEFAULT_AGENT_ID: &str = "agent:default-v1";
 const WORKSPACE_AGENTS_SOURCE_KEY: &str = "workspace:agents-md:v1";
@@ -258,6 +259,7 @@ impl EpochCompatibility {
             "sensitivity": retrieval_scope.sensitivity_ceiling,
             "token_budget": token_budget.get(),
             "durable_memory_limit": durable_memory_limit.get(),
+            "compacted_history_version": COMPACTED_HISTORY_VERSION,
         }))?)?;
         let catalog_hash = sha256_digest(&serde_json::to_vec(&descriptor.map_or_else(
             || {
@@ -326,16 +328,33 @@ pub struct ContextPreparationInput {
     pub retrieval_scope: RetrievalScope,
     /// Frozen compatibility contract for the attempt epoch.
     pub compatibility: EpochCompatibility,
-    /// Existing epoch required for tool-loop continuations.
-    pub existing_epoch: Option<ContextEpochManifest>,
+    /// Exact epoch action for this provider turn.
+    pub epoch: ContextEpochMode,
     /// Complete registered source observations.
     pub observed_sources: Vec<ObservedContextSource>,
     /// Immutable memory candidates in arbitrary physical order.
     pub memory_candidates: Vec<MemoryCandidate>,
     /// Stable commit time used by every record in this turn.
     pub committed_at: TimestampMillis,
-    /// Whether this top-level attempt is an explicit retry.
-    pub explicit_retry: bool,
+}
+
+/// Whether one provider turn starts or reuses an immutable context epoch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContextEpochMode {
+    /// Start the ordinary first epoch for a top-level attempt.
+    NewAttempt {
+        /// Whether the user explicitly retried a settled attempt.
+        explicit_retry: bool,
+    },
+    /// Reuse an already durable epoch for a later provider turn.
+    Existing(ContextEpochManifest),
+    /// Start a replacement epoch at a verified compaction boundary.
+    Compaction {
+        /// Deterministic identity of the replacement epoch.
+        epoch_id: ContextEpochId,
+        /// Exact epoch whose history baseline is being replaced.
+        predecessor_epoch_id: ContextEpochId,
+    },
 }
 
 /// Provider request paired with the exact durable context commit that authorizes dispatch.
@@ -376,7 +395,11 @@ pub fn prepare_context_turn(
         return Err(AppError::Configuration);
     }
     let context_turn_id = context_turn_id(&input.attempt_id, input.run_turn);
-    let epoch_id = context_epoch_id(&input.attempt_id);
+    let epoch_id = match &input.epoch {
+        ContextEpochMode::NewAttempt { .. } => context_epoch_id(&input.attempt_id),
+        ContextEpochMode::Existing(epoch) => epoch.epoch_id().clone(),
+        ContextEpochMode::Compaction { epoch_id, .. } => epoch_id.clone(),
+    };
     let reserved_tokens = estimated_request_bytes(&input.request)?;
     let builder = ContextBuilder::default();
     let built = builder.build(ContextBuildRequest {
@@ -441,7 +464,7 @@ pub fn prepare_context_turn(
     })
 }
 
-/// Immutable inputs for a continuation that must reuse its first bound baseline.
+/// Immutable inputs for a continuation that must reuse its epoch baseline.
 pub struct FrozenContinuationInput {
     /// Current provider-neutral conversation and settled tool history.
     pub request: ChatRequest,
@@ -451,17 +474,17 @@ pub struct FrozenContinuationInput {
     pub run_turn: u32,
     /// New manifest commit timestamp. Baseline source observations remain unchanged.
     pub committed_at: TimestampMillis,
-    /// Durable attempt epoch created by turn one.
+    /// Durable attempt epoch created by its first bound turn.
     pub epoch: ContextEpochManifest,
-    /// Exact first bound provider-turn manifest.
+    /// Exact first bound provider-turn manifest in this epoch.
     pub baseline_turn: ContextTurnManifest,
-    /// Exact retained first-turn rendered bytes in admission order.
+    /// Exact retained epoch-baseline rendered bytes in admission order.
     pub baseline_content: ContextTurnContent,
     /// Current observation of compatibility inputs that must still match the epoch.
     pub compatibility: EpochCompatibility,
 }
 
-/// Rebinds the exact durable first-turn baseline into a later provider request.
+/// Rebinds the exact durable epoch baseline into a later provider request.
 ///
 /// This does not observe sources, inspect active memory, or rerank candidates.
 /// Changed conversation/tool history affects only the provider request hash and
@@ -471,7 +494,7 @@ pub fn prepare_frozen_continuation(
 ) -> Result<PreparedContextTurn, AppError> {
     if input.run_turn <= 1
         || input.request.context.is_some()
-        || input.baseline_turn.run_turn() != 1
+        || input.baseline_turn.run_turn() >= input.run_turn
         || input.baseline_turn.epoch_id() != input.epoch.epoch_id()
         || input.baseline_turn.session_id() != input.epoch.session_id()
         || input.baseline_turn.memory_generation() != input.epoch.memory_generation()
@@ -606,37 +629,48 @@ fn prepare_epoch(
     epoch_id: ContextEpochId,
 ) -> Result<Option<ContextEpochManifest>, AppError> {
     let versions = context_versions()?;
-    if input.run_turn > 1 {
-        let existing = input
-            .existing_epoch
-            .as_ref()
-            .ok_or(AppError::Configuration)?;
-        if existing.epoch_id() != &epoch_id
-            || existing.session_id() != &input.session_id
-            || existing.memory_generation() != input.memory_generation
-            || existing.versions() != versions
-            || existing.hashes() != input.compatibility.hashes()
-            || existing.token_budget() != input.compatibility.token_budget()
-        {
-            return Err(AppError::Configuration);
+    let (reason, predecessor_epoch_id) = match &input.epoch {
+        ContextEpochMode::Existing(existing) => {
+            if input.run_turn <= 1
+                || existing.epoch_id() != &epoch_id
+                || existing.session_id() != &input.session_id
+                || existing.memory_generation() != input.memory_generation
+                || existing.versions() != versions
+                || existing.hashes() != input.compatibility.hashes()
+                || existing.token_budget() != input.compatibility.token_budget()
+            {
+                return Err(AppError::Configuration);
+            }
+            return Ok(None);
         }
-        return Ok(None);
-    }
-    if input.existing_epoch.is_some() {
-        return Err(AppError::Configuration);
-    }
-    let baseline_hash = baseline_hash(manifest, input.compatibility.hashes())?;
-    let reason = if input.explicit_retry {
-        ContextEpochReason::ExplicitRetry
-    } else {
-        ContextEpochReason::NewAttempt
+        ContextEpochMode::NewAttempt { explicit_retry } => {
+            if input.run_turn != 1 {
+                return Err(AppError::Configuration);
+            }
+            (
+                if *explicit_retry {
+                    ContextEpochReason::ExplicitRetry
+                } else {
+                    ContextEpochReason::NewAttempt
+                },
+                None,
+            )
+        }
+        ContextEpochMode::Compaction {
+            predecessor_epoch_id,
+            ..
+        } => (
+            ContextEpochReason::Compaction,
+            Some(predecessor_epoch_id.clone()),
+        ),
     };
+    let baseline_hash = baseline_hash(manifest, input.compatibility.hashes())?;
     ContextEpochManifest::new(
         epoch_id,
         input.session_id.clone(),
         input.memory_generation,
         reason,
-        None,
+        predecessor_epoch_id,
         baseline_hash,
         versions,
         input.compatibility.hashes().clone(),
@@ -693,6 +727,27 @@ pub fn context_epoch_id(attempt_id: &AttemptId) -> ContextEpochId {
     ]);
     ContextEpochId::new(format!("context-epoch:{digest}"))
         .expect("SHA-256 context epoch IDs are valid")
+}
+
+/// Derives one stable replacement epoch identity from its exact compaction boundary.
+#[must_use]
+pub fn compaction_epoch_id(
+    attempt_id: &AttemptId,
+    run_turn: u32,
+    predecessor_epoch_id: &ContextEpochId,
+    cutoff: SessionSequence,
+) -> ContextEpochId {
+    let turn = run_turn.to_be_bytes();
+    let cutoff = cutoff.get().to_be_bytes();
+    let digest = digest_fields(&[
+        b"autoharness-context-compaction-epoch-v1",
+        attempt_id.as_str().as_bytes(),
+        &turn,
+        predecessor_epoch_id.as_str().as_bytes(),
+        &cutoff,
+    ]);
+    ContextEpochId::new(format!("context-epoch:{digest}"))
+        .expect("SHA-256 compaction epoch IDs are valid")
 }
 
 fn context_turn_id(attempt_id: &AttemptId, run_turn: u32) -> ContextTurnId {
@@ -820,11 +875,12 @@ mod tests {
             request,
             retrieval_scope,
             compatibility,
-            existing_epoch: None,
+            epoch: ContextEpochMode::NewAttempt {
+                explicit_retry: false,
+            },
             observed_sources: Vec::new(),
             memory_candidates,
             committed_at: TimestampMillis::new(10),
-            explicit_retry: false,
         }
     }
 
@@ -899,10 +955,63 @@ mod tests {
         let epoch = first.commit.epoch().expect("epoch").clone();
         let mut continuation = preparation(&scope, Vec::new());
         continuation.run_turn = 2;
-        continuation.existing_epoch = Some(epoch);
+        continuation.epoch = ContextEpochMode::Existing(epoch);
         continuation.memory_generation = MemoryGeneration::new(2).expect("generation");
 
         assert!(prepare_context_turn(continuation).is_err());
+    }
+
+    #[test]
+    fn compaction_can_start_a_replacement_epoch_after_a_tool_turn() {
+        let scope = scope();
+        let predecessor = ContextEpochId::new("epoch-before-compaction").expect("epoch ID");
+        let cutoff = SessionSequence::new(17).expect("cutoff");
+        let mut compacted = preparation(&scope, Vec::new());
+        compacted.run_turn = 3;
+        compacted.expected_session_sequence = cutoff;
+        let epoch_id = compaction_epoch_id(
+            &compacted.attempt_id,
+            compacted.run_turn,
+            &predecessor,
+            cutoff,
+        );
+        compacted.epoch = ContextEpochMode::Compaction {
+            epoch_id: epoch_id.clone(),
+            predecessor_epoch_id: predecessor.clone(),
+        };
+
+        let prepared = prepare_context_turn(compacted).expect("compaction turn");
+        let epoch = prepared.commit().epoch().expect("replacement epoch");
+        assert_eq!(prepared.manifest().run_turn(), 3);
+        assert_eq!(epoch.epoch_id(), &epoch_id);
+        assert_eq!(epoch.reason(), ContextEpochReason::Compaction);
+        assert_eq!(epoch.predecessor_epoch_id(), Some(&predecessor));
+
+        let retrieval_scope = scope.retrieval_scope(
+            SessionId::new("session-1").expect("session ID"),
+            epoch.started_at(),
+        );
+        let compatibility = EpochCompatibility::new(
+            &request(),
+            None,
+            &retrieval_scope,
+            epoch.token_budget(),
+            prepared.manifest().budget().durable_memory_limit(),
+        )
+        .expect("compatibility");
+        let continuation = prepare_frozen_continuation(FrozenContinuationInput {
+            request: request(),
+            expected_session_sequence: SessionSequence::new(19).expect("sequence"),
+            run_turn: 4,
+            committed_at: TimestampMillis::new(20),
+            epoch: epoch.clone(),
+            baseline_turn: prepared.manifest().clone(),
+            baseline_content: prepared.commit().content().clone(),
+            compatibility,
+        })
+        .expect("continuation from compacted baseline");
+        assert_eq!(continuation.manifest().epoch_id(), epoch.epoch_id());
+        assert_eq!(continuation.manifest().run_turn(), 4);
     }
 
     #[test]

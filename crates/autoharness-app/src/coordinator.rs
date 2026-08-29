@@ -46,10 +46,10 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use crate::context_runtime::{
-    ContextPreparationInput, ContextScope, EpochCompatibility, FrozenContinuationInput,
-    PreparedContextTurn, context_epoch_id, is_workspace_agents_admission, observe_workspace_agents,
-    prepare_context_turn, prepare_frozen_continuation, retained_workspace_agents,
-    workspace_locator_digest,
+    ContextEpochMode, ContextPreparationInput, ContextScope, EpochCompatibility,
+    FrozenContinuationInput, PreparedContextTurn, context_epoch_id, is_workspace_agents_admission,
+    observe_workspace_agents, prepare_context_turn, prepare_frozen_continuation,
+    retained_workspace_agents, workspace_locator_digest,
 };
 use crate::engine_actor::EngineHandle;
 use crate::error::AppError;
@@ -2919,11 +2919,12 @@ impl Coordinator {
             request,
             retrieval_scope,
             compatibility,
-            existing_epoch: None,
+            epoch: ContextEpochMode::NewAttempt {
+                explicit_retry: attempt.retry_of().is_some(),
+            },
             observed_sources,
             memory_candidates: candidates,
             committed_at,
-            explicit_retry: attempt.retry_of().is_some(),
         })
     }
 
