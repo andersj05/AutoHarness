@@ -3716,12 +3716,16 @@ const fn corrupt_memory_projection() -> StoreError {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        CommandId, ConfidenceBasisPoints, CorrelationId, InputId, MemoryEvidence,
+        AttemptId, CommandId, ConfidenceBasisPoints, ContextEpochId, ContextTokenBudget,
+        ContextTurnId, CorrelationId, EstimatedTokens, InputId, MemoryEvidence,
         MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource,
         MemoryId, MemoryOperationId, MemoryOrigin, MemoryRelation, MemoryRelationKind,
         MemoryRevisionDraft, MemoryRevisionNumber, MemorySequence, MemorySubjectKey,
-        MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus, SessionId,
-        Sha256Digest, TimestampMillis, TrustClass, UserId,
+        MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus, ModelId, ModelRef,
+        ProviderId, SessionId, SessionSequence, Sha256Digest, TimestampMillis, TrustClass, UserId,
+    };
+    use autoharness_memory::{
+        ContextBuildRequest, ContextBuilder, MemoryCandidate, RetrievalScope,
     };
     use autoharness_store::{
         DeletionDisposition, MemoryContentState, MemoryEvidenceContent, MemoryRevisionContent,
@@ -3905,6 +3909,91 @@ mod tests {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         Sha256Digest::new(encoded).expect("raw digest")
+    }
+
+    fn rebuild_fts_in_physical_order(store: &SqliteStore, descending: bool) {
+        store
+            .connection
+            .execute("DELETE FROM memory_revision_fts", [])
+            .expect("clear FTS projection");
+        let sql = if descending {
+            "INSERT INTO memory_revision_fts (rowid, content, revision_id, memory_id) \
+             SELECT r.search_rowid, CAST(b.content_utf8 AS TEXT), r.revision_id, r.memory_id \
+             FROM memory_revisions AS r \
+             JOIN memory_content_blobs AS b ON b.content_id = r.content_id \
+             WHERE r.state = 'active' ORDER BY r.search_rowid DESC"
+        } else {
+            "INSERT INTO memory_revision_fts (rowid, content, revision_id, memory_id) \
+             SELECT r.search_rowid, CAST(b.content_utf8 AS TEXT), r.revision_id, r.memory_id \
+             FROM memory_revisions AS r \
+             JOIN memory_content_blobs AS b ON b.content_id = r.content_id \
+             WHERE r.state = 'active' ORDER BY r.search_rowid ASC"
+        };
+        store
+            .connection
+            .execute(sql, [])
+            .expect("rebuild FTS projection");
+    }
+
+    fn context_candidate(candidate: &MemorySearchCandidate) -> MemoryCandidate {
+        let revision = candidate.revision();
+        let lexical_basis_points = match candidate.memory_id().as_str() {
+            "memory-m-near" => 10_000,
+            "memory-a-tie" | "memory-b-tie" => 9_000,
+            "memory-z-verbose" => 8_000,
+            _ => 0,
+        };
+        MemoryCandidate {
+            memory_id: candidate.memory_id().clone(),
+            revision_id: revision.revision_id().clone(),
+            status: revision.status(),
+            scope: candidate.scope().clone(),
+            kind: candidate.memory_kind(),
+            trust: revision.trust_class(),
+            confidence: revision.confidence(),
+            sensitivity: revision.sensitivity(),
+            validity: revision.validity(),
+            content: candidate.content().clone(),
+            content_hash: revision.content_hash().clone(),
+            created_at: revision.created_at(),
+            exact_match: false,
+            lexical_basis_points,
+            conflicted: false,
+        }
+    }
+
+    fn context_request(
+        generation: MemoryGeneration,
+        memory_candidates: Vec<MemoryCandidate>,
+        durable_memory_limit: u64,
+    ) -> ContextBuildRequest {
+        ContextBuildRequest {
+            context_turn_id: ContextTurnId::new("context-turn-fts-order").expect("turn ID"),
+            epoch_id: ContextEpochId::new("context-epoch-fts-order").expect("epoch ID"),
+            session_id: SessionId::new("session-fts-order").expect("session ID"),
+            attempt_id: AttemptId::new("attempt-fts-order").expect("attempt ID"),
+            run_turn: 1,
+            expected_session_sequence: SessionSequence::FIRST,
+            memory_generation: generation,
+            model: ModelRef::new(
+                ProviderId::new("provider-fts-order").expect("provider ID"),
+                ModelId::new("model-fts-order").expect("model ID"),
+            ),
+            token_budget: ContextTokenBudget::new(100_000).expect("token budget"),
+            reserved_tokens: EstimatedTokens::new(0).expect("reserved tokens"),
+            durable_memory_limit: EstimatedTokens::new(durable_memory_limit).expect("memory limit"),
+            committed_at: TimestampMillis::new(20),
+            retrieval_scope: RetrievalScope {
+                user_id: UserId::new("user-1").expect("user ID"),
+                workspace_id: WorkspaceId::new("workspace-fts-order").expect("workspace ID"),
+                session_id: SessionId::new("session-fts-order").expect("session ID"),
+                agent_id: None,
+                as_of: TimestampMillis::new(20),
+                sensitivity_ceiling: Sensitivity::Internal,
+            },
+            observed_sources: Vec::new(),
+            memory_candidates,
+        }
     }
 
     #[test]
@@ -5621,5 +5710,222 @@ mod tests {
             })
             .expect("item count");
         assert_eq!(item_count, 0);
+    }
+
+    #[test]
+    fn fts_physical_rebuild_order_cannot_change_ranking_or_context_fit() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let memories = [
+            (
+                "memory-z-verbose",
+                "revision-z-verbose",
+                "operation-z-verbose",
+                "nexus candidate with verbose unrelated filler words for lower relevance",
+            ),
+            (
+                "memory-b-tie",
+                "revision-b-tie",
+                "operation-b-tie",
+                "nexus stable tie context",
+            ),
+            (
+                "memory-m-near",
+                "revision-m-near",
+                "operation-m-near",
+                "nexus nexus stable near context",
+            ),
+            (
+                "memory-a-tie",
+                "revision-a-tie",
+                "operation-a-tie",
+                "nexus stable tie context",
+            ),
+        ];
+        for (memory_id, revision_id, operation_id, content) in memories {
+            let (revision, sidecar) =
+                revision(revision_id, 1, content, MemoryRevisionStatus::Active);
+            store
+                .append_memory(&MemoryAppendRequest::new(
+                    0,
+                    create_operation(memory_id, operation_id, revision),
+                    Some(sidecar),
+                ))
+                .expect("append FTS candidate");
+        }
+        store
+            .rebuild_memory_projections()
+            .expect("rebuild authoritative projections");
+
+        let query = MemorySearchQuery::new(
+            MemoryContent::new("nexus").expect("query"),
+            vec![MemoryScope::User(UserId::new("user-1").expect("user ID"))],
+            Sensitivity::Internal,
+            TimestampMillis::new(20),
+            8,
+        )
+        .expect("search query");
+        rebuild_fts_in_physical_order(&store, false);
+        let ascending = store.search_memory(&query).expect("ascending search");
+        rebuild_fts_in_physical_order(&store, true);
+        let descending = store.search_memory(&query).expect("descending search");
+
+        let signatures = |batch: &MemoryCandidateBatch| {
+            batch
+                .candidates()
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.memory_id().as_str().to_owned(),
+                        candidate.revision().revision_id().as_str().to_owned(),
+                        candidate.fts_rank(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let ascending_signatures = signatures(&ascending);
+        assert_eq!(ascending_signatures, signatures(&descending));
+        assert_eq!(ascending_signatures.len(), 4);
+        let tie_a = ascending_signatures
+            .iter()
+            .position(|(memory_id, _, _)| memory_id == "memory-a-tie")
+            .expect("first tied candidate");
+        let tie_b = ascending_signatures
+            .iter()
+            .position(|(memory_id, _, _)| memory_id == "memory-b-tie")
+            .expect("second tied candidate");
+        assert_eq!(tie_b, tie_a + 1);
+
+        let ascending_candidates = ascending
+            .candidates()
+            .iter()
+            .map(context_candidate)
+            .collect::<Vec<_>>();
+        let mut reversed_candidates = descending
+            .candidates()
+            .iter()
+            .map(context_candidate)
+            .collect::<Vec<_>>();
+        reversed_candidates.reverse();
+        let generous = ContextBuilder::default()
+            .build(context_request(
+                ascending.generation(),
+                ascending_candidates.clone(),
+                100_000,
+            ))
+            .expect("generous context build");
+        let expected_order = [
+            "revision-m-near",
+            "revision-a-tie",
+            "revision-b-tie",
+            "revision-z-verbose",
+        ];
+        assert_eq!(
+            generous
+                .selected_memories()
+                .iter()
+                .map(|memory| memory.revision_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+        let three_item_limit = generous.selected_memories()[..3]
+            .iter()
+            .map(|memory| memory.estimated_tokens.get())
+            .sum();
+        let ascending_fit = ContextBuilder::default()
+            .build(context_request(
+                ascending.generation(),
+                ascending_candidates,
+                three_item_limit,
+            ))
+            .expect("ascending context fit");
+        let reversed_fit = ContextBuilder::default()
+            .build(context_request(
+                descending.generation(),
+                reversed_candidates,
+                three_item_limit,
+            ))
+            .expect("reversed context fit");
+        let selected = |built: &autoharness_memory::BuiltContext| {
+            built
+                .selected_memories()
+                .iter()
+                .map(|memory| memory.revision_id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            selected(&ascending_fit),
+            vec![
+                "revision-m-near".to_owned(),
+                "revision-a-tie".to_owned(),
+                "revision-b-tie".to_owned(),
+            ]
+        );
+        assert_eq!(selected(&ascending_fit), selected(&reversed_fit));
+        assert_eq!(ascending_fit.prelude(), reversed_fit.prelude());
+        assert_eq!(ascending_fit.rendered_hash(), reversed_fit.rendered_hash());
+    }
+
+    #[test]
+    fn active_fts_literalizes_operator_control_and_unicode_query_text() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let target_content =
+            "quoted OR NOT NEAR prefix column value system control 雪 Ω café naïve target";
+        let (target, target_sidecar) = revision(
+            "revision-unicode-literal",
+            1,
+            target_content,
+            MemoryRevisionStatus::Active,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-unicode-literal",
+                    "operation-unicode-literal",
+                    target,
+                ),
+                Some(target_sidecar),
+            ))
+            .expect("append Unicode target");
+        let (distractor, distractor_sidecar) = revision(
+            "revision-unrelated-literal",
+            1,
+            "completely unrelated searchable memory",
+            MemoryRevisionStatus::Active,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-unrelated-literal",
+                    "operation-unrelated-literal",
+                    distractor,
+                ),
+                Some(distractor_sidecar),
+            ))
+            .expect("append distractor");
+
+        let hostile_literal =
+            "\"quoted OR NOT NEAR(prefix*) column:value <system>\u{0007}\ncontrol 雪 Ω café naïve";
+        let query = MemorySearchQuery::new(
+            MemoryContent::new(hostile_literal).expect("hostile literal query"),
+            vec![MemoryScope::User(UserId::new("user-1").expect("user ID"))],
+            Sensitivity::Internal,
+            TimestampMillis::new(20),
+            8,
+        )
+        .expect("search query");
+        let batch = store
+            .search_memory(&query)
+            .expect("safe literal FTS search");
+
+        assert_eq!(batch.candidates().len(), 1);
+        assert_eq!(
+            batch.candidates()[0].memory_id(),
+            &MemoryId::new("memory-unicode-literal").expect("memory ID")
+        );
+        assert_eq!(batch.candidates()[0].content().as_str(), target_content);
     }
 }
