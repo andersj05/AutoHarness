@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -211,6 +212,192 @@ fn version_one_database_upgrades_catalog_cache_without_rewriting_history() {
             })
             .expect("migration count"),
         6
+    );
+}
+
+#[test]
+fn populated_schema_three_upgrade_preserves_history_and_a_rollback_copy() {
+    let database = TestDatabase::new();
+    let rollback_path = database
+        .path
+        .with_file_name("schema-three-rollback.sqlite3");
+    let session = session_id("session-schema-three");
+    let created = event(
+        "event-schema-three-created",
+        &session,
+        1,
+        "command-schema-three-created",
+        1_700_000_000_000,
+        EventPayload::SessionCreated,
+    );
+    let envelope_json = serde_json::to_vec(&created).expect("serialize fixture event");
+    let catalog_json = br#"{"schema_version":1,"models":[{"id":"models/schema-three"}]}"#;
+    let catalog_sha256 = Sha256::digest(catalog_json);
+
+    let connection = Connection::open(&database.path).expect("open schema-three fixture");
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY NOT NULL CHECK (version > 0),
+                name TEXT NOT NULL,
+                checksum BLOB NOT NULL CHECK (length(checksum) = 32),
+                applied_at_ms INTEGER NOT NULL
+            ) STRICT;
+            "#,
+        )
+        .expect("migration table");
+    for (version, name, sql) in [
+        (
+            1_i64,
+            "session_store",
+            include_str!("../migrations/0001_session_store.sql"),
+        ),
+        (
+            2_i64,
+            "model_catalog_cache",
+            include_str!("../migrations/0002_model_catalog_cache.sql"),
+        ),
+        (
+            3_i64,
+            "session_lifecycle",
+            include_str!("../migrations/0003_session_lifecycle.sql"),
+        ),
+    ] {
+        connection
+            .execute_batch(sql)
+            .expect("apply fixture migration");
+        let checksum = Sha256::digest(sql.as_bytes());
+        connection
+            .execute(
+                "INSERT INTO schema_migrations \
+                 (version, name, checksum, applied_at_ms) VALUES (?1, ?2, ?3, ?4)",
+                params![version, name, checksum.as_slice(), version * 1_000],
+            )
+            .expect("record fixture migration");
+        connection
+            .pragma_update(None, "user_version", version)
+            .expect("advance fixture schema version");
+    }
+    connection
+        .execute(
+            "INSERT INTO sessions \
+             (session_id, status, selected_provider_id, selected_model_id, last_sequence, \
+              created_at_ms, updated_at_ms, title) \
+             VALUES (?1, 'active', NULL, NULL, 1, ?2, ?2, ?3)",
+            params![
+                session.as_str(),
+                created.occurred_at().get(),
+                "Migration rehearsal"
+            ],
+        )
+        .expect("insert schema-three session");
+    connection
+        .execute(
+            "INSERT INTO session_events \
+             (event_id, session_id, sequence, schema_version, occurred_at_ms, \
+              caused_by_command_id, caused_by_event_id, correlation_id, event_kind, envelope_json) \
+             VALUES (?1, ?2, 1, 1, ?3, ?4, NULL, ?5, 'session_created', ?6)",
+            params![
+                created.event_id().as_str(),
+                session.as_str(),
+                created.occurred_at().get(),
+                "command-schema-three-created",
+                created.correlation_id().as_str(),
+                &envelope_json
+            ],
+        )
+        .expect("insert schema-three event");
+    connection
+        .execute(
+            "INSERT INTO model_catalog_cache \
+             (provider_id, schema_version, refreshed_at_ms, catalog_json, content_sha256) \
+             VALUES ('schema-three-provider', 1, 42, ?1, ?2)",
+            params![catalog_json, catalog_sha256.as_slice()],
+        )
+        .expect("insert schema-three catalog");
+    drop(connection);
+    fs::copy(&database.path, &rollback_path).expect("preserve schema-three rollback copy");
+
+    let mut store = database.open();
+    assert_eq!(
+        store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("read upgraded schema version"),
+        6
+    );
+    assert_eq!(
+        store
+            .load_events(&session, 0, 8)
+            .expect("load migrated event history"),
+        vec![created.clone()]
+    );
+    let sessions = store.list_sessions().expect("list migrated sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        sessions[0].title().map(|title| title.as_str()),
+        Some("Migration rehearsal")
+    );
+    let provider_id = ProviderId::new("schema-three-provider").expect("provider ID");
+    assert_eq!(
+        store
+            .load_catalog_cache(&provider_id)
+            .expect("load migrated catalog")
+            .expect("catalog exists")
+            .catalog_json(),
+        catalog_json
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN \
+                 ('memory_items', 'context_epochs', 'memory_revision_fts')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count phase-four schema objects"),
+        3
+    );
+    drop(store);
+
+    let rollback = Connection::open(&rollback_path).expect("open rollback copy");
+    assert_eq!(
+        rollback
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("read rollback schema version"),
+        3
+    );
+    assert_eq!(
+        rollback
+            .query_row(
+                "SELECT title FROM sessions WHERE session_id = ?1",
+                [session.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read rollback session"),
+        "Migration rehearsal"
+    );
+    assert_eq!(
+        rollback
+            .query_row(
+                "SELECT envelope_json FROM session_events WHERE event_id = ?1",
+                [created.event_id().as_str()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .expect("read rollback event"),
+        envelope_json
+    );
+    assert_eq!(
+        rollback
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'memory_items'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("check rollback schema"),
+        0
     );
 }
 
