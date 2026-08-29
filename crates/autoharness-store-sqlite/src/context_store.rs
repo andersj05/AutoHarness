@@ -431,7 +431,19 @@ fn persist_compaction_boundary(
             Err(StoreError::InvalidContextTransition)
         };
     }
-    let boundary = boundary.ok_or(StoreError::InvalidContextTransition)?;
+    let existing = load_compaction_boundary_record(transaction, epoch.epoch_id())?;
+    let Some(boundary) = boundary else {
+        let existing = existing.ok_or(StoreError::InvalidContextTransition)?;
+        if existing.epoch_id() != epoch.epoch_id()
+            || Some(existing.predecessor_epoch_id()) != epoch.predecessor_epoch_id()
+            || existing.session_id() != turn.session_id()
+            || existing.memory_generation() != turn.memory_generation()
+            || existing.facts_version() != COMPACTION_FACTS_VERSION
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+        return Ok(());
+    };
     if boundary.epoch_id() != epoch.epoch_id()
         || Some(boundary.predecessor_epoch_id()) != epoch.predecessor_epoch_id()
         || boundary.session_id() != turn.session_id()
@@ -442,7 +454,7 @@ fn persist_compaction_boundary(
         return Err(StoreError::InvalidContextTransition);
     }
 
-    if let Some(existing) = load_compaction_boundary_record(transaction, boundary.epoch_id())? {
+    if let Some(existing) = existing {
         return if &existing == boundary {
             Ok(())
         } else {
@@ -4402,6 +4414,69 @@ mod tests {
             ContextCommitDisposition::AlreadyCommitted
         );
         store
+            .append(&AppendRequest::new(
+                SessionId::new("session-context").expect("session ID"),
+                10,
+                vec![
+                    session_event(
+                        11,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: compacted_turn.attempt_id().clone(),
+                            turn: 2,
+                        },
+                    ),
+                    session_event(
+                        12,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: compacted_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        13,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: compacted_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("advance within compacted epoch");
+        let continuation_turn = turn_at(
+            "turn-compaction-continuation",
+            "epoch-compaction-bound",
+            3,
+            13,
+            "workspace-1",
+        );
+        let continuation_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(
+                None,
+                continuation_turn.clone(),
+                turn_content(&continuation_turn),
+            ),
+            session_event(
+                14,
+                EventPayload::ContextTurnBound {
+                    attempt_id: continuation_turn.attempt_id().clone(),
+                    run_turn: 3,
+                    context_turn_id: continuation_turn.context_turn_id().clone(),
+                    manifest_hash: continuation_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&continuation_request)
+                .expect("bind continuation in compacted epoch")
+                .last_sequence(),
+            14
+        );
+        assert_eq!(
+            store
+                .load_compaction_boundary(compacted_epoch.epoch_id())
+                .expect("load unchanged compaction boundary"),
+            Some(boundary.clone())
+        );
+        store
             .rebuild_projections()
             .expect("rebuild session projections around retained context audit rows");
         assert_eq!(
@@ -4409,6 +4484,12 @@ mod tests {
                 .load_context_turn(compacted_turn.context_turn_id())
                 .expect("load compacted turn after rebuild"),
             Some(compacted_turn)
+        );
+        assert_eq!(
+            store
+                .load_context_turn(continuation_turn.context_turn_id())
+                .expect("load compacted continuation after rebuild"),
+            Some(continuation_turn)
         );
         assert_eq!(
             store
@@ -4423,7 +4504,7 @@ mod tests {
                     row.get::<_, i64>(0)
                 })
                 .expect("binding count after rebuild"),
-            2
+            3
         );
     }
 
