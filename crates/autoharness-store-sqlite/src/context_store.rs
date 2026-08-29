@@ -753,10 +753,11 @@ fn load_compaction_boundary_record(
 struct RawCompactionCheckpoint {
     epoch_id: String,
     boundary: RawCompactionBoundary,
-    epoch_json: Vec<u8>,
-    epoch_hash: Vec<u8>,
-    turn_json: Vec<u8>,
-    turn_hash: Vec<u8>,
+    epoch_json: Option<Vec<u8>>,
+    epoch_hash: Option<Vec<u8>>,
+    turn_json: Option<Vec<u8>>,
+    turn_hash: Option<Vec<u8>>,
+    binding_context_turn_id: Option<String>,
 }
 
 fn load_latest_compaction_checkpoint_record(
@@ -770,12 +771,12 @@ fn load_latest_compaction_checkpoint_record(
                     c.facts_sha256, c.memory_fact_count, c.pending_session_fact_count, \
                     c.summary_revision_id, c.verified_at_ms, \
                     e.manifest_json, e.manifest_json_sha256, \
-                    t.manifest_json, t.manifest_json_sha256 \
+                    t.manifest_json, t.manifest_json_sha256, b.context_turn_id \
              FROM context_compaction_boundaries AS c \
-             JOIN context_epochs AS e ON e.epoch_id = c.epoch_id \
-             JOIN context_turns AS t ON t.epoch_id = c.epoch_id \
+             LEFT JOIN context_epochs AS e ON e.epoch_id = c.epoch_id \
+             LEFT JOIN context_turns AS t ON t.epoch_id = c.epoch_id \
                AND t.expected_session_sequence = c.expected_session_sequence \
-             JOIN context_turn_bindings AS b ON b.context_turn_id = t.context_turn_id \
+             LEFT JOIN context_turn_bindings AS b ON b.context_turn_id = t.context_turn_id \
              WHERE c.session_id = ?1 \
              ORDER BY c.expected_session_sequence DESC, c.epoch_id DESC LIMIT 1",
             params![session_id.as_str()],
@@ -787,6 +788,7 @@ fn load_latest_compaction_checkpoint_record(
                     epoch_hash: row.get(12)?,
                     turn_json: row.get(13)?,
                     turn_hash: row.get(14)?,
+                    binding_context_turn_id: row.get(15)?,
                 })
             },
         )
@@ -797,8 +799,20 @@ fn load_latest_compaction_checkpoint_record(
     };
     let epoch_id = ContextEpochId::new(raw.epoch_id).map_err(|_| corrupt_context())?;
     let boundary = decode_compaction_boundary(epoch_id, raw.boundary)?;
-    let epoch: ContextEpochManifest = decode_context_json(&raw.epoch_json, &raw.epoch_hash)?;
-    let turn: ContextTurnManifest = decode_context_json(&raw.turn_json, &raw.turn_hash)?;
+    let (Some(epoch_json), Some(epoch_hash), Some(turn_json), Some(turn_hash), Some(binding_id)) = (
+        raw.epoch_json,
+        raw.epoch_hash,
+        raw.turn_json,
+        raw.turn_hash,
+        raw.binding_context_turn_id,
+    ) else {
+        return Err(corrupt_context());
+    };
+    let epoch: ContextEpochManifest = decode_context_json(&epoch_json, &epoch_hash)?;
+    let turn: ContextTurnManifest = decode_context_json(&turn_json, &turn_hash)?;
+    if binding_id != turn.context_turn_id().as_str() {
+        return Err(corrupt_context());
+    }
     if !verify_context_manifest_hash(&turn).map_err(|_| corrupt_context())? {
         return Err(corrupt_context());
     }
@@ -3817,6 +3831,37 @@ mod tests {
         );
         assert_eq!(
             store.load_context_epoch_baseline(fixture.epoch.epoch_id()),
+            Err(StoreError::CorruptData {
+                area: CorruptionArea::ContextLedger,
+            })
+        );
+    }
+
+    #[test]
+    fn latest_checkpoint_fails_closed_when_its_binding_is_missing() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let fixture = seed_compaction_fixture(&mut store, MemoryGeneration::INITIAL);
+        let fingerprint = compaction_fingerprint(&mut store, &fixture);
+        store
+            .commit_context_turn_and_bind(
+                &BoundContextTurnCommitRequest::new(
+                    fixture.context.clone(),
+                    fixture.binding.clone(),
+                )
+                .with_compaction_boundary(compaction_boundary(&fixture, &fingerprint)),
+            )
+            .expect("commit compaction checkpoint");
+        store
+            .connection
+            .execute(
+                "DELETE FROM context_turn_bindings WHERE context_turn_id = ?1",
+                [fixture.turn.context_turn_id().as_str()],
+            )
+            .expect("remove checkpoint binding");
+
+        assert_eq!(
+            store.load_latest_compaction_checkpoint(fixture.turn.session_id()),
             Err(StoreError::CorruptData {
                 area: CorruptionArea::ContextLedger,
             })
