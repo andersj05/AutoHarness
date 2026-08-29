@@ -9,10 +9,11 @@ use ratatui_textarea::{Input, Key};
 
 use crate::model::{
     AttemptKey, COMMANDS, CatalogProjection, CodexLoginState, CommandEntry, Focus,
-    LocalPreferenceChange, MODEL_THINKING_LEVELS, MemoryContent, MemoryDraftEditor,
-    MemoryLifecycleMode, MemoryLifecycleState, MemoryPane, MemoryScopeFilter, MemoryStatusFilter,
-    MemoryTargetSnapshot, MemoryWorkspaceFocus, Message, Model, ModelDefaultStep, MouseAction,
-    Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
+    LocalPreferenceChange, MAX_MEMORY_VIEW_QUERY_CHARS, MEMORY_VIEW_PAGE_SIZE,
+    MODEL_THINKING_LEVELS, MemoryContent, MemoryDraftEditor, MemoryLifecycleMode,
+    MemoryLifecycleState, MemoryPageDirection, MemoryPane, MemoryScopeFilter, MemoryStatusFilter,
+    MemoryTargetSnapshot, MemoryViewQuery, MemoryWorkspaceFocus, Message, Model, ModelDefaultStep,
+    MouseAction, Notice, OverlayKind, PROVIDER_CHOICES, PendingKind, ProfileCenterFocus,
     ProfileCredentialAction, ProfileCredentialEditor, ProfileEditorMode, ProfileEditorState,
     ProfilesProjection, ProviderChoice, ProviderKindLabel, ProviderProfileDraft, RetryPolicy,
     Route, SETTINGS_NAV_COUNT, SessionProjection, SessionsProjection, SettingsCategory,
@@ -21,6 +22,7 @@ use crate::model::{
 use crate::text::{display_safe, editable_safe};
 
 const MAX_DISPLAY_LABEL_CHARS: usize = 64;
+const MEMORY_VIEW_DEBOUNCE_MS: u64 = 150;
 /// Applies one input to local UI state and returns application-owned effects.
 #[must_use]
 pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
@@ -98,7 +100,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<UiEffect> {
             {
                 model.dirty = true;
             }
-            Vec::new()
+            dispatch_due_memory_view(model)
         }
         Message::Resize => {
             model.mark_activity();
@@ -323,6 +325,8 @@ fn handle_mouse(model: &mut Model, action: MouseAction) -> Vec<UiEffect> {
             }
             Vec::new()
         }
+        MouseAction::MemoryPreviousPage => request_previous_memory_page(model),
+        MouseAction::MemoryNextPage => request_next_memory_page(model),
         MouseAction::MemoryOpen => {
             open_memory_detail(model);
             Vec::new()
@@ -667,6 +671,7 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             {
                 model.memory_workspace.query.clear();
                 model.sync_memory_selection();
+                schedule_memory_view(model);
                 model.dirty = true;
             } else if model.memory_workspace.pane != MemoryPane::List {
                 memory_back(model);
@@ -689,6 +694,12 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
         },
         Input { key: Key::Up, .. } => move_memory_selection(model, -1),
         Input { key: Key::Down, .. } => move_memory_selection(model, 1),
+        Input {
+            key: Key::PageUp, ..
+        } => return request_previous_memory_page(model),
+        Input {
+            key: Key::PageDown, ..
+        } => return request_next_memory_page(model),
         Input { key: Key::Left, .. } => match model.memory_workspace.focus {
             MemoryWorkspaceFocus::Status => cycle_memory_status(model, -1),
             MemoryWorkspaceFocus::Scope => cycle_memory_scope(model, -1),
@@ -705,9 +716,11 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             key: Key::Backspace,
             ..
         } if model.memory_workspace.focus == MemoryWorkspaceFocus::Search => {
-            model.memory_workspace.query.pop();
-            model.sync_memory_selection();
-            model.dirty = true;
+            if model.memory_workspace.query.pop().is_some() {
+                model.sync_memory_selection();
+                schedule_memory_view(model);
+                model.dirty = true;
+            }
         }
         Input {
             key: Key::Char(character),
@@ -716,9 +729,12 @@ fn handle_memory_input(model: &mut Model, input: Input) -> Vec<UiEffect> {
             ..
         } if !character.is_control() => {
             model.memory_workspace.focus = MemoryWorkspaceFocus::Search;
-            model.memory_workspace.query.push(character);
-            model.sync_memory_selection();
-            model.dirty = true;
+            if model.memory_workspace.query.chars().count() < MAX_MEMORY_VIEW_QUERY_CHARS {
+                model.memory_workspace.query.push(character);
+                model.sync_memory_selection();
+                schedule_memory_view(model);
+                model.dirty = true;
+            }
         }
         _ => {}
     }
@@ -760,6 +776,7 @@ fn cycle_memory_status(model: &mut Model, direction: i32) {
         MemoryStatusFilter::ALL[usize::try_from(next).unwrap_or_default()];
     model.memory_workspace.focus = MemoryWorkspaceFocus::Status;
     model.sync_memory_selection();
+    schedule_memory_view(model);
     model.dirty = true;
 }
 
@@ -774,7 +791,85 @@ fn cycle_memory_scope(model: &mut Model, direction: i32) {
         MemoryScopeFilter::ALL[usize::try_from(next).unwrap_or_default()];
     model.memory_workspace.focus = MemoryWorkspaceFocus::Scope;
     model.sync_memory_selection();
+    schedule_memory_view(model);
     model.dirty = true;
+}
+
+fn schedule_memory_view(model: &mut Model) {
+    model.memory_workspace.view_generation =
+        model.memory_workspace.view_generation.saturating_add(1);
+    model.memory_workspace.debounce_deadline =
+        Some(model.now.saturating_add(MEMORY_VIEW_DEBOUNCE_MS));
+    model.memory_workspace.loading_generation = None;
+    model.memory_workspace.page_before = None;
+    model.memory_workspace.page_history.clear();
+    model.memory_workspace.page_direction = MemoryPageDirection::First;
+}
+
+fn dispatch_due_memory_view(model: &mut Model) -> Vec<UiEffect> {
+    if model.route() != Route::Memory
+        || !model
+            .memory_workspace
+            .debounce_deadline
+            .is_some_and(|deadline| model.now >= deadline)
+    {
+        return Vec::new();
+    }
+    dispatch_memory_view(model)
+}
+
+fn dispatch_memory_view(model: &mut Model) -> Vec<UiEffect> {
+    let query = MemoryViewQuery::new(
+        model.memory_workspace.query.clone(),
+        model.memory_workspace.status,
+        model.memory_workspace.scope,
+        model.memory_workspace.page_direction,
+        model.memory_workspace.page_before.clone(),
+        MEMORY_VIEW_PAGE_SIZE,
+    )
+    .expect("Memory workspace state always forms a bounded view query");
+    let request_id = model.allocate_request();
+    let view_generation = model.memory_workspace.view_generation;
+    model.memory_workspace.debounce_deadline = None;
+    model.memory_workspace.loading_generation = Some(view_generation);
+    model.dirty = true;
+    vec![UiEffect::Dispatch(UiIntent::QueryMemory {
+        request_id,
+        view_generation,
+        query,
+    })]
+}
+
+fn request_next_memory_page(model: &mut Model) -> Vec<UiEffect> {
+    if model.route() != Route::Memory || model.memory_view_loading() {
+        return Vec::new();
+    }
+    let Some(next) = model.memory().next_cursor().cloned() else {
+        return Vec::new();
+    };
+    model
+        .memory_workspace
+        .page_history
+        .push(model.memory_workspace.page_before.clone());
+    model.memory_workspace.page_before = Some(next);
+    model.memory_workspace.page_direction = MemoryPageDirection::Next;
+    model.memory_workspace.view_generation =
+        model.memory_workspace.view_generation.saturating_add(1);
+    dispatch_memory_view(model)
+}
+
+fn request_previous_memory_page(model: &mut Model) -> Vec<UiEffect> {
+    if model.route() != Route::Memory || model.memory_view_loading() {
+        return Vec::new();
+    }
+    let Some(previous) = model.memory_workspace.page_history.pop() else {
+        return Vec::new();
+    };
+    model.memory_workspace.page_before = previous;
+    model.memory_workspace.page_direction = MemoryPageDirection::Previous;
+    model.memory_workspace.view_generation =
+        model.memory_workspace.view_generation.saturating_add(1);
+    dispatch_memory_view(model)
 }
 
 fn move_memory_selection(model: &mut Model, direction: i32) {
@@ -4433,6 +4528,20 @@ fn handle_paste(model: &mut Model, text: &str) {
                         "Display label limited to 64 characters".to_owned(),
                     ));
                 }
+                model.dirty = true;
+            }
+        }
+        None if model.route() == Route::Memory
+            && model.memory_workspace.focus == MemoryWorkspaceFocus::Search =>
+        {
+            let flattened = editable_safe(text).replace('\n', " ");
+            let remaining = MAX_MEMORY_VIEW_QUERY_CHARS
+                .saturating_sub(model.memory_workspace.query.chars().count());
+            let appended = flattened.chars().take(remaining).collect::<String>();
+            if !appended.is_empty() {
+                model.memory_workspace.query.push_str(&appended);
+                model.sync_memory_selection();
+                schedule_memory_view(model);
                 model.dirty = true;
             }
         }
