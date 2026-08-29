@@ -1054,6 +1054,9 @@ fn read_workspace_binding(path: &std::path::Path) -> Result<WorkspaceId, AppErro
 }
 
 fn open(database_path: PathBuf) -> Result<(LocalEngine, SessionId, SessionAggregate), AppError> {
+    let artifact_root = database_path
+        .parent()
+        .map(|directory| directory.join("artifacts"));
     let store = SqliteStore::open(database_path)?;
     let mut engine = DurableEngine::recover(store, RuntimeMetadata)?;
     let active_sessions: Vec<_> = engine
@@ -1064,7 +1067,7 @@ fn open(database_path: PathBuf) -> Result<(LocalEngine, SessionId, SessionAggreg
         .map(|summary| summary.session_id().clone())
         .collect();
     let (failed_before_dispatch, marked_unknown) =
-        reconcile_interrupted_attempts(&mut engine, &active_sessions)?;
+        reconcile_interrupted_attempts(&mut engine, &active_sessions, artifact_root.as_deref())?;
     telemetry::storage_recovered(
         active_sessions.len(),
         failed_before_dispatch,
@@ -1091,6 +1094,7 @@ fn open(database_path: PathBuf) -> Result<(LocalEngine, SessionId, SessionAggreg
 fn reconcile_interrupted_attempts(
     engine: &mut LocalEngine,
     session_ids: &[SessionId],
+    artifact_root: Option<&std::path::Path>,
 ) -> Result<(usize, usize), AppError> {
     let mut failed_before_dispatch = 0_usize;
     let mut marked_unknown = 0_usize;
@@ -1107,15 +1111,22 @@ fn reconcile_interrupted_attempts(
                     .and_then(|session| session.attempt(call.attempt_id()))
                     .map(autoharness_engine::AttemptProjection::status)
                     .ok_or(AppError::Configuration)?;
-                Ok((
-                    call.call().tool_call_id.clone(),
-                    call.status(),
-                    attempt_status,
-                ))
+                Ok((call.clone(), call.status(), attempt_status))
             })
             .collect::<Result<Vec<_>, AppError>>()?;
-        for (tool_call_id, status, attempt_status) in interrupted_tools {
+        for (call, status, attempt_status) in interrupted_tools {
+            let tool_call_id = call.call().tool_call_id.clone();
             let payload = match status {
+                ToolCallStatus::Running
+                    if reconcile_committed_memory_proposal(
+                        engine,
+                        session_id,
+                        &call,
+                        artifact_root,
+                    )? =>
+                {
+                    continue;
+                }
                 ToolCallStatus::Running => CommandPayload::MarkToolCallUnknown {
                     session_id: session_id.clone(),
                     tool_call_id,
@@ -1214,6 +1225,59 @@ fn reconcile_interrupted_attempts(
     Ok((failed_before_dispatch, marked_unknown))
 }
 
+fn reconcile_committed_memory_proposal(
+    engine: &mut LocalEngine,
+    session_id: &SessionId,
+    call: &autoharness_engine::ToolCallProjection,
+    artifact_root: Option<&std::path::Path>,
+) -> Result<bool, AppError> {
+    use autoharness_store::{ContextStore as _, MemoryStore as _};
+
+    let Ok(replanned) = autoharness_tool::replan(call.call().clone()) else {
+        return Ok(false);
+    };
+    let Some(proposal) = replanned.memory_proposal() else {
+        return Ok(false);
+    };
+    let context_turn = engine
+        .store()
+        .load_attempt_context_turn(call.attempt_id(), 1)?
+        .ok_or(AppError::Configuration)?;
+    let session = engine
+        .session(session_id)
+        .cloned()
+        .ok_or(AppError::Configuration)?;
+    let Ok(command) = crate::proposal_runtime::build_memory_proposal_command(
+        &session,
+        session_id,
+        context_turn.eligibility().workspace_id(),
+        artifact_root,
+        call,
+        proposal,
+    ) else {
+        return Ok(false);
+    };
+    let operations = engine
+        .store()
+        .load_memory_operations(command.memory_id(), 0, 16)?;
+    let revision_id = ids::memory_proposal_revision_id(&call.call().tool_call_id);
+    let content = engine.store().load_memory_content(&revision_id)?;
+    if !crate::proposal_runtime::exact_memory_proposal_committed(
+        &command,
+        &operations,
+        content.as_ref(),
+    ) {
+        return Ok(false);
+    }
+    engine.execute(&ids::command(CommandPayload::CompleteToolCall {
+        session_id: session_id.clone(),
+        tool_call_id: call.call().tool_call_id.clone(),
+        output: autoharness_domain::ToolOutput::new(String::new(), None, 0, false)
+            .expect("empty proposal output is valid"),
+    }))?;
+    Ok(true)
+}
+
 fn interrupted_before_dispatch() -> AttemptFailure {
     AttemptFailure::new(
         ErrorClass::Unavailable,
@@ -1233,7 +1297,7 @@ mod tests {
     };
     use autoharness_provider::{ChatContent, ChatMessage, ChatRequest, ChatRole};
     use autoharness_store::{ContextStore as _, MemoryStore as _};
-    use autoharness_tool::{IncomingToolCall, plan};
+    use autoharness_tool::{IncomingToolCall, plan, replan};
 
     use super::*;
 
@@ -1440,6 +1504,119 @@ mod tests {
         (session_id, attempt_id, tool_call_id)
     }
 
+    fn seed_committed_running_memory_proposal(
+        database: PathBuf,
+    ) -> (
+        SessionId,
+        autoharness_domain::AttemptId,
+        autoharness_domain::ToolCallId,
+        autoharness_domain::MemoryId,
+    ) {
+        let (mut engine, session_id, _) = open(database.clone()).expect("open fixture store");
+        engine
+            .execute(&ids::command(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model: ModelRef::new(
+                    ProviderId::new("gemini").expect("provider ID"),
+                    ModelId::new("models/gemini-fixture").expect("model ID"),
+                ),
+            }))
+            .expect("select model");
+        let attempt_id = ids::attempt_id();
+        engine
+            .execute(&ids::command(
+                CommandPayload::AdmitPromptAndPrepareAttempt {
+                    session_id: session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    input_id: InputId::new("input-proposal-recovery").expect("input ID"),
+                    prompt: PromptText::new("remember a review-only proposal").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ))
+            .expect("prepare proposal attempt");
+        engine
+            .execute(&ids::command(CommandPayload::StartAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("start proposal attempt");
+        mark_provider_dispatched(&mut engine, &session_id, &attempt_id);
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ids::tool_call_id(),
+            provider_call_id: ProviderCallId::new("provider-memory-proposal-recovery")
+                .expect("provider call ID"),
+            tool_name: ToolName::new("memory_propose").expect("tool name"),
+            arguments: ToolArguments::new(serde_json::json!({
+                "content": "Use exact deterministic recovery.",
+                "kind": "preference",
+                "scope": "session",
+                "sensitivity": "internal"
+            }))
+            .expect("tool arguments"),
+        })
+        .expect("planned memory proposal");
+        let tool_call_id = planned.spec().tool_call_id.clone();
+        engine
+            .execute(&ids::command(CommandPayload::ProposeToolCall {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                call: planned.spec().clone(),
+            }))
+            .expect("propose memory tool");
+        engine
+            .execute(&ids::command(CommandPayload::RecordToolPermission {
+                session_id: session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                decision_id: PermissionDecisionId::new("permission-proposal-recovery")
+                    .expect("permission ID"),
+                outcome: PermissionOutcome::Allow,
+            }))
+            .expect("authorize proposal tool");
+        engine
+            .execute(&ids::command(CommandPayload::StartToolCall {
+                session_id: session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+            }))
+            .expect("start proposal tool");
+        engine
+            .execute(&ids::command(CommandPayload::PauseAttemptForTools {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("pause for proposal settlement");
+
+        let session = engine.session(&session_id).expect("session").clone();
+        let call = session.tool_call(&tool_call_id).expect("proposal call");
+        let replanned = replan(call.call().clone()).expect("replanned proposal");
+        let proposal = replanned.memory_proposal().expect("memory proposal");
+        let turn = engine
+            .store()
+            .load_attempt_context_turn(&attempt_id, 1)
+            .expect("load context turn")
+            .expect("context turn");
+        let command = crate::proposal_runtime::build_memory_proposal_command(
+            &session,
+            &session_id,
+            turn.eligibility().workspace_id(),
+            database
+                .parent()
+                .map(|directory| directory.join("artifacts"))
+                .as_deref(),
+            call,
+            proposal,
+        )
+        .expect("deterministic proposal command");
+        crate::memory_runtime::execute_memory_command(
+            engine.store_mut(),
+            &command,
+            TimestampMillis::new(20),
+        )
+        .expect("commit proposal before simulated crash");
+        let memory_id = command.memory_id().clone();
+        drop(engine);
+        (session_id, attempt_id, tool_call_id, memory_id)
+    }
+
     #[test]
     fn recovery_fails_prepared_attempt_once_and_keeps_it_retryable() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -1531,6 +1708,60 @@ mod tests {
 
         let (_, _, recovered_again) = open(database).expect("recover settled store");
         assert_eq!(recovered_again.last_sequence(), settled_sequence);
+    }
+
+    #[test]
+    fn recovery_settles_an_exact_committed_memory_proposal_without_reauthoring_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("proposal-crash-recovery.sqlite3");
+        let (session_id, attempt_id, tool_call_id, memory_id) =
+            seed_committed_running_memory_proposal(database.clone());
+
+        let (engine, recovered_id, recovered) = open(database.clone()).expect("recover store");
+        assert_eq!(recovered_id, session_id);
+        assert_eq!(
+            recovered
+                .attempt(&attempt_id)
+                .expect("recovered attempt")
+                .status(),
+            AttemptStatus::AwaitingTools
+        );
+        let recovered_call = recovered.tool_call(&tool_call_id).expect("recovered call");
+        assert_eq!(recovered_call.status(), ToolCallStatus::Completed);
+        let output = recovered_call
+            .output()
+            .expect("content-free proposal output");
+        assert_eq!(output.content(), "");
+        assert_eq!(output.original_bytes(), 0);
+        assert!(!output.truncated());
+        let operations = engine
+            .store()
+            .load_memory_operations(&memory_id, 0, 16)
+            .expect("proposal operations");
+        assert_eq!(operations.len(), 2);
+        assert!(operations.iter().all(|operation| !matches!(
+            operation.payload(),
+            autoharness_domain::MemoryOperationPayload::RevisionActivated { .. }
+        )));
+        drop(engine);
+
+        let (engine, _, recovered_again) = open(database).expect("recover store again");
+        assert_eq!(
+            recovered_again
+                .tool_call(&tool_call_id)
+                .expect("idempotently recovered call")
+                .status(),
+            ToolCallStatus::Completed
+        );
+        assert_eq!(
+            engine
+                .store()
+                .load_memory_operations(&memory_id, 0, 16)
+                .expect("idempotent proposal operations")
+                .len(),
+            2,
+            "startup reconciliation must not append or re-author the proposal"
+        );
     }
 
     #[test]

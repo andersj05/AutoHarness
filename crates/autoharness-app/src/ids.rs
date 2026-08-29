@@ -92,10 +92,6 @@ pub fn memory_proposal_memory_id(tool_call_id: &ToolCallId) -> MemoryId {
 
 /// Derives the immutable first revision identity owned by one proposal tool call.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "consumed by the following proposal-sink checkpoint"
-)]
 pub fn memory_proposal_revision_id(tool_call_id: &ToolCallId) -> MemoryRevisionId {
     MemoryRevisionId::new(deterministic_tag(
         "memory-proposal-revision",
@@ -106,10 +102,6 @@ pub fn memory_proposal_revision_id(tool_call_id: &ToolCallId) -> MemoryRevisionI
 
 /// Derives the evidence identity owned by one proposal tool call.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "consumed by the following proposal-sink checkpoint"
-)]
 pub fn memory_proposal_evidence_id(tool_call_id: &ToolCallId) -> MemoryEvidenceId {
     MemoryEvidenceId::new(deterministic_tag(
         "memory-proposal-evidence",
@@ -120,10 +112,6 @@ pub fn memory_proposal_evidence_id(tool_call_id: &ToolCallId) -> MemoryEvidenceI
 
 /// Constructs an exactly replayable proposal command for one durable tool call.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "consumed by the following proposal-sink checkpoint"
-)]
 pub fn memory_proposal_command(
     tool_call_id: &ToolCallId,
     payload: MemoryCommandPayload,

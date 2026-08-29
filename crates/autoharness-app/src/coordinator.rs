@@ -9,7 +9,7 @@ use autoharness_domain::{
     MemoryRevision, MemoryRevisionDraft, MemoryRevisionId, MemoryRevisionNumber,
     MemoryRevisionStatus, MemoryScope as DomainMemoryScope, MemorySequence, MemoryValidity,
     PermissionAnswer, PermissionOutcome, PromptText, PublicMessage, ResponseText, RetryAdvice,
-    RunLimits, Sensitivity, SessionId, SessionTitle, ToolCallId, TrustClass,
+    RunLimits, Sensitivity, SessionId, SessionTitle, ToolCallId, ToolOutput, TrustClass,
     UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
@@ -31,7 +31,9 @@ use autoharness_store::{
     ContextAdmissionContent, ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery,
     MemoryContentState, MemoryInspectionQuery, MemorySearchQuery, SessionStatus,
 };
-use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
+use autoharness_tool::{
+    IncomingToolCall, MemoryProposal, RunBudget, ToolError, ToolRuntime, definitions, plan, replan,
+};
 use autoharness_tui::{
     ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
     LocalPreferenceChange, LocalUserProfileProjection, ProfileConnectionState,
@@ -152,6 +154,7 @@ pub(crate) struct RuntimeComposition {
     pub(crate) provider: ProviderComposition,
     pub(crate) profiles: Option<ProfileRuntime>,
     pub(crate) tool_runtime: Arc<ToolRuntime>,
+    pub(crate) artifact_root: Option<std::path::PathBuf>,
 }
 
 #[cfg(test)]
@@ -202,6 +205,12 @@ enum StartAttemptError {
     Context(AppError),
 }
 
+#[derive(Debug)]
+enum MemoryProposalPersistenceError {
+    Safe(ToolError),
+    Ambiguous(AppError),
+}
+
 /// Owns application orchestration while the terminal runner owns UI state.
 pub struct Coordinator {
     session_id: SessionId,
@@ -211,6 +220,7 @@ pub struct Coordinator {
     provider_factory: ProviderFactory,
     profiles: Option<ProfileRuntime>,
     tool_runtime: Arc<ToolRuntime>,
+    artifact_root: Option<std::path::PathBuf>,
     ports: AppPorts,
     messages: mpsc::Sender<AsyncMessage>,
     message_rx: mpsc::Receiver<AsyncMessage>,
@@ -268,6 +278,7 @@ impl Coordinator {
                 provider,
                 profiles: None,
                 tool_runtime,
+                artifact_root: None,
             },
             ports,
             shutdown,
@@ -296,6 +307,7 @@ impl Coordinator {
             provider_factory: runtime.provider.factory,
             profiles: runtime.profiles,
             tool_runtime: runtime.tool_runtime,
+            artifact_root: runtime.artifact_root,
             ports,
             messages,
             message_rx,
@@ -3437,6 +3449,8 @@ impl Coordinator {
             .tool_call(&tool_call_id)
             .cloned()
             .ok_or(AppError::Configuration)?;
+        let replanned = replan(call.call().clone()).map_err(|_| AppError::Configuration)?;
+        let memory_proposal = replanned.memory_proposal().cloned();
         let outcome = call
             .policy_decision()
             .map(|(_, outcome)| *outcome)
@@ -3466,6 +3480,10 @@ impl Coordinator {
             .await?;
             return Ok(());
         }
+        if let Some(proposal) = memory_proposal {
+            self.finish_memory_proposal_tool(call, proposal).await?;
+            return Ok(());
+        }
         let runtime = Arc::clone(&self.tool_runtime);
         let messages = self.messages.clone();
         let cancellation = self
@@ -3484,6 +3502,132 @@ impl Coordinator {
                 .await;
         });
         Ok(())
+    }
+
+    async fn finish_memory_proposal_tool(
+        &mut self,
+        call: autoharness_engine::ToolCallProjection,
+        proposal: MemoryProposal,
+    ) -> Result<(), AppError> {
+        let tool_call_id = call.call().tool_call_id.clone();
+        let result = self.persist_memory_proposal(&call, &proposal).await;
+        match result {
+            Ok(()) => {
+                self.finish_active_tool_budget(call.attempt_id());
+                self.execute(CommandPayload::CompleteToolCall {
+                    session_id: self.session_id.clone(),
+                    tool_call_id,
+                    output: ToolOutput::new(String::new(), None, 0, false)
+                        .expect("empty proposal output is valid"),
+                })
+                .await?;
+            }
+            Err(MemoryProposalPersistenceError::Safe(error)) => {
+                self.finish_active_tool_budget(call.attempt_id());
+                self.execute(CommandPayload::FailToolCall {
+                    session_id: self.session_id.clone(),
+                    tool_call_id,
+                    failure: error.durable_failure(),
+                })
+                .await?;
+            }
+            Err(MemoryProposalPersistenceError::Ambiguous(error)) => {
+                return Err(error);
+            }
+        }
+        self.maybe_resume_after_tools().await
+    }
+
+    fn finish_active_tool_budget(&mut self, attempt_id: &AttemptId) {
+        if let Some(active) = &mut self.active
+            && active.attempt_id == *attempt_id
+        {
+            active.budget.finish_tool();
+        }
+    }
+
+    async fn persist_memory_proposal(
+        &mut self,
+        call: &autoharness_engine::ToolCallProjection,
+        proposal: &MemoryProposal,
+    ) -> Result<(), MemoryProposalPersistenceError> {
+        let command = self
+            .build_memory_proposal_command(call, proposal)
+            .map_err(|error| MemoryProposalPersistenceError::Safe(error.into_tool_error()))?;
+        if self.memory_command_contains_configured_secret(&command) {
+            return Err(MemoryProposalPersistenceError::Safe(
+                memory_proposal_invalid(),
+            ));
+        }
+        if let Err(error) = self.engine.execute_memory_command(command.clone()).await {
+            match self.exact_memory_proposal_committed(&command).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(match error {
+                        AppError::MemoryCommand(
+                            crate::memory_runtime::MemoryCommandError::ValidationRejected
+                            | crate::memory_runtime::MemoryCommandError::InvalidTransition
+                            | crate::memory_runtime::MemoryCommandError::UnsupportedCommand
+                            | crate::memory_runtime::MemoryCommandError::Policy(_),
+                        ) => MemoryProposalPersistenceError::Safe(memory_proposal_invalid()),
+                        AppError::MemoryCommand(
+                            crate::memory_runtime::MemoryCommandError::VersionConflict,
+                        ) => MemoryProposalPersistenceError::Safe(memory_proposal_internal()),
+                        other => MemoryProposalPersistenceError::Ambiguous(other),
+                    });
+                }
+                Err(_) => return Err(MemoryProposalPersistenceError::Ambiguous(error)),
+            }
+        }
+        if let Err(error) = self.publish_memories().await {
+            tracing::warn!(error = %error, "memory proposal committed but projection refresh failed");
+        }
+        Ok(())
+    }
+
+    fn build_memory_proposal_command(
+        &self,
+        call: &autoharness_engine::ToolCallProjection,
+        proposal: &MemoryProposal,
+    ) -> Result<
+        autoharness_domain::MemoryCommandEnvelope,
+        crate::proposal_runtime::ProposalBuildError,
+    > {
+        let workspace_id = self
+            .context_scope
+            .as_ref()
+            .ok_or(crate::proposal_runtime::ProposalBuildError::Internal)?
+            .workspace_id();
+        crate::proposal_runtime::build_memory_proposal_command(
+            &self.session,
+            &self.session_id,
+            workspace_id,
+            self.artifact_root.as_deref(),
+            call,
+            proposal,
+        )
+    }
+
+    async fn exact_memory_proposal_committed(
+        &self,
+        command: &autoharness_domain::MemoryCommandEnvelope,
+    ) -> Result<bool, AppError> {
+        let MemoryCommandPayload::CreateMemory { revision, .. } = command.payload() else {
+            return Ok(false);
+        };
+        let operations = self
+            .engine
+            .load_memory_operations(command.memory_id().clone(), 0, 16)
+            .await?;
+        let content = self
+            .engine
+            .load_memory_content(revision.revision_id().clone())
+            .await?;
+        Ok(crate::proposal_runtime::exact_memory_proposal_committed(
+            command,
+            &operations,
+            content.as_ref(),
+        ))
     }
 
     async fn handle_tool_result(
@@ -4270,6 +4414,32 @@ fn tool_provider_error(error: &ToolError) -> ProviderError {
     ProviderError::new(kind, error.retry_advice())
 }
 
+fn memory_proposal_invalid() -> ToolError {
+    ToolError::new(
+        autoharness_tool::ToolErrorKind::InvalidCall,
+        RetryAdvice::Never,
+    )
+}
+
+fn memory_proposal_internal() -> ToolError {
+    ToolError::new(
+        autoharness_tool::ToolErrorKind::Internal,
+        RetryAdvice::Never,
+    )
+}
+
+#[cfg(test)]
+fn raw_sha256(bytes: &[u8]) -> Result<autoharness_domain::Sha256Digest, ToolError> {
+    use sha2::{Digest as _, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    let encoded = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    autoharness_domain::Sha256Digest::new(encoded).map_err(|_| memory_proposal_internal())
+}
+
 #[cfg(test)]
 fn test_tool_runtime() -> Arc<ToolRuntime> {
     let root = tempfile::tempdir().expect("tool test directory").keep();
@@ -4300,6 +4470,12 @@ fn test_tool_runtime_at(root: &std::path::Path) -> Arc<ToolRuntime> {
 
 fn tool_result_content(call: &autoharness_engine::ToolCallProjection) -> String {
     match call.status() {
+        autoharness_engine::ToolCallStatus::Completed
+            if call.call().capability.kind
+                == autoharness_domain::CapabilityKind::MemoryProposal =>
+        {
+            "Memory proposal recorded for review".to_owned()
+        }
         autoharness_engine::ToolCallStatus::Completed => call.output().map_or_else(
             || "Tool completed without output".to_owned(),
             |output| output.content().to_owned(),
@@ -4678,6 +4854,7 @@ fn memory_failure(error: &AppError) -> UiFailure {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
@@ -4686,8 +4863,8 @@ mod tests {
     use autoharness_app::vault::{FakeVault, VaultPort};
     use autoharness_domain::{
         Causation, CommandId, CorrelationId, EventEnvelope, EventId, EventPayload, InputId,
-        ModelId, ModelRef, ProviderCallId, ProviderId, SessionSequence, TimestampMillis,
-        ToolArguments, ToolName,
+        MemoryEvidenceSource, MemoryOperationPayload, ModelId, ModelRef, ProviderCallId,
+        ProviderId, SessionSequence, TimestampMillis, ToolArguments, ToolName,
     };
     use autoharness_provider::{
         CapabilitySupport, Catalog, CatalogFreshness, CatalogRequest, Chat, CompletionReason,
@@ -4952,6 +5129,106 @@ mod tests {
 
         fn availability(&self) -> ProviderAvailability {
             ProviderAvailability::Ready
+        }
+    }
+
+    enum ProposalProviderTurn {
+        Tools(Vec<ProviderToolCall>),
+        Complete(&'static str),
+    }
+
+    struct ProposalProvider {
+        turns: Mutex<VecDeque<ProposalProviderTurn>>,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl ProposalProvider {
+        fn new(turns: Vec<ProposalProviderTurn>) -> Self {
+            Self {
+                turns: Mutex::new(turns.into()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Catalog for ProposalProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for ProposalProvider {
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            self.requests.lock().expect("request lock").push(request);
+            let turn = self
+                .turns
+                .lock()
+                .expect("turn lock")
+                .pop_front()
+                .expect("scripted provider turn");
+            let mut events = vec![Ok(ProviderStreamEvent::Started)];
+            match turn {
+                ProposalProviderTurn::Tools(calls) => {
+                    events.extend(
+                        calls.into_iter().map(|call| {
+                            Ok::<_, ProviderError>(ProviderStreamEvent::ToolCall(call))
+                        }),
+                    );
+                    events.push(Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::ToolCalls,
+                    }));
+                }
+                ProposalProviderTurn::Complete(text) => {
+                    events.push(Ok(ProviderStreamEvent::TextDelta(
+                        TextDelta::new(text).expect("scripted text"),
+                    )));
+                    events.push(Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::Stop,
+                    }));
+                }
+            }
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for ProposalProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.replace("test-api-secret", "[REDACTED]")
+        }
+    }
+
+    impl ProviderMetadata for ProposalProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
+    fn scripted_tool_call(
+        provider_call_id: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> ProviderToolCall {
+        ProviderToolCall {
+            provider_call_id: ProviderCallId::new(provider_call_id).expect("provider call ID"),
+            tool_name: ToolName::new(tool_name).expect("tool name"),
+            arguments: ToolArguments::new(arguments).expect("tool arguments"),
         }
     }
 
@@ -5642,6 +5919,7 @@ mod tests {
                     directory.path().to_string_lossy().into_owned(),
                 )),
                 tool_runtime: test_tool_runtime(),
+                artifact_root: None,
             },
             app,
             shutdown.clone(),
@@ -7564,6 +7842,965 @@ mod tests {
                 .expect("second turn read")
                 .is_none()
         );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn model_proposals_remain_review_only_and_approval_creates_user_revision() {
+        const FIRST_PROPOSAL: &str = "The project uses rustfmt before review.";
+        const SECOND_PROPOSAL: &str = "The team prefers compact status updates.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("model-proposals.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::Tools(vec![
+                scripted_tool_call(
+                    "proposal-call-1",
+                    "memory_propose",
+                    serde_json::json!({
+                        "content": FIRST_PROPOSAL,
+                        "kind": "fact",
+                        "scope": "session",
+                        "sensitivity": "internal"
+                    }),
+                ),
+                scripted_tool_call(
+                    "proposal-call-2",
+                    "memory_propose",
+                    serde_json::json!({
+                        "content": SECOND_PROPOSAL,
+                        "kind": "preference",
+                        "scope": "workspace",
+                        "sensitivity": "public"
+                    }),
+                ),
+            ]),
+            ProposalProviderTurn::Complete("proposal tools settled"),
+            ProposalProviderTurn::Complete("second request settled"),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(directory.path()),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Propose useful review-only memory.".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        text,
+                        ..
+                    } if text == "proposal tools settled"
+                )
+            })
+        })
+        .await;
+
+        let events = handle
+            .load_events(session_id.clone())
+            .await
+            .expect("session events");
+        let input_id = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::InputAdmitted { input_id, .. } => Some(input_id.clone()),
+                _ => None,
+            })
+            .expect("input ID");
+        let proposal_calls = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.capability.kind
+                        == autoharness_domain::CapabilityKind::MemoryProposal =>
+                {
+                    Some(call.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(proposal_calls.len(), 2);
+        for (index, (call, expected_content)) in proposal_calls
+            .iter()
+            .zip([FIRST_PROPOSAL, SECOND_PROPOSAL])
+            .enumerate()
+        {
+            let memory_id = ids::memory_proposal_memory_id(&call.tool_call_id);
+            let revisions = handle
+                .load_memory_revisions(memory_id.clone())
+                .await
+                .expect("proposal revisions");
+            assert_eq!(revisions.len(), 1);
+            let revision = &revisions[0];
+            assert_eq!(revision.status(), MemoryRevisionStatus::Proposed);
+            assert_eq!(revision.origin(), MemoryOrigin::ModelProposal);
+            assert_eq!(revision.trust_class(), TrustClass::UntrustedProposal);
+            assert_eq!(
+                handle
+                    .load_memory_content(revision.revision_id().clone())
+                    .await
+                    .expect("proposal content")
+                    .expect("retained proposal")
+                    .as_str(),
+                expected_content
+            );
+            assert!(matches!(
+                revision.evidence(),
+                [evidence]
+                    if matches!(
+                        evidence.source(),
+                        MemoryEvidenceSource::UserInput {
+                            session_id: evidence_session,
+                            input_id: evidence_input,
+                        } if evidence_session == &session_id && evidence_input == &input_id
+                    )
+            ));
+            let operations = handle
+                .load_memory_operations(memory_id, 0, 16)
+                .await
+                .expect("proposal operations");
+            assert_eq!(operations.len(), 2, "proposal {index} must not activate");
+            assert!(operations.iter().all(|operation| !matches!(
+                operation.payload(),
+                MemoryOperationPayload::RevisionActivated { .. }
+            )));
+        }
+        assert_eq!(
+            handle
+                .memory_generation()
+                .await
+                .expect("eligibility generation")
+                .get(),
+            0
+        );
+        let completed_outputs = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::ToolCallCompleted {
+                    tool_call_id,
+                    output,
+                } if proposal_calls
+                    .iter()
+                    .any(|call| &call.tool_call_id == tool_call_id) =>
+                {
+                    Some(output)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed_outputs.len(), 2);
+        assert!(completed_outputs.iter().all(|output| {
+            output.content().is_empty() && output.original_bytes() == 0 && !output.truncated()
+        }));
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            let results = requests[1]
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    ChatMessage::ToolResult { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                results,
+                vec![
+                    "Memory proposal recorded for review",
+                    "Memory proposal recorded for review"
+                ]
+            );
+            assert!(results.iter().all(
+                |result| !result.contains(FIRST_PROPOSAL) && !result.contains(SECOND_PROPOSAL)
+            ));
+        }
+
+        let second_submit = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: second_submit,
+                prompt: FIRST_PROPOSAL.to_owned(),
+            })
+            .await
+            .expect("second prompt");
+        expect_commit(&mut ui, second_submit).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection
+                .transcript
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Completed,
+                            ..
+                        }
+                    )
+                })
+                .count()
+                == 2
+        })
+        .await;
+        let events = handle
+            .load_events(session_id.clone())
+            .await
+            .expect("updated events");
+        let attempt_ids = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::AttemptPrepared { attempt_id, .. } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let second_turn = handle
+            .load_attempt_context_turn(attempt_ids[1].clone(), 1)
+            .await
+            .expect("second attempt context")
+            .expect("second attempt turn");
+        assert!(
+            second_turn
+                .admissions()
+                .iter()
+                .all(|admission| admission.memory_revision_id().is_none())
+        );
+
+        let target = &proposal_calls[0];
+        let target_memory_id = ids::memory_proposal_memory_id(&target.tool_call_id);
+        let target_revision_id = ids::memory_proposal_revision_id(&target.tool_call_id);
+        let approve_request = RequestId::new(4);
+        ui.intents
+            .send(UiIntent::ApproveMemoryProposal {
+                request_id: approve_request,
+                memory_id: target_memory_id.as_str().to_owned(),
+                expected_last_sequence: 2,
+                proposal_revision_id: target_revision_id.as_str().to_owned(),
+            })
+            .await
+            .expect("approve proposal");
+        expect_commit(&mut ui, approve_request).await;
+        let approved = handle
+            .load_memory_revisions(target_memory_id)
+            .await
+            .expect("approved revisions");
+        assert_eq!(approved.len(), 2);
+        assert_eq!(approved[0].revision_id(), &target_revision_id);
+        assert_eq!(approved[0].status(), MemoryRevisionStatus::Superseded);
+        assert_ne!(approved[1].revision_id(), &target_revision_id);
+        assert_eq!(approved[1].status(), MemoryRevisionStatus::Active);
+        assert_eq!(approved[1].origin(), MemoryOrigin::ExplicitUser);
+        assert_eq!(approved[1].trust_class(), TrustClass::UserApproved);
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn unverified_or_secret_model_proposals_fail_without_memory_writes() {
+        const SENTINEL: &str = "test-api-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("evidence.txt"), "not completed yet")
+            .expect("evidence fixture");
+        let database = directory.path().join("invalid-proposals.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::Tools(vec![
+                scripted_tool_call(
+                    "incomplete-read",
+                    "fs_read",
+                    serde_json::json!({"path":"evidence.txt"}),
+                ),
+                scripted_tool_call(
+                    "proposal-incomplete",
+                    "memory_propose",
+                    serde_json::json!({
+                        "content":"This proposal cites an unfinished call.",
+                        "kind":"fact",
+                        "scope":"session",
+                        "sensitivity":"internal",
+                        "source_provider_call_id":"incomplete-read"
+                    }),
+                ),
+                scripted_tool_call(
+                    "proposal-forged",
+                    "memory_propose",
+                    serde_json::json!({
+                        "content":"This proposal cites a nonexistent call.",
+                        "kind":"fact",
+                        "scope":"session",
+                        "sensitivity":"internal",
+                        "source_provider_call_id":"forged-provider-call"
+                    }),
+                ),
+                scripted_tool_call(
+                    "proposal-secret",
+                    "memory_propose",
+                    serde_json::json!({
+                        "content":format!("Never retain {SENTINEL}"),
+                        "kind":"fact",
+                        "scope":"session",
+                        "sensitivity":"internal"
+                    }),
+                ),
+            ]),
+            ProposalProviderTurn::Complete("invalid proposals settled"),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace;
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Try proposals with invalid evidence.".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        let deny_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: deny_request,
+                tool_call_id: permission.tool_call_id,
+                allow: false,
+            })
+            .await
+            .expect("deny incomplete source call");
+        expect_commit(&mut ui, deny_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        text,
+                        ..
+                    } if text == "invalid proposals settled"
+                )
+            })
+        })
+        .await;
+
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        let proposal_calls = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.capability.kind
+                        == autoharness_domain::CapabilityKind::MemoryProposal =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(proposal_calls.len(), 3);
+        for call in proposal_calls {
+            let memory_id = ids::memory_proposal_memory_id(&call.tool_call_id);
+            assert!(
+                handle
+                    .load_memory_operations(memory_id.clone(), 0, 16)
+                    .await
+                    .expect("memory operations")
+                    .is_empty()
+            );
+            assert!(
+                handle
+                    .load_memory_revisions(memory_id)
+                    .await
+                    .expect("memory revisions")
+                    .is_empty()
+            );
+            assert!(events.iter().any(|event| matches!(
+                event.payload(),
+                EventPayload::ToolCallFailed { tool_call_id, .. }
+                    if tool_call_id == &call.tool_call_id
+            )));
+        }
+        assert_eq!(
+            handle
+                .memory_mutation_generation()
+                .await
+                .expect("mutation generation")
+                .get(),
+            0
+        );
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            let results = requests[1]
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    ChatMessage::ToolResult { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(results.len(), 4);
+            assert!(results.iter().all(|result| !result.contains(SENTINEL)));
+        }
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn inline_tool_provenance_and_exact_proposal_retry_are_idempotent() {
+        const EVIDENCE: &str = "verified inline observation";
+        const PROPOSAL: &str = "The verified inline observation is available.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("inline.txt"), EVIDENCE).expect("inline evidence fixture");
+        let database = directory.path().join("inline-proposal.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "inline-read",
+                "fs_read",
+                serde_json::json!({"path":"inline.txt"}),
+            )]),
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "inline-proposal",
+                "memory_propose",
+                serde_json::json!({
+                    "content":PROPOSAL,
+                    "kind":"fact",
+                    "scope":"session",
+                    "sensitivity":"internal",
+                    "source_provider_call_id":"inline-read"
+                }),
+            )]),
+            ProposalProviderTurn::Complete("inline proposal settled"),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace.clone();
+        coordinator.artifact_root = Some(workspace.join("artifacts"));
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Read and ground an inline proposal.".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let allow_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: allow_request,
+                tool_call_id: awaiting_permission.permission_requests[0]
+                    .tool_call_id
+                    .clone(),
+                allow: true,
+            })
+            .await
+            .expect("allow inline read");
+        expect_commit(&mut ui, allow_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        text,
+                        ..
+                    } if text == "inline proposal settled"
+                )
+            })
+        })
+        .await;
+
+        let events = handle
+            .load_events(session_id.clone())
+            .await
+            .expect("session events");
+        let read_call = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.provider_call_id.as_str() == "inline-read" =>
+                {
+                    Some(call.clone())
+                }
+                _ => None,
+            })
+            .expect("inline read call");
+        let proposal_call = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.provider_call_id.as_str() == "inline-proposal" =>
+                {
+                    Some(call.clone())
+                }
+                _ => None,
+            })
+            .expect("inline proposal call");
+        let read_output = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallCompleted {
+                    tool_call_id,
+                    output,
+                } if tool_call_id == &read_call.tool_call_id => Some(output),
+                _ => None,
+            })
+            .expect("inline read output");
+        assert!(!read_output.truncated());
+        assert!(read_output.artifact().is_none());
+        assert_eq!(read_output.content(), EVIDENCE);
+        let memory_id = ids::memory_proposal_memory_id(&proposal_call.tool_call_id);
+        let revisions = handle
+            .load_memory_revisions(memory_id.clone())
+            .await
+            .expect("inline proposal revisions");
+        assert!(matches!(
+            revisions.as_slice(),
+            [revision]
+                if revision.status() == MemoryRevisionStatus::Proposed
+                    && revision.origin() == MemoryOrigin::VerifiedTool
+                    && revision.trust_class() == TrustClass::VerifiedObservation
+                    && matches!(
+                        revision.evidence(),
+                        [evidence]
+                            if matches!(
+                                evidence.source(),
+                                MemoryEvidenceSource::ToolObservation {
+                                    session_id: evidence_session,
+                                    tool_call_id,
+                                    output_hash,
+                                } if evidence_session == &session_id
+                                    && tool_call_id == &read_call.tool_call_id
+                                    && output_hash == &raw_sha256(EVIDENCE.as_bytes())
+                                        .expect("inline evidence hash")
+                            )
+                    )
+        ));
+        let proposal_output = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallCompleted {
+                    tool_call_id,
+                    output,
+                } if tool_call_id == &proposal_call.tool_call_id => Some(output),
+                _ => None,
+            })
+            .expect("proposal output");
+        assert_eq!(proposal_output.content(), "");
+        assert_eq!(proposal_output.original_bytes(), 0);
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert!(requests[2].messages.iter().any(|message| {
+                matches!(
+                    message,
+                    ChatMessage::ToolResult {
+                        provider_call_id,
+                        content,
+                        ..
+                    } if provider_call_id.as_str() == "inline-proposal"
+                        && content.as_str() == "Memory proposal recorded for review"
+                )
+            }));
+        }
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+
+        let (actor, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        let handle = actor.handle();
+        let proposal_projection = recovered
+            .tool_call(&proposal_call.tool_call_id)
+            .expect("recovered proposal call")
+            .clone();
+        let replanned = replan(proposal_projection.call().clone()).expect("replanned proposal");
+        let proposal = replanned
+            .memory_proposal()
+            .expect("memory proposal")
+            .clone();
+        let attempt_id = proposal_projection.attempt_id().clone();
+        let turn = handle
+            .load_attempt_context_turn(attempt_id, 1)
+            .await
+            .expect("load context turn")
+            .expect("context turn");
+        let (_unused_ui, retry_ports) = bounded_ports(
+            Arc::new(projection::session(&recovered)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let mut retry = Coordinator::with_provider_factory(
+            session_id.clone(),
+            recovered,
+            handle.clone(),
+            ProviderComposition {
+                initial: None,
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            retry_ports,
+            CancellationToken::new(),
+        );
+        retry.context_scope = Some(ContextScope::local(
+            turn.eligibility().workspace_id().clone(),
+        ));
+        retry.artifact_root = Some(workspace.join("artifacts"));
+        retry
+            .persist_memory_proposal(&proposal_projection, &proposal)
+            .await
+            .expect("exact retry reconciles as committed");
+        assert_eq!(
+            handle
+                .load_memory_operations(memory_id, 0, 16)
+                .await
+                .expect("idempotent proposal operations")
+                .len(),
+            2,
+            "exact command retry must not append a second mutation"
+        );
+        drop(retry);
+        drop(handle);
+        actor.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn completed_artifact_tool_provenance_is_verified_before_proposal_write() {
+        const PROPOSAL: &str = "The verified artifact contains the expected repeated bytes.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let evidence_bytes = vec![b'x'; 70_000];
+        std::fs::write(workspace.join("evidence.bin"), &evidence_bytes)
+            .expect("artifact evidence fixture");
+        let database = directory.path().join("verified-proposal.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let expected_workspace = handle
+            .resolve_workspace_id(
+                workspace_locator_digest(&workspace).expect("workspace locator digest"),
+            )
+            .await
+            .expect("workspace binding");
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "verified-read",
+                "fs_read",
+                serde_json::json!({"path":"evidence.bin"}),
+            )]),
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "verified-proposal",
+                "memory_propose",
+                serde_json::json!({
+                    "content":PROPOSAL,
+                    "kind":"fact",
+                    "scope":"workspace",
+                    "sensitivity":"internal",
+                    "source_provider_call_id":"verified-read"
+                }),
+            )]),
+            ProposalProviderTurn::Complete("verified proposal settled"),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace.clone();
+        coordinator.artifact_root = Some(workspace.join("artifacts"));
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "Read and ground a review-only proposal.".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        let allow_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: allow_request,
+                tool_call_id: permission.tool_call_id,
+                allow: true,
+            })
+            .await
+            .expect("allow evidence read");
+        expect_commit(&mut ui, allow_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Completed,
+                        text,
+                        ..
+                    } if text == "verified proposal settled"
+                )
+            })
+        })
+        .await;
+
+        let events = handle
+            .load_events(session_id.clone())
+            .await
+            .expect("session events");
+        let read_call = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.provider_call_id.as_str() == "verified-read" =>
+                {
+                    Some(call.clone())
+                }
+                _ => None,
+            })
+            .expect("read call");
+        let proposal_call = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallProposed { call, .. }
+                    if call.provider_call_id.as_str() == "verified-proposal" =>
+                {
+                    Some(call.clone())
+                }
+                _ => None,
+            })
+            .expect("proposal call");
+        let read_output = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::ToolCallCompleted {
+                    tool_call_id,
+                    output,
+                } if tool_call_id == &read_call.tool_call_id => Some(output),
+                _ => None,
+            })
+            .expect("read output");
+        assert!(read_output.truncated());
+        assert!(read_output.artifact().is_some());
+
+        let memory_id = ids::memory_proposal_memory_id(&proposal_call.tool_call_id);
+        let revisions = handle
+            .load_memory_revisions(memory_id.clone())
+            .await
+            .expect("verified proposal revisions");
+        assert_eq!(revisions.len(), 1);
+        let revision = &revisions[0];
+        assert_eq!(revision.status(), MemoryRevisionStatus::Proposed);
+        assert_eq!(revision.origin(), MemoryOrigin::VerifiedTool);
+        assert_eq!(revision.trust_class(), TrustClass::VerifiedObservation);
+        assert!(matches!(
+            revision.evidence(),
+            [evidence]
+                if matches!(
+                    evidence.source(),
+                    MemoryEvidenceSource::ToolObservation {
+                        session_id: evidence_session,
+                        tool_call_id,
+                        output_hash,
+                    } if evidence_session == &session_id
+                        && tool_call_id == &read_call.tool_call_id
+                        && output_hash == &raw_sha256(&evidence_bytes).expect("evidence hash")
+                )
+        ));
+        let operations = handle
+            .load_memory_operations(memory_id, 0, 16)
+            .await
+            .expect("verified proposal operations");
+        assert!(matches!(
+            operations[0].payload(),
+            MemoryOperationPayload::MemoryCreated {
+                scope: DomainMemoryScope::Workspace(workspace_id),
+                ..
+            } if workspace_id == &expected_workspace
+        ));
+        assert!(operations.iter().all(|operation| !matches!(
+            operation.payload(),
+            MemoryOperationPayload::RevisionActivated { .. }
+        )));
 
         shutdown.cancel();
         task.await.expect("coordinator join").expect("shutdown");
