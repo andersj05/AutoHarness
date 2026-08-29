@@ -15,7 +15,9 @@ use autoharness_domain::{
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
 };
-use autoharness_memory::{MemoryCandidate, normalized_content_hash};
+use autoharness_memory::{
+    MemoryCandidate, RetainedContextSource, normalized_content_hash, verify_admission_rendered_hash,
+};
 use autoharness_provider::{
     CancellationToken, CatalogRequest, ChatContent, ChatMessage, ChatRequest, ChatRole,
     ModelCatalog, ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
@@ -26,8 +28,8 @@ use autoharness_provider_codex_cli::{CodexAuthProgress, login_with_browser};
 use autoharness_provider_gemini::{GeminiApiKey, GeminiProvider};
 use autoharness_settings::{DisplayLabel, ProfileId, ProviderKind, ProviderProfile};
 use autoharness_store::{
-    MemoryAdmissionKey, MemoryAdmissionQuery, MemoryInspectionQuery, MemorySearchQuery,
-    SessionStatus,
+    ContextAdmissionContent, ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery,
+    MemoryContentState, MemoryInspectionQuery, MemorySearchQuery, SessionStatus,
 };
 use autoharness_tool::{IncomingToolCall, RunBudget, ToolError, ToolRuntime, definitions, plan};
 use autoharness_tui::{
@@ -42,8 +44,10 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use crate::context_runtime::{
-    ContextPreparationInput, ContextScope, EpochCompatibility, PreparedContextTurn,
-    context_epoch_id, prepare_context_turn, workspace_locator_digest,
+    ContextPreparationInput, ContextScope, EpochCompatibility, FrozenContinuationInput,
+    PreparedContextTurn, context_epoch_id, is_workspace_agents_admission, observe_workspace_agents,
+    prepare_context_turn, prepare_frozen_continuation, retained_workspace_agents,
+    workspace_locator_digest,
 };
 use crate::engine_actor::EngineHandle;
 use crate::error::AppError;
@@ -1008,23 +1012,26 @@ impl Coordinator {
         let Some(draft) = memory_command_draft(command.payload()) else {
             return false;
         };
-        let content = draft.content().as_str();
-        if self
-            .provider
-            .as_ref()
-            .is_some_and(|provider| provider.redact_secrets(content) != content)
-        {
-            return true;
-        }
-        self.profiles.as_ref().is_some_and(|profiles| {
-            [
-                profiles.environment.gemini.as_deref(),
-                profiles.environment.router.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|secret| !secret.is_empty() && content.contains(secret))
-        })
+        let contains_configured_secret = |value: &str| {
+            self.provider
+                .as_ref()
+                .is_some_and(|provider| provider.redact_secrets(value) != value)
+                || self.profiles.as_ref().is_some_and(|profiles| {
+                    [
+                        profiles.environment.gemini.as_deref(),
+                        profiles.environment.router.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|secret| !secret.is_empty() && value.contains(secret))
+                })
+        };
+        contains_configured_secret(draft.content().as_str())
+            || draft.evidence().iter().any(|evidence| {
+                evidence
+                    .excerpt()
+                    .is_some_and(|excerpt| contains_configured_secret(excerpt.as_str()))
+            })
     }
 
     async fn update_local_preference(
@@ -2807,6 +2814,44 @@ impl Coordinator {
             .session
             .last_sequence()
             .ok_or(AppError::Configuration)?;
+        let descriptor = self.catalog_models.iter().find(|descriptor| {
+            descriptor.provider_id == *attempt.model().provider_id()
+                && descriptor.model_id == *attempt.model().model_id()
+        });
+        if run_turn > 1 {
+            let epoch = self
+                .engine
+                .load_context_epoch(context_epoch_id(attempt_id))
+                .await?
+                .ok_or(AppError::Configuration)?;
+            let baseline_turn = self
+                .engine
+                .load_attempt_context_turn(attempt_id.clone(), 1)
+                .await?
+                .ok_or(AppError::Configuration)?;
+            let baseline_content = self.load_frozen_context_content(&baseline_turn).await?;
+            let retrieval_scope = self
+                .context_scope()?
+                .retrieval_scope(self.session_id.clone(), epoch.started_at());
+            let compatibility = EpochCompatibility::new(
+                &request,
+                descriptor,
+                &retrieval_scope,
+                epoch.token_budget(),
+                baseline_turn.budget().durable_memory_limit(),
+            )?;
+            return prepare_frozen_continuation(FrozenContinuationInput {
+                request,
+                expected_session_sequence,
+                run_turn,
+                committed_at: ids::now(),
+                epoch,
+                baseline_turn,
+                baseline_content,
+                compatibility,
+            });
+        }
+
         let committed_at = ids::now();
         let retrieval_scope = self
             .context_scope()?
@@ -2827,10 +2872,6 @@ impl Coordinator {
             .iter()
             .map(|candidate| memory_candidate(candidate, &memory_query))
             .collect();
-        let descriptor = self.catalog_models.iter().find(|descriptor| {
-            descriptor.provider_id == *attempt.model().provider_id()
-                && descriptor.model_id == *attempt.model().model_id()
-        });
         let reported_token_limit = descriptor
             .and_then(|descriptor| descriptor.input_token_limit)
             .unwrap_or(DEFAULT_CONTEXT_TOKEN_BUDGET);
@@ -2847,13 +2888,15 @@ impl Coordinator {
             token_budget,
             durable_memory_limit,
         )?;
-        let existing_epoch = if run_turn == 1 {
-            None
-        } else {
-            self.engine
-                .load_context_epoch(context_epoch_id(attempt_id))
-                .await?
-        };
+        let retained_sources = self.retained_workspace_agents(attempt_id).await?;
+        let environment_secrets = self.environment_credential_sentinels();
+        let observed_sources = observe_workspace_agents(
+            &self.workspace,
+            self.provider.as_deref(),
+            &environment_secrets,
+            committed_at,
+            retained_sources,
+        )?;
         prepare_context_turn(ContextPreparationInput {
             session_id: self.session_id.clone(),
             attempt_id: attempt_id.clone(),
@@ -2864,12 +2907,112 @@ impl Coordinator {
             request,
             retrieval_scope,
             compatibility,
-            existing_epoch,
-            observed_sources: Vec::new(),
+            existing_epoch: None,
+            observed_sources,
             memory_candidates: candidates,
             committed_at,
             explicit_retry: attempt.retry_of().is_some(),
         })
+    }
+
+    async fn load_frozen_context_content(
+        &self,
+        baseline_turn: &autoharness_domain::ContextTurnManifest,
+    ) -> Result<ContextTurnContent, AppError> {
+        let prelude = self
+            .engine
+            .load_context_turn_content(baseline_turn.context_turn_id().clone())
+            .await?;
+        if baseline_turn.admissions().is_empty() != prelude.is_none() {
+            return Err(AppError::Configuration);
+        }
+        let mut contents = Vec::with_capacity(baseline_turn.admissions().len());
+        for admission in baseline_turn.admissions() {
+            let rendered = self
+                .engine
+                .load_context_admission_content(admission.admission_id().clone())
+                .await?
+                .ok_or(AppError::Configuration)?;
+            let memory_id = if let Some(revision_id) = admission.memory_revision_id() {
+                let candidate = self
+                    .engine
+                    .load_memory_candidate(revision_id.clone())
+                    .await?
+                    .ok_or(AppError::Configuration)?;
+                if !matches!(candidate.content(), MemoryContentState::Retained(_)) {
+                    return Err(AppError::Configuration);
+                }
+                Some(candidate.memory_id().clone())
+            } else {
+                None
+            };
+            if !verify_admission_rendered_hash(admission, memory_id.as_ref(), rendered.as_str())? {
+                return Err(AppError::Configuration);
+            }
+            contents.push(ContextAdmissionContent::new(
+                admission.admission_id().clone(),
+                rendered,
+            ));
+        }
+        Ok(ContextTurnContent::new(prelude, contents))
+    }
+
+    async fn retained_workspace_agents(
+        &self,
+        current_attempt_id: &AttemptId,
+    ) -> Result<Vec<RetainedContextSource>, AppError> {
+        for attempt in self.session.attempts().iter().rev() {
+            if attempt.attempt_id() == current_attempt_id {
+                continue;
+            }
+            let Some(turn) = self
+                .engine
+                .load_attempt_context_turn(attempt.attempt_id().clone(), 1)
+                .await?
+            else {
+                continue;
+            };
+            for admission in turn.admissions() {
+                if !is_workspace_agents_admission(admission) {
+                    continue;
+                }
+                let rendered = self
+                    .engine
+                    .load_context_admission_content(admission.admission_id().clone())
+                    .await?
+                    .ok_or(AppError::Configuration)?;
+                let source = retained_workspace_agents(admission, &rendered)?
+                    .ok_or(AppError::Configuration)?;
+                return Ok(vec![source]);
+            }
+            // A newer attempt may have observed the optional source as absent.
+            // Keep searching for the latest retained value so an unavailable
+            // read never silently discards previously verified instructions.
+        }
+        Ok(Vec::new())
+    }
+
+    fn environment_credential_sentinels(&self) -> Vec<&str> {
+        self.profiles
+            .as_ref()
+            .into_iter()
+            .flat_map(|profiles| {
+                [
+                    profiles
+                        .environment
+                        .gemini
+                        .as_ref()
+                        .map(|secret| secret.as_str()),
+                    profiles
+                        .environment
+                        .router
+                        .as_ref()
+                        .map(|secret| secret.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect()
     }
 
     async fn fail_context_preparation(
@@ -4121,7 +4264,8 @@ fn tool_provider_error(error: &ToolError) -> ProviderError {
         | autoharness_tool::ToolErrorKind::Process
         | autoharness_tool::ToolErrorKind::Http
         | autoharness_tool::ToolErrorKind::Artifact => ProviderErrorKind::Unavailable,
-        autoharness_tool::ToolErrorKind::Internal => ProviderErrorKind::Internal,
+        autoharness_tool::ToolErrorKind::MemoryProposalSinkRequired
+        | autoharness_tool::ToolErrorKind::Internal => ProviderErrorKind::Internal,
     };
     ProviderError::new(kind, error.retry_advice())
 }
@@ -4754,6 +4898,63 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingProvider {
+        calls: AtomicUsize,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Catalog for RecordingProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![fixture_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for RecordingProvider {
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            self.requests.lock().expect("request lock").push(request);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::pin(futures_util::stream::iter([
+                Ok(ProviderStreamEvent::Started),
+                Ok(ProviderStreamEvent::TextDelta(
+                    TextDelta::new("recorded").expect("text delta"),
+                )),
+                Ok(ProviderStreamEvent::Completed {
+                    reason: CompletionReason::Stop,
+                }),
+            ])))
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for RecordingProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.replace("configured-secret", "[REDACTED]")
+        }
+    }
+
+    impl ProviderMetadata for RecordingProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
     struct InvalidToolRepairProvider {
         repair_after_first: bool,
         calls: AtomicUsize,
@@ -5134,6 +5335,54 @@ mod tests {
         assert_eq!(notice, UiNotice::IntentCommitted { request_id });
     }
 
+    struct SeededMemory {
+        memory_id: MemoryId,
+        revision_id: MemoryRevisionId,
+        last_sequence: u64,
+    }
+
+    async fn seed_workspace_memory(
+        handle: &EngineHandle,
+        workspace: &std::path::Path,
+        content: &str,
+    ) -> SeededMemory {
+        let workspace_id = handle
+            .resolve_workspace_id(
+                workspace_locator_digest(workspace).expect("workspace locator digest"),
+            )
+            .await
+            .expect("workspace binding");
+        let memory_id = ids::memory_id();
+        let revision = user_memory_draft(
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.to_owned(),
+            ConfidenceBasisPoints::new(10_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+        )
+        .expect("memory draft");
+        let revision_id = revision.revision_id().clone();
+        let commit = handle
+            .execute_memory_command(ids::memory_command(
+                memory_id.clone(),
+                None,
+                MemoryCommandPayload::CreateMemory {
+                    scope: DomainMemoryScope::Workspace(workspace_id),
+                    memory_kind: MemoryKind::Preference,
+                    revision,
+                },
+            ))
+            .await
+            .expect("seed memory");
+        SeededMemory {
+            memory_id,
+            revision_id,
+            last_sequence: commit.receipt().last_sequence(),
+        }
+    }
+
     #[tokio::test]
     async fn configured_credential_is_rejected_before_any_memory_durable_surface() {
         const SENTINEL: &str = "test-api-secret";
@@ -5193,6 +5442,118 @@ mod tests {
 
         shutdown.cancel();
         task.await.expect("coordinator task").expect("coordinator");
+        actor.shutdown().await.expect("actor shutdown");
+        for bytes in all_file_bytes(directory.path()) {
+            assert!(
+                !bytes
+                    .windows(SENTINEL.len())
+                    .any(|window| window == SENTINEL.as_bytes())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_credential_in_evidence_is_rejected_before_any_memory_write() {
+        const SENTINEL: &str = "test-api-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("memory-evidence-secret.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::new(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            Some(Arc::new(FakeProvider::default())),
+            app,
+            shutdown,
+        );
+        let excerpt =
+            autoharness_domain::MemoryEvidenceExcerpt::new(SENTINEL).expect("evidence excerpt");
+        let evidence = autoharness_domain::MemoryEvidence::new(
+            autoharness_domain::MemoryEvidenceId::new("credential-evidence").expect("evidence ID"),
+            autoharness_domain::MemoryEvidenceSource::UserInput {
+                session_id: session_id.clone(),
+                input_id: InputId::new("credential-input").expect("input ID"),
+            },
+            autoharness_domain::MemoryEvidenceRelation::Supports,
+            Some(excerpt.clone()),
+            Some(normalized_content_hash(excerpt.as_str()).expect("excerpt digest")),
+        )
+        .expect("evidence");
+        let content = MemoryContent::new("ordinary safe memory content").expect("memory content");
+        let revision = MemoryRevisionDraft::new(
+            ids::memory_revision_id(),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content digest"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(10_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            vec![evidence],
+            Vec::new(),
+        )
+        .expect("memory draft");
+        let memory_id = ids::memory_id();
+        let command = ids::memory_command(
+            memory_id.clone(),
+            None,
+            MemoryCommandPayload::CreateMemory {
+                scope: DomainMemoryScope::Session(session_id),
+                memory_kind: MemoryKind::Fact,
+                revision,
+            },
+        );
+        assert!(!format!("{command:?}").contains(SENTINEL));
+        let request_id = RequestId::new(92);
+        coordinator
+            .commit_memory_command(request_id, command)
+            .await
+            .expect("safe rejection");
+
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("notice timeout")
+            .expect("notice sender remains open");
+        match notice {
+            UiNotice::IntentRejected {
+                request_id: rejected,
+                failure,
+            } => {
+                assert_eq!(rejected, request_id);
+                assert_eq!(failure.code, "memory_secret");
+                assert!(!format!("{failure:?}").contains(SENTINEL));
+            }
+            other => panic!("expected safe memory rejection, got {other:?}"),
+        }
+        assert!(
+            handle
+                .load_memory_revisions(memory_id)
+                .await
+                .expect("memory revisions")
+                .is_empty()
+        );
+        assert_eq!(
+            handle
+                .memory_mutation_generation()
+                .await
+                .expect("mutation generation")
+                .get(),
+            0
+        );
+
+        drop(coordinator);
+        drop(handle);
         actor.shutdown().await.expect("actor shutdown");
         for bytes in all_file_bytes(directory.path()) {
             assert!(
@@ -6529,6 +6890,685 @@ mod tests {
                     == autoharness_domain::CapabilityKind::InvalidToolCall
         }));
         reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn configured_credential_in_workspace_agents_is_rejected_before_context_commit() {
+        const SENTINEL: &str = "configured-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            format!("Never persist {SENTINEL} from this source."),
+        )
+        .expect("secret-bearing agents source");
+        let database = directory.path().join("agents-secret.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace;
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "read the workspace instructions".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("notice timeout")
+            .expect("notice sender remains open");
+        match notice {
+            UiNotice::IntentRejected {
+                request_id,
+                failure,
+            } => {
+                assert_eq!(request_id, submit_request);
+                assert_eq!(failure.code, "context_not_committed");
+                assert!(!format!("{failure:?}").contains(SENTINEL));
+            }
+            other => panic!("expected safe context rejection, got {other:?}"),
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(provider.requests.lock().expect("request lock").is_empty());
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            !events
+                .iter()
+                .any(|event| { matches!(event.payload(), EventPayload::ContextTurnBound { .. }) })
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+        for entry in std::fs::read_dir(directory.path()).expect("state directory") {
+            let entry = entry.expect("state entry");
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("agents-secret")
+            {
+                let bytes = std::fs::read(entry.path()).expect("durable state file");
+                assert!(
+                    !bytes
+                        .windows(SENTINEL.len())
+                        .any(|window| window == SENTINEL.as_bytes()),
+                    "configured credential must not reach durable context state"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_agents_persists_available_stale_and_absent_observations() {
+        const BASELINE: &str = "Keep the last verified workspace instruction.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let agents_path = workspace.join("AGENTS.md");
+        std::fs::write(&agents_path, BASELINE).expect("baseline agents source");
+        let database = directory.path().join("agents-observations.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace.clone();
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+
+        for (request_id, expected_completed) in [(2, 1_usize), (3, 2), (4, 3), (5, 4)] {
+            if request_id == 3 {
+                std::fs::remove_file(&agents_path).expect("remove agents file");
+                std::fs::create_dir(&agents_path).expect("unavailable agents fixture");
+            } else if request_id == 4 {
+                std::fs::remove_dir(&agents_path).expect("missing agents fixture");
+            } else if request_id == 5 {
+                std::fs::create_dir(&agents_path).expect("second unavailable agents fixture");
+            }
+            let request_id = RequestId::new(request_id);
+            ui.intents
+                .send(UiIntent::SubmitPrompt {
+                    request_id,
+                    prompt: format!("observation {expected_completed}"),
+                })
+                .await
+                .expect("submit prompt");
+            expect_commit(&mut ui, request_id).await;
+            wait_for_session(&mut ui.sessions, |projection| {
+                projection
+                    .transcript
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item,
+                            TranscriptItem::Assistant {
+                                status: autoharness_tui::AttemptStatus::Completed,
+                                ..
+                            }
+                        )
+                    })
+                    .count()
+                    == expected_completed
+            })
+            .await;
+        }
+
+        let events = handle
+            .load_events(session_id.clone())
+            .await
+            .expect("events");
+        let attempt_ids = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::AttemptPrepared { attempt_id, .. } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(attempt_ids.len(), 4);
+        let mut turns = Vec::new();
+        for attempt_id in attempt_ids {
+            turns.push(
+                handle
+                    .load_attempt_context_turn(attempt_id, 1)
+                    .await
+                    .expect("load turn")
+                    .expect("turn"),
+            );
+        }
+        assert_eq!(turns[0].sources().len(), 1);
+        assert_eq!(turns[1].sources().len(), 1);
+        assert_eq!(turns[2].sources().len(), 1);
+        assert_eq!(
+            turns[0].sources()[0].observation_state(),
+            autoharness_domain::ContextObservationState::Available
+        );
+        assert_eq!(
+            turns[1].sources()[0].observation_state(),
+            autoharness_domain::ContextObservationState::RetainedStale
+        );
+        assert_eq!(
+            turns[2].sources()[0].observation_state(),
+            autoharness_domain::ContextObservationState::ObservedAbsent
+        );
+        assert_eq!(
+            turns[3].sources()[0].observation_state(),
+            autoharness_domain::ContextObservationState::RetainedStale
+        );
+        assert_eq!(
+            turns[0].sources()[0].source_revision(),
+            turns[1].sources()[0].source_revision()
+        );
+        assert_eq!(
+            turns[0].sources()[0].source_revision(),
+            turns[3].sources()[0].source_revision()
+        );
+        assert!(turns[2].sources()[0].source_revision().is_none());
+        assert_eq!(turns[0].admissions().len(), 1);
+        assert_eq!(turns[1].admissions().len(), 1);
+        assert!(turns[2].admissions().is_empty());
+        assert_eq!(turns[3].admissions().len(), 1);
+        let first = handle
+            .load_context_turn_content(turns[0].context_turn_id().clone())
+            .await
+            .expect("first source read")
+            .expect("first source");
+        let stale = handle
+            .load_context_turn_content(turns[1].context_turn_id().clone())
+            .await
+            .expect("stale source read")
+            .expect("stale source");
+        let recovered_stale = handle
+            .load_context_turn_content(turns[3].context_turn_id().clone())
+            .await
+            .expect("recovered stale source read")
+            .expect("recovered stale source");
+        assert_eq!(first, stale);
+        assert_eq!(first, recovered_stale);
+        assert!(first.as_str().contains(BASELINE));
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 4);
+            assert_eq!(requests[0].context, requests[1].context);
+            assert!(requests[2].context.is_none());
+            assert_eq!(requests[0].context, requests[3].context);
+        }
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn restarted_tool_continuation_reuses_frozen_agents_and_memory_baseline() {
+        const BASELINE_AGENTS: &str = "Always preserve the first verified workspace baseline.";
+        const CHANGED_AGENTS: &str = "This changed instruction belongs to a later epoch.";
+        const BASELINE_MEMORY: &str = "Prefer frozen context across tool continuations.";
+        const CHANGED_MEMORY: &str = "Prefer newly mutated context immediately.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join("AGENTS.md"), BASELINE_AGENTS)
+            .expect("baseline agents source");
+        std::fs::write(workspace.join(".env"), "ordinary fixture").expect("tool read fixture");
+        let database = directory.path().join("frozen-context.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let handle = actor.handle();
+        let seeded = seed_workspace_memory(&handle, &workspace, BASELINE_MEMORY).await;
+        let provider = Arc::new(ToolLoopProvider::reading());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace.clone();
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: BASELINE_MEMORY.to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+
+        std::fs::write(workspace.join("AGENTS.md"), CHANGED_AGENTS).expect("changed agents source");
+        let changed_revision = user_memory_draft(
+            MemoryRevisionNumber::new(2).expect("revision number"),
+            None,
+            CHANGED_MEMORY.to_owned(),
+            ConfidenceBasisPoints::new(10_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Indefinite,
+            Vec::new(),
+        )
+        .expect("changed memory draft");
+        handle
+            .execute_memory_command(ids::memory_command(
+                seeded.memory_id.clone(),
+                Some(MemorySequence::new(seeded.last_sequence).expect("memory sequence")),
+                MemoryCommandPayload::ReviseMemory {
+                    revision: changed_revision,
+                    supersedes_revision_id: seeded.revision_id.clone(),
+                },
+            ))
+            .await
+            .expect("mutate memory between turns");
+
+        shutdown.cancel();
+        task.await
+            .expect("first coordinator join")
+            .expect("first coordinator shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("first actor shutdown");
+        drop(ui);
+
+        let (reopened, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        assert_eq!(
+            recovered.attempts().last().expect("attempt").status(),
+            EngineAttemptStatus::AwaitingTools
+        );
+        let reopened_handle = reopened.handle();
+        let (mut resumed_ui, resumed_app) = bounded_ports(
+            Arc::new(projection::session(&recovered)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let resumed_shutdown = CancellationToken::new();
+        let mut resumed = Coordinator::with_provider_factory(
+            session_id.clone(),
+            recovered,
+            reopened_handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            resumed_app,
+            resumed_shutdown.clone(),
+        );
+        resumed.workspace = workspace.clone();
+        let resumed_task = tokio::spawn(resumed.run());
+        wait_for_catalog(&mut resumed_ui).await;
+        let recovered_permission = wait_for_session(&mut resumed_ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        assert_eq!(
+            recovered_permission.permission_requests[0].tool_call_id,
+            permission.tool_call_id
+        );
+        let deny_request = RequestId::new(3);
+        resumed_ui
+            .intents
+            .send(UiIntent::AnswerPermission {
+                request_id: deny_request,
+                tool_call_id: permission.tool_call_id,
+                allow: false,
+            })
+            .await
+            .expect("deny permission");
+        expect_commit(&mut resumed_ui, deny_request).await;
+        wait_for_session(&mut resumed_ui.sessions, |projection| {
+            projection.permission_requests.is_empty()
+                && projection.transcript.iter().any(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Completed,
+                            text,
+                            ..
+                        } if text == "tool complete"
+                    )
+                })
+        })
+        .await;
+
+        let attempts = reopened_handle
+            .load_events(session_id.clone())
+            .await
+            .expect("events");
+        let attempt_id = attempts
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::AttemptPrepared { attempt_id, .. } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .expect("attempt ID");
+        let first_turn = reopened_handle
+            .load_attempt_context_turn(attempt_id.clone(), 1)
+            .await
+            .expect("load first turn")
+            .expect("first turn");
+        let second_turn = reopened_handle
+            .load_attempt_context_turn(attempt_id, 2)
+            .await
+            .expect("load second turn")
+            .expect("second turn");
+        let first_prelude = reopened_handle
+            .load_context_turn_content(first_turn.context_turn_id().clone())
+            .await
+            .expect("first prelude read")
+            .expect("first prelude");
+        let second_prelude = reopened_handle
+            .load_context_turn_content(second_turn.context_turn_id().clone())
+            .await
+            .expect("second prelude read")
+            .expect("second prelude");
+        assert_eq!(first_prelude, second_prelude);
+        assert!(first_prelude.as_str().contains(BASELINE_AGENTS));
+        assert!(first_prelude.as_str().contains(BASELINE_MEMORY));
+        assert!(!first_prelude.as_str().contains(CHANGED_AGENTS));
+        assert!(!first_prelude.as_str().contains(CHANGED_MEMORY));
+        assert_eq!(first_turn.epoch_id(), second_turn.epoch_id());
+        assert_eq!(
+            first_turn.memory_generation(),
+            second_turn.memory_generation()
+        );
+        assert_eq!(first_turn.sources(), second_turn.sources());
+        assert_eq!(first_turn.rendered_hash(), second_turn.rendered_hash());
+        assert_ne!(first_turn.request_hash(), second_turn.request_hash());
+        assert_eq!(
+            first_turn.admissions().len(),
+            second_turn.admissions().len()
+        );
+        for (first, second) in first_turn.admissions().iter().zip(second_turn.admissions()) {
+            assert_ne!(first.admission_id(), second.admission_id());
+            assert_eq!(first.source_key(), second.source_key());
+            assert_eq!(first.source_revision(), second.source_revision());
+            assert_eq!(first.memory_revision_id(), second.memory_revision_id());
+            assert_eq!(first.rendered_hash(), second.rendered_hash());
+            assert_eq!(first.token_count(), second.token_count());
+        }
+        assert!(
+            first_turn
+                .admissions()
+                .iter()
+                .any(|admission| { admission.memory_revision_id() == Some(&seeded.revision_id) })
+        );
+        assert!(
+            reopened_handle
+                .memory_generation()
+                .await
+                .expect("current generation")
+                > first_turn.memory_generation()
+        );
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].context, requests[1].context);
+        }
+
+        resumed_shutdown.cancel();
+        resumed_task
+            .await
+            .expect("resumed coordinator join")
+            .expect("resumed coordinator shutdown");
+        drop(reopened_handle);
+        reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn erased_frozen_memory_blocks_tool_continuation_before_dispatch() {
+        const BASELINE_MEMORY: &str = "Keep this exact memory for the tool-loop epoch.";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(workspace.join(".env"), "ordinary fixture").expect("tool read fixture");
+        let database = directory.path().join("erased-frozen-context.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let seeded = seed_workspace_memory(&handle, &workspace, BASELINE_MEMORY).await;
+        let provider = Arc::new(ToolLoopProvider::reading());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace;
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: BASELINE_MEMORY.to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let awaiting_permission = wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.len() == 1
+        })
+        .await;
+        let permission = awaiting_permission.permission_requests[0].clone();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+
+        handle
+            .execute_memory_command(ids::memory_command(
+                seeded.memory_id,
+                Some(MemorySequence::new(seeded.last_sequence).expect("memory sequence")),
+                MemoryCommandPayload::DeleteMemory {
+                    revision_id: seeded.revision_id,
+                },
+            ))
+            .await
+            .expect("erase admitted memory");
+
+        let deny_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::AnswerPermission {
+                request_id: deny_request,
+                tool_call_id: permission.tool_call_id,
+                allow: false,
+            })
+            .await
+            .expect("deny permission");
+        expect_commit(&mut ui, deny_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.permission_requests.is_empty()
+                && projection.transcript.iter().any(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Failed(UiFailure {
+                                code,
+                                ..
+                            }),
+                            ..
+                        } if code == "context_not_committed"
+                    )
+                })
+        })
+        .await;
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "erased frozen bytes must block the second provider dispatch"
+        );
+
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        let attempt_id = events
+            .iter()
+            .find_map(|event| match event.payload() {
+                EventPayload::AttemptPrepared { attempt_id, .. } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .expect("attempt ID");
+        assert!(
+            handle
+                .load_attempt_context_turn(attempt_id.clone(), 1)
+                .await
+                .expect("first turn read")
+                .is_some()
+        );
+        assert!(
+            handle
+                .load_attempt_context_turn(attempt_id, 2)
+                .await
+                .expect("second turn read")
+                .is_none()
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]

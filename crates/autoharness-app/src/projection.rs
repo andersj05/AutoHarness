@@ -150,6 +150,7 @@ fn tool_summary(call: &autoharness_engine::ToolCallProjection) -> Option<String>
 const fn capability_name(kind: autoharness_domain::CapabilityKind) -> &'static str {
     match kind {
         autoharness_domain::CapabilityKind::InvalidToolCall => "invalid tool call",
+        autoharness_domain::CapabilityKind::MemoryProposal => "memory proposal",
         autoharness_domain::CapabilityKind::FilesystemRead => "filesystem read",
         autoharness_domain::CapabilityKind::FilesystemWrite => "filesystem write",
         autoharness_domain::CapabilityKind::ProcessExecute => "process execute",

@@ -3,16 +3,20 @@
 use std::path::Path;
 
 use autoharness_domain::{
-    AgentId, AttemptId, ContextEpochHashes, ContextEpochId, ContextEpochManifest,
-    ContextEpochReason, ContextEpochVersions, ContextTokenBudget, ContextTurnId, EstimatedTokens,
-    MemoryGeneration, ModelRef, Sensitivity, SessionId, SessionSequence, Sha256Digest,
-    TimestampMillis, UserId, WorkspaceId,
+    AgentId, AttemptId, ContextAdmission, ContextAdmissionId, ContextBudgetAllocation,
+    ContextEpochHashes, ContextEpochId, ContextEpochManifest, ContextEpochReason,
+    ContextEpochVersions, ContextSection, ContextSourceKey, ContextTokenBudget, ContextTurnId,
+    ContextTurnManifest, EstimatedTokens, MemoryGeneration, ModelRef, Sensitivity, SessionId,
+    SessionSequence, Sha256Digest, TimestampMillis, UserId, WorkspaceId,
 };
 use autoharness_memory::{
     CONTEXT_BUILDER_VERSION, CONTEXT_RENDERER_VERSION, ContextBuildRequest, ContextBuilder,
-    MemoryCandidate, ObservedContextSource, RetrievalScope,
+    ContextSource, ContextSourcePolicy, ContextSourceRead, ContextSourceRegistry,
+    ContextSourceValue, MAX_CONTEXT_SOURCE_VALUE_BYTES, MemoryCandidate, ObservedContextSource,
+    RetainedContextSource, RetrievalScope, context_manifest_hash, verify_admission_rendered_hash,
+    verify_context_manifest_hash, verify_rendered_context_hash,
 };
-use autoharness_provider::{ChatRequest, ContextPrelude, ModelDescriptor};
+use autoharness_provider::{ChatRequest, ContextPrelude, ModelDescriptor, SecretRedactor};
 use autoharness_store::{
     ContextAdmissionContent, ContextTurnCommitRequest, ContextTurnContent, RenderedContextText,
 };
@@ -20,12 +24,14 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
-const CONTEXT_REGISTRY_VERSION: u16 = 1;
 const CONTEXT_RANKER_VERSION: u16 = 1;
 const CONTEXT_SIZER_VERSION: u16 = 1;
 const CONTEXT_CONFIG_VERSION: &[u8] = b"autoharness-context-config-v1";
 const LOCAL_USER_ID: &str = "user:local-v1";
 const DEFAULT_AGENT_ID: &str = "agent:default-v1";
+const WORKSPACE_AGENTS_SOURCE_KEY: &str = "workspace:agents-md:v1";
+const AUTHORIZED_INSTRUCTION_OPEN: &str = "<autoharness-authorized-instruction-v1>\n";
+const AUTHORIZED_INSTRUCTION_CLOSE: &str = "\n</autoharness-authorized-instruction-v1>";
 
 /// Stable local scope identities used at one provider-turn boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,6 +91,146 @@ impl ContextScope {
 pub fn workspace_locator_digest(workspace: &Path) -> Result<Sha256Digest, AppError> {
     let canonical = workspace.canonicalize().map_err(|_| AppError::FileSystem)?;
     sha256_digest(canonical.to_string_lossy().as_bytes())
+}
+
+#[derive(Clone)]
+struct WorkspaceAgentsSource {
+    key: ContextSourceKey,
+    read: ContextSourceRead,
+}
+
+impl ContextSource for WorkspaceAgentsSource {
+    fn key(&self) -> &ContextSourceKey {
+        &self.key
+    }
+
+    fn policy(&self) -> ContextSourcePolicy {
+        ContextSourcePolicy::Optional
+    }
+
+    fn observe(&self) -> ContextSourceRead {
+        self.read.clone()
+    }
+}
+
+/// Observes the workspace instruction source once through the versioned registry.
+///
+/// Configured credential bytes are rejected before a value or snapshot is
+/// constructed, so neither source metadata nor provider-visible sidecars can
+/// retain them.
+pub fn observe_workspace_agents<R>(
+    workspace: &Path,
+    redactor: Option<&R>,
+    known_secrets: &[&str],
+    observed_at: TimestampMillis,
+    retained: Vec<RetainedContextSource>,
+) -> Result<Vec<ObservedContextSource>, AppError>
+where
+    R: SecretRedactor + ?Sized,
+{
+    if retained.iter().any(|source| {
+        contains_configured_credential(source.value.as_str(), redactor, known_secrets)
+    }) {
+        return Err(AppError::Configuration);
+    }
+    let path = workspace.join("AGENTS.md");
+    let read = match std::fs::read(&path) {
+        Ok(bytes) => {
+            if bytes.len() > MAX_CONTEXT_SOURCE_VALUE_BYTES {
+                return Err(AppError::Configuration);
+            }
+            let value = String::from_utf8(bytes).map_err(|_| AppError::Configuration)?;
+            if contains_configured_credential(&value, redactor, known_secrets) {
+                return Err(AppError::Configuration);
+            }
+            ContextSourceRead::Available {
+                section: ContextSection::AuthorizedInstruction,
+                source_revision: sha256_digest(value.as_bytes())?,
+                value: ContextSourceValue::new(value)?,
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ContextSourceRead::ObservedAbsent
+        }
+        Err(_) => ContextSourceRead::Unavailable,
+    };
+    if matches!(read, ContextSourceRead::Unavailable) && retained.is_empty() {
+        return Err(AppError::FileSystem);
+    }
+    let mut registry = ContextSourceRegistry::new();
+    registry.register(WorkspaceAgentsSource {
+        key: ContextSourceKey::new(WORKSPACE_AGENTS_SOURCE_KEY)
+            .map_err(|_| AppError::Configuration)?,
+        read,
+    })?;
+    registry
+        .observe_all(observed_at, retained)
+        .map_err(Into::into)
+}
+
+fn contains_configured_credential<R>(
+    value: &str,
+    redactor: Option<&R>,
+    known_secrets: &[&str],
+) -> bool
+where
+    R: SecretRedactor + ?Sized,
+{
+    redactor.is_some_and(|redactor| redactor.redact_secrets(value) != value)
+        || known_secrets
+            .iter()
+            .any(|secret| !secret.is_empty() && value.contains(secret))
+}
+
+/// Returns whether an admission belongs to the registered workspace AGENTS source.
+#[must_use]
+pub fn is_workspace_agents_admission(admission: &ContextAdmission) -> bool {
+    admission.source_key().as_str() == WORKSPACE_AGENTS_SOURCE_KEY
+}
+
+/// Recovers one previously verified AGENTS source value from its retained v1 sidecar.
+pub fn retained_workspace_agents(
+    admission: &ContextAdmission,
+    rendered: &RenderedContextText,
+) -> Result<Option<RetainedContextSource>, AppError> {
+    if !is_workspace_agents_admission(admission) {
+        return Ok(None);
+    }
+    if admission.section() != ContextSection::AuthorizedInstruction
+        || admission.memory_revision_id().is_some()
+        || !verify_admission_rendered_hash(admission, None, rendered.as_str())?
+    {
+        return Err(AppError::Configuration);
+    }
+    let payload = rendered
+        .as_str()
+        .strip_prefix(AUTHORIZED_INSTRUCTION_OPEN)
+        .and_then(|value| value.strip_suffix(AUTHORIZED_INSTRUCTION_CLOSE))
+        .ok_or(AppError::Configuration)?;
+    let record: serde_json::Value = serde_json::from_str(payload)?;
+    let content = record
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(AppError::Configuration)?;
+    if record.get("source_key").and_then(serde_json::Value::as_str)
+        != Some(admission.source_key().as_str())
+        || record
+            .get("source_revision")
+            .and_then(serde_json::Value::as_str)
+            != Some(admission.source_revision().as_str())
+        || record.get("section").and_then(serde_json::Value::as_str)
+            != Some("authorized_instruction")
+        || record.get("bytes").and_then(serde_json::Value::as_u64)
+            != u64::try_from(content.len()).ok()
+    {
+        return Err(AppError::Configuration);
+    }
+    Ok(Some(RetainedContextSource {
+        source_key: admission.source_key().clone(),
+        section: admission.section(),
+        source_revision: admission.source_revision().clone(),
+        value: ContextSourceValue::new(content)?,
+    }))
 }
 
 /// Frozen epoch compatibility inputs derived from provider-neutral state.
@@ -295,6 +441,165 @@ pub fn prepare_context_turn(
     })
 }
 
+/// Immutable inputs for a continuation that must reuse its first bound baseline.
+pub struct FrozenContinuationInput {
+    /// Current provider-neutral conversation and settled tool history.
+    pub request: ChatRequest,
+    /// Exact current session boundary immediately before atomic binding.
+    pub expected_session_sequence: SessionSequence,
+    /// One-based provider turn being prepared.
+    pub run_turn: u32,
+    /// New manifest commit timestamp. Baseline source observations remain unchanged.
+    pub committed_at: TimestampMillis,
+    /// Durable attempt epoch created by turn one.
+    pub epoch: ContextEpochManifest,
+    /// Exact first bound provider-turn manifest.
+    pub baseline_turn: ContextTurnManifest,
+    /// Exact retained first-turn rendered bytes in admission order.
+    pub baseline_content: ContextTurnContent,
+    /// Current observation of compatibility inputs that must still match the epoch.
+    pub compatibility: EpochCompatibility,
+}
+
+/// Rebinds the exact durable first-turn baseline into a later provider request.
+///
+/// This does not observe sources, inspect active memory, or rerank candidates.
+/// Changed conversation/tool history affects only the provider request hash and
+/// reserved budget. Erased baseline bytes fail closed.
+pub fn prepare_frozen_continuation(
+    input: FrozenContinuationInput,
+) -> Result<PreparedContextTurn, AppError> {
+    if input.run_turn <= 1
+        || input.request.context.is_some()
+        || input.baseline_turn.run_turn() != 1
+        || input.baseline_turn.epoch_id() != input.epoch.epoch_id()
+        || input.baseline_turn.session_id() != input.epoch.session_id()
+        || input.baseline_turn.memory_generation() != input.epoch.memory_generation()
+        || input.baseline_turn.model().model_id() != &input.request.model_id
+        || input.epoch.versions() != context_versions()?
+        || input.epoch.hashes() != input.compatibility.hashes()
+        || input.epoch.token_budget() != input.compatibility.token_budget()
+        || !verify_context_manifest_hash(&input.baseline_turn)?
+        || input.baseline_turn.admissions().len() != input.baseline_content.admissions().len()
+        || input
+            .baseline_turn
+            .admissions()
+            .iter()
+            .zip(input.baseline_content.admissions())
+            .any(|(admission, content)| admission.admission_id() != content.admission_id())
+    {
+        return Err(AppError::Configuration);
+    }
+    let prelude = input.baseline_content.prelude().cloned();
+    if input.baseline_turn.admissions().is_empty() != prelude.is_none()
+        || !verify_rendered_context_hash(
+            prelude.as_ref().map_or("", RenderedContextText::as_str),
+            input.baseline_turn.rendered_hash(),
+        )?
+    {
+        return Err(AppError::Configuration);
+    }
+
+    let request = match prelude.as_ref() {
+        Some(prelude) => input
+            .request
+            .clone()
+            .with_context(ContextPrelude::new(prelude.as_str().to_owned())?),
+        None => input.request.clone(),
+    };
+    let reserved_tokens = estimated_request_bytes(&input.request)?;
+    let budget = ContextBudgetAllocation::new(
+        input.epoch.token_budget(),
+        reserved_tokens,
+        input.baseline_turn.budget().durable_memory_limit(),
+    )
+    .map_err(|_| AppError::Configuration)?;
+    if input.baseline_turn.rendered_token_count().get() > budget.rendered_limit() {
+        return Err(AppError::Configuration);
+    }
+
+    let context_turn_id = context_turn_id(input.baseline_turn.attempt_id(), input.run_turn);
+    let admissions = input
+        .baseline_turn
+        .admissions()
+        .iter()
+        .enumerate()
+        .map(|(index, baseline)| {
+            ContextAdmission::new(
+                context_admission_id(&context_turn_id, index + 1),
+                context_turn_id.clone(),
+                baseline.section(),
+                baseline.source_key().clone(),
+                baseline.source_revision().clone(),
+                baseline.memory_revision_id().cloned(),
+                baseline.renderer_version(),
+                baseline.rendered_hash().clone(),
+                baseline.rank(),
+                baseline.rank_score(),
+                baseline.token_count(),
+                input.committed_at,
+                baseline.reasons().to_vec(),
+            )
+            .map_err(|_| AppError::Configuration)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let contents = admissions
+        .iter()
+        .zip(input.baseline_content.admissions())
+        .map(|(admission, baseline)| {
+            ContextAdmissionContent::new(
+                admission.admission_id().clone(),
+                baseline.rendered().clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let request_hash = provider_request_hash(&request)?;
+    let placeholder = Sha256Digest::new("0".repeat(64)).map_err(|_| AppError::Configuration)?;
+    let build_manifest = |manifest_hash: Sha256Digest| {
+        ContextTurnManifest::new(
+            context_turn_id.clone(),
+            input.epoch.epoch_id().clone(),
+            input.baseline_turn.session_id().clone(),
+            input.baseline_turn.attempt_id().clone(),
+            input.run_turn,
+            input.expected_session_sequence,
+            input.epoch.memory_generation(),
+            input.baseline_turn.model().clone(),
+            request_hash.clone(),
+            input.baseline_turn.rendered_hash().clone(),
+            manifest_hash,
+            input.baseline_turn.eligibility().clone(),
+            budget,
+            input.baseline_turn.rendered_token_count(),
+            input.committed_at,
+            input.baseline_turn.sources().to_vec(),
+            admissions.clone(),
+        )
+        .map_err(|_| AppError::Configuration)
+    };
+    let draft = build_manifest(placeholder)?;
+    let manifest = build_manifest(context_manifest_hash(&draft)?)?;
+    Ok(PreparedContextTurn {
+        request,
+        commit: ContextTurnCommitRequest::new(
+            None,
+            manifest,
+            ContextTurnContent::new(prelude, contents),
+        ),
+    })
+}
+
+fn context_admission_id(context_turn_id: &ContextTurnId, rank: usize) -> ContextAdmissionId {
+    let rank = u64::try_from(rank).unwrap_or(u64::MAX).to_be_bytes();
+    let digest = digest_fields(&[
+        b"autoharness-context-admission-v1",
+        context_turn_id.as_str().as_bytes(),
+        &rank,
+    ]);
+    ContextAdmissionId::new(format!("context-admission:{digest}"))
+        .expect("SHA-256 admission IDs are valid")
+}
+
 fn prepare_epoch(
     input: &ContextPreparationInput,
     manifest: &autoharness_domain::ContextTurnManifest,
@@ -345,7 +650,7 @@ fn prepare_epoch(
 fn context_versions() -> Result<ContextEpochVersions, AppError> {
     ContextEpochVersions::new(
         CONTEXT_BUILDER_VERSION,
-        CONTEXT_REGISTRY_VERSION,
+        ContextSourceRegistry::VERSION,
         CONTEXT_RANKER_VERSION,
         CONTEXT_RENDERER_VERSION,
         CONTEXT_SIZER_VERSION,
@@ -428,14 +733,22 @@ fn hex_digest(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        ConfidenceBasisPoints, ContextTokenBudget, MemoryContent, MemoryId, MemoryKind,
-        MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidity, ModelId, ProviderId,
-        Sensitivity, TrustClass,
+        ConfidenceBasisPoints, ContextObservationState, ContextTokenBudget, MemoryContent,
+        MemoryId, MemoryKind, MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidity,
+        ModelId, ProviderId, Sensitivity, TrustClass,
     };
-    use autoharness_memory::{MemoryCandidate, normalized_content_hash};
+    use autoharness_memory::{ContextSourceRegistry, MemoryCandidate, normalized_content_hash};
     use autoharness_provider::{ChatContent, ChatMessage, ChatRole};
 
     use super::*;
+
+    struct FixtureRedactor;
+
+    impl SecretRedactor for FixtureRedactor {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.replace("configured-secret", "[REDACTED]")
+        }
+    }
 
     fn scope() -> ContextScope {
         ContextScope::local(WorkspaceId::new("workspace-fixture").expect("workspace ID"))
@@ -590,5 +903,186 @@ mod tests {
         continuation.memory_generation = MemoryGeneration::new(2).expect("generation");
 
         assert!(prepare_context_turn(continuation).is_err());
+    }
+
+    #[test]
+    fn workspace_agents_is_bounded_authorized_and_credential_gated() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let content = "Use the verified workspace instructions.";
+        std::fs::write(directory.path().join("AGENTS.md"), content).expect("instructions");
+
+        let observed = observe_workspace_agents(
+            directory.path(),
+            Some(&FixtureRedactor),
+            &[],
+            TimestampMillis::new(11),
+            Vec::new(),
+        )
+        .expect("observe instructions");
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            observed[0].snapshot().observation_state(),
+            ContextObservationState::Available
+        );
+        assert_eq!(
+            observed[0].section(),
+            Some(ContextSection::AuthorizedInstruction)
+        );
+        assert_eq!(
+            observed[0].value().map(ContextSourceValue::as_str),
+            Some(content)
+        );
+        assert!(!format!("{observed:?}").contains(content));
+        assert_eq!(
+            context_versions().expect("versions").registry_version(),
+            ContextSourceRegistry::VERSION
+        );
+
+        std::fs::write(
+            directory.path().join("AGENTS.md"),
+            "Never persist configured-secret here",
+        )
+        .expect("secret instructions");
+        assert!(matches!(
+            observe_workspace_agents(
+                directory.path(),
+                Some(&FixtureRedactor),
+                &[],
+                TimestampMillis::new(12),
+                Vec::new(),
+            ),
+            Err(AppError::Configuration)
+        ));
+    }
+
+    #[test]
+    fn unavailable_agents_retains_stale_but_missing_is_observed_absent() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let path = directory.path().join("AGENTS.md");
+        std::fs::write(&path, "Retain this verified instruction.").expect("instructions");
+        let first = observe_workspace_agents(
+            directory.path(),
+            Some(&FixtureRedactor),
+            &[],
+            TimestampMillis::new(20),
+            Vec::new(),
+        )
+        .expect("first observation");
+        let retained = RetainedContextSource {
+            source_key: first[0].snapshot().source_key().clone(),
+            section: first[0].section().expect("section"),
+            source_revision: first[0]
+                .snapshot()
+                .source_revision()
+                .expect("revision")
+                .clone(),
+            value: first[0].value().expect("value").clone(),
+        };
+
+        std::fs::remove_file(&path).expect("remove file");
+        std::fs::create_dir(&path).expect("unreadable source fixture");
+        let stale = observe_workspace_agents(
+            directory.path(),
+            Some(&FixtureRedactor),
+            &[],
+            TimestampMillis::new(21),
+            vec![retained.clone()],
+        )
+        .expect("retain stale");
+        assert_eq!(
+            stale[0].snapshot().observation_state(),
+            ContextObservationState::RetainedStale
+        );
+        assert_eq!(
+            stale[0].value().map(ContextSourceValue::as_str),
+            Some("Retain this verified instruction.")
+        );
+
+        std::fs::remove_dir(&path).expect("remove unreadable fixture");
+        let absent = observe_workspace_agents(
+            directory.path(),
+            Some(&FixtureRedactor),
+            &[],
+            TimestampMillis::new(22),
+            vec![retained],
+        )
+        .expect("observe absence");
+        assert_eq!(
+            absent[0].snapshot().observation_state(),
+            ContextObservationState::ObservedAbsent
+        );
+        assert!(absent[0].value().is_none());
+    }
+
+    #[test]
+    fn continuation_reuses_exact_baseline_with_new_dynamic_history() {
+        let scope = scope();
+        let first =
+            prepare_context_turn(preparation(&scope, vec![memory(&scope)])).expect("first turn");
+        let epoch = first.commit().epoch().expect("epoch").clone();
+        let baseline_turn = first.manifest().clone();
+        let baseline_content = first.commit().content().clone();
+        let mut request = request();
+        request.messages.push(ChatMessage::text(
+            ChatRole::Assistant,
+            ChatContent::new("A settled tool result changed dynamic history").expect("content"),
+        ));
+        let retrieval_scope = scope.retrieval_scope(
+            SessionId::new("session-1").expect("session ID"),
+            epoch.started_at(),
+        );
+        let compatibility = EpochCompatibility::new(
+            &request,
+            None,
+            &retrieval_scope,
+            epoch.token_budget(),
+            baseline_turn.budget().durable_memory_limit(),
+        )
+        .expect("compatibility");
+
+        let continuation = prepare_frozen_continuation(FrozenContinuationInput {
+            request,
+            expected_session_sequence: SessionSequence::new(9).expect("sequence"),
+            run_turn: 2,
+            committed_at: TimestampMillis::new(20),
+            epoch,
+            baseline_turn: baseline_turn.clone(),
+            baseline_content,
+            compatibility,
+        })
+        .expect("frozen continuation");
+
+        assert_eq!(continuation.manifest().run_turn(), 2);
+        assert_eq!(
+            continuation.request().context,
+            first.request().context,
+            "provider-visible baseline bytes must be identical"
+        );
+        assert_eq!(
+            continuation.manifest().rendered_hash(),
+            baseline_turn.rendered_hash()
+        );
+        assert_eq!(
+            continuation.manifest().memory_generation(),
+            baseline_turn.memory_generation()
+        );
+        assert_eq!(continuation.manifest().sources(), baseline_turn.sources());
+        assert_ne!(
+            continuation.manifest().request_hash(),
+            baseline_turn.request_hash()
+        );
+        for (later, baseline) in continuation
+            .manifest()
+            .admissions()
+            .iter()
+            .zip(baseline_turn.admissions())
+        {
+            assert_ne!(later.admission_id(), baseline.admission_id());
+            assert_eq!(later.source_key(), baseline.source_key());
+            assert_eq!(later.source_revision(), baseline.source_revision());
+            assert_eq!(later.memory_revision_id(), baseline.memory_revision_id());
+            assert_eq!(later.rendered_hash(), baseline.rendered_hash());
+            assert_eq!(later.token_count(), baseline.token_count());
+        }
     }
 }

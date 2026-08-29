@@ -92,6 +92,11 @@ pub enum StorageRequest {
         revision_id: autoharness_domain::MemoryRevisionId,
         reply: oneshot::Sender<Result<Option<autoharness_domain::MemoryContent>, AppError>>,
     },
+    /// Loads one integrity-checked immutable revision for frozen context reconstruction.
+    LoadMemoryCandidate {
+        revision_id: autoharness_domain::MemoryRevisionId,
+        reply: oneshot::Sender<Result<Option<autoharness_store::StoredMemoryCandidate>, AppError>>,
+    },
     /// Retrieves one immutable, generation-bound memory candidate batch.
     SearchMemory {
         query: autoharness_store::MemorySearchQuery,
@@ -355,6 +360,19 @@ impl EngineHandle {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(StorageRequest::LoadMemoryContent { revision_id, reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Loads one exact verified memory revision through the single storage owner.
+    pub async fn load_memory_candidate(
+        &self,
+        revision_id: autoharness_domain::MemoryRevisionId,
+    ) -> Result<Option<autoharness_store::StoredMemoryCandidate>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadMemoryCandidate { revision_id, reply })
             .await
             .map_err(|_| AppError::WorkerStopped)?;
         response.await.map_err(|_| AppError::WorkerStopped)?
@@ -802,6 +820,15 @@ fn run(
                 let result = engine
                     .store()
                     .load_memory_content(&revision_id)
+                    .map_err(AppError::from);
+                let _ = reply.send(result);
+            }
+            StorageRequest::LoadMemoryCandidate { revision_id, reply } => {
+                use autoharness_store::MemoryStore as _;
+
+                let result = engine
+                    .store()
+                    .load_memory_candidate(&revision_id)
                     .map_err(AppError::from);
                 let _ = reply.send(result);
             }
