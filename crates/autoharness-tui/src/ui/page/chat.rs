@@ -6,22 +6,20 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::model::{
-    AttemptKey, AttemptStatus, CatalogProjection, Focus, Model, MouseAction, Notice, PendingKind,
-    Route, TranscriptItem,
+    AttemptKey, AttemptStatus, Model, MouseAction, Notice, PendingKind, Route, TranscriptItem,
 };
 use crate::text::display_safe;
 use crate::ui::component::paint::{self, wrap_cells};
 use crate::ui::component::{
-    Button, ButtonRow, ButtonVariant, Callout, Chip, ChipVariant, Hero, MessageBlock, StatusBar,
+    Button, ButtonRow, ButtonVariant, Callout, Chip, ChipVariant, MessageBlock, StatusBar,
     StatusSegment, ToolCard,
 };
 use crate::ui::icon::Icon;
-use crate::ui::layout::NamedRects;
+use crate::ui::layout::{NamedRects, prompt_surface_height};
 use crate::ui::metrics::{
-    HERO_MIN_HEIGHT, PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH,
-    SIDEBAR_BRAND_ROWS, SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET,
-    SIDEBAR_RECENT_HEADER, SIDEBAR_SESSION_CHROME, SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS,
-    TWO_ROWS,
+    PROMPT_INSET_MIN_WIDTH, ROW, SEARCH_LABEL_WIDTH, SEARCH_STATUS_MIN_WIDTH, SIDEBAR_BRAND_ROWS,
+    SIDEBAR_FOOTER_ROWS, SIDEBAR_GROUP_GAP, SIDEBAR_LABEL_INSET, SIDEBAR_RECENT_HEADER,
+    SIDEBAR_SESSION_CHROME, SIDEBAR_WORKSPACE_ROWS, STREAMING_WAVE_CELLS, TWO_ROWS,
 };
 use crate::ui::tokens::Token;
 use crate::ui::{Theme, normalized_t};
@@ -93,22 +91,12 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         if y >= inner.bottom() {
             break;
         }
-        let selected = model.route() == route;
-        let style = if selected {
-            theme.filled(Token::SurfaceSelected)
-        } else {
-            theme.style(Token::TextSecondary)
-        };
-        paint::put(buf, inner.x, y, icons.width(icon), icons.glyph(icon), style);
-        paint::put(
+        render_route_row(
             buf,
-            inner
-                .x
-                .saturating_add(icons.width(icon).saturating_add(ROW)),
-            y,
-            inner.width,
-            route.label(),
-            style,
+            Rect::new(inner.x, y, inner.width, ROW),
+            route,
+            icon,
+            model,
         );
         y = y.saturating_add(ROW);
     }
@@ -133,24 +121,34 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             break;
         }
         let active = entry.active || entry.session_id == model.session.session_id;
-        let marker = if active {
-            icons.glyph(Icon::SelectionCaret)
-        } else {
-            " "
-        };
         let style = if active {
-            theme.filled(Token::SurfaceSelected)
+            theme.style(Token::SurfaceSelectedMuted)
         } else {
             theme.style(Token::TextPrimary)
         };
+        let row = Rect::new(inner.x, y, inner.width, ROW);
+        if active {
+            paint::fill(buf, row, style, Some(' '));
+        }
+        let marker_width = icons.width(Icon::SelectionCaret);
+        if active {
+            paint::put(
+                buf,
+                row.x,
+                row.y,
+                marker_width,
+                icons.glyph(Icon::SelectionCaret),
+                style,
+            );
+        }
         let label =
             paint::ellipsize_words_with(&display_safe(&entry.title), label_width, icons.ellipsis());
         paint::put(
             buf,
-            inner.x,
-            y,
-            inner.width,
-            &format!("{marker} {label}"),
+            row.x.saturating_add(marker_width).saturating_add(ROW),
+            row.y,
+            row.width.saturating_sub(marker_width.saturating_add(ROW)),
+            &label,
             style,
         );
         y = y.saturating_add(ROW);
@@ -171,28 +169,71 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             inner.x.saturating_add(ROW),
             y,
             inner.width,
-            &workspace_label(&model.profiles().user.workspace),
-            theme.style(Token::TextPrimary),
+            icons.glyph(Icon::Workspace),
+            theme.style(Token::Accent),
+        );
+        let path_x = inner
+            .x
+            .saturating_add(icons.width(Icon::Workspace))
+            .saturating_add(TWO_ROWS);
+        let path_width = inner.right().saturating_sub(path_x);
+        let path = workspace_display_path(&model.profiles().user.workspace, icons.ellipsis());
+        let path = if path.is_empty() {
+            "workspace".to_owned()
+        } else {
+            paint::ellipsize_words_with(&path, path_width, icons.ellipsis())
+        };
+        paint::put(
+            buf,
+            path_x,
+            y,
+            path_width,
+            &path,
+            theme.style(Token::TextSecondary),
         );
     }
-    let footer = Rect::new(
-        inner.x,
-        inner.bottom().saturating_sub(SIDEBAR_FOOTER_ROWS),
-        inner.width,
-        SIDEBAR_FOOTER_ROWS,
-    );
-    let settings_style = if model.route() == Route::Settings {
-        theme.filled(Token::SurfaceSelected)
+}
+
+fn render_route_row(buf: &mut Buffer, row: Rect, route: Route, icon: Icon, model: &Model) {
+    let theme = model.theme();
+    let icons = theme.icons();
+    let selected = model.route() == route;
+    let style = if selected {
+        theme.style(Token::TextOnAccent)
     } else {
-        theme.style(Token::TextPrimary)
+        theme.style(Token::TextSecondary)
     };
+    if selected {
+        paint::fill(buf, row, theme.style(Token::SurfaceSelected), Some(' '));
+        paint::put(
+            buf,
+            row.x,
+            row.y,
+            icons.width(Icon::SelectionCaret),
+            icons.glyph(Icon::SelectionCaret),
+            style,
+        );
+    }
+    let icon_x = row
+        .x
+        .saturating_add(icons.width(Icon::SelectionCaret))
+        .saturating_add(ROW);
     paint::put(
         buf,
-        footer.x.saturating_add(ROW),
-        footer.y,
-        footer.width,
-        "Settings",
-        settings_style,
+        icon_x,
+        row.y,
+        icons.width(icon),
+        icons.glyph(icon),
+        style,
+    );
+    let label_x = icon_x.saturating_add(icons.width(icon)).saturating_add(ROW);
+    paint::put(
+        buf,
+        label_x,
+        row.y,
+        row.right().saturating_sub(label_x),
+        route.label(),
+        style,
     );
 }
 
@@ -228,15 +269,6 @@ pub fn rail_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
             MouseAction::Route(Route::Sessions),
         ));
     }
-    hits.push((
-        Rect::new(
-            inner.x,
-            inner.bottom().saturating_sub(SIDEBAR_FOOTER_ROWS),
-            inner.width,
-            SIDEBAR_FOOTER_ROWS,
-        ),
-        MouseAction::Route(Route::Settings),
-    ));
     hits
 }
 
@@ -284,7 +316,7 @@ pub fn collect_hits(regions: &NamedRects, model: &Model) -> Vec<(Rect, MouseActi
 #[must_use]
 pub fn display_lines(model: &Model) -> Vec<String> {
     if model.session.transcript.is_empty() {
-        return hero_lines(model);
+        return Vec::new();
     }
     model
         .session
@@ -294,49 +326,54 @@ pub fn display_lines(model: &Model) -> Vec<String> {
         .collect()
 }
 
+/// Visible composer rectangle within the scrollable conversation viewport.
+#[must_use]
+pub(crate) fn composer_rect(area: Rect, model: &Model) -> Option<Rect> {
+    if area.width == 0
+        || area.height == 0
+        || model.search_open() && model.search_pinned_row.is_some()
+    {
+        return None;
+    }
+    if !model.transcript.follow_tail && model.transcript.rows_from_bottom != 0 {
+        return None;
+    }
+    let composer_height = prompt_surface_height(area, model);
+    let viewport = usize::from(area.height);
+    let available = viewport.saturating_sub(usize::from(composer_height));
+    let y_offset = transcript_tail_height(model, conversation_inner_width(area), available);
+    Some(Rect::new(
+        area.x,
+        area.y
+            .saturating_add(u16::try_from(y_offset).unwrap_or(u16::MAX)),
+        area.width,
+        composer_height,
+    ))
+}
+
+fn conversation_inner_width(area: Rect) -> u16 {
+    let inset = u16::from(area.width >= PROMPT_INSET_MIN_WIDTH);
+    area.width.saturating_sub(inset.saturating_mul(TWO_ROWS))
+}
+
+fn transcript_tail_height(model: &Model, width: u16, limit: usize) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+    let mut total = 0_usize;
+    for item in model.session.transcript.iter().rev() {
+        total = total
+            .saturating_add(usize::from(item_height(model, item, width)))
+            .saturating_add(usize::from(ROW));
+        if total >= limit {
+            return limit;
+        }
+    }
+    total
+}
+
 fn sidebar_session_limit(inner: Rect) -> usize {
     usize::from(inner.height.saturating_sub(SIDEBAR_SESSION_CHROME)).max(1)
-}
-
-fn hero_lines(model: &Model) -> Vec<String> {
-    let (headline, steps, next) = hero_copy(model);
-    let mut lines = vec!["AutoHarness".to_owned(), headline.to_owned()];
-    for (index, step) in steps.iter().enumerate() {
-        lines.push(format!("{}. {step}", index + 1));
-    }
-    lines.push(next.to_owned());
-    lines
-}
-
-fn hero_copy(model: &Model) -> (&'static str, &'static [&'static str], &'static str) {
-    match &*model.catalog {
-        CatalogProjection::CredentialRequired => (
-            "Offline",
-            &["Connect a provider key", "Choose a compatible model"],
-            "/settings",
-        ),
-        CatalogProjection::Loading => {
-            ("Connecting", &["Loading provider models..."], "Please wait")
-        }
-        CatalogProjection::Failed(_) => (
-            "Connection error",
-            &["Retry discovery", "Inspect provider settings"],
-            "Ctrl+R retry",
-        ),
-        CatalogProjection::Ready { models, .. } if models.is_empty() => (
-            "No compatible models",
-            &["Refresh the catalog"],
-            "Ctrl+R refresh",
-        ),
-        CatalogProjection::Ready { .. } if model.session.selected_model.is_none() => {
-            ("Choose a model", &["Open the catalog"], "Ctrl+P")
-        }
-        CatalogProjection::Ready { .. } => (
-            "New conversation",
-            &["Connect a provider key", "Choose a compatible model"],
-            "Write a prompt below",
-        ),
-    }
 }
 
 fn item_lines(model: &Model, item: &TranscriptItem) -> Vec<String> {
@@ -377,7 +414,7 @@ fn item_lines(model: &Model, item: &TranscriptItem) -> Vec<String> {
             } else {
                 display_safe(text)
             };
-            let mut lines = vec![format!("AutoHarness  {meta}"), body];
+            let mut lines = vec![format!("Agent  {meta}"), body];
             if let AttemptStatus::Failed(failure) = status {
                 lines.push(display_safe(&failure.message));
                 lines.push(format!(
@@ -448,7 +485,6 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         return;
     }
     if model.session.transcript.is_empty() {
-        render_hero(buf, inner, model);
         return;
     }
     if model.search_pinned_row.is_none() || !model.search_open() {
@@ -467,7 +503,7 @@ struct TailSlice {
 }
 
 fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
-    let slices = tail_slices(inner, model);
+    let slices = tail_slices(inner, model, prompt_surface_height(inner, model));
     if slices.is_empty() && !model.session.transcript.is_empty() {
         render_transcript_start(buf, inner, model);
         return;
@@ -487,15 +523,35 @@ fn render_tail_window(buf: &mut Buffer, inner: Rect, model: &Model) {
     }
 }
 
-fn tail_slices(inner: Rect, model: &Model) -> Vec<TailSlice> {
+/// Clamps manual conversation scrolling to the oldest renderable viewport.
+///
+/// Input updates intentionally stay independent of terminal dimensions. The
+/// runner calls this immediately before drawing, when the actual conversation
+/// rectangle is known.
+pub(crate) fn normalize_scroll(inner: Rect, model: &mut Model) {
+    if model.transcript.follow_tail {
+        model.transcript.rows_from_bottom = 0;
+        return;
+    }
+    let maximum = maximum_scroll_offset(inner, model, prompt_surface_height(inner, model));
+    model.transcript.rows_from_bottom = model.transcript.rows_from_bottom.min(maximum);
+    if maximum == 0 {
+        model.transcript.follow_tail = true;
+    }
+}
+
+fn tail_slices(inner: Rect, model: &Model, trailing_rows: u16) -> Vec<TailSlice> {
     let viewport = usize::from(inner.height);
     let bottom = if model.transcript.follow_tail {
         0
     } else {
-        model.transcript.rows_from_bottom
+        model
+            .transcript
+            .rows_from_bottom
+            .min(maximum_scroll_offset(inner, model, trailing_rows))
     };
     let top = bottom.saturating_add(viewport);
-    let mut cursor = 0_usize;
+    let mut cursor = usize::from(trailing_rows);
     let mut slices = Vec::with_capacity(viewport.min(model.session.transcript.len()));
     for (index, item) in model.session.transcript.iter().enumerate().rev() {
         let item_height = item_height(model, item, inner.width);
@@ -544,6 +600,19 @@ fn tail_slices(inner: Rect, model: &Model) -> Vec<TailSlice> {
             .saturating_sub(content_shift);
     }
     slices
+}
+
+fn maximum_scroll_offset(inner: Rect, model: &Model, trailing_rows: u16) -> usize {
+    let content_rows =
+        model
+            .session
+            .transcript
+            .iter()
+            .fold(usize::from(trailing_rows), |rows, item| {
+                rows.saturating_add(usize::from(item_height(model, item, inner.width)))
+                    .saturating_add(1)
+            });
+    content_rows.saturating_sub(usize::from(inner.height))
 }
 
 fn render_transcript_start(buf: &mut Buffer, inner: Rect, model: &Model) {
@@ -676,9 +745,8 @@ fn item_height(model: &Model, item: &TranscriptItem, width: u16) -> u16 {
         } => {
             let meta = assistant_heading(model, status, usage, retry_of.is_some(), attempt_id);
             let body = assistant_body(text, status);
-            let message =
-                MessageBlock::new(theme, icons, Icon::Assistant, "AutoHarness", &meta, &body)
-                    .measure(width);
+            let message = MessageBlock::new(theme, icons, Icon::Assistant, "Agent", &meta, &body)
+                .measure(width);
             if let AttemptStatus::Failed(failure) = status {
                 let lines = wrap_cells(
                     &display_safe(&failure.message),
@@ -719,14 +787,6 @@ fn assistant_body(text: &str, status: &AttemptStatus) -> String {
     }
 }
 
-fn render_hero(buf: &mut Buffer, area: Rect, model: &Model) {
-    let theme = model.theme();
-    let icons = theme.icons();
-    let (headline, steps, next) = hero_copy(model);
-    let _ = HERO_MIN_HEIGHT;
-    Hero::new(theme, icons, "AutoHarness", headline, steps, next).render(buf, area);
-}
-
 fn render_item(buf: &mut Buffer, area: Rect, model: &Model, item: &TranscriptItem) -> u16 {
     let theme = model.theme();
     let icons = theme.icons();
@@ -758,9 +818,8 @@ fn render_item(buf: &mut Buffer, area: Rect, model: &Model, item: &TranscriptIte
         } => {
             let meta = assistant_heading(model, status, usage, retry_of.is_some(), attempt_id);
             let body = assistant_body(text, status);
-            let used =
-                MessageBlock::new(theme, icons, Icon::Assistant, "AutoHarness", &meta, &body)
-                    .render(buf, area);
+            let used = MessageBlock::new(theme, icons, Icon::Assistant, "Agent", &meta, &body)
+                .render(buf, area);
             if matches!(status, AttemptStatus::Streaming)
                 && icons.mode() != GlyphMode::Ascii
                 && model.motion().animating()
@@ -905,7 +964,7 @@ fn tail_recovery_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
     let buttons = recovery_buttons();
     let theme = model.theme();
     let mut hits = Vec::new();
-    for slice in tail_slices(area, model) {
+    for slice in tail_slices(area, model, prompt_surface_height(area, model)) {
         if !matches!(
             model.session.transcript.get(slice.index),
             Some(TranscriptItem::Assistant {
@@ -1022,7 +1081,6 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     composer.set_cursor_line_style(theme.style_transparent(Token::TextPrimary));
     composer.set_cursor_style(theme.filled(Token::SurfaceSelected));
     frame.render_widget(&composer, editor_area);
-    set_composer_cursor(frame, editor_area, model);
 }
 
 fn render_status(buf: &mut Buffer, area: Rect, model: &Model) {
@@ -1177,6 +1235,7 @@ fn latest_tokens(model: &Model) -> String {
 
 fn workspace_display_path(workspace: &str, ellipsis: &str) -> String {
     let normalized = display_safe(workspace.trim()).replace('\\', "/");
+    let normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized);
     if normalized.is_empty() || normalized == "." {
         return String::new();
     }
@@ -1203,7 +1262,7 @@ fn workspace_display_path(workspace: &str, ellipsis: &str) -> String {
     } else if parts.len() > 3 {
         format!("{ellipsis}/{}", parts[parts.len() - 3..].join("/"))
     } else {
-        normalized
+        normalized.to_owned()
     }
 }
 
@@ -1214,17 +1273,6 @@ fn compact_token_count(tokens: u64) -> String {
     } else {
         tokens.to_string()
     }
-}
-
-fn workspace_label(workspace: &str) -> String {
-    let trimmed = workspace.trim();
-    if trimmed.is_empty() || trimmed == "." {
-        return "workspace".to_owned();
-    }
-    trimmed
-        .rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .map_or_else(|| "workspace".to_owned(), display_safe)
 }
 
 fn paint_gradient_text(
@@ -1323,28 +1371,6 @@ fn render_search(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     }
 }
 
-fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, model: &Model) {
-    if model.focus != Focus::Composer
-        || model.overlay().is_some()
-        || model
-            .pending
-            .values()
-            .any(|pending| matches!(pending, PendingKind::SubmitPrompt(_)))
-    {
-        return;
-    }
-    let cursor = model.composer.editor.screen_cursor();
-    let x = area
-        .x
-        .saturating_add(u16::try_from(cursor.col).unwrap_or(u16::MAX));
-    let y = area
-        .y
-        .saturating_add(u16::try_from(cursor.row).unwrap_or(u16::MAX));
-    if x < area.right() && y < area.bottom() {
-        frame.set_cursor_position((x, y));
-    }
-}
-
 fn blit_item(
     dest: &mut Buffer,
     dest_area: Rect,
@@ -1370,5 +1396,36 @@ fn blit_item(
                 *to = from;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_display_path;
+
+    #[test]
+    fn workspace_paths_collapse_home_on_supported_platforms() {
+        for path in [
+            r"C:\Users\jense\Desktop\AutoHarness",
+            "C:/Users/jense/Desktop/AutoHarness",
+            r"\\?\C:\Users\jense\Desktop\AutoHarness",
+            "/Users/jense/Desktop/AutoHarness",
+            "/home/jense/Desktop/AutoHarness",
+        ] {
+            assert_eq!(
+                workspace_display_path(path, "…"),
+                "~/Desktop/AutoHarness",
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_paths_keep_short_non_home_paths_and_compact_long_ones() {
+        assert_eq!(workspace_display_path("./project", "…"), "./project");
+        assert_eq!(
+            workspace_display_path("/srv/workspaces/team/AutoHarness", "…"),
+            "…/workspaces/team/AutoHarness"
+        );
     }
 }

@@ -318,6 +318,11 @@ Only these values may be used: `0`, `1`, `2`, and `4` cells.
 Page gutters are `2` at `Md` and above and `1` below.
 Panel padding is `1` horizontally and `0` vertically unless the panel has a title, in which case `1` vertically.
 The sidebar is `26` columns at `Lg` and `32` at `Xl`, replacing today's fixed `28`.
+The rail body preserves the terminal background.
+Exactly one primary destination uses a full-width `surface_selected` row with a selection caret, route icon, and high-contrast label.
+The current recent session uses `surface_selected_muted`, so session context remains visible without competing with the active route.
+Inactive destinations remain transparent, and no primary destination is duplicated in a footer.
+Workspace paths use `/` separators and collapse recognized Windows, macOS, and Linux home prefixes to `~/`, including Windows extended-length paths.
 
 ## Components
 
@@ -326,8 +331,8 @@ Every component is unit-tested by rendering into a `TestBackend` at `40`, `60`, 
 
 | Component | Contract |
 | --- | --- |
-| `Panel` | Optional icon, title, subtitle, and footer hint row. Border style is `border_subtle` when unfocused and a gradient perimeter when focused. Returns the inner rect. |
-| `Scrim` | Dims a whole region by replacing every cell style with `surface_scrim` before a modal draws. Fixes audit finding O1. |
+| `Panel` | Optional icon, title, subtitle, and footer hint row. It clears content with a reset background so the terminal's native transparency remains visible. Border style is `border_subtle` when unfocused and a gradient perimeter when focused. Returns the inner rect. |
+| `Scrim` | Occludes background glyphs with blank cells while preserving a reset background, so modals stay readable without creating an opaque black rectangle. Fixes audit finding O1. |
 | `Modal` | Scrim plus `Panel` plus body plus a right-aligned `ButtonRow`. One sizing function with a single clamp table replaces the five existing helpers. |
 | `ButtonRow` | Buttons with primary, secondary, and danger variants; renders `label` plus key annotation; measures itself; exports `Vec<(Rect, MouseAction)>`. Fixes audit findings V2 and O3. |
 | `KeyValueTable` | Computes the label column from the widest label, right-aligns an optional trailing chip, and wraps values in a hanging indent. Fixes audit findings T2, H1, and V3. |
@@ -337,10 +342,10 @@ Every component is unit-tested by rendering into a `TestBackend` at `40`, `60`, 
 | `SegmentedControl` | Renders all options as adjacent chips with the current one filled at `Md` and above; falls back to `‹ current ›` with an `n/m` position indicator below `Md`. Fixes audit finding T11. |
 | `SettingRow` | Renders one of `Toggle`, `Choice`, `Text`, `Action`, or `Info` from data, with label, control, provenance chip, and description. The variant is the single authority for whether the row is editable, which removes the render-versus-update disagreement in audit finding T3. |
 | `StatusBar` | Priority-ordered segments; measures each and drops the lowest priority until the line fits the actual remaining width. Fixes audit finding C4. |
-| `MessageBlock` | A conversation turn: two-cell role gutter with icon and rule, role name, right-aligned turn metadata, wrapped body, and optional footer callout. Fixes audit findings C5 and C6. |
+| `MessageBlock` | A conversation turn with a compact role icon gutter, role name, right-aligned turn metadata, wrapped body, and optional footer callout. The navigation rail remains the only vertical conversation-adjacent rule. Fixes audit findings C5 and C6. |
 | `ToolCard` | Status icon, tool name, target, duration, expand caret, and an indented detail body when expanded. Fixes audit finding C8. |
 | `Callout` | Bordered semantic block with icon, title, message, and an optional `ButtonRow`. Used for failures, offline state, and empty catalogs. |
-| `Hero` | Centered brand gradient, headline, numbered step chips, and a highlighted next action. Used by the onboarding and empty-conversation states. |
+| `Hero` | Centered brand gradient, headline, numbered step chips, and a highlighted next action. Reserved for explicit onboarding surfaces; a new Chat conversation stays blank apart from its composer. |
 | `SearchField` | Icon, inline query with a visible cursor, and a right-aligned match count. Replaces the inverted `Filter:` slabs in audit findings S-3 and P1. |
 
 ## Layout and hit regions
@@ -357,6 +362,10 @@ struct Frame {
 Rendering reads `regions`; `hit_test` becomes a reverse scan of `hits`.
 No threshold literal may appear outside `ui/metrics.rs`.
 This deletes the duplicated geometry in audit finding S8 and makes the unreachable actions in audit finding S9 either wired or removed.
+
+Chat treats the transcript and composer as one scrollable flow.
+The composer starts at the top of an empty conversation, follows the final message when the conversation is shorter than the viewport, and scrolls out of view while the user browses earlier turns with Page Up, Page Down, or the mouse wheel.
+Typing, pasting, opening the inline command palette, or explicitly focusing the composer resumes tail following.
 
 ## Motion
 

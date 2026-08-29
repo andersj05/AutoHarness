@@ -187,13 +187,7 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     assert!(all.contains("/provider"));
     type_text(&mut model, "mod");
     let filtered = buffer_text(&render_model(&model, 80, 24));
-    assert!(
-        filtered
-            .lines()
-            .rev()
-            .take(4)
-            .any(|line| line.contains("/mod"))
-    );
+    assert!(filtered.lines().any(|line| line.contains("/mod")));
     assert!(filtered.contains("/models"));
     assert!(!filtered.contains("/sessions"));
 }
@@ -222,16 +216,16 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
 }
 
 #[test]
-fn inline_command_rows_stay_above_the_bottom_prompt_at_narrow_width() {
+fn inline_command_rows_follow_the_top_prompt_at_narrow_width() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
 
     let rendered = render_model(&model, 40, 12);
     let text = buffer_text(&rendered);
-    assert!(text.lines().rev().take(4).any(|line| line.contains("❯ /")));
+    assert!(text.lines().take(4).any(|line| line.contains("❯ /")));
     let command = text.find("/chat").expect("command row");
-    let prompt = text.rfind("❯ /").expect("bottom prompt");
-    assert!(command < prompt);
+    let prompt = text.find("❯ /").expect("top prompt");
+    assert!(prompt < command);
 }
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {
@@ -636,7 +630,7 @@ fn inline_and_centered_palettes_paint_the_same_command_row() {
     let command_row = |rendered: &str| {
         rendered
             .lines()
-            .find(|line| line.contains("/settings"))
+            .find(|line| line.contains("/settings") && line.contains("Show effective"))
             .map(str::trim)
             .expect("settings palette row")
             .to_owned()

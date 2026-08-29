@@ -14,8 +14,9 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
-    SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
+    CatalogProjection, Message, Model, MouseAction, ProfilesProjection, RetryPolicy,
+    SessionProjection, SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure,
+    UiIntent, UiNotice,
 };
 use crate::ui::ColorDepth;
 use crate::{update, view};
@@ -258,6 +259,18 @@ fn terminal_message(
         Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) => {
             crate::view::hit_test(model, width, height, mouse.column, mouse.row).map(Message::Mouse)
         }
+        Event::Mouse(mouse)
+            if matches!(
+                crate::view::hit_test(model, width, height, mouse.column, mouse.row),
+                Some(MouseAction::FocusTranscript | MouseAction::FocusComposer)
+            ) =>
+        {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => Some(Message::TranscriptScroll(3)),
+                MouseEventKind::ScrollDown => Some(Message::TranscriptScroll(-3)),
+                _ => None,
+            }
+        }
         Event::FocusGained | Event::FocusLost | Event::Key(_) | Event::Mouse(_) => None,
     }
 }
@@ -313,7 +326,12 @@ where
     B::Error: Display,
 {
     terminal
-        .draw(|frame| view(frame, model))
+        .draw(|frame| {
+            if let Some(transcript) = crate::ui::layout::chat_transcript_rect(frame.area(), model) {
+                crate::ui::page::chat::normalize_scroll(transcript, model);
+            }
+            view(frame, model);
+        })
         .map_err(|error| RunnerError::Draw(error.to_string()))?;
     #[cfg(feature = "benchmark-instrumentation")]
     crate::benchmark::rendered_projection(&model.session.session_id, model.session.revision);
@@ -430,7 +448,7 @@ mod tests {
         let profile_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 2,
-            row: 23,
+            row: 2,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
@@ -440,13 +458,33 @@ mod tests {
         let settings_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 14,
-            row: 23,
+            row: 2,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
             terminal_message(settings_event, &model, 80, 24),
             Some(Message::Mouse(MouseAction::FocusComposer))
         ));
+    }
+
+    #[test]
+    fn mouse_wheel_over_chat_becomes_transcript_scroll() {
+        let model = model_with_draft();
+        for (kind, expected) in [
+            (MouseEventKind::ScrollUp, Message::TranscriptScroll(3)),
+            (MouseEventKind::ScrollDown, Message::TranscriptScroll(-3)),
+        ] {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 10,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(
+                format!("{:?}", terminal_message(event, &model, 80, 24)),
+                format!("Some({expected:?})")
+            );
+        }
     }
 
     #[test]

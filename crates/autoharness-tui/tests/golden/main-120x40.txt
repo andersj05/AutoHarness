@@ -1,7 +1,7 @@
 # autoharness-tui style snapshot v1
 # 120x40
 @0
- AutoHarness             │ ☺│You                                                                                        
+ AutoHarness             │ ☺ You                                                                                        
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#4ad0f1 bg=reset
@@ -18,136 +18,132 @@
  | 25-25 fg=#22d3ee bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#86bbfc bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-31 fg=#86bbfc bg=reset bold
  | 32-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @1
-▣ Chat                   │  │  Plan a café launch.                                                                      
- | 0-0 fg=#f8fafc bg=#0b0f19 bold
- | 1-1 fg=#f2f9fc bg=reset
- | 2-5 fg=#f8fafc bg=#0b0f19 bold
- | 6-24 fg=#f2f9fc bg=reset
+                         │   Plan a café launch.                                                                        
+ | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#30d2ef bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-49 fg=#f2f9fc bg=reset
- | 50-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-47 fg=#f2f9fc bg=reset
+ | 48-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @2
-≡ Sessions               │  │  Keep it practical.                                                                       
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+❯ ▣ Chat                 │   Keep it practical.                                                                         
+ | 0-0 fg=#0b0f19 bg=#8c76d4 bold
+ | 1-1 fg=#0b0f19 bg=#8c76d4
+ | 2-2 fg=#0b0f19 bg=#8c76d4 bold
+ | 3-3 fg=#0b0f19 bg=#8c76d4
+ | 4-7 fg=#0b0f19 bg=#8c76d4 bold
+ | 8-24 fg=#0b0f19 bg=#8c76d4
  | 25-25 fg=#3ad2f0 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-48 fg=#f2f9fc bg=reset
- | 49-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-46 fg=#f2f9fc bg=reset
+ | 47-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @3
-⌘ Profiles               │                                                                                              
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+  ≡ Sessions             │                                                                                              
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#43d1f1 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @4
-⚙ Settings               │ ◆│AutoHarness                                                       complete  18 in / 41 out 
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+  ⌘ Profiles             │ ◆ Agent                                                             complete  18 in / 41 out 
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#4bd0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#67dbf1 bg=reset bold
- | 28-28 fg=#2e343f bg=reset
- | 29-39 fg=#67dbf1 bg=reset bold
- | 40-94 fg=reset bg=reset
+ | 28-28 fg=reset bg=reset
+ | 29-33 fg=#67dbf1 bg=reset bold
+ | 34-94 fg=reset bg=reset
  | 95-118 fg=#656b75 bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @5
-? Help                   │  │  Start with a two-week validation sprint:                                                 
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-5 fg=#a2a9b0 bg=reset
- | 6-24 fg=#f2f9fc bg=reset
+  ⚙ Settings             │   Start with a two-week validation sprint:                                                   
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#52d0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-70 fg=#f2f9fc bg=reset
- | 71-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-68 fg=#f2f9fc bg=reset
+ | 69-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @6
-                         │  │  1. Interview ten customers.                                                              
- | 0-24 fg=#f2f9fc bg=reset
+  ? Help                 │   1. Interview ten customers.                                                                
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-7 fg=#a2a9b0 bg=reset
+ | 8-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#58cff3 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-57 fg=#f2f9fc bg=reset
- | 58-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-55 fg=#f2f9fc bg=reset
+ | 56-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @7
- Recent                  │  │  2. Price three menu bundles.                                                             
+                         │   2. Price three menu bundles.                                                               
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#5ecef4 bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-56 fg=#f2f9fc bg=reset
+ | 57-118 fg=reset bg=reset
+ | 119-119 fg=#f2f9fc bg=reset
+@8
+ Recent                  │   3. Measure repeat intent.                                                                  
  | 0-0 fg=#f2f9fc bg=reset
  | 1-6 fg=#656b75 bg=reset
  | 7-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#5ecef4 bg=reset
+ | 25-25 fg=#63cdf5 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-58 fg=#f2f9fc bg=reset
- | 59-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-53 fg=#f2f9fc bg=reset
+ | 54-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
-@8
- Workspace               │  │  3. Measure repeat intent.                                                                
+@9
+ Workspace               │                                                                                              
  | 0-0 fg=#f2f9fc bg=reset
  | 1-9 fg=#656b75 bg=reset
  | 10-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#63cdf5 bg=reset
- | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-55 fg=#f2f9fc bg=reset
- | 56-118 fg=reset bg=reset
- | 119-119 fg=#f2f9fc bg=reset
-@9
- workspace               │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#68cdf6 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @10
-                         │ ☺│You                                                                                        
- | 0-24 fg=#f2f9fc bg=reset
+ ▸ workspace             │ ☺ You                                                                                        
+ | 0-0 fg=#f2f9fc bg=reset
+ | 1-1 fg=#22d3ee bg=reset
+ | 2-2 fg=#f2f9fc bg=reset
+ | 3-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#6dccf7 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#86bbfc bg=reset bold
- | 28-28 fg=#2e343f bg=reset
+ | 28-28 fg=reset bg=reset
  | 29-31 fg=#86bbfc bg=reset bold
  | 32-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @11
-                         │  │  What could go wrong?                                                                     
+                         │   What could go wrong?                                                                       
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#72cbf8 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-50 fg=#f2f9fc bg=reset
- | 51-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-48 fg=#f2f9fc bg=reset
+ | 49-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @12
                          │                                                                                              
@@ -155,26 +151,24 @@
  | 25-25 fg=#76caf8 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @13
-                         │ ◆│AutoHarness                                                                  retry  failed 
+                         │ ◆ Agent                                                                        retry  failed 
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#7bcaf9 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#67dbf1 bg=reset bold
- | 28-28 fg=#2e343f bg=reset
- | 29-39 fg=#67dbf1 bg=reset bold
- | 40-105 fg=reset bg=reset
+ | 28-28 fg=reset bg=reset
+ | 29-33 fg=#67dbf1 bg=reset bold
+ | 34-105 fg=reset bg=reset
  | 106-118 fg=#656b75 bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @14
-                         │  │  The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                               
+                         │   The provider returned \u{1b}[31ma partial answer\u{1b}[0m.                                 
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#7fc9fa bg=reset
  | 26-26 fg=#f2f9fc bg=reset
- | 27-27 fg=reset bg=reset
- | 28-28 fg=#2e343f bg=reset
- | 29-30 fg=reset bg=reset
- | 31-88 fg=#f2f9fc bg=reset
- | 89-118 fg=reset bg=reset
+ | 27-28 fg=reset bg=reset
+ | 29-86 fg=#f2f9fc bg=reset
+ | 87-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @15
                          │ ╭──────────────────────────────────────────────────────────────────────────────────────────╮ 
@@ -190,7 +184,7 @@
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
  | 28-28 fg=#22d3ee bg=reset
- | 29-117 fg=#f2f9fc bg=#080c18
+ | 29-117 fg=#f2f9fc bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @17
@@ -199,7 +193,7 @@
  | 25-25 fg=#8ac6fd bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
- | 28-117 fg=#f2f9fc bg=#080c18
+ | 28-117 fg=#f2f9fc bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @18
@@ -209,9 +203,9 @@
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#2e343f bg=reset
  | 28-41 fg=#fb7185 bg=#482937
- | 42-74 fg=#f2f9fc bg=#080c18
+ | 42-74 fg=#f2f9fc bg=reset
  | 75-92 fg=#0b0f19 bg=#22d3ee bold
- | 93-93 fg=#656b75 bg=#080c18
+ | 93-93 fg=#656b75 bg=reset
  | 94-117 fg=#777d86 bg=reset
  | 118-118 fg=#2e343f bg=reset
  | 119-119 fg=#f2f9fc bg=reset
@@ -228,85 +222,10 @@
  | 25-25 fg=#94c3ff bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @21
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#95c0ff bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@22
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#97bdfe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@23
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#98bafe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@24
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#99b8fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@25
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9bb5fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@26
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9cb2fe bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@27
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9daffd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@28
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9eacfd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@29
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#9fa9fd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@30
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a0a6fd bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@31
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a1a3fc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@32
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a2a0fc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@33
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a39dfc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@34
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a39afc bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@35
-                         │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a497fb bg=reset
- | 26-119 fg=#f2f9fc bg=reset
-@36
                          │ ──────────────────────────────────────────────────────────────────────────────────────────── 
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a594fb bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#95c0ff bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#22d3ee bg=reset
  | 28-28 fg=#29d3ee bg=reset
  | 29-29 fg=#2ed2ef bg=reset
@@ -399,12 +318,12 @@
  | 116-116 fg=#a68efa bg=reset
  | 117-117 fg=#a78cfa bg=reset
  | 118-118 fg=#a78bfa bg=reset
- | 119-119 fg=reset bg=reset
-@37
+ | 119-119 fg=#f2f9fc bg=reset
+@22
                          │ ● Gemini 2.5 Pro · ◐ auto · ▰ ctx <0.1%                                                      
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a691fb bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#97bdfe bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#22d3ee bg=reset
  | 28-28 fg=#a2a9b0 bg=reset
  | 29-42 fg=#f2f9fc bg=reset
@@ -415,22 +334,93 @@
  | 52-54 fg=#2e343f bg=reset
  | 55-55 fg=#22d3ee bg=reset
  | 56-56 fg=#a2a9b0 bg=reset
- | 57-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
-@38
+ | 57-119 fg=#f2f9fc bg=reset
+@23
                          │ ❯ Retry with a smaller scope.                                                                
  | 0-24 fg=#f2f9fc bg=reset
- | 25-25 fg=#a68efa bg=reset
- | 26-26 fg=reset bg=reset
+ | 25-25 fg=#98bafe bg=reset
+ | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=#67dbf1 bg=reset bold
- | 29-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
+ | 29-119 fg=#f2f9fc bg=reset
+@24
+                         │   Keep the checklist concise.                                                                
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#99b8fe bg=reset
+ | 26-55 fg=#f2f9fc bg=reset
+ | 56-56 fg=#f8fafc bg=#0b0f19 bold
+ | 57-119 fg=#f2f9fc bg=reset
+@25
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9bb5fe bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@26
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9cb2fe bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@27
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9daffd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@28
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9eacfd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@29
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#9fa9fd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@30
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a0a6fd bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@31
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a1a3fc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@32
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a2a0fc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@33
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a39dfc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@34
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a39afc bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@35
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a497fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@36
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a594fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@37
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a691fb bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
+@38
+                         │                                                                                              
+ | 0-24 fg=#f2f9fc bg=reset
+ | 25-25 fg=#a68efa bg=reset
+ | 26-119 fg=#f2f9fc bg=reset
 @39
- Settings                │   Keep the checklist concise.                                                                
+                         │                                                                                              
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#a78bfa bg=reset
- | 26-26 fg=reset bg=reset
- | 27-55 fg=#f2f9fc bg=reset
- | 56-56 fg=#f8fafc bg=#0b0f19 bold
- | 57-118 fg=#f2f9fc bg=reset
- | 119-119 fg=reset bg=reset
+ | 26-119 fg=#f2f9fc bg=reset

@@ -18,25 +18,36 @@ fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
     // operation and still present the full interface.
     let mut session = PtySession::start(&environment, 24, 80);
 
-    // The first draw names the offline state and directs the user through the
-    // redesigned zero-shell provider and model setup path.
+    // The first draw stays quiet and leaves setup available through commands.
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("Offline")
-                && text.contains("Connect a provider key")
-                && text.contains("Choose a compatible model")
-                && text.contains("/settings")
-                && text.contains("Ask AutoHarness")
+            text.contains("no model")
+                && text.contains("Ask Agent")
+                && !text.contains("Connect a provider key")
+                && !text.contains("Choose a compatible model")
         },
-        "first draw should show the complete credential-free launch surface",
+        "first draw should show the clean credential-free Chat surface",
     );
+    let cursor_show_count = session
+        .raw_output()
+        .windows(b"\x1b[?25h".len())
+        .filter(|window| *window == b"\x1b[?25h")
+        .count();
     session.type_text("/settings");
     session.send_bytes(b"\r");
     session.wait_for(
         |screen| screen.contents().contains("Settings"),
         "the settings command should open the settings route",
+    );
+    assert_eq!(
+        session
+            .raw_output()
+            .windows(b"\x1b[?25h".len())
+            .filter(|window| *window == b"\x1b[?25h")
+            .count(),
+        cursor_show_count,
+        "interactive redraws must keep the hardware cursor hidden behind the styled software cursor"
     );
 
     // Quit with Ctrl+C: clean exit code and restored terminal.

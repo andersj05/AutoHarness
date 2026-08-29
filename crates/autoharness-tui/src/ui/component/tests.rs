@@ -399,10 +399,29 @@ fn modal_scrim_occludes_background_and_intent_selects_the_border_rule() {
         for x in area.x..area.right() {
             let outside = x < frame.x || x >= frame.right() || y < frame.y || y >= frame.bottom();
             if outside {
-                assert_eq!(buf.cell((x, y)).expect("scrim cell").symbol(), " ");
+                let cell = buf.cell((x, y)).expect("scrim cell");
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(
+                    cell.bg,
+                    theme
+                        .style(Token::SurfaceScrim)
+                        .bg
+                        .expect("scrim background intent"),
+                    "scrim background at {x},{y}"
+                );
             }
         }
     }
+    let body_cell = buf
+        .cell((frame.x.saturating_add(2), frame.y.saturating_add(3)))
+        .expect("modal body cell");
+    assert_eq!(
+        body_cell.bg,
+        theme
+            .style_transparent(Token::TextPrimary)
+            .bg
+            .expect("transparent body background intent")
+    );
     assert_eq!(
         buf.cell((frame.x, frame.y)).expect("danger border").fg,
         theme.style(Token::Danger).fg.expect("danger foreground")

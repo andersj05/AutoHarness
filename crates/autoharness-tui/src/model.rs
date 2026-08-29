@@ -745,7 +745,7 @@ pub struct ComposerState {
 impl Default for ComposerState {
     fn default() -> Self {
         let mut editor = TextArea::default();
-        editor.set_placeholder_text("Ask AutoHarness...");
+        editor.set_placeholder_text("Ask Agent...");
         editor.set_wrap_mode(WrapMode::WordOrGlyph);
         editor.set_cursor_line_style(Style::default());
         let mut state = Self { editor };
@@ -1159,6 +1159,8 @@ pub enum Message {
     Input(ratatui_textarea::Input),
     /// Semantic click action derived from a visible terminal hit region.
     Mouse(MouseAction),
+    /// Mouse-wheel movement over the Chat conversation, positive away from the tail.
+    TranscriptScroll(i16),
     /// Bracketed paste content.
     Paste(String),
     /// Newest session projection.
@@ -1186,6 +1188,10 @@ impl Debug for Message {
         match self {
             Self::Input(_) => formatter.write_str("Input([REDACTED])"),
             Self::Mouse(action) => formatter.debug_tuple("Mouse").field(action).finish(),
+            Self::TranscriptScroll(rows) => formatter
+                .debug_tuple("TranscriptScroll")
+                .field(rows)
+                .finish(),
             Self::Paste(_) => formatter.write_str("Paste([REDACTED])"),
             Self::SessionChanged(session) => formatter
                 .debug_tuple("SessionChanged")
@@ -1724,7 +1730,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+Y", "copy the visible transcript"),
             ("Ctrl+Z", "undo the latest archive or unarchive"),
             ("Esc", "cancel streaming output"),
-            ("Alt+Up / Alt+Down", "scroll the transcript"),
+            ("PgUp/PgDn", "scroll the transcript; mouse wheel also works"),
             ("Ctrl+End", "follow live output again"),
             ("Ctrl+/", "command palette"),
             ("F1", "this help"),
@@ -1738,7 +1744,7 @@ pub(crate) const HELP_SECTIONS: &[HelpSection] = &[
             ("Type", "write the prompt"),
             ("Paste", "insert multiline text"),
             ("Esc", "cancel streaming output"),
-            ("Alt+Up / Alt+Down", "scroll the transcript"),
+            ("PgUp/PgDn", "scroll the transcript; mouse wheel also works"),
         ],
     },
     HelpSection {

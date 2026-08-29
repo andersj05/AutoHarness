@@ -1459,21 +1459,21 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Permanently deletes a settled non-active session.
+    /// Permanently deletes a settled session and keeps one open conversation.
     ///
-    /// Deletion of the active session is refused locally because the running
-    /// coordinator owns its aggregates; the user must switch first.
+    /// Deleting the current session first prepares the newest other open
+    /// session, then swaps to it only after export and deletion succeed.
     async fn delete_session(
         &mut self,
         request_id: RequestId,
         raw_session_id: String,
     ) -> Result<(), AppError> {
-        if raw_session_id == self.session_id.as_str() || self.active.is_some() {
+        if self.active.is_some() {
             self.reject(
                 request_id,
                 UiFailure::new(
                     ErrorClass::Conflict,
-                    "Switch to another session before deleting this one",
+                    "Cancel or finish the active response before deleting a session",
                     RetryPolicy::Now,
                 ),
             )
@@ -1492,6 +1492,7 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
+        let deleting_current = session_id == self.session_id;
         let summaries = self.engine.list_sessions().await?;
         let Some(summary) = summaries
             .iter()
@@ -1509,6 +1510,56 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
+        let replacement = if deleting_current {
+            let Some(replacement_summary) = summaries.iter().find(|candidate| {
+                candidate.session_id() != &session_id && candidate.status() == SessionStatus::Active
+            }) else {
+                self.reject(
+                    request_id,
+                    UiFailure::new(
+                        ErrorClass::Conflict,
+                        "Create another session before deleting your only open session",
+                        RetryPolicy::Now,
+                    ),
+                )
+                .await?;
+                return Ok(());
+            };
+            let replacement_id = replacement_summary.session_id().clone();
+            let events = match self.engine.load_events(replacement_id.clone()).await {
+                Ok(events) => events,
+                Err(_) => {
+                    self.reject(
+                        request_id,
+                        UiFailure::new(
+                            ErrorClass::Storage,
+                            "The next session could not be loaded, so nothing was deleted",
+                            RetryPolicy::Now,
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            let aggregate = match SessionAggregate::rehydrate(replacement_id.clone(), &events) {
+                Ok(aggregate) => aggregate,
+                Err(_) => {
+                    self.reject(
+                        request_id,
+                        UiFailure::new(
+                            ErrorClass::Storage,
+                            "The next session failed validation, so nothing was deleted",
+                            RetryPolicy::Never,
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+            Some((replacement_id, aggregate))
+        } else {
+            None
+        };
         let expected_last_sequence = summary.last_sequence().get();
         let delete_result = self
             .engine
@@ -1516,8 +1567,18 @@ impl Coordinator {
             .await;
         match delete_result {
             Ok(_) => {
+                if let Some((replacement_id, aggregate)) = replacement {
+                    self.session_id = replacement_id;
+                    self.session = aggregate;
+                    self.ports
+                        .sessions
+                        .send_replace(Arc::new(projection::session(&self.session)));
+                }
                 self.publish_sessions().await?;
                 self.commit(request_id).await?;
+                if deleting_current {
+                    self.maybe_resume_after_tools().await?;
+                }
             }
             Err(AppError::Store(autoharness_store::StoreError::InvalidSessionTransition)) => {
                 self.reject(
@@ -4517,6 +4578,77 @@ mod tests {
                 .any(|summary| summary.session_id() == &created_session_id),
             "the fresh session must remain durably discoverable"
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_current_session_switches_to_the_next_open_session() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("delete-current.sqlite3");
+        let (actor, first_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let initial_session = Arc::new(projection::session(&session));
+        let (mut ui, app) = bounded_ports(
+            initial_session,
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::new(
+            first_id.clone(),
+            session,
+            actor.handle(),
+            None,
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+        let _ =
+            wait_for_session_list(&mut ui.session_lists, |list| !list.sessions.is_empty()).await;
+
+        let create_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::CreateSession {
+                request_id: create_request,
+            })
+            .await
+            .expect("create intent");
+        expect_commit(&mut ui, create_request).await;
+        let second = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id != first_id.as_str()
+        })
+        .await;
+
+        let delete_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::DeleteSession {
+                request_id: delete_request,
+                session_id: second.session_id.clone(),
+            })
+            .await
+            .expect("delete current intent");
+        expect_commit(&mut ui, delete_request).await;
+        let replacement = wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id == first_id.as_str()
+        })
+        .await;
+        assert_eq!(replacement.session_id, first_id.as_str());
+        let listed =
+            wait_for_session_list(&mut ui.session_lists, |list| list.sessions.len() == 1).await;
+        assert_eq!(listed[0].session_id, first_id.as_str());
+        assert!(listed[0].active);
+
+        shutdown.cancel();
+        task.await
+            .expect("coordinator join")
+            .expect("coordinator shutdown");
+        actor.shutdown().await.expect("actor shutdown");
+
+        let store = SqliteStore::open(database).expect("reopen store");
+        let summaries = store.list_sessions().expect("session summaries");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id(), &first_id);
+        let archive_name = format!("autoharness-session-{}.export.v1.json", second.session_id);
+        assert!(directory.path().join(archive_name).is_file());
     }
 
     #[tokio::test]

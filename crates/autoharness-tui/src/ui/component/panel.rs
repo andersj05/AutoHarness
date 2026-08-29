@@ -8,7 +8,7 @@ use super::super::icon::{Icon, IconSet};
 use super::super::metrics::{PANEL_PAD_X, PANEL_PAD_Y, PANEL_PAD_Y_TITLED};
 use super::super::theme::Theme;
 use super::super::tokens::Token;
-use super::paint::{clear_surface, ellipsize_words_with, put};
+use super::paint::{clear_transparent, ellipsize_words_with, put};
 
 /// Framed panel.
 pub struct Panel<'a> {
@@ -67,7 +67,7 @@ impl<'a> Panel<'a> {
         if area.width == 0 || area.height == 0 {
             return area;
         }
-        clear_surface(buf, area, self.theme);
+        clear_transparent(buf, area, self.theme);
         paint_border(buf, area, self.theme, self.icons, self.focused);
         let mut y = area.y.saturating_add(1);
         if let Some(title) = self.title {

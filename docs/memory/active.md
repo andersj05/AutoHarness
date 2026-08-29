@@ -1,20 +1,20 @@
 # Active memory
 
-**Last reviewed:** 2026-08-27
+**Last reviewed:** 2026-08-28
 
 **Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
 
-**Status:** Phase 3.10 steps 0 through 9 are on `dev`; step 10 local Windows implementation and validation pass on `feat/tui-redesign-validation`, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
+**Status:** Phase 3.10 implementation is on `dev` and `main`; follow-up conversation-flow and session-management polish passes local workspace, conformance, render-cost, and real-PTY validation on `feat/tui-conversation-flow`, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
 
 ## Current objective
 
-Finish Phase 3.10 step 10 on one final candidate without changing route semantics, overlay ownership, durable intents, or the settings schema.
+Promote one final Phase 3.10 candidate, including the conversation-flow polish, without changing route semantics, overlay ownership, durable intents, or the settings schema.
 
 Keep the Phase 3.9 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until the same candidate passes Windows, macOS, and Linux PTY CI, three human terminal smokes, and the approved release checklist.
 
-Phase 3.10 steps 0 through 9 are implemented.
-The local Windows portion of step 10 is complete and recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
+Phase 3.10 steps 0 through 10 are implemented and promoted through `dev` to `main`.
+The remaining release evidence is recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
 
 ## Current repository state
 
@@ -34,23 +34,26 @@ The local Windows portion of step 10 is complete and recorded in [the validation
 - Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; the Models tab saves a compatible model and reasoning effort as the active profile default, fresh sessions select it durably, and catalog refresh does not overwrite an intentional session-specific model.
 - The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
 - `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
-- Wide terminals show a persistent navigation rail separated by one vertical accent rule; the rail is 26 columns at `Lg` and 32 at `Xl`, and narrower terminals collapse it without introducing a compact Chat Profile|Settings footer.
-- Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `Hero`, `StatusBar`, and `SearchField`, keeps You / AutoHarness roles, places the gradient rule between the transcript and the prompt, preserves the terminal background through its rail, transcript, and composer, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
-- The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
+- Wide terminals show a persistent transparent navigation rail separated by one vertical accent rule; the active route has one full-width theme fill with a caret and icon, the active recent session uses a quieter selected surface, duplicate footer routes are absent, the rail is 26 columns at `Lg` and 32 at `Xl`, and narrower terminals collapse it without introducing a compact Chat Profile|Settings footer.
+- Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `StatusBar`, and `SearchField`, keeps You / Agent roles without a redundant per-message vertical rule, places the gradient rule above the prompt, preserves the terminal background through its rail, transcript, and composer, keeps the hardware cursor hidden behind its styled software cursor, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
+- The transcript and composer share one scroll flow: a blank conversation places the composer at the top, short conversations place it immediately after the final message, long conversations tail-follow with the composer visible, and Page Up, Page Down, Alt+Up, Alt+Down, or the mouse wheel can scroll it out of view; manual scrolling clamps at the oldest complete viewport instead of clearing or accumulating an unreachable offset, while typing, pasting, command entry, focus, and Ctrl+End resume the tail.
+- Empty Chat sessions render no onboarding hero or numbered provider and model instructions, and successful session switches do not spend a row on a redundant `Session opened` notice.
+- The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, collapses recognized home paths to `~/` with forward separators, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
 - Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
 - Settings is a responsive two-pane workspace with nine categories, editable typed rows, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
-- Sessions is a responsive grouped list and detail workspace with deterministic relative ages, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, and a shared search field.
+- Sessions is a responsive grouped list and detail workspace with deterministic relative ages, exact UTC date and time details, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, a shared search field, and action buttons whose measured render and mouse regions share one geometry.
+- Deleting the current session is allowed when another open session exists, exports the authoritative event stream first, and atomically presents the newest replacement session after the deletion succeeds.
 - Models persists the selected model and thinking level together from one workspace, while Providers uses catalog and saved-connection panes with grouped identity, connection, credential, and default tables and measured action buttons.
-- Every modal-like dialog now uses the shared scrim, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
+- Every modal-like dialog now uses the shared transparent scrim, reset-background panel body, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
 - The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
 - The Phase 3.10 conformance harness pins 5,035 style-aware cells across nineteen routes and overlays, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
 - Reduced motion produces identical frames at different tick times for every conformance surface, NoColor semantic states have distinct modifier signatures, and source guards keep presentation colors and symbols in their declared authorities.
-- Tail-following Chat rendering scans only the visible transcript window, so 32-turn and 4,096-turn renders use the same 333 allocations and approximately 67.5 KiB while remaining inside the recorded pre-redesign allocation envelope.
+- Tail-following Chat rendering scans only the visible transcript window, so 32-turn and 4,096-turn release renders use the same 417 allocations and approximately 69 KiB while remaining inside the recorded pre-redesign allocation envelope.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
-- Eight real-PTY scenario binaries now contain twelve tests for first run, routed shell navigation, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, and Basic16 color output.
+- Eight real-PTY scenario binaries now contain thirteen tests for first run, routed shell navigation, long-session conversation scrolling, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, and Basic16 color output.
 - The instrumented release binary and three-sample real-PTY loopback runner produce valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render intervals outside network time; the result is local smoke evidence, not authoritative reference-machine evidence.
 - Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
 - Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
@@ -73,6 +76,10 @@ The local Windows portion of step 10 is complete and recorded in [the validation
 
 ## Recently completed
 
+- On 2026-08-28, `feat/tui-conversation-flow` gave the shared wide rail one full-width theme-selected primary route with a caret and icon, moved active-session context to the quieter selected surface, removed the duplicate Settings footer action, added spacing below the brand, and reused robust home-relative workspace paths in both the rail and prompt bar; formatting, strict workspace Clippy, the complete locked workspace suite, documentation links, refreshed goldens, full visual conformance, and the real Windows routed-shell PTY journey pass.
+
+- On 2026-08-28, `feat/tui-conversation-flow` renamed the conversational assistant label to Agent, kept the terminal hardware cursor hidden during interactive redraws, made shared panels and modal scrims preserve the native terminal background, replaced raw session milliseconds with readable UTC timestamps, rebuilt the Sessions action footer around exact shared button geometry, and made confirmed deletion of the current session export it and open the newest remaining session; focused TUI and coordinator tests, two real Windows PTY journeys, formatting, strict workspace Clippy, the complete locked workspace suite, and documentation links pass.
+- On 2026-08-28, `feat/tui-conversation-flow` made the composer the final item in the scrollable conversation, added ordinary Page Up and Page Down plus mouse-wheel scrolling, clamped repeated upward scrolling at a stable populated viewport with immediate downward recovery, kept tail rendering viewport-bounded, placed a new-session composer at the top of an otherwise blank canvas, removed redundant message rules and session-opened copy, and passed formatting, strict workspace Clippy, the complete locked workspace suite, the 5,035-cell conformance matrix, the release render-cost report, and a real long-session PTY journey.
 - On 2026-08-27, `feat/tui-redesign-validation` aligned every stale real-PTY assertion with the delivered presentation, added visible rename-mode guidance, and added cross-platform real-binary smokes for Nerd Font, Unicode, and Basic16 output; all twelve explicit Windows PTY tests, formatting, strict workspace Clippy, the full locked workspace suite, warning-denied rustdoc and doctests, documentation links, isolated benchmark gates, and the release render-cost report pass locally.
 - On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison; formatting, strict workspace Clippy, the full locked workspace suite, the matrix, the allocation gate, and documentation links pass.
 - On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
@@ -152,12 +159,12 @@ The local Windows portion of step 10 is complete and recorded in [the validation
 
 ## Immediate next actions
 
-1. Designate one final candidate and collect green Windows, macOS, and Linux CI links for that exact commit.
+1. Merge the validated conversation-flow branch through `dev`, designate the resulting final candidate, and collect green Windows, macOS, and Linux CI links for that exact commit.
 2. Perform and record the Nerd Font, no-Nerd-Font, and sixteen-color human terminal smokes against the same candidate.
 3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
 4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
 5. Obtain independent release-checklist approval, then mark ADR-0016 Accepted.
-6. Promote the validated step-10 branch into `dev` and reconcile memory with the final evidence.
+6. Promote the validated final candidate into `main` and reconcile memory with the final evidence.
 
 ## Open questions
 
@@ -165,13 +172,13 @@ The local Windows portion of step 10 is complete and recorded in [the validation
 
 ## Blockers
 
-The local Windows step-10 slice is complete, but the same final candidate has not run through macOS and Linux CI or the three human terminal smokes.
+The implementation and local Windows validation are complete, but the conversation-flow candidate has not run through macOS and Linux CI or the three human terminal smokes.
 Configured router access, macOS and Linux platform vault environments, an approved reference machine, operator-owned rollback inputs, and an independent reviewer remain prerequisites for release approval.
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 9 are implemented, validated, and merged on `dev`.
-Step 10 local Windows implementation and validation are complete on `feat/tui-redesign-validation`.
+Phase 3.10 steps 0 through 10 are implemented and promoted through `dev` to `main`.
+The follow-up conversation-flow polish is locally validated on `feat/tui-conversation-flow` and still requires the normal merge and cross-platform evidence path.
 The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
 ADR-0016 stays Proposed until the cross-platform, human terminal, and release-approval gates pass on one candidate.
 Relative session timestamps now derive deterministically from the wall-clock tick and session update time.

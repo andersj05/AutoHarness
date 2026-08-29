@@ -177,13 +177,6 @@ fn ctrl(key: Key) -> Input {
     }
 }
 
-fn alt(key: Key) -> Input {
-    Input {
-        alt: true,
-        ..key_input(key)
-    }
-}
-
 fn render_model(model: &Model, width: u16, height: u16) -> TestBackend {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -757,15 +750,52 @@ fn manual_scroll_pauses_tail_follow_and_end_resumes_it() {
     let at_tail = buffer_text(&render_model(&model, 40, 12));
     assert!(at_tail.contains("message 9"));
 
-    let _ = update(&mut model, Message::Input(alt(Key::Up)));
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
     let scrolled = buffer_text(&render_model(&model, 40, 12));
     assert!(!model.transcript.follow_tail);
     assert!(!scrolled.contains("message 9"));
+    assert!(
+        !scrolled.contains('❯'),
+        "the composer should scroll away with the conversation tail"
+    );
+
+    let _ = update(&mut model, Message::Input(key_input(Key::Char('x'))));
+    let resumed_by_typing = buffer_text(&render_model(&model, 40, 12));
+    assert!(model.transcript.follow_tail);
+    assert!(resumed_by_typing.contains('❯'));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
 
     let _ = update(&mut model, Message::Input(ctrl(Key::End)));
     let followed = buffer_text(&render_model(&model, 40, 12));
     assert!(model.transcript.follow_tail);
     assert!(followed.contains("message 9"));
+}
+
+#[test]
+fn manual_scroll_stops_at_the_oldest_viewport_without_clearing() {
+    let transcript = (0..48)
+        .map(|index| TranscriptItem::User {
+            input_id: format!("input-{index}"),
+            text: format!("message {index:02}"),
+        })
+        .collect();
+    let mut model = Model::new(
+        session(12, transcript),
+        Arc::new(SessionsProjection::default()),
+        ready_catalog(),
+    );
+
+    for _ in 0..100 {
+        let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
+    }
+    let at_start = buffer_text(&render_model(&model, 40, 12));
+    assert!(at_start.contains("message 00"));
+    assert!(!at_start.contains("message 47"));
+    assert!(!at_start.contains('❯'));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::PageUp)));
+    assert_eq!(at_start, buffer_text(&render_model(&model, 40, 12)));
 }
 
 #[test]
@@ -1204,7 +1234,8 @@ fn theme_and_timestamp_preferences_change_rendered_output() {
     );
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('l'))));
     let sessions = buffer_text(&render_model(&model, 120, 40));
-    assert!(sessions.contains("1700000000000 ms"));
+    assert!(sessions.contains("2023-11-14 22:13 UTC"));
+    assert!(!sessions.contains("1700000000000 ms"));
     assert!(sessions.contains("Messages"));
 
     let _ = update(&mut model, Message::Input(ctrl(Key::Char('1'))));

@@ -53,8 +53,8 @@ pub const COMPACT_CHAT_MIN_HEIGHT: u16 = 7;
 pub const SIDEBAR_WIDTH_LG: u16 = 26;
 /// Sidebar width at the extra-large breakpoint.
 pub const SIDEBAR_WIDTH_XL: u16 = 32;
-/// Brand row above the rail destinations.
-pub const SIDEBAR_BRAND_ROWS: u16 = 1;
+/// Brand row plus breathing room above the rail destinations.
+pub const SIDEBAR_BRAND_ROWS: u16 = 2;
 /// Primary route rows in the rebuilt rail.
 pub const SIDEBAR_NAV_COUNT: u16 = 5;
 /// Blank row between the rail and the recent-session group.
@@ -63,8 +63,8 @@ pub const SIDEBAR_GROUP_GAP: u16 = 1;
 pub const SIDEBAR_RECENT_HEADER: u16 = 1;
 /// Workspace heading plus the current project label.
 pub const SIDEBAR_WORKSPACE_ROWS: u16 = 2;
-/// Bottom action row in the rail.
-pub const SIDEBAR_FOOTER_ROWS: u16 = 1;
+/// No duplicate route is reserved below the workspace context.
+pub const SIDEBAR_FOOTER_ROWS: u16 = 0;
 /// Rows reserved around the sidebar session list.
 pub const SIDEBAR_SESSION_CHROME: u16 = SIDEBAR_BRAND_ROWS
     + SIDEBAR_NAV_COUNT
@@ -184,15 +184,16 @@ pub const PROFILE_DETAIL_CHROME_ROWS: u16 = 9;
 
 /// Session action bar uses the long hint at or above this width.
 pub const SESSION_HELP_WIDE: u16 = 50;
+/// Session action bar can show every measured action at or above this width.
+pub const SESSION_ACTIONS_FULL_WIDTH: u16 = 76;
+/// Session action bar keeps rename between the compact and full widths.
+pub const SESSION_ACTIONS_MEDIUM_WIDTH: u16 = 54;
 /// Sessions use list and detail panes at the medium breakpoint and above.
 pub const SESSION_TWO_PANE_MIN_WIDTH: u16 = 72;
 /// Session list share in the two-pane workspace.
 pub const SESSION_LIST_PERCENT: u16 = 58;
 /// Session detail share in the two-pane workspace.
 pub const SESSION_DETAIL_PERCENT: u16 = 42;
-/// Session action hits land this many rows above the frame bottom.
-pub const SESSION_ACTION_FROM_BOTTOM: u16 = 2;
-
 /// Inline command palette shows at most this many grouped result rows.
 pub const INLINE_PALETTE_MAX_ROWS: u16 = 10;
 /// Inline palette left inset.

@@ -38,7 +38,7 @@ fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     first.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("durable offline response") && text.contains("Ask AutoHarness")
+            text.contains("durable offline response") && text.contains("Ask Agent")
         },
         "resize should redraw the complete active surface without artifacts",
     );

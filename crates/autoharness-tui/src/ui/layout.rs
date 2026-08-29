@@ -14,7 +14,7 @@ use super::metrics::{
     PALETTE_MODAL_CHROME_ROWS, PALETTE_MODAL_LIST_TOP_CHROME, PROFILE_COMPACT_WIDTH,
     PROFILE_DETAIL_PERCENT, PROFILE_DETAIL_PERCENT_STACKED, PROFILE_LIST_PERCENT,
     PROFILE_LIST_PERCENT_STACKED, PROFILE_TWO_PANE_MIN_WIDTH, PROMPT_INSET_MIN_WIDTH, ROW,
-    SESSION_ACTION_FROM_BOTTOM, SESSION_HELP_WIDE, SETTINGS_BODY_INSET_X,
+    SESSION_ACTIONS_FULL_WIDTH, SESSION_ACTIONS_MEDIUM_WIDTH, SETTINGS_BODY_INSET_X,
     SETTINGS_BODY_INSET_X_TOTAL, SETTINGS_BODY_INSET_Y, SETTINGS_BODY_INSET_Y_TOTAL,
     SETTINGS_CATEGORY_RAIL_COMPACT, SETTINGS_CATEGORY_RAIL_WIDE, SETTINGS_CATEGORY_RAIL_XS,
     SETTINGS_FOOTER_ROWS, STARTUP_MAX_HEIGHT, STARTUP_MAX_WIDTH, STARTUP_MIN_HEIGHT,
@@ -258,48 +258,10 @@ fn fill_page_regions(regions: &mut NamedRects, model: &Model) {
 }
 
 fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
-    let content = regions.content;
-    if content.width < COMPACT_CHAT_MIN_WIDTH || content.height < COMPACT_CHAT_MIN_HEIGHT {
-        let composer_height = prompt_surface_height(content, model);
-        let transcript_height = content.height.saturating_sub(composer_height);
-        regions.transcript = Some(Rect::new(
-            content.x,
-            content.y,
-            content.width,
-            transcript_height,
-        ));
-        regions.composer = Some(Rect::new(
-            content.x,
-            content.y.saturating_add(transcript_height),
-            content.width,
-            composer_height,
-        ));
-    } else {
-        let composer_height = prompt_surface_height(content, model);
-        let notice_height = if model.notice.is_some() {
-            if presentation(model).compact {
-                ROW
-            } else {
-                TWO_ROWS
-            }
-        } else {
-            0
-        };
-        let search_height = u16::from(model.search_open());
-        let chunks = Split::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(ROW),
-                Constraint::Length(notice_height),
-                Constraint::Length(search_height),
-                Constraint::Length(composer_height),
-            ])
-            .split(content);
-        regions.transcript = Some(chunks[0]);
-        regions.notice = (notice_height > 0).then_some(chunks[1]);
-        regions.search = (search_height > 0).then_some(chunks[2]);
-        regions.composer = Some(chunks[3]);
-    }
+    fill_chat_viewport_regions(regions, model);
+    regions.composer = regions
+        .transcript
+        .and_then(|transcript| crate::ui::page::chat::composer_rect(transcript, model));
     if let Some(composer) = regions.composer {
         let inset = u16::from(composer.width >= PROMPT_INSET_MIN_WIDTH);
         let surface = Rect::new(
@@ -317,6 +279,46 @@ fn fill_chat_regions(regions: &mut NamedRects, model: &Model) {
         };
         regions.composer_metadata = Some(Rect::new(surface.x, metadata_y, surface.width, ROW));
     }
+}
+
+fn fill_chat_viewport_regions(regions: &mut NamedRects, model: &Model) {
+    let content = regions.content;
+    if content.width < COMPACT_CHAT_MIN_WIDTH || content.height < COMPACT_CHAT_MIN_HEIGHT {
+        regions.transcript = Some(content);
+    } else {
+        let notice_height = if model.notice.is_some() {
+            if presentation(model).compact {
+                ROW
+            } else {
+                TWO_ROWS
+            }
+        } else {
+            0
+        };
+        let search_height = u16::from(model.search_open());
+        let chunks = Split::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(ROW),
+                Constraint::Length(notice_height),
+                Constraint::Length(search_height),
+            ])
+            .split(content);
+        regions.transcript = Some(chunks[0]);
+        regions.notice = (notice_height > 0).then_some(chunks[1]);
+        regions.search = (search_height > 0).then_some(chunks[2]);
+    }
+}
+
+/// Returns the Chat conversation viewport without constructing paint-order hits.
+#[must_use]
+pub(crate) fn chat_transcript_rect(area: Rect, model: &Model) -> Option<Rect> {
+    if model.route() != Route::Chat {
+        return None;
+    }
+    let mut regions = shell_regions(area, model);
+    fill_chat_viewport_regions(&mut regions, model);
+    regions.transcript
 }
 
 fn fill_settings_regions(regions: &mut NamedRects) {
@@ -425,10 +427,20 @@ pub fn inline_palette_rect(area: Rect, model: &Model) -> Rect {
         .min(INLINE_PALETTE_MAX_ROWS)
         .saturating_add(INLINE_PALETTE_CHROME_ROWS)
         .min(area.height.saturating_sub(prompt_height));
+    let composer = crate::ui::page::chat::composer_rect(area, model).unwrap_or(Rect::new(
+        area.x,
+        area.bottom().saturating_sub(prompt_height),
+        area.width,
+        prompt_height,
+    ));
+    let y = if composer.y.saturating_sub(area.y) >= height {
+        composer.y.saturating_sub(height)
+    } else {
+        composer.bottom().min(area.bottom().saturating_sub(height))
+    };
     Rect::new(
         area.x.saturating_add(INLINE_PALETTE_INSET_X),
-        area.bottom()
-            .saturating_sub(prompt_height.saturating_add(height)),
+        y,
         area.width
             .saturating_sub(INLINE_PALETTE_INSET_X_TOTAL)
             .min(MODAL_MAX_WIDTH),
@@ -688,34 +700,60 @@ fn push_settings_row_hits(hits: &mut Vec<(Rect, MouseAction)>, body: Rect, model
 }
 
 fn push_session_hits(hits: &mut Vec<(Rect, MouseAction)>, regions: &NamedRects, model: &Model) {
-    let row_y = regions
-        .area
-        .height
-        .saturating_sub(SESSION_ACTION_FROM_BOTTOM);
-    let row = Rect::new(regions.content.x, row_y, regions.content.width, ROW);
-    let inner_width = regions.content.width.saturating_sub(TWO_ROWS);
-    let text = if model.overlay() == Some(OverlayKind::Confirmation) {
-        "[ Y Confirm ]  [ N Cancel ]"
-    } else if inner_width >= SESSION_HELP_WIDE {
-        "[ Open ] Enter  [ Rename ] Ctrl+R  [ Archive ] Ctrl+A  [ Delete ] Ctrl+D  Esc"
-    } else {
-        "[ Open ]  [ Rename ]  [ Delete ]  Esc"
-    };
-    for (x, width, label) in bracket_spans(text) {
-        let action = match label.as_str() {
-            "[ Open ]" => MouseAction::SessionOpen,
-            "[ Rename ]" => MouseAction::SessionRename,
-            "[ Archive ]" => MouseAction::SessionArchive,
-            "[ Delete ]" => MouseAction::SessionDelete,
-            "[ Y Confirm ]" => MouseAction::Confirm,
-            "[ N Cancel ]" => MouseAction::Cancel,
-            _ => continue,
-        };
-        hits.push((
-            Rect::new(row.x.saturating_add(x), row.y, width, ROW),
-            action,
+    let row = session_action_rect(regions.content);
+    let buttons = session_action_buttons(model, row.width);
+    hits.extend(ButtonRow::new(model.theme(), &buttons).regions(row));
+}
+
+/// Exact session footer rectangle shared by painting and hit testing.
+#[must_use]
+pub(crate) fn session_action_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(ROW),
+        area.bottom().saturating_sub(TWO_ROWS),
+        area.width.saturating_sub(TWO_ROWS),
+        ROW,
+    )
+}
+
+/// Contextual session actions that fit the available footer width.
+#[must_use]
+pub(crate) fn session_action_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
+    let archived = model.browser.selected.as_ref().is_some_and(|selected| {
+        model
+            .browser_entries()
+            .iter()
+            .any(|entry| &entry.session_id == selected && entry.archived)
+    });
+    let mut buttons = vec![Button::new(
+        "Open",
+        Some("Enter".to_owned()),
+        ButtonVariant::Primary,
+        MouseAction::SessionOpen,
+    )];
+    if width >= SESSION_ACTIONS_MEDIUM_WIDTH {
+        buttons.push(Button::new(
+            "Rename",
+            Some("Ctrl+R".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::SessionRename,
         ));
     }
+    if width >= SESSION_ACTIONS_FULL_WIDTH {
+        buttons.push(Button::new(
+            if archived { "Restore" } else { "Archive" },
+            Some("Ctrl+A".to_owned()),
+            ButtonVariant::Secondary,
+            MouseAction::SessionArchive,
+        ));
+    }
+    buttons.push(Button::new(
+        "Delete",
+        Some("Ctrl+D".to_owned()),
+        ButtonVariant::Danger,
+        MouseAction::SessionDelete,
+    ));
+    buttons
 }
 
 fn push_profile_hits(hits: &mut Vec<(Rect, MouseAction)>, area: Rect, model: &Model) {
@@ -1171,24 +1209,6 @@ fn filtered_models(model: &Model) -> Vec<&crate::model::ModelSummary> {
                     .contains(&query)
         })
         .collect()
-}
-
-fn bracket_spans(text: &str) -> Vec<(u16, u16, String)> {
-    let mut spans = Vec::new();
-    let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find('[') {
-        let start = search_from + rel;
-        let Some(end_rel) = text[start..].find(']') else {
-            break;
-        };
-        let end = start + end_rel;
-        let label = text[start..=end].to_owned();
-        let x = u16::try_from(text[..start].width()).unwrap_or(u16::MAX);
-        let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
-        spans.push((x, width, label));
-        search_from = end.saturating_add(1);
-    }
-    spans
 }
 
 #[cfg(test)]

@@ -288,7 +288,7 @@ fn colored_paint(token: Token, ramp: &Ramp) -> TokenPaint {
         Token::SurfaceSunken => surface(ramp.surface_sunken, ramp.text_primary, token),
         Token::SurfaceRaised => surface(ramp.surface_raised, ramp.text_primary, token),
         Token::SurfaceOverlay => surface(ramp.surface_overlay, ramp.text_primary, token),
-        Token::SurfaceScrim => surface(ramp.surface_scrim, ramp.text_muted, token),
+        Token::SurfaceScrim => transparent(ramp.text_muted),
         Token::SurfaceSelected => surface(ramp.surface_selected, ramp.text_on_accent, token),
         Token::SurfaceSelectedMuted => {
             surface(ramp.surface_selected_muted, ramp.text_primary, token)
