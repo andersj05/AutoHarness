@@ -1,10 +1,10 @@
 use autoharness_domain::{
     AttemptFailure, AttemptId, CapabilityKind, CapabilityRequest, Causation, CommandEnvelope,
-    CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass, ErrorCode, EventEnvelope,
-    EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer, PermissionDecisionId,
-    PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage, ResourceRef,
-    ResponseText, RetryAdvice, RunLimits, SessionId, TimestampMillis, ToolArguments, ToolCallId,
-    ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
+    CommandId, CommandPayload, ContextTurnId, CorrelationId, DeliveryMode, ErrorClass, ErrorCode,
+    EventEnvelope, EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer,
+    PermissionDecisionId, PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage,
+    ResourceRef, ResponseText, RetryAdvice, RunLimits, SessionId, Sha256Digest, TimestampMillis,
+    ToolArguments, ToolCallId, ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
 };
 use autoharness_engine::{
     AttemptStatus, CommandRejection, EngineError, EventMetadataSource, GeneratedEventMetadata,
@@ -48,6 +48,7 @@ fn tool_effect_requires_frozen_permission_and_resumes_after_durable_settlement()
             attempt_id: attempt.clone(),
         },
     );
+    bind_context_turn(&mut engine, "bind-turn-one", &attempt, 1);
     execute(
         &mut engine,
         "turn-one",
@@ -213,6 +214,7 @@ fn tool_effect_requires_frozen_permission_and_resumes_after_durable_settlement()
             attempt_id: attempt.clone(),
         },
     );
+    bind_context_turn(&mut engine, "bind-turn-two", &attempt, 2);
     execute(
         &mut engine,
         "turn-two",
@@ -260,6 +262,26 @@ fn input_id() -> InputId {
 
 fn attempt_id(value: &str) -> AttemptId {
     AttemptId::new(value).expect("valid attempt ID")
+}
+
+fn bind_context_turn(
+    engine: &mut InMemoryEngine<CounterMetadata>,
+    name: &str,
+    attempt_id: &AttemptId,
+    run_turn: u32,
+) {
+    execute(
+        engine,
+        name,
+        CommandPayload::BindContextTurn {
+            session_id: session_id(),
+            attempt_id: attempt_id.clone(),
+            run_turn,
+            context_turn_id: ContextTurnId::new(format!("context-{attempt_id}-{run_turn}"))
+                .expect("context turn ID"),
+            manifest_hash: Sha256Digest::new(format!("{run_turn:064x}")).expect("manifest hash"),
+        },
+    );
 }
 
 fn model() -> ModelRef {

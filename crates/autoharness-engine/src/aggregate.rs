@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoharness_domain::{
-    AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload, DeliveryMode,
-    EVENT_SCHEMA_V1, EventEnvelope, EventId, EventPayload, InputId, ModelRef, PermissionAnswer,
-    PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RetryAdvice, RunLimits,
-    SessionId, SessionSequence, SessionTitle, TimestampMillis, ToolCallId, ToolCallSpec,
-    ToolOutput, UsageSnapshot,
+    AttemptFailure, AttemptId, Causation, CommandEnvelope, CommandId, CommandPayload,
+    ContextTurnId, DeliveryMode, EVENT_SCHEMA_V1, EventEnvelope, EventId, EventPayload, InputId,
+    ModelRef, PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText,
+    RetryAdvice, RunLimits, SessionId, SessionSequence, SessionTitle, Sha256Digest,
+    TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput, UsageSnapshot,
 };
 
 use crate::{CommandRejection, ReplayError};
@@ -74,6 +74,41 @@ impl AttemptStatus {
             self,
             Self::Completed | Self::Failed | Self::Cancelled | Self::Unknown
         )
+    }
+}
+
+/// Exact durable context identity bound to one provider turn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextTurnBinding {
+    run_turn: u32,
+    context_turn_id: ContextTurnId,
+    manifest_hash: Sha256Digest,
+    bound_sequence: SessionSequence,
+}
+
+impl ContextTurnBinding {
+    /// Returns the one-based provider turn receiving this context.
+    #[must_use]
+    pub const fn run_turn(&self) -> u32 {
+        self.run_turn
+    }
+
+    /// Returns the stable committed context-manifest identity.
+    #[must_use]
+    pub const fn context_turn_id(&self) -> &ContextTurnId {
+        &self.context_turn_id
+    }
+
+    /// Returns the canonical committed context-manifest digest.
+    #[must_use]
+    pub const fn manifest_hash(&self) -> &Sha256Digest {
+        &self.manifest_hash
+    }
+
+    /// Returns the session sequence at which the binding became durable.
+    #[must_use]
+    pub const fn bound_sequence(&self) -> SessionSequence {
+        self.bound_sequence
     }
 }
 
@@ -182,6 +217,8 @@ pub struct AttemptProjection {
     failure: Option<AttemptFailure>,
     run_limits: Option<RunLimits>,
     turns_started: u32,
+    context_turn_bindings: Vec<ContextTurnBinding>,
+    provider_dispatch_ready: bool,
     started_at: Option<TimestampMillis>,
 }
 
@@ -257,6 +294,27 @@ impl AttemptProjection {
         self.turns_started
     }
 
+    /// Returns exact context bindings in one-based provider-turn order.
+    #[must_use]
+    pub fn context_turn_bindings(&self) -> &[ContextTurnBinding] {
+        &self.context_turn_bindings
+    }
+
+    /// Returns a durable context binding not yet consumed by a dispatch boundary.
+    #[must_use]
+    pub fn pending_context_turn(&self) -> Option<&ContextTurnBinding> {
+        let expected = self.turns_started.checked_add(1)?;
+        self.context_turn_bindings
+            .last()
+            .filter(|binding| binding.run_turn == expected)
+    }
+
+    /// Returns whether lifecycle state permits preparing the next provider dispatch.
+    #[must_use]
+    pub fn is_provider_dispatch_ready(&self) -> bool {
+        self.status == AttemptStatus::InFlight && self.provider_dispatch_ready
+    }
+
     /// Returns the durable wall-clock start used to reconstruct elapsed run time.
     #[must_use]
     pub const fn started_at(&self) -> Option<TimestampMillis> {
@@ -293,6 +351,7 @@ pub struct SessionAggregate {
     attempt_indexes: BTreeMap<AttemptId, usize>,
     tool_calls: Vec<ToolCallProjection>,
     tool_call_indexes: BTreeMap<ToolCallId, usize>,
+    context_turn_ids: BTreeSet<ContextTurnId>,
     applied_event_ids: BTreeSet<EventId>,
     applied_command_ids: BTreeSet<CommandId>,
     last_sequence: Option<SessionSequence>,
@@ -314,6 +373,7 @@ impl SessionAggregate {
             attempt_indexes: BTreeMap::new(),
             tool_calls: Vec::new(),
             tool_call_indexes: BTreeMap::new(),
+            context_turn_ids: BTreeSet::new(),
             applied_event_ids: BTreeSet::new(),
             applied_command_ids: BTreeSet::new(),
             last_sequence: None,
@@ -614,6 +674,43 @@ impl SessionAggregate {
                     limits: *limits,
                 }
             }
+            CommandPayload::BindContextTurn {
+                attempt_id,
+                run_turn,
+                context_turn_id,
+                manifest_hash,
+                ..
+            } => {
+                self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
+                if self.context_turn_ids.contains(context_turn_id) {
+                    return Err(CommandRejection::DuplicateContextTurn {
+                        session_id: self.session_id.clone(),
+                        context_turn_id: context_turn_id.clone(),
+                    });
+                }
+                let attempt = self
+                    .attempt(attempt_id)
+                    .expect("attempt status validation guarantees presence");
+                let expected = attempt.turns_started.checked_add(1);
+                if !attempt.provider_dispatch_ready
+                    || expected != Some(*run_turn)
+                    || attempt.pending_context_turn().is_some()
+                    || attempt
+                        .run_limits
+                        .is_some_and(|limits| expected.is_none_or(|turn| turn > limits.max_turns))
+                {
+                    return Err(CommandRejection::InvalidContextTurnBinding {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                    });
+                }
+                EventPayload::ContextTurnBound {
+                    attempt_id: attempt_id.clone(),
+                    run_turn: *run_turn,
+                    context_turn_id: context_turn_id.clone(),
+                    manifest_hash: manifest_hash.clone(),
+                }
+            }
             CommandPayload::StartRunTurn { attempt_id, .. } => {
                 self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
                 let attempt = self
@@ -625,11 +722,18 @@ impl SessionAggregate {
                         attempt_id: attempt_id.clone(),
                     }
                 })?;
-                if attempt
-                    .run_limits
-                    .is_some_and(|limits| turn > limits.max_turns)
+                let exact_adjacent_binding =
+                    attempt.pending_context_turn().is_some_and(|binding| {
+                        binding.run_turn == turn
+                            && self.last_sequence == Some(binding.bound_sequence)
+                    });
+                if !attempt.provider_dispatch_ready
+                    || !exact_adjacent_binding
+                    || attempt
+                        .run_limits
+                        .is_some_and(|limits| turn > limits.max_turns)
                 {
-                    return Err(CommandRejection::InvalidAttemptState {
+                    return Err(CommandRejection::InvalidContextTurnBinding {
                         session_id: self.session_id.clone(),
                         attempt_id: attempt_id.clone(),
                     });
@@ -745,10 +849,15 @@ impl SessionAggregate {
             }
             CommandPayload::PauseAttemptForTools { attempt_id, .. } => {
                 self.require_attempt_status(attempt_id, &[AttemptStatus::InFlight])?;
-                if !self
-                    .tool_calls
-                    .iter()
-                    .any(|call| call.attempt_id == *attempt_id)
+                let attempt = self
+                    .attempt(attempt_id)
+                    .expect("attempt status validation guarantees presence");
+                if attempt.provider_dispatch_ready
+                    || attempt.turns_started == 0
+                    || !self
+                        .tool_calls
+                        .iter()
+                        .any(|call| call.attempt_id == *attempt_id)
                 {
                     return Err(CommandRejection::InvalidAttemptState {
                         session_id: self.session_id.clone(),
@@ -1120,6 +1229,8 @@ impl SessionAggregate {
                     failure: None,
                     run_limits: None,
                     turns_started: 0,
+                    context_turn_bindings: Vec::new(),
+                    provider_dispatch_ready: false,
                     started_at: None,
                 });
                 self.attempt_indexes.insert(attempt_id.clone(), index);
@@ -1131,6 +1242,7 @@ impl SessionAggregate {
                     &[AttemptStatus::Prepared],
                     |attempt| {
                         attempt.status = AttemptStatus::InFlight;
+                        attempt.provider_dispatch_ready = true;
                         attempt.started_at = Some(event.occurred_at());
                     },
                 )?;
@@ -1241,18 +1353,77 @@ impl SessionAggregate {
                     },
                 )?;
             }
+            EventPayload::ContextTurnBound {
+                attempt_id,
+                run_turn,
+                context_turn_id,
+                manifest_hash,
+            } => {
+                self.require_created_for_replay(event)?;
+                if self.context_turn_ids.contains(context_turn_id) {
+                    return Err(ReplayError::DuplicateContextTurn {
+                        session_id: self.session_id.clone(),
+                        context_turn_id: context_turn_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                let attempt =
+                    self.attempt(attempt_id)
+                        .ok_or_else(|| ReplayError::UnknownAttempt {
+                            session_id: self.session_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                            event_id: event.event_id().clone(),
+                        })?;
+                let expected = attempt.turns_started.checked_add(1);
+                if attempt.status != AttemptStatus::InFlight
+                    || !attempt.provider_dispatch_ready
+                    || expected != Some(*run_turn)
+                    || attempt.pending_context_turn().is_some()
+                    || attempt
+                        .run_limits
+                        .is_some_and(|limits| expected.is_none_or(|turn| turn > limits.max_turns))
+                {
+                    return Err(ReplayError::IllegalContextTurnBinding {
+                        session_id: self.session_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        event_id: event.event_id().clone(),
+                    });
+                }
+                self.transition_attempt(
+                    event,
+                    attempt_id,
+                    &[AttemptStatus::InFlight],
+                    |attempt| {
+                        attempt.context_turn_bindings.push(ContextTurnBinding {
+                            run_turn: *run_turn,
+                            context_turn_id: context_turn_id.clone(),
+                            manifest_hash: manifest_hash.clone(),
+                            bound_sequence: event.sequence(),
+                        });
+                    },
+                )?;
+                self.context_turn_ids.insert(context_turn_id.clone());
+            }
             EventPayload::RunTurnStarted { attempt_id, turn } => {
+                let exact_adjacent_binding = self.attempt(attempt_id).is_some_and(|attempt| {
+                    attempt.provider_dispatch_ready
+                        && attempt.pending_context_turn().is_some_and(|binding| {
+                            binding.run_turn == *turn
+                                && binding.bound_sequence.checked_next() == Some(event.sequence())
+                        })
+                });
                 let expected = self
                     .attempt(attempt_id)
                     .and_then(|attempt| attempt.turns_started.checked_add(1));
-                if expected != Some(*turn)
+                if !exact_adjacent_binding
+                    || expected != Some(*turn)
                     || self.attempt(attempt_id).is_some_and(|attempt| {
                         attempt
                             .run_limits
                             .is_some_and(|limits| *turn > limits.max_turns)
                     })
                 {
-                    return Err(ReplayError::IllegalAttemptTransition {
+                    return Err(ReplayError::IllegalContextTurnBinding {
                         session_id: self.session_id.clone(),
                         attempt_id: attempt_id.clone(),
                         event_id: event.event_id().clone(),
@@ -1264,6 +1435,7 @@ impl SessionAggregate {
                     &[AttemptStatus::InFlight],
                     |attempt| {
                         attempt.turns_started = *turn;
+                        attempt.provider_dispatch_ready = false;
                     },
                 )?;
             }
@@ -1418,7 +1590,9 @@ impl SessionAggregate {
                 )?;
             }
             EventPayload::AttemptPausedForTools { attempt_id } => {
-                if !self
+                if self.attempt(attempt_id).is_none_or(|attempt| {
+                    attempt.provider_dispatch_ready || attempt.turns_started == 0
+                }) || !self
                     .tool_calls
                     .iter()
                     .any(|call| call.attempt_id == *attempt_id)
@@ -1452,7 +1626,10 @@ impl SessionAggregate {
                     event,
                     attempt_id,
                     &[AttemptStatus::AwaitingTools],
-                    |attempt| attempt.status = AttemptStatus::InFlight,
+                    |attempt| {
+                        attempt.status = AttemptStatus::InFlight;
+                        attempt.provider_dispatch_ready = true;
+                    },
                 )?;
             }
         }

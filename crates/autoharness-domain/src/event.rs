@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, EventId, InputId, ModelRef,
-    PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RunLimits,
-    SessionId, SessionSequence, SessionTitle, TimestampMillis, ToolCallId, ToolCallSpec,
-    ToolOutput, UsageSnapshot,
+    AttemptFailure, AttemptId, CommandId, ContextTurnId, CorrelationId, DeliveryMode, EventId,
+    InputId, ModelRef, PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText,
+    ResponseText, RunLimits, SessionId, SessionSequence, SessionTitle, Sha256Digest,
+    TimestampMillis, ToolCallId, ToolCallSpec, ToolOutput, UsageSnapshot,
 };
 
 /// The only event schema emitted by the initial engine slice.
@@ -199,6 +199,17 @@ pub enum EventPayload {
         attempt_id: AttemptId,
         /// Bounded authority dimensions.
         limits: RunLimits,
+    },
+    /// One exact durable context manifest was bound to the next provider turn.
+    ContextTurnBound {
+        /// Owning attempt.
+        attempt_id: AttemptId,
+        /// Exact one-based provider turn being prepared.
+        run_turn: u32,
+        /// Stable identity of the committed context manifest.
+        context_turn_id: ContextTurnId,
+        /// Canonical digest of the committed context manifest.
+        manifest_hash: Sha256Digest,
     },
     /// A provider turn crossed its durable pre-dispatch boundary.
     RunTurnStarted {
