@@ -1,0 +1,17 @@
+[package]
+name = "autoharness-memory"
+description = "Deterministic context construction and revisioned memory policy for AutoHarness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+autoharness-domain = { path = "../autoharness-domain" }
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
