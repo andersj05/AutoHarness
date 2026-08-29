@@ -156,7 +156,7 @@ fn memory_projection() -> MemoryProjection {
             1,
             "Use keyboard-first navigation for terminal workflows while keeping mouse targets available.",
             "explicit user preference",
-            MemoryTrust::UserApproved,
+            MemoryTrust::UntrustedProposal,
             1_724_000_000_000,
             None,
             vec![
@@ -278,6 +278,9 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
     assert!(!wide.contains("Admission history"));
     assert!(wide.contains("Prefer concise"));
     assert!(wide.contains("workspace instruction"));
+    assert!(wide.contains("Evidence"));
+    assert!(wide.contains("Findings 0"));
+    assert!(!wide.contains("Review data"));
 
     let extra_wide = text(&render(&model, 140, 50));
     assert!(extra_wide.contains("Admission history"));
@@ -309,6 +312,20 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
         assert!(compact.contains("Revision detail"));
         assert!(compact.contains("Prefer concise"));
     }
+}
+
+#[test]
+fn empty_memory_index_invites_the_first_saved_memory() {
+    let mut model = model();
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(8, Vec::new(), Vec::new(), 0, false)
+            .expect("empty ready projection"),
+    ));
+    let _ = update(&mut model, Message::Input(alt('6')));
+
+    let rendered = text(&render(&model, 80, 24));
+    assert!(rendered.contains("No saved memories yet."));
+    assert!(!rendered.contains("No admitted memories yet."));
 }
 
 #[test]
@@ -890,6 +907,8 @@ fn correction_review_and_proposal_decisions_carry_exact_revision_guards() {
     );
     let rendered = text(&render(&review, 80, 24));
     assert!(rendered.contains("Exact proposed content"));
+    assert!(rendered.contains("Trust: untrusted proposal"));
+    assert!(!rendered.contains("Trust: user approved"));
     assert!(rendered.contains("user current-account"));
     assert!(rendered.contains("Observed preference"));
     assert!(rendered.contains("possible contradiction"));

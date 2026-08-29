@@ -325,7 +325,7 @@ fn render_list(buf: &mut Buffer, area: Rect, model: &Model) {
                     failure.message.as_str()
                 }),
             MemoryLoadState::Ready if model.memory().summaries().is_empty() => {
-                "No admitted memories yet."
+                "No saved memories yet."
             }
             MemoryLoadState::Ready if model.memory_has_next_page() || model.memory().stale() => {
                 "No matches on this page; use Next for older results."
@@ -558,6 +558,7 @@ fn render_detail(buf: &mut Buffer, area: Rect, model: &Model) {
         .revision_context()
         .map_or(0, |context| context.findings().len())
         .to_string();
+    let findings_label = format!("Findings {finding_count}");
     let rows = vec![
         KeyValue {
             label: "State",
@@ -590,9 +591,9 @@ fn render_detail(buf: &mut Buffer, area: Rect, model: &Model) {
             chip: Some(sensitivity),
         },
         KeyValue {
-            label: "Review data",
+            label: "Evidence",
             value: &evidence_count,
-            chip: Some(&finding_count),
+            chip: Some(&findings_label),
         },
         KeyValue {
             label: "Created",
