@@ -268,11 +268,7 @@ fn render_search(buf: &mut Buffer, area: Rect, model: &Model) {
             x,
             area.y,
             area.right().saturating_sub(x).saturating_sub(TWO_ROWS),
-            if model.memory().stale() {
-                "Search loaded page"
-            } else {
-                "Search memories"
-            },
+            "Search all memory",
             model.theme().style(Token::TextMuted),
         );
     }

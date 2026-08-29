@@ -284,6 +284,7 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
 
     let medium = text(&render(&model, 80, 24));
     assert!(medium.contains("Memory index"));
+    assert!(medium.contains("Search all memory"));
     assert!(medium.contains("Revision detail"));
     assert!(!medium.contains("Admission history"));
     assert!(medium.contains("Alt+N remember  Alt+A actions"));
