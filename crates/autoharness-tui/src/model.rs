@@ -28,6 +28,11 @@ const MAX_MEMORY_EVIDENCE: usize = 16;
 const MAX_MEMORY_RELATIONS: usize = 16;
 const MAX_MEMORY_FINDINGS: usize = 16;
 const MAX_MEMORY_REASON_FACTORS: usize = 16;
+const MAX_MEMORY_VIEW_CURSOR_CHARS: usize = 512;
+/// Maximum literal characters accepted by one Memory workspace query.
+pub const MAX_MEMORY_VIEW_QUERY_CHARS: usize = 256;
+/// Fixed bounded page size requested by the Memory workspace.
+pub const MEMORY_VIEW_PAGE_SIZE: u16 = 100;
 
 /// Monotonic, process-local identity used to correlate a UI request.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1574,39 +1579,188 @@ pub enum MemoryLoadState {
     Failed(UiFailure),
 }
 
+/// Opaque stable boundary returned by application-owned Memory inspection.
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryViewCursor(String);
+
+impl MemoryViewCursor {
+    /// Creates a bounded non-empty cursor without interpreting its contents.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err("memory view cursor must not be empty");
+        }
+        if value.chars().count() > MAX_MEMORY_VIEW_CURSOR_CHARS {
+            return Err("memory view cursor is too long");
+        }
+        if value.chars().any(char::is_control) {
+            return Err("memory view cursor contains control characters");
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the opaque cursor for application-owned decoding.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Debug for MemoryViewCursor {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("MemoryViewCursor([REDACTED])")
+    }
+}
+
+/// User navigation that selected the requested stable Memory page boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MemoryPageDirection {
+    /// Start from the newest matching row.
+    #[default]
+    First,
+    /// Advance to the next older page.
+    Next,
+    /// Return to a previously visited newer page.
+    Previous,
+}
+
+/// One bounded authoritative Memory workspace request.
+#[derive(Clone, Eq, PartialEq)]
+pub struct MemoryViewQuery {
+    literal: String,
+    status: MemoryStatusFilter,
+    scope: MemoryScopeFilter,
+    direction: MemoryPageDirection,
+    before: Option<MemoryViewCursor>,
+    limit: u16,
+}
+
+impl MemoryViewQuery {
+    /// Constructs a literal query over one stable page boundary.
+    pub fn new(
+        literal: impl Into<String>,
+        status: MemoryStatusFilter,
+        scope: MemoryScopeFilter,
+        direction: MemoryPageDirection,
+        before: Option<MemoryViewCursor>,
+        limit: u16,
+    ) -> Result<Self, &'static str> {
+        let literal = literal.into();
+        if literal.chars().count() > MAX_MEMORY_VIEW_QUERY_CHARS {
+            return Err("memory view query is too long");
+        }
+        if literal.chars().any(char::is_control) {
+            return Err("memory view query contains control characters");
+        }
+        if limit == 0 || limit > MEMORY_VIEW_PAGE_SIZE {
+            return Err("memory view page limit is out of range");
+        }
+        if direction == MemoryPageDirection::First && before.is_some() {
+            return Err("first memory page cannot have a cursor");
+        }
+        if direction == MemoryPageDirection::Next && before.is_none() {
+            return Err("next memory page requires a cursor");
+        }
+        Ok(Self {
+            literal,
+            status,
+            scope,
+            direction,
+            before,
+            limit,
+        })
+    }
+
+    /// Returns exact literal search text without query-language interpretation.
+    #[must_use]
+    pub fn literal(&self) -> &str {
+        &self.literal
+    }
+
+    /// Returns the requested status filter.
+    #[must_use]
+    pub const fn status(&self) -> MemoryStatusFilter {
+        self.status
+    }
+
+    /// Returns the requested scope filter.
+    #[must_use]
+    pub const fn scope(&self) -> MemoryScopeFilter {
+        self.scope
+    }
+
+    /// Returns how the user reached this page boundary.
+    #[must_use]
+    pub const fn direction(&self) -> MemoryPageDirection {
+        self.direction
+    }
+
+    /// Returns the exclusive newest-first boundary, when not on the first page.
+    #[must_use]
+    pub const fn before(&self) -> Option<&MemoryViewCursor> {
+        self.before.as_ref()
+    }
+
+    /// Returns the fixed bounded row limit.
+    #[must_use]
+    pub const fn limit(&self) -> u16 {
+        self.limit
+    }
+}
+
+impl Debug for MemoryViewQuery {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryViewQuery")
+            .field("literal", &"[REDACTED]")
+            .field("status", &self.status)
+            .field("scope", &self.scope)
+            .field("direction", &self.direction)
+            .field("has_cursor", &self.before.is_some())
+            .field("limit", &self.limit)
+            .finish()
+    }
+}
+
 /// Bounded read model consumed by the read-only Memory workspace.
 #[derive(Clone, Eq, PartialEq)]
 pub struct MemoryProjection {
+    view_generation: u64,
     generation: u64,
     state: MemoryLoadState,
     summaries: Vec<MemorySummary>,
     details: Vec<MemoryDetail>,
     total: u32,
     stale: bool,
+    next_cursor: Option<MemoryViewCursor>,
 }
 
 impl MemoryProjection {
     #[must_use]
     pub const fn loading(generation: u64) -> Self {
         Self {
+            view_generation: 0,
             generation,
             state: MemoryLoadState::Loading,
             summaries: Vec::new(),
             details: Vec::new(),
             total: 0,
             stale: false,
+            next_cursor: None,
         }
     }
 
     #[must_use]
     pub fn failed(generation: u64, failure: UiFailure) -> Self {
         Self {
+            view_generation: 0,
             generation,
             state: MemoryLoadState::Failed(failure),
             summaries: Vec::new(),
             details: Vec::new(),
             total: 0,
             stale: false,
+            next_cursor: None,
         }
     }
 
@@ -1647,13 +1801,27 @@ impl MemoryProjection {
             return Err("memory detail has no matching summary");
         }
         Ok(Self {
+            view_generation: 0,
             generation,
             state: MemoryLoadState::Ready,
             summaries,
             details,
             total,
             stale,
+            next_cursor: None,
         })
+    }
+
+    /// Binds this response to one exact UI view request and its next-page boundary.
+    #[must_use]
+    pub fn with_view_page(
+        mut self,
+        view_generation: u64,
+        next_cursor: Option<MemoryViewCursor>,
+    ) -> Self {
+        self.view_generation = view_generation;
+        self.next_cursor = next_cursor;
+        self
     }
 
     #[must_use]
@@ -1679,6 +1847,18 @@ impl MemoryProjection {
         self.generation
     }
 
+    /// Monotonic UI query generation, independent from durable ledger generation.
+    #[must_use]
+    pub const fn view_generation(&self) -> u64 {
+        self.view_generation
+    }
+
+    /// Returns the stable boundary for the next older page, when one exists.
+    #[must_use]
+    pub const fn next_cursor(&self) -> Option<&MemoryViewCursor> {
+        self.next_cursor.as_ref()
+    }
+
     #[must_use]
     pub const fn stale(&self) -> bool {
         self.stale
@@ -1701,12 +1881,14 @@ impl MemoryProjection {
 impl Default for MemoryProjection {
     fn default() -> Self {
         Self {
+            view_generation: 0,
             generation: 0,
             state: MemoryLoadState::Ready,
             summaries: Vec::new(),
             details: Vec::new(),
             total: 0,
             stale: false,
+            next_cursor: None,
         }
     }
 }
@@ -1715,12 +1897,14 @@ impl Debug for MemoryProjection {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("MemoryProjection")
+            .field("view_generation", &self.view_generation)
             .field("generation", &self.generation)
             .field("state", &self.state)
             .field("summary_count", &self.summaries.len())
             .field("detail_count", &self.details.len())
             .field("total", &self.total)
             .field("stale", &self.stale)
+            .field("has_next_page", &self.next_cursor.is_some())
             .finish()
     }
 }
@@ -2211,6 +2395,12 @@ pub enum UiIntent {
         request_id: RequestId,
         session_id: String,
     },
+    /// Query one bounded authoritative Memory workspace page.
+    QueryMemory {
+        request_id: RequestId,
+        view_generation: u64,
+        query: MemoryViewQuery,
+    },
     /// Create an explicit user-authored memory.
     RememberMemory {
         request_id: RequestId,
@@ -2289,6 +2479,7 @@ impl UiIntent {
             | Self::DeleteSession { request_id, .. }
             | Self::UpdateLocalPreference { request_id, .. }
             | Self::ExportTranscript { request_id, .. }
+            | Self::QueryMemory { request_id, .. }
             | Self::RememberMemory { request_id, .. }
             | Self::ReviseMemory { request_id, .. }
             | Self::ApproveMemoryProposal { request_id, .. }
@@ -2629,6 +2820,18 @@ pub(crate) struct MemoryState {
     pub pane: MemoryPane,
     pub focus: MemoryWorkspaceFocus,
     pub admission_selected: usize,
+    /// Desired query generation, independent from durable memory mutation generation.
+    pub view_generation: u64,
+    /// Debounce deadline for the latest local query or filter change.
+    pub debounce_deadline: Option<UiInstant>,
+    /// View generation currently awaiting an authoritative response.
+    pub loading_generation: Option<u64>,
+    /// Exclusive boundary of the current requested page.
+    pub page_before: Option<MemoryViewCursor>,
+    /// Previously visited page boundaries, newest page first.
+    pub page_history: Vec<Option<MemoryViewCursor>>,
+    /// Navigation that selected the current requested boundary.
+    pub page_direction: MemoryPageDirection,
 }
 
 /// Workflow shown by the single Memory lifecycle overlay owner.
@@ -4191,10 +4394,15 @@ impl Model {
 
     /// Replaces the bounded read-only Memory projection.
     pub fn apply_memory(&mut self, memory: Arc<MemoryProjection>) {
+        if memory.view_generation() != self.memory_workspace.view_generation {
+            return;
+        }
         if memory.generation() < self.memory.generation() {
             return;
         }
         self.memory = memory;
+        self.memory_workspace.loading_generation = None;
+        self.memory_workspace.debounce_deadline = None;
         self.sync_memory_selection();
         self.dirty = true;
     }
@@ -4233,6 +4441,31 @@ impl Model {
     #[must_use]
     pub const fn memory_scope_filter(&self) -> MemoryScopeFilter {
         self.memory_workspace.scope
+    }
+
+    /// Returns the desired Memory workspace query generation.
+    #[must_use]
+    pub const fn memory_view_generation(&self) -> u64 {
+        self.memory_workspace.view_generation
+    }
+
+    /// Returns whether an authoritative Memory view response is pending.
+    #[must_use]
+    pub const fn memory_view_loading(&self) -> bool {
+        self.memory_workspace.loading_generation.is_some()
+            || self.memory_workspace.debounce_deadline.is_some()
+    }
+
+    /// Returns whether the current view has a previously visited page.
+    #[must_use]
+    pub fn memory_has_previous_page(&self) -> bool {
+        !self.memory_workspace.page_history.is_empty()
+    }
+
+    /// Returns whether the current authoritative page has an older continuation.
+    #[must_use]
+    pub fn memory_has_next_page(&self) -> bool {
+        self.memory.next_cursor().is_some()
     }
 
     /// Returns the active compact Memory drill-down pane.
