@@ -4269,16 +4269,31 @@ fn build_request(
     attempt_id: &AttemptId,
     advertise_tools: bool,
 ) -> Result<ChatRequest, ProviderError> {
+    build_request_after_cutoff(session, attempt_id, advertise_tools, None)
+}
+
+fn build_request_after_cutoff(
+    session: &SessionAggregate,
+    attempt_id: &AttemptId,
+    advertise_tools: bool,
+    compacted_through: Option<autoharness_domain::SessionSequence>,
+) -> Result<ChatRequest, ProviderError> {
     let attempt = session
         .attempt(attempt_id)
         .ok_or_else(|| ProviderError::new(ProviderErrorKind::Internal, RetryAdvice::Never))?;
+    let is_retained_completed_attempt = |candidate: &autoharness_engine::AttemptProjection| {
+        candidate.status() == EngineAttemptStatus::Completed
+            && candidate
+                .completed_sequence()
+                .is_some_and(|completed| compacted_through.is_none_or(|cutoff| completed > cutoff))
+    };
     let mut messages = Vec::new();
     for input in session.admitted_inputs().iter().filter(|input| {
         input.promoted_by().is_some()
             && (input.input_id() == attempt.input_id()
                 || session.attempts().iter().any(|candidate| {
                     candidate.input_id() == input.input_id()
-                        && candidate.status() == EngineAttemptStatus::Completed
+                        && is_retained_completed_attempt(candidate)
                 }))
     }) {
         messages.push(ChatMessage::text(
@@ -4287,7 +4302,7 @@ fn build_request(
         ));
         for response in session.attempts().iter().filter(|candidate| {
             candidate.input_id() == input.input_id()
-                && (candidate.status() == EngineAttemptStatus::Completed
+                && (is_retained_completed_attempt(candidate)
                     || (candidate.attempt_id() == attempt_id
                         && session
                             .tool_calls()
@@ -6626,6 +6641,96 @@ mod tests {
                 .expect("text message")
                 .as_str(),
             "Hello"
+        );
+    }
+
+    #[test]
+    fn provider_request_cutoff_removes_only_completed_history() {
+        let session_id = SessionId::new("session-compacted-request").expect("session ID");
+        let prior_input = InputId::new("input-prior").expect("input ID");
+        let current_input = InputId::new("input-current").expect("input ID");
+        let prior_attempt = AttemptId::new("attempt-prior").expect("attempt ID");
+        let current_attempt = AttemptId::new("attempt-current").expect("attempt ID");
+        let model = fixture_model();
+        let payloads = [
+            EventPayload::SessionCreated,
+            EventPayload::ModelSelected {
+                model: model.clone(),
+            },
+            EventPayload::InputAdmitted {
+                input_id: prior_input.clone(),
+                prompt: PromptText::new("old committed input").expect("prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            },
+            EventPayload::AttemptPrepared {
+                attempt_id: prior_attempt.clone(),
+                input_id: prior_input,
+                model: model.clone(),
+                retry_of: None,
+            },
+            EventPayload::AttemptStarted {
+                attempt_id: prior_attempt.clone(),
+            },
+            EventPayload::AttemptTextAppended {
+                attempt_id: prior_attempt.clone(),
+                text: ResponseText::new("old committed response").expect("response"),
+            },
+            EventPayload::AttemptCompleted {
+                attempt_id: prior_attempt,
+            },
+            EventPayload::InputAdmitted {
+                input_id: current_input.clone(),
+                prompt: PromptText::new("current unsettled input").expect("prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            },
+            EventPayload::AttemptPrepared {
+                attempt_id: current_attempt.clone(),
+                input_id: current_input,
+                model,
+                retry_of: None,
+            },
+            EventPayload::AttemptStarted {
+                attempt_id: current_attempt.clone(),
+            },
+        ];
+        let events = payloads
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                EventEnvelope::new_v1(
+                    EventId::new(format!("compacted-event-{index}")).expect("event ID"),
+                    session_id.clone(),
+                    SessionSequence::new(index as u64 + 1).expect("sequence"),
+                    TimestampMillis::new(index as i64),
+                    Causation::Command(
+                        CommandId::new(format!("compacted-command-{index}")).expect("command ID"),
+                    ),
+                    CorrelationId::new(format!("compacted-correlation-{index}"))
+                        .expect("correlation ID"),
+                    payload,
+                )
+            })
+            .collect::<Vec<_>>();
+        let aggregate = SessionAggregate::rehydrate(session_id, &events).expect("valid history");
+        let cutoff = aggregate
+            .attempts()
+            .first()
+            .and_then(autoharness_engine::AttemptProjection::completed_sequence)
+            .expect("durable completion sequence");
+
+        let complete = build_request(&aggregate, &current_attempt, false).expect("full request");
+        let compacted =
+            build_request_after_cutoff(&aggregate, &current_attempt, false, Some(cutoff))
+                .expect("cutoff request");
+
+        assert_eq!(complete.messages.len(), 3);
+        assert_eq!(compacted.messages.len(), 1);
+        assert_eq!(
+            compacted.messages[0]
+                .content()
+                .expect("current input")
+                .as_str(),
+            "current unsettled input"
         );
     }
 
