@@ -3876,13 +3876,11 @@ impl Coordinator {
                 } if self
                     .session
                     .tool_call(tool_call_id)
-                    .is_some_and(|call| call.attempt_id() == attempt_id) =>
+                    .is_some_and(|call| call.attempt_id() == attempt_id)
+                    && (self.provider_value_contains_secret(output.content())
+                        || guard.contains_tool_output(output.content())) =>
                 {
-                    if self.provider_value_contains_secret(output.content())
-                        || guard.contains_tool_output(output.content())
-                    {
-                        return Err(AppError::Configuration);
-                    }
+                    return Err(AppError::Configuration);
                 }
                 _ => {}
             }
@@ -8519,13 +8517,15 @@ mod tests {
                 .expect("serialize events")
                 .contains(SENTINEL)
         );
-        let requests = provider.requests.lock().expect("request lock");
-        assert_eq!(requests.len(), 2);
-        assert!(
-            !serde_json::to_string(&*requests)
-                .expect("serialize requests")
-                .contains(SENTINEL)
-        );
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            assert!(
+                !serde_json::to_string(&*requests)
+                    .expect("serialize requests")
+                    .contains(SENTINEL)
+            );
+        }
 
         shutdown.cancel();
         task.await.expect("coordinator join").expect("shutdown");
@@ -8726,13 +8726,15 @@ mod tests {
                 .expect("serialize events")
                 .contains(SENTINEL)
         );
-        let requests = provider.requests.lock().expect("request lock");
-        assert_eq!(requests.len(), 2);
-        assert!(
-            !serde_json::to_string(&*requests)
-                .expect("serialize requests")
-                .contains(SENTINEL)
-        );
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            assert!(
+                !serde_json::to_string(&*requests)
+                    .expect("serialize requests")
+                    .contains(SENTINEL)
+            );
+        }
 
         resumed_shutdown.cancel();
         resumed_task
