@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout as Split, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::model::{
     MemoryLifecycleMode, MemoryLoadState, MemoryPane, MemoryStatus, MemorySummary,
@@ -21,10 +22,10 @@ use crate::ui::layout::presentation;
 use crate::ui::metrics::{
     MEMORY_ACTIONS_FULL_WIDTH, MEMORY_ADMISSION_CONTEXT_MIN_HEIGHT, MEMORY_ADMISSION_CONTEXT_ROWS,
     MEMORY_ADMISSIONS_PERCENT_WIDE, MEMORY_CONTENT_PREVIEW_ROWS, MEMORY_DETAIL_PERCENT,
-    MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_HINT_MIN_WIDTH, MEMORY_FOOTER_MIN_HEIGHT,
-    MEMORY_LIST_PERCENT, MEMORY_LIST_PERCENT_WIDE, MEMORY_REMEMBER_EDITOR_CHROME_ROWS,
-    MEMORY_ROW_BADGE_MIN_WIDTH, MEMORY_TALL_HEADER_MIN_HEIGHT, MEMORY_TALL_LIST_MIN_HEIGHT,
-    MEMORY_THREE_PANE_MIN_WIDTH, MEMORY_TWO_PANE_MIN_WIDTH, ROW, TWO_ROWS,
+    MEMORY_DETAIL_PERCENT_WIDE, MEMORY_FOOTER_MIN_HEIGHT, MEMORY_LIST_PERCENT,
+    MEMORY_LIST_PERCENT_WIDE, MEMORY_REMEMBER_EDITOR_CHROME_ROWS, MEMORY_ROW_BADGE_MIN_WIDTH,
+    MEMORY_TALL_HEADER_MIN_HEIGHT, MEMORY_TALL_LIST_MIN_HEIGHT, MEMORY_THREE_PANE_MIN_WIDTH,
+    MEMORY_TWO_PANE_MIN_WIDTH, ROW, TWO_ROWS,
 };
 use crate::ui::{Icon, Token, normalized_t};
 
@@ -922,13 +923,22 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
     let button_row = ButtonRow::new(model.theme(), &buttons);
     let button_width = button_row.measure().min(area.width);
     let hint_width = area.width.saturating_sub(button_width).saturating_sub(ROW);
-    if hint_width >= MEMORY_FOOTER_HINT_MIN_WIDTH {
+    let full_hint = "Alt+N remember  Alt+A actions";
+    let compact_hint = "Alt+N remember";
+    let hint = if u16::try_from(full_hint.width()).unwrap_or(u16::MAX) <= hint_width {
+        Some(full_hint)
+    } else if u16::try_from(compact_hint.width()).unwrap_or(u16::MAX) <= hint_width {
+        Some(compact_hint)
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
         paint::put(
             buf,
             area.x,
             area.y,
             hint_width,
-            "Alt+N remember  Alt+A actions",
+            hint,
             model.theme().style(Token::TextMuted),
         );
     }

@@ -285,6 +285,11 @@ fn responsive_memory_page_has_clear_progressive_disclosure() {
     assert!(medium.contains("Memory index"));
     assert!(medium.contains("Revision detail"));
     assert!(!medium.contains("Admission history"));
+    assert!(medium.contains("Alt+N remember  Alt+A actions"));
+
+    let narrow = text(&render(&model, 60, 18));
+    assert!(narrow.contains("Alt+N remember"));
+    assert!(!narrow.contains("Alt+A ac"));
 
     for (width, height) in [(60, 18), (40, 12)] {
         let compact = text(&render(&model, width, height));
@@ -404,7 +409,7 @@ fn memory_projection_bounds_and_debug_redaction_are_enforced() {
     assert!(!debug.contains("workspace instruction"));
     assert!(debug.contains("summary_count"));
     let detail = projection.detail("memory-concise").expect("detail");
-    let admission_debug = format!("{:?}", &detail.admissions()[0]);
+    let admission_debug = format!("{:?}", detail.admissions()[0]);
     assert!(!admission_debug.contains("attempt-launch-1"));
     assert!(!admission_debug.contains("epoch-launch-a"));
     assert!(!admission_debug.contains("workspace scope matched"));

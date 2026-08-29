@@ -220,8 +220,6 @@ pub const MEMORY_ROW_BADGE_MIN_WIDTH: u16 = 28;
 pub const MEMORY_CONTENT_PREVIEW_ROWS: u16 = 3;
 /// Memory footer shows a context-specific direct action at or above this width.
 pub const MEMORY_ACTIONS_FULL_WIDTH: u16 = 72;
-/// Minimum spare footer cells before a keyboard hint is useful.
-pub const MEMORY_FOOTER_HINT_MIN_WIDTH: u16 = 20;
 /// Remember defaults and safety copy above the bounded editor.
 pub const MEMORY_REMEMBER_EDITOR_CHROME_ROWS: u16 = 4;
 /// Admission panes at this height reserve exact selected-turn coordinates.
