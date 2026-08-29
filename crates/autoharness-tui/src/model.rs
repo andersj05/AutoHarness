@@ -2575,6 +2575,10 @@ pub enum MouseAction {
     MemoryCycleStatus,
     /// Cycle the scope filter.
     MemoryCycleScope,
+    /// Request the previously visited authoritative Memory page.
+    MemoryPreviousPage,
+    /// Request the next authoritative Memory page.
+    MemoryNextPage,
     /// Open the selected memory detail on a compact layout.
     MemoryOpen,
     /// Return to the preceding compact Memory pane.
