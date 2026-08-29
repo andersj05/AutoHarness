@@ -2,6 +2,7 @@
 
 mod builder;
 mod canonical;
+mod compaction;
 mod error;
 mod rank;
 mod render;
@@ -15,6 +16,10 @@ pub use builder::{
     verify_context_manifest_hash, verify_rendered_context_hash,
 };
 pub use canonical::CanonicalEncoder;
+pub use compaction::{
+    COMPACTION_FACTS_VERSION, PendingSessionFact, PendingSessionFactKind,
+    effective_durable_facts_hash, verify_effective_durable_facts_hash,
+};
 pub use error::MemoryError;
 pub use rank::{
     DeterministicRankerV1, MemoryCandidate, MemoryRanker, RankFactor, RankReason, RankedMemory,

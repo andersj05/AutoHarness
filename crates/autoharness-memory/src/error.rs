@@ -11,6 +11,10 @@ pub enum MemoryError {
     DuplicateRetainedSource(ContextSourceKey),
     /// Retrieval supplied the same immutable memory revision more than once.
     DuplicateMemoryRevision(MemoryRevisionId),
+    /// Compaction supplied the same authoritative session-fact identity more than once.
+    DuplicateCompactionFact,
+    /// Compaction fact metadata did not match its exact content or active state.
+    InvalidCompactionFact,
     /// A required source could not provide a usable current or retained value.
     RequiredSourceUnavailable(ContextSourceKey),
     /// A context source returned a section that its authority cannot populate.
@@ -34,6 +38,12 @@ impl Display for MemoryError {
             }
             Self::DuplicateMemoryRevision(_) => {
                 "memory retrieval returned a duplicate immutable revision"
+            }
+            Self::DuplicateCompactionFact => {
+                "compaction received a duplicate authoritative session fact"
+            }
+            Self::InvalidCompactionFact => {
+                "compaction received memory facts with invalid active content"
             }
             Self::RequiredSourceUnavailable(_) => {
                 "a required context source had no usable current or retained value"

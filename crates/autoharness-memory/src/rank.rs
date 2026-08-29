@@ -132,7 +132,7 @@ impl MemoryRanker for DeterministicRankerV1 {
     }
 }
 
-fn eligible(scope: &RetrievalScope, candidate: &MemoryCandidate) -> bool {
+pub(crate) fn eligible(scope: &RetrievalScope, candidate: &MemoryCandidate) -> bool {
     candidate.status == MemoryRevisionStatus::Active
         && candidate.trust != TrustClass::UntrustedProposal
         && !candidate.conflicted
