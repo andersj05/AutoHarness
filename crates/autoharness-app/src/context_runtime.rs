@@ -5,9 +5,10 @@ use std::path::Path;
 use autoharness_domain::{
     AgentId, AttemptId, ContextAdmission, ContextAdmissionId, ContextBudgetAllocation,
     ContextEpochHashes, ContextEpochId, ContextEpochManifest, ContextEpochReason,
-    ContextEpochVersions, ContextSection, ContextSourceKey, ContextTokenBudget, ContextTurnId,
-    ContextTurnManifest, EstimatedTokens, MemoryGeneration, ModelRef, Sensitivity, SessionId,
-    SessionSequence, Sha256Digest, TimestampMillis, UserId, WorkspaceId,
+    ContextEpochVersions, ContextSection, ContextSourceKey, ContextSourceSnapshot,
+    ContextSourceVisibility, ContextTokenBudget, ContextTurnId, ContextTurnManifest,
+    EstimatedTokens, MemoryGeneration, ModelRef, Sensitivity, SessionId, SessionSequence,
+    Sha256Digest, TimestampMillis, UserId, WorkspaceId,
 };
 use autoharness_memory::{
     CONTEXT_BUILDER_VERSION, CONTEXT_RENDERER_VERSION, ContextBuildRequest, ContextBuilder,
@@ -16,7 +17,10 @@ use autoharness_memory::{
     RetainedContextSource, RetrievalScope, context_manifest_hash, verify_admission_rendered_hash,
     verify_context_manifest_hash, verify_rendered_context_hash,
 };
-use autoharness_provider::{ChatRequest, ContextPrelude, ModelDescriptor, SecretRedactor};
+use autoharness_provider::{
+    ChatMessage, ChatRequest, ContextPrelude, ModelDescriptor, ProviderToolDefinition,
+    SecretRedactor,
+};
 use autoharness_store::{
     ContextAdmissionContent, ContextTurnCommitRequest, ContextTurnContent, RenderedContextText,
 };
@@ -32,6 +36,8 @@ const LOCAL_USER_ID: &str = "user:local-v1";
 const DEFAULT_AGENT_ID: &str = "agent:default-v1";
 const WORKSPACE_AGENTS_SOURCE_KEY: &str = "workspace:agents-md:v1";
 const COMPACTED_HISTORY_SOURCE_KEY: &str = "session:compacted-history:v1";
+const PROVIDER_HISTORY_AUDIT_SOURCE_KEY: &str = "session:provider-history:v1";
+const PROVIDER_TOOL_STATE_AUDIT_SOURCE_KEY: &str = "session:provider-tool-state:v1";
 const COMPACTED_MESSAGE_EXCERPT_CHARS: usize = 512;
 const AUTHORIZED_INSTRUCTION_OPEN: &str = "<autoharness-authorized-instruction-v1>\n";
 const AUTHORIZED_INSTRUCTION_CLOSE: &str = "\n</autoharness-authorized-instruction-v1>";
@@ -573,6 +579,62 @@ fn validate_compacted_history(history: &CompactedHistoryV1) -> Result<(), AppErr
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct ProviderToolStateAudit<'a> {
+    schema_version: u16,
+    definitions: &'a [ProviderToolDefinition],
+    messages: Vec<&'a ChatMessage>,
+}
+
+fn dynamic_request_snapshots(
+    request: &ChatRequest,
+    observed_at: TimestampMillis,
+) -> Result<Vec<ContextSourceSnapshot>, AppError> {
+    let history = serde_json::to_vec(&request.messages)?;
+    let tool_messages = request
+        .messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                ChatMessage::ToolCall(_) | ChatMessage::ToolResult { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let tool_state = serde_json::to_vec(&ProviderToolStateAudit {
+        schema_version: 1,
+        definitions: &request.tools,
+        messages: tool_messages,
+    })?;
+    let mut snapshots = vec![
+        dynamic_audit_snapshot(PROVIDER_HISTORY_AUDIT_SOURCE_KEY, &history, observed_at)?,
+        dynamic_audit_snapshot(
+            PROVIDER_TOOL_STATE_AUDIT_SOURCE_KEY,
+            &tool_state,
+            observed_at,
+        )?,
+    ];
+    snapshots.sort_by(|left, right| left.source_key().cmp(right.source_key()));
+    Ok(snapshots)
+}
+
+fn dynamic_audit_snapshot(
+    source_key: &str,
+    exact_state: &[u8],
+    observed_at: TimestampMillis,
+) -> Result<ContextSourceSnapshot, AppError> {
+    let source_key = ContextSourceKey::new(source_key).map_err(|_| AppError::Configuration)?;
+    let source_revision = sha256_digest(exact_state)?;
+    let value_hash = Sha256Digest::new(digest_fields(&[
+        b"autoharness-context-audit-value-v1",
+        source_key.as_str().as_bytes(),
+        exact_state,
+    ]))
+    .map_err(|_| AppError::Configuration)?;
+    ContextSourceSnapshot::audit_only(source_key, source_revision, value_hash, observed_at)
+        .map_err(|_| AppError::Configuration)
+}
+
 /// Frozen epoch compatibility inputs derived from provider-neutral state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EpochCompatibility {
@@ -740,6 +802,7 @@ pub fn prepare_context_turn(
         ContextEpochMode::Compaction { epoch_id, .. } => epoch_id.clone(),
     };
     let reserved_tokens = estimated_request_bytes(&input.request)?;
+    let audit_snapshots = dynamic_request_snapshots(&input.request, input.committed_at)?;
     let builder = ContextBuilder::default();
     let built = builder.build(ContextBuildRequest {
         context_turn_id,
@@ -756,6 +819,7 @@ pub fn prepare_context_turn(
         committed_at: input.committed_at,
         retrieval_scope: input.retrieval_scope.clone(),
         observed_sources: input.observed_sources.clone(),
+        audit_snapshots,
         memory_candidates: input.memory_candidates.clone(),
     })?;
 
@@ -862,6 +926,25 @@ pub fn prepare_frozen_continuation(
         return Err(AppError::Configuration);
     }
 
+    let mut sources = input
+        .baseline_turn
+        .sources()
+        .iter()
+        .filter(|snapshot| snapshot.visibility() == ContextSourceVisibility::PreludeEligible)
+        .cloned()
+        .collect::<Vec<_>>();
+    sources.extend(dynamic_request_snapshots(
+        &input.request,
+        input.committed_at,
+    )?);
+    sources.sort_by(|left, right| left.source_key().cmp(right.source_key()));
+    if sources
+        .windows(2)
+        .any(|pair| pair[0].source_key() == pair[1].source_key())
+    {
+        return Err(AppError::Configuration);
+    }
+
     let request = match prelude.as_ref() {
         Some(prelude) => input
             .request
@@ -934,7 +1017,7 @@ pub fn prepare_frozen_continuation(
             budget,
             input.baseline_turn.rendered_token_count(),
             input.committed_at,
-            input.baseline_turn.sources().to_vec(),
+            sources.clone(),
             admissions.clone(),
         )
         .map_err(|_| AppError::Configuration)
@@ -1129,10 +1212,10 @@ mod tests {
     use autoharness_domain::{
         ConfidenceBasisPoints, ContextObservationState, ContextTokenBudget, MemoryContent,
         MemoryId, MemoryKind, MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidity,
-        ModelId, ProviderId, Sensitivity, TrustClass,
+        ModelId, ProviderCallId, ProviderId, Sensitivity, ToolArguments, ToolName, TrustClass,
     };
     use autoharness_memory::{ContextSourceRegistry, MemoryCandidate, normalized_content_hash};
-    use autoharness_provider::{ChatContent, ChatMessage, ChatRole};
+    use autoharness_provider::{ChatContent, ChatMessage, ChatRole, ProviderToolCall};
 
     use super::*;
 
@@ -1185,6 +1268,36 @@ mod tests {
             lexical_basis_points: 10_000,
             conflicted: false,
         }
+    }
+
+    fn snapshot<'a>(
+        manifest: &'a ContextTurnManifest,
+        source_key: &str,
+    ) -> &'a ContextSourceSnapshot {
+        manifest
+            .sources()
+            .iter()
+            .find(|snapshot| snapshot.source_key().as_str() == source_key)
+            .expect("source snapshot")
+    }
+
+    fn append_tool_exchange(request: &mut ChatRequest, suffix: &str) {
+        let provider_call_id =
+            ProviderCallId::new(format!("provider-call-{suffix}")).expect("provider call ID");
+        let tool_name = ToolName::new("filesystem_read").expect("tool name");
+        request
+            .messages
+            .push(ChatMessage::ToolCall(ProviderToolCall {
+                provider_call_id: provider_call_id.clone(),
+                tool_name: tool_name.clone(),
+                arguments: ToolArguments::new(serde_json::json!({"path": suffix}))
+                    .expect("tool arguments"),
+            }));
+        request.messages.push(ChatMessage::ToolResult {
+            provider_call_id,
+            tool_name,
+            content: ChatContent::new(format!("settled result {suffix}")).expect("tool result"),
+        });
     }
 
     fn preparation(
@@ -1683,7 +1796,38 @@ mod tests {
             continuation.manifest().memory_generation(),
             baseline_turn.memory_generation()
         );
-        assert_eq!(continuation.manifest().sources(), baseline_turn.sources());
+        assert_eq!(
+            continuation
+                .manifest()
+                .sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == ContextSourceVisibility::PreludeEligible
+                })
+                .collect::<Vec<_>>(),
+            baseline_turn
+                .sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == ContextSourceVisibility::PreludeEligible
+                })
+                .collect::<Vec<_>>(),
+            "epoch-baseline source snapshots must remain frozen"
+        );
+        assert_ne!(
+            snapshot(continuation.manifest(), PROVIDER_HISTORY_AUDIT_SOURCE_KEY).value_hash(),
+            snapshot(&baseline_turn, PROVIDER_HISTORY_AUDIT_SOURCE_KEY).value_hash(),
+            "changed provider-neutral history needs a new audit hash"
+        );
+        assert_eq!(
+            snapshot(
+                continuation.manifest(),
+                PROVIDER_TOOL_STATE_AUDIT_SOURCE_KEY
+            )
+            .value_hash(),
+            snapshot(&baseline_turn, PROVIDER_TOOL_STATE_AUDIT_SOURCE_KEY).value_hash(),
+            "unchanged tool state must retain its deterministic audit hash"
+        );
         assert_ne!(
             continuation.manifest().request_hash(),
             baseline_turn.request_hash()
@@ -1700,6 +1844,192 @@ mod tests {
             assert_eq!(later.memory_revision_id(), baseline.memory_revision_id());
             assert_eq!(later.rendered_hash(), baseline.rendered_hash());
             assert_eq!(later.token_count(), baseline.token_count());
+        }
+    }
+
+    #[test]
+    fn consecutive_continuations_replace_only_dynamic_audit_snapshots() {
+        let scope = scope();
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            directory.path().join("AGENTS.md"),
+            "Keep the frozen workspace contract.",
+        )
+        .expect("workspace instructions");
+        let mut first_input = preparation(&scope, vec![memory(&scope)]);
+        first_input.observed_sources = observe_workspace_agents(
+            directory.path(),
+            Some(&FixtureRedactor),
+            &[],
+            first_input.committed_at,
+            Vec::new(),
+        )
+        .expect("workspace observation");
+        let first = prepare_context_turn(first_input).expect("first turn");
+        let epoch = first.commit().epoch().expect("epoch").clone();
+        let baseline_turn = first.manifest().clone();
+        let baseline_content = first.commit().content().clone();
+        assert_eq!(
+            baseline_turn
+                .sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == ContextSourceVisibility::PreludeEligible
+                })
+                .count(),
+            1,
+            "the registered epoch source must be distinct from dynamic audit state"
+        );
+        assert!(
+            baseline_turn
+                .admissions()
+                .iter()
+                .any(|admission| admission.memory_revision_id().is_some())
+        );
+
+        let retrieval_scope = scope.retrieval_scope(
+            SessionId::new("session-1").expect("session ID"),
+            epoch.started_at(),
+        );
+        let mut second_request = request();
+        append_tool_exchange(&mut second_request, "one");
+        let second_compatibility = EpochCompatibility::new(
+            &second_request,
+            None,
+            &retrieval_scope,
+            epoch.token_budget(),
+            baseline_turn.budget().durable_memory_limit(),
+        )
+        .expect("second compatibility");
+        let prepare_second = || {
+            prepare_frozen_continuation(FrozenContinuationInput {
+                request: second_request.clone(),
+                expected_session_sequence: SessionSequence::new(9).expect("sequence"),
+                run_turn: 2,
+                committed_at: TimestampMillis::new(20),
+                epoch: epoch.clone(),
+                baseline_turn: baseline_turn.clone(),
+                baseline_content: baseline_content.clone(),
+                compatibility: second_compatibility.clone(),
+            })
+            .expect("second turn")
+        };
+        let second = prepare_second();
+        let repeated_second = prepare_second();
+        assert_eq!(second.manifest(), repeated_second.manifest());
+
+        let mut third_request = second_request;
+        append_tool_exchange(&mut third_request, "two");
+        let third_compatibility = EpochCompatibility::new(
+            &third_request,
+            None,
+            &retrieval_scope,
+            epoch.token_budget(),
+            baseline_turn.budget().durable_memory_limit(),
+        )
+        .expect("third compatibility");
+        let third = prepare_frozen_continuation(FrozenContinuationInput {
+            request: third_request,
+            expected_session_sequence: SessionSequence::new(12).expect("sequence"),
+            run_turn: 3,
+            committed_at: TimestampMillis::new(20),
+            epoch,
+            baseline_turn: baseline_turn.clone(),
+            baseline_content: baseline_content.clone(),
+            compatibility: third_compatibility,
+        })
+        .expect("third turn");
+
+        for source_key in [
+            PROVIDER_HISTORY_AUDIT_SOURCE_KEY,
+            PROVIDER_TOOL_STATE_AUDIT_SOURCE_KEY,
+        ] {
+            let second_snapshot = snapshot(second.manifest(), source_key);
+            let third_snapshot = snapshot(third.manifest(), source_key);
+            assert_eq!(
+                second_snapshot.visibility(),
+                ContextSourceVisibility::AuditOnly
+            );
+            assert_ne!(
+                second_snapshot.source_revision(),
+                third_snapshot.source_revision(),
+                "each changed dynamic source needs a distinct revision"
+            );
+            assert_ne!(
+                second_snapshot.value_hash(),
+                third_snapshot.value_hash(),
+                "each changed dynamic source needs a distinct value hash"
+            );
+            assert!(
+                second
+                    .manifest()
+                    .admissions()
+                    .iter()
+                    .all(|admission| admission.source_key().as_str() != source_key)
+            );
+        }
+        assert_ne!(
+            second.manifest().manifest_hash(),
+            third.manifest().manifest_hash()
+        );
+        assert!(verify_context_manifest_hash(second.manifest()).expect("verify second"));
+        assert!(verify_context_manifest_hash(third.manifest()).expect("verify third"));
+        assert_eq!(second.request().context, first.request().context);
+        assert_eq!(third.request().context, first.request().context);
+        assert_eq!(
+            second
+                .commit()
+                .content()
+                .admissions()
+                .iter()
+                .map(|content| content.rendered())
+                .collect::<Vec<_>>(),
+            third
+                .commit()
+                .content()
+                .admissions()
+                .iter()
+                .map(|content| content.rendered())
+                .collect::<Vec<_>>(),
+            "retained admission bytes must stay frozen"
+        );
+        assert_eq!(
+            second
+                .manifest()
+                .sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == ContextSourceVisibility::PreludeEligible
+                })
+                .collect::<Vec<_>>(),
+            baseline_turn
+                .sources()
+                .iter()
+                .filter(|source| {
+                    source.visibility() == ContextSourceVisibility::PreludeEligible
+                })
+                .collect::<Vec<_>>()
+        );
+        for (second_admission, third_admission) in second
+            .manifest()
+            .admissions()
+            .iter()
+            .zip(third.manifest().admissions())
+        {
+            assert_eq!(second_admission.source_key(), third_admission.source_key());
+            assert_eq!(
+                second_admission.source_revision(),
+                third_admission.source_revision()
+            );
+            assert_eq!(
+                second_admission.memory_revision_id(),
+                third_admission.memory_revision_id()
+            );
+            assert_eq!(
+                second_admission.rendered_hash(),
+                third_admission.rendered_hash()
+            );
+            assert_eq!(second_admission.reasons(), third_admission.reasons());
         }
     }
 }

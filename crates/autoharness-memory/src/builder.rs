@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use autoharness_domain::{
     AttemptId, ContextAdmission, ContextAdmissionFactor, ContextAdmissionId,
     ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility, ContextEpochId,
-    ContextSection, ContextSourceKey, ContextSourceSnapshot, ContextTokenBudget, ContextTurnId,
-    ContextTurnManifest, EstimatedTokens, MemoryGeneration, MemoryRevisionId, ModelRef, SessionId,
-    SessionSequence, Sha256Digest, TimestampMillis,
+    ContextSection, ContextSourceKey, ContextSourceSnapshot, ContextSourceVisibility,
+    ContextTokenBudget, ContextTurnId, ContextTurnManifest, EstimatedTokens, MemoryGeneration,
+    MemoryRevisionId, ModelRef, SessionId, SessionSequence, Sha256Digest, TimestampMillis,
 };
 
 use crate::{
@@ -55,6 +55,8 @@ pub struct ContextBuildRequest {
     pub retrieval_scope: RetrievalScope,
     /// Complete registered source observations.
     pub observed_sources: Vec<ObservedContextSource>,
+    /// Hash-only per-turn source observations that are never rendered or admitted.
+    pub audit_snapshots: Vec<ContextSourceSnapshot>,
     /// Immutable bounded retrieval candidates in arbitrary physical order.
     pub memory_candidates: Vec<MemoryCandidate>,
 }
@@ -101,11 +103,28 @@ where
             ));
         }
 
-        let snapshots: Vec<_> = request
+        if request
+            .audit_snapshots
+            .iter()
+            .any(|snapshot| snapshot.visibility() != ContextSourceVisibility::AuditOnly)
+        {
+            return Err(MemoryError::InvalidDomainValue);
+        }
+        let mut snapshots: Vec<_> = request
             .observed_sources
             .iter()
             .map(|source| source.snapshot().clone())
             .collect();
+        snapshots.extend(request.audit_snapshots.iter().cloned());
+        snapshots.sort_by(|left, right| left.source_key().cmp(right.source_key()));
+        if let Some(duplicate) = snapshots
+            .windows(2)
+            .find(|pair| pair[0].source_key() == pair[1].source_key())
+        {
+            return Err(MemoryError::DuplicateSource(
+                duplicate[0].source_key().clone(),
+            ));
+        }
         let mut rendered_sources = Vec::new();
         for source in &request.observed_sources {
             if let Some(rendered) = render_source(source, &self.sizer)? {
@@ -682,6 +701,7 @@ mod tests {
                 sensitivity_ceiling: Sensitivity::Internal,
             },
             observed_sources: Vec::new(),
+            audit_snapshots: Vec::new(),
             memory_candidates,
         }
     }
@@ -707,6 +727,49 @@ mod tests {
         assert!(verify_context_manifest_hash(&first).expect("verify"));
         assert_eq!(first.attempt_id().as_str(), "attempt-1");
         assert_eq!(first.run_turn(), 2);
+    }
+
+    #[test]
+    fn audit_only_snapshots_are_hashed_but_never_rendered_or_admitted() {
+        let history = ContextSourceSnapshot::audit_only(
+            ContextSourceKey::new("session:provider-history:v1").expect("source key"),
+            digest('a'),
+            digest('b'),
+            TimestampMillis::new(20),
+        )
+        .expect("history snapshot");
+        let tools = ContextSourceSnapshot::audit_only(
+            ContextSourceKey::new("session:provider-tool-state:v1").expect("source key"),
+            digest('c'),
+            digest('d'),
+            TimestampMillis::new(20),
+        )
+        .expect("tool snapshot");
+        let mut first_request = request(Vec::new());
+        first_request.audit_snapshots = vec![tools.clone(), history.clone()];
+        let first = ContextBuilder::default()
+            .build(first_request)
+            .expect("build audit-only context");
+        let mut second_request = request(Vec::new());
+        second_request.audit_snapshots = vec![history, tools];
+        let second = ContextBuilder::default()
+            .build(second_request)
+            .expect("build reordered audit-only context");
+
+        assert_eq!(first.prelude(), None);
+        assert!(first.selected_sources().is_empty());
+        let first = first.seal(digest('f')).expect("seal first manifest");
+        let second = second.seal(digest('f')).expect("seal second manifest");
+        assert!(first.admissions().is_empty());
+        assert_eq!(first.sources(), second.sources());
+        assert!(
+            first
+                .sources()
+                .iter()
+                .all(|snapshot| snapshot.visibility() == ContextSourceVisibility::AuditOnly)
+        );
+        assert_eq!(first.manifest_hash(), second.manifest_hash());
+        assert!(verify_context_manifest_hash(&first).expect("verify first manifest"));
     }
 
     #[test]
