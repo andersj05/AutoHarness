@@ -3,21 +3,24 @@
 mod pty_support;
 
 use autoharness_domain::{
-    MemoryContent, MemoryId, MemoryOperationPayload, MemoryScope, Sensitivity, TimestampMillis,
-    WorkspaceId,
+    MemoryContent, MemoryId, MemoryOperationPayload, MemoryOrigin, MemoryScope, Sensitivity,
+    TimestampMillis, TrustClass, WorkspaceId,
 };
 use autoharness_store::{MemorySearchQuery, MemoryStore};
 use autoharness_store_sqlite::SqliteStore;
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 const ALT_6: [u8; 2] = [0x1b, b'6'];
+const ALT_I: [u8; 2] = [0x1b, b'i'];
 const ALT_N: [u8; 2] = [0x1b, b'n'];
 const ALT_E: [u8; 2] = [0x1b, b'e'];
+const ALT_V: [u8; 2] = [0x1b, b'v'];
 const ALT_S: [u8; 2] = [0x1b, b's'];
 const ALT_X: [u8; 2] = [0x1b, b'x'];
 const ALT_D: [u8; 2] = [0x1b, b'd'];
 const CTRL_S: [u8; 1] = [0x13];
 const TAB: [u8; 1] = *b"\t";
+const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 
 #[test]
@@ -27,6 +30,10 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     environment.seed_completed_session("memory journey seed", "memory journey ready");
     let original = "PTY durable preference: use compact verified summaries.";
     let correction = " Corrected after restart.";
+    let import_path = "import.txt";
+    let imported = "PTY imported decision: preserve exact provider evidence across restart.";
+    std::fs::write(environment.data_dir().join(import_path), imported)
+        .expect("safe UTF-8 workspace document");
 
     let mut first = PtySession::start(&environment, 30, 100);
     first.wait_for(
@@ -39,7 +46,7 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
             let text = screen.contents();
             text.contains("Memory")
                 && text.contains("Memory index")
-                && text.contains("Search memories")
+                && text.contains("Search all memory")
         },
         "Alt+6 should open the complete Memory workspace",
     );
@@ -62,6 +69,72 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
         },
         "saving should close the editor and publish the committed memory",
     );
+
+    first.send_bytes(&ALT_I);
+    first.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Import document")
+                && text.contains("Workspace-relative UTF-8 text")
+                && text.contains("Copies exact bytes, up to 16 KiB")
+                && text.contains("Review-only until separate approval")
+                && text.contains("Enter imports; Esc cancels")
+        },
+        "Alt+I should explain the bounded review-only workspace import",
+    );
+    first.type_text(import_path);
+    first.send_bytes(b"\r");
+    first.wait_for(
+        |screen| {
+            let text = screen.contents();
+            !text.contains("Import document") && text.contains("2 on page")
+        },
+        "submitting a relative path should create a review-only proposal",
+    );
+    first.send_bytes(b"/");
+    first.send_bytes(&TAB);
+    for _ in 0..3 {
+        first.send_bytes(&RIGHT);
+    }
+    first.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("State: proposed")
+                && text.contains("PTY imported decision")
+                && text.contains("proposed")
+                && text.contains("imported document")
+                && text.contains("imported")
+        },
+        "the imported document should remain a visibly unapproved proposal",
+    );
+    first.send_bytes(&ALT_V);
+    first.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Review proposal")
+                && text.contains("Exact proposed content")
+                && text.contains("PTY imported decision")
+                && text.contains("State: proposed")
+                && text.contains("Trust: imported")
+                && text.contains("Origin: imported document")
+        },
+        "proposal review should expose exact content, provenance, and authority",
+    );
+    for _ in 0..5 {
+        first.send_bytes(&DOWN);
+    }
+    first.wait_for(
+        |screen| screen.contents().contains("Approval is deliberate"),
+        "the scrollable review should explain that approval affects future turns",
+    );
+    first.send_bytes(b"a");
+    first.wait_for(
+        |screen| {
+            let text = screen.contents();
+            !text.contains("Review proposal") && text.contains("State: proposed")
+        },
+        "approval should commit before the first process exits",
+    );
     first.send_bytes(&ctrl_c());
     assert_eq!(first.wait_for_exit(), 0, "first terminal exits cleanly");
     first.wait_for_raw(
@@ -73,8 +146,64 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     let mut restarted = PtySession::start(&environment, 30, 100);
     restarted.send_bytes(&ALT_6);
     restarted.wait_for(
-        |screen| screen.contents().contains("PTY durable preference"),
-        "the eligible memory should survive a real process restart",
+        |screen| screen.contents().contains("Memory index"),
+        "the Memory workspace should reopen after a real process restart",
+    );
+    restarted.send_bytes(b"/");
+    restarted.type_text("PTY imported decision");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "import search should enter its debounced authoritative refresh",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("PTY imported decision")
+                && text.contains("user approved")
+                && text.contains("explicit user")
+                && text.contains("active")
+                && !text.contains("refreshing view")
+        },
+        "the approved imported revision should remain eligible after restart",
+    );
+    restarted.send_bytes(b"\x1b");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "clearing import search should request the authoritative eligible view",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Search all memory") && !text.contains("refreshing view")
+        },
+        "clearing import search should restore the authoritative eligible view",
+    );
+    restarted.send_bytes(b"/");
+    restarted.type_text("PTY durable preference");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "remembered-preference search should enter its debounced refresh",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("PTY durable preference") && !text.contains("refreshing view")
+        },
+        "literal search should restore the separately remembered preference",
+    );
+    restarted.send_bytes(b"\x1b");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "clearing remembered-preference search should refresh the full view",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("PTY durable preference")
+                && text.contains("Search all memory")
+                && !text.contains("refreshing view")
+        },
+        "clearing the focused search should keep its selected durable row",
     );
     restarted.send_bytes(b"/");
     restarted.type_text("missing memory sentinel");
@@ -87,8 +216,30 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"\x1b");
     restarted.wait_for(
-        |screen| screen.contents().contains("PTY durable preference"),
-        "Esc should clear Memory search and restore the selected durable row",
+        |screen| screen.contents().contains("refreshing view"),
+        "clearing the no-match search should refresh the complete eligible view",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Search all memory")
+                && text.contains("2 visible")
+                && !text.contains("refreshing view")
+        },
+        "Esc should clear Memory search and restore the complete eligible view",
+    );
+    restarted.send_bytes(b"/");
+    restarted.type_text("PTY durable preference");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "the correction target search should enter its authoritative refresh",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("PTY durable preference") && !text.contains("refreshing view")
+        },
+        "the separately remembered preference should be selected for correction",
     );
     restarted.resize(18, 60);
     restarted.wait_for(
@@ -170,21 +321,21 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
 
     let workspace_id = persisted_workspace_id(&environment);
     let eligibility_query = MemorySearchQuery::new(
-        MemoryContent::new("PTY durable preference").expect("eligibility query"),
-        vec![MemoryScope::Workspace(workspace_id)],
+        MemoryContent::new("durable").expect("eligibility query"),
+        vec![MemoryScope::Workspace(workspace_id.clone())],
         Sensitivity::Sensitive,
         TimestampMillis::new(i64::MAX),
         8,
     )
     .expect("bounded eligibility query");
+    let eligible_after_retraction = SqliteStore::open(environment.database())
+        .expect("open store after retraction")
+        .search_memory(&eligibility_query)
+        .expect("search future-eligible memory");
     assert!(
-        SqliteStore::open(environment.database())
-            .expect("open store after retraction")
-            .search_memory(&eligibility_query)
-            .expect("search future-eligible memory")
-            .candidates()
-            .is_empty(),
-        "retraction must remove the memory from every future retrieval batch"
+        eligible_after_retraction.candidates().is_empty(),
+        "retraction must remove the remembered preference from every future retrieval batch: {:?}",
+        eligible_after_retraction.candidates()
     );
 
     restarted.send_bytes(b"/");
@@ -216,7 +367,24 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
-            !text.contains("Delete memory") && text.contains("deleted")
+            !text.contains("Delete memory")
+                && text.contains("0 visible")
+                && text.contains("No memories match")
+        },
+        "confirmed deletion should immediately erase the revision from content search",
+    );
+    restarted.send_bytes(b"/");
+    restarted.send_bytes(b"\x1b");
+    restarted.wait_for(
+        |screen| screen.contents().contains("refreshing view"),
+        "clearing deleted content search should refresh the inactive audit view",
+    );
+    restarted.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("State: inactive")
+                && text.contains("deleted")
+                && !text.contains("refreshing view")
         },
         "confirmed deletion should leave a visible content-free audit row",
     );
@@ -250,7 +418,7 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
         &std::fs::read(&export_path).expect("read standalone memory export"),
     )
     .expect("parse standalone memory export");
-    assert_eq!(export["schema_version"], 1);
+    assert_eq!(export["schema_version"], 2);
     let memory_id = MemoryId::new(
         export["memory_id"]
             .as_str()
@@ -265,6 +433,30 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     assert!(String::from_utf8_lossy(&exported_bytes).contains(correction));
 
     let store = SqliteStore::open(environment.database()).expect("open deleted memory store");
+    let imported_query = MemorySearchQuery::new(
+        MemoryContent::new("provider").expect("import eligibility query"),
+        vec![MemoryScope::Workspace(workspace_id)],
+        Sensitivity::Sensitive,
+        TimestampMillis::new(i64::MAX),
+        8,
+    )
+    .expect("bounded import eligibility query");
+    let imported_candidates = store
+        .search_memory(&imported_query)
+        .expect("search approved imported memory");
+    let imported_candidate = imported_candidates
+        .candidates()
+        .first()
+        .expect("approved import remains future-eligible");
+    assert_eq!(imported_candidate.content().as_str(), imported);
+    assert_eq!(
+        imported_candidate.revision().origin(),
+        MemoryOrigin::ExplicitUser
+    );
+    assert_eq!(
+        imported_candidate.revision().trust_class(),
+        TrustClass::UserApproved
+    );
     let operations = store
         .load_memory_operations(&memory_id, 0, 64)
         .expect("load durable memory audit stream");
