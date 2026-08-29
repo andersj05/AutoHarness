@@ -463,8 +463,10 @@ fn status_variant(status: MemoryStatus) -> ChipVariant {
     match status {
         MemoryStatus::Active => ChipVariant::Success,
         MemoryStatus::Proposed => ChipVariant::Warning,
+        MemoryStatus::Conflicting => ChipVariant::Danger,
         MemoryStatus::Superseded => ChipVariant::Muted,
         MemoryStatus::Rejected | MemoryStatus::Retracted => ChipVariant::Danger,
+        MemoryStatus::Expired => ChipVariant::Warning,
         MemoryStatus::Deleted => ChipVariant::Muted,
     }
 }

@@ -465,6 +465,121 @@ fn partial_memory_page_never_claims_a_global_search_miss() {
 }
 
 #[test]
+fn conflicting_and_expired_memories_have_deliberate_states_and_safe_actions() {
+    let mut model = model();
+    let conflicting = MemorySummary::new(
+        "memory-conflicting",
+        "A proposed preference conflicts with current durable knowledge.",
+        MemoryStatus::Conflicting,
+        MemoryScope::Workspace,
+        1_726_000_000_000,
+        Some(6_000),
+        0,
+    )
+    .expect("conflicting summary");
+    let expired = MemorySummary::new(
+        "memory-expired",
+        "A formerly active preference has passed its validity boundary.",
+        MemoryStatus::Expired,
+        MemoryScope::Session,
+        1_725_000_000_000,
+        Some(8_000),
+        1,
+    )
+    .expect("expired summary");
+    let conflicting_detail = MemoryDetail::new(
+        "memory-conflicting",
+        1,
+        "Prefer the contradictory behavior.",
+        "model proposal",
+        MemoryTrust::UntrustedProposal,
+        1_726_000_000_000,
+        None,
+        vec![],
+    )
+    .expect("conflicting detail")
+    .with_revision_context(
+        MemoryRevisionContext::new(
+            3,
+            "revision-conflicting-1",
+            Some("revision-conflicting-1".to_owned()),
+            "workspace current-project",
+            MemoryOrigin::ModelProposal,
+            MemorySensitivity::Internal,
+            vec![],
+            vec![],
+            vec![MemoryValidationFinding::new(
+                MemoryFindingKind::Contradiction,
+                "memory-existing",
+                "Conflicts with an active preference",
+            )
+            .expect("finding")],
+        )
+        .expect("conflicting context"),
+    );
+    let expired_detail = MemoryDetail::new(
+        "memory-expired",
+        2,
+        "Use the former preference only during the launch window.",
+        "explicit user memory",
+        MemoryTrust::UserApproved,
+        1_720_000_000_000,
+        Some(1_724_000_000_000),
+        vec![],
+    )
+    .expect("expired detail")
+    .with_revision_context(
+        MemoryRevisionContext::new(
+            8,
+            "revision-expired-2",
+            None,
+            "session memory-session",
+            MemoryOrigin::ExplicitUser,
+            MemorySensitivity::Internal,
+            vec![],
+            vec![],
+            vec![],
+        )
+        .expect("expired context"),
+    );
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(
+            40,
+            vec![conflicting, expired],
+            vec![conflicting_detail, expired_detail],
+            2,
+            false,
+        )
+        .expect("status projection"),
+    ));
+    let _ = update(&mut model, Message::Input(alt('6')));
+    let _ = update(&mut model, Message::Mouse(MouseAction::MemoryCycleStatus));
+    let rendered = text(&render(&model, 80, 24));
+    assert!(rendered.contains("conflicting"));
+    assert!(rendered.contains("expired"));
+
+    let _ = update(
+        &mut model,
+        Message::Mouse(MouseAction::MemorySelect("memory-conflicting".to_owned())),
+    );
+    let _ = update(&mut model, Message::Input(alt('v')));
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Review)
+    );
+    let _ = update(&mut model, Message::Input(key(Key::Esc)));
+    let _ = update(
+        &mut model,
+        Message::Mouse(MouseAction::MemorySelect("memory-expired".to_owned())),
+    );
+    let _ = update(&mut model, Message::Input(alt('e')));
+    assert_eq!(
+        model.memory_lifecycle_mode(),
+        Some(MemoryLifecycleMode::Revise)
+    );
+}
+
+#[test]
 fn remember_editor_is_bounded_redacted_pending_safe_and_restores_focus() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(alt('6')));

@@ -644,9 +644,11 @@ pub struct SessionsProjection {
 pub enum MemoryStatus {
     Active,
     Proposed,
+    Conflicting,
     Superseded,
     Rejected,
     Retracted,
+    Expired,
     Deleted,
 }
 
@@ -656,9 +658,11 @@ impl MemoryStatus {
         match self {
             Self::Active => "active",
             Self::Proposed => "proposed",
+            Self::Conflicting => "conflicting",
             Self::Superseded => "superseded",
             Self::Rejected => "rejected",
             Self::Retracted => "retracted",
+            Self::Expired => "expired",
             Self::Deleted => "deleted",
         }
     }
@@ -2543,6 +2547,8 @@ impl MemoryStatusFilter {
                     MemoryStatus::Superseded
                         | MemoryStatus::Rejected
                         | MemoryStatus::Retracted
+                        | MemoryStatus::Conflicting
+                        | MemoryStatus::Expired
                         | MemoryStatus::Deleted
                 )
             }
@@ -4268,6 +4274,24 @@ impl Model {
                     }
                     actions.push(MemoryLifecycleMode::Retract);
                 }
+                MemoryStatus::Conflicting if detail.is_some_and(MemoryDetail::has_content) => {
+                    if detail.is_some_and(|detail| {
+                        detail
+                            .revision_context()
+                            .and_then(MemoryRevisionContext::proposal_revision_id)
+                            .is_some()
+                    }) {
+                        actions.push(MemoryLifecycleMode::Review);
+                    } else {
+                        actions.push(MemoryLifecycleMode::Revise);
+                        actions.push(MemoryLifecycleMode::Retract);
+                    }
+                }
+                MemoryStatus::Expired if detail.is_some_and(MemoryDetail::has_content) => {
+                    actions.push(MemoryLifecycleMode::Revise);
+                    actions.push(MemoryLifecycleMode::Retract);
+                }
+                MemoryStatus::Conflicting | MemoryStatus::Expired => {}
                 MemoryStatus::Superseded
                 | MemoryStatus::Rejected
                 | MemoryStatus::Retracted
