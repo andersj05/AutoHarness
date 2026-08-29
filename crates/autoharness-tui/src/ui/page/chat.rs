@@ -91,22 +91,12 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         if y >= inner.bottom() {
             break;
         }
-        let selected = model.route() == route;
-        let style = if selected {
-            theme.filled(Token::SurfaceSelected)
-        } else {
-            theme.style(Token::TextSecondary)
-        };
-        paint::put(buf, inner.x, y, icons.width(icon), icons.glyph(icon), style);
-        paint::put(
+        render_route_row(
             buf,
-            inner
-                .x
-                .saturating_add(icons.width(icon).saturating_add(ROW)),
-            y,
-            inner.width,
-            route.label(),
-            style,
+            Rect::new(inner.x, y, inner.width, ROW),
+            route,
+            icon,
+            model,
         );
         y = y.saturating_add(ROW);
     }
@@ -131,24 +121,34 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             break;
         }
         let active = entry.active || entry.session_id == model.session.session_id;
-        let marker = if active {
-            icons.glyph(Icon::SelectionCaret)
-        } else {
-            " "
-        };
         let style = if active {
-            theme.filled(Token::SurfaceSelected)
+            theme.style(Token::SurfaceSelectedMuted)
         } else {
             theme.style(Token::TextPrimary)
         };
+        let row = Rect::new(inner.x, y, inner.width, ROW);
+        if active {
+            paint::fill(buf, row, style, Some(' '));
+        }
+        let marker_width = icons.width(Icon::SelectionCaret);
+        if active {
+            paint::put(
+                buf,
+                row.x,
+                row.y,
+                marker_width,
+                icons.glyph(Icon::SelectionCaret),
+                style,
+            );
+        }
         let label =
             paint::ellipsize_words_with(&display_safe(&entry.title), label_width, icons.ellipsis());
         paint::put(
             buf,
-            inner.x,
-            y,
-            inner.width,
-            &format!("{marker} {label}"),
+            row.x.saturating_add(marker_width).saturating_add(ROW),
+            row.y,
+            row.width.saturating_sub(marker_width.saturating_add(ROW)),
+            &label,
             style,
         );
         y = y.saturating_add(ROW);
@@ -169,28 +169,71 @@ pub fn render_rail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             inner.x.saturating_add(ROW),
             y,
             inner.width,
-            &workspace_label(&model.profiles().user.workspace),
-            theme.style(Token::TextPrimary),
+            icons.glyph(Icon::Workspace),
+            theme.style(Token::Accent),
+        );
+        let path_x = inner
+            .x
+            .saturating_add(icons.width(Icon::Workspace))
+            .saturating_add(TWO_ROWS);
+        let path_width = inner.right().saturating_sub(path_x);
+        let path = workspace_display_path(&model.profiles().user.workspace, icons.ellipsis());
+        let path = if path.is_empty() {
+            "workspace".to_owned()
+        } else {
+            paint::ellipsize_words_with(&path, path_width, icons.ellipsis())
+        };
+        paint::put(
+            buf,
+            path_x,
+            y,
+            path_width,
+            &path,
+            theme.style(Token::TextSecondary),
         );
     }
-    let footer = Rect::new(
-        inner.x,
-        inner.bottom().saturating_sub(SIDEBAR_FOOTER_ROWS),
-        inner.width,
-        SIDEBAR_FOOTER_ROWS,
-    );
-    let settings_style = if model.route() == Route::Settings {
-        theme.filled(Token::SurfaceSelected)
+}
+
+fn render_route_row(buf: &mut Buffer, row: Rect, route: Route, icon: Icon, model: &Model) {
+    let theme = model.theme();
+    let icons = theme.icons();
+    let selected = model.route() == route;
+    let style = if selected {
+        theme.style(Token::TextOnAccent)
     } else {
-        theme.style(Token::TextPrimary)
+        theme.style(Token::TextSecondary)
     };
+    if selected {
+        paint::fill(buf, row, theme.style(Token::SurfaceSelected), Some(' '));
+        paint::put(
+            buf,
+            row.x,
+            row.y,
+            icons.width(Icon::SelectionCaret),
+            icons.glyph(Icon::SelectionCaret),
+            style,
+        );
+    }
+    let icon_x = row
+        .x
+        .saturating_add(icons.width(Icon::SelectionCaret))
+        .saturating_add(ROW);
     paint::put(
         buf,
-        footer.x.saturating_add(ROW),
-        footer.y,
-        footer.width,
-        "Settings",
-        settings_style,
+        icon_x,
+        row.y,
+        icons.width(icon),
+        icons.glyph(icon),
+        style,
+    );
+    let label_x = icon_x.saturating_add(icons.width(icon)).saturating_add(ROW);
+    paint::put(
+        buf,
+        label_x,
+        row.y,
+        row.right().saturating_sub(label_x),
+        route.label(),
+        style,
     );
 }
 
@@ -226,15 +269,6 @@ pub fn rail_hits(area: Rect, model: &Model) -> Vec<(Rect, MouseAction)> {
             MouseAction::Route(Route::Sessions),
         ));
     }
-    hits.push((
-        Rect::new(
-            inner.x,
-            inner.bottom().saturating_sub(SIDEBAR_FOOTER_ROWS),
-            inner.width,
-            SIDEBAR_FOOTER_ROWS,
-        ),
-        MouseAction::Route(Route::Settings),
-    ));
     hits
 }
 
@@ -1201,6 +1235,7 @@ fn latest_tokens(model: &Model) -> String {
 
 fn workspace_display_path(workspace: &str, ellipsis: &str) -> String {
     let normalized = display_safe(workspace.trim()).replace('\\', "/");
+    let normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized);
     if normalized.is_empty() || normalized == "." {
         return String::new();
     }
@@ -1227,7 +1262,7 @@ fn workspace_display_path(workspace: &str, ellipsis: &str) -> String {
     } else if parts.len() > 3 {
         format!("{ellipsis}/{}", parts[parts.len() - 3..].join("/"))
     } else {
-        normalized
+        normalized.to_owned()
     }
 }
 
@@ -1238,17 +1273,6 @@ fn compact_token_count(tokens: u64) -> String {
     } else {
         tokens.to_string()
     }
-}
-
-fn workspace_label(workspace: &str) -> String {
-    let trimmed = workspace.trim();
-    if trimmed.is_empty() || trimmed == "." {
-        return "workspace".to_owned();
-    }
-    trimmed
-        .rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .map_or_else(|| "workspace".to_owned(), display_safe)
 }
 
 fn paint_gradient_text(
@@ -1372,5 +1396,36 @@ fn blit_item(
                 *to = from;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_display_path;
+
+    #[test]
+    fn workspace_paths_collapse_home_on_supported_platforms() {
+        for path in [
+            r"C:\Users\jense\Desktop\AutoHarness",
+            "C:/Users/jense/Desktop/AutoHarness",
+            r"\\?\C:\Users\jense\Desktop\AutoHarness",
+            "/Users/jense/Desktop/AutoHarness",
+            "/home/jense/Desktop/AutoHarness",
+        ] {
+            assert_eq!(
+                workspace_display_path(path, "…"),
+                "~/Desktop/AutoHarness",
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_paths_keep_short_non_home_paths_and_compact_long_ones() {
+        assert_eq!(workspace_display_path("./project", "…"), "./project");
+        assert_eq!(
+            workspace_display_path("/srv/workspaces/team/AutoHarness", "…"),
+            "…/workspaces/team/AutoHarness"
+        );
     }
 }

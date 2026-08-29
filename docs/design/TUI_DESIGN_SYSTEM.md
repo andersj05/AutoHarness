@@ -318,6 +318,11 @@ Only these values may be used: `0`, `1`, `2`, and `4` cells.
 Page gutters are `2` at `Md` and above and `1` below.
 Panel padding is `1` horizontally and `0` vertically unless the panel has a title, in which case `1` vertically.
 The sidebar is `26` columns at `Lg` and `32` at `Xl`, replacing today's fixed `28`.
+The rail body preserves the terminal background.
+Exactly one primary destination uses a full-width `surface_selected` row with a selection caret, route icon, and high-contrast label.
+The current recent session uses `surface_selected_muted`, so session context remains visible without competing with the active route.
+Inactive destinations remain transparent, and no primary destination is duplicated in a footer.
+Workspace paths use `/` separators and collapse recognized Windows, macOS, and Linux home prefixes to `~/`, including Windows extended-length paths.
 
 ## Components
 

@@ -87,7 +87,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
                 && text.contains("Session details")
                 && text.contains("Offline seed")
                 && text.contains("active")
-                && text.contains("[ Open ]")
+                && text.contains("[ Open (Enter) ]")
         },
         "Alt+2 should leave first-run credential entry for the Sessions route",
     );
@@ -219,8 +219,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("no model")
+            text.contains("no model")
                 && text.contains("Ask Agent")
                 && !text.contains("Connect a provider key")
                 && !text.contains("Profile")

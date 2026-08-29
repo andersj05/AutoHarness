@@ -649,15 +649,15 @@ fn render_route_review_matrix() {
 fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 1),
+        hit_test(&model, 120, 40, 2, 2),
         Some(MouseAction::Route(Route::Chat))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 39),
+        hit_test(&model, 120, 40, 2, 5),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 14, 39),
+        hit_test(&model, 120, 40, 14, 5),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(

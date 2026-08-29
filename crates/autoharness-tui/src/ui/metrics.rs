@@ -53,8 +53,8 @@ pub const COMPACT_CHAT_MIN_HEIGHT: u16 = 7;
 pub const SIDEBAR_WIDTH_LG: u16 = 26;
 /// Sidebar width at the extra-large breakpoint.
 pub const SIDEBAR_WIDTH_XL: u16 = 32;
-/// Brand row above the rail destinations.
-pub const SIDEBAR_BRAND_ROWS: u16 = 1;
+/// Brand row plus breathing room above the rail destinations.
+pub const SIDEBAR_BRAND_ROWS: u16 = 2;
 /// Primary route rows in the rebuilt rail.
 pub const SIDEBAR_NAV_COUNT: u16 = 5;
 /// Blank row between the rail and the recent-session group.
@@ -63,8 +63,8 @@ pub const SIDEBAR_GROUP_GAP: u16 = 1;
 pub const SIDEBAR_RECENT_HEADER: u16 = 1;
 /// Workspace heading plus the current project label.
 pub const SIDEBAR_WORKSPACE_ROWS: u16 = 2;
-/// Bottom action row in the rail.
-pub const SIDEBAR_FOOTER_ROWS: u16 = 1;
+/// No duplicate route is reserved below the workspace context.
+pub const SIDEBAR_FOOTER_ROWS: u16 = 0;
 /// Rows reserved around the sidebar session list.
 pub const SIDEBAR_SESSION_CHROME: u16 = SIDEBAR_BRAND_ROWS
     + SIDEBAR_NAV_COUNT

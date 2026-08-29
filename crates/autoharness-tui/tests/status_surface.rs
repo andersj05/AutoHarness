@@ -112,6 +112,37 @@ fn chat_rail_transcript_and_composer_preserve_terminal_background() {
 }
 
 #[test]
+fn chat_rail_uses_one_clear_full_width_active_destination() {
+    let model = empty_model(SettingsProjection::default());
+    let rendered = render_model(&model, 120, 40);
+    let active_row = 2;
+    for column in 0..25 {
+        assert_ne!(
+            rendered.buffer()[(column, active_row)].bg,
+            ratatui::style::Color::Reset,
+            "the active destination must fill the complete rail row"
+        );
+        assert_eq!(
+            rendered.buffer()[(column, active_row)].bg,
+            rendered.buffer()[(0, active_row)].bg,
+            "the active destination must read as one surface"
+        );
+    }
+    let rendered_text = buffer_text(&rendered);
+    assert!(
+        rendered_text
+            .lines()
+            .nth(usize::from(active_row))
+            .is_some_and(|line| { line.starts_with("❯ ▣ Chat") })
+    );
+    assert_eq!(
+        rendered.buffer()[(10, active_row + 1)].bg,
+        ratatui::style::Color::Reset,
+        "inactive destinations must preserve terminal transparency"
+    );
+}
+
+#[test]
 fn chat_surface_omits_provider_status_chrome() {
     let model = empty_model(SettingsProjection::default());
     let rendered = buffer_text(&render_model(&model, 120, 40));

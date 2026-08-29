@@ -23,11 +23,8 @@
  | 32-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @1
-▣ Chat                   │   Plan a café launch.                                                                        
- | 0-0 fg=#f8fafc bg=#0b0f19 bold
- | 1-1 fg=#f2f9fc bg=reset
- | 2-5 fg=#f8fafc bg=#0b0f19 bold
- | 6-24 fg=#f2f9fc bg=reset
+                         │   Plan a café launch.                                                                        
+ | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#30d2ef bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -35,11 +32,13 @@
  | 48-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @2
-≡ Sessions               │   Keep it practical.                                                                         
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+❯ ▣ Chat                 │   Keep it practical.                                                                         
+ | 0-0 fg=#0b0f19 bg=#8c76d4 bold
+ | 1-1 fg=#0b0f19 bg=#8c76d4
+ | 2-2 fg=#0b0f19 bg=#8c76d4 bold
+ | 3-3 fg=#0b0f19 bg=#8c76d4
+ | 4-7 fg=#0b0f19 bg=#8c76d4 bold
+ | 8-24 fg=#0b0f19 bg=#8c76d4
  | 25-25 fg=#3ad2f0 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -47,19 +46,21 @@
  | 47-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @3
-⌘ Profiles               │                                                                                              
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+  ≡ Sessions             │                                                                                              
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#43d1f1 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @4
-⚙ Settings               │ ◆ Agent                                                             complete  18 in / 41 out 
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-9 fg=#a2a9b0 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+  ⌘ Profiles             │ ◆ Agent                                                             complete  18 in / 41 out 
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#4bd0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#67dbf1 bg=reset bold
@@ -69,11 +70,12 @@
  | 95-118 fg=#656b75 bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @5
-? Help                   │   Start with a two-week validation sprint:                                                   
- | 0-0 fg=#a2a9b0 bg=reset
- | 1-1 fg=#f2f9fc bg=reset
- | 2-5 fg=#a2a9b0 bg=reset
- | 6-24 fg=#f2f9fc bg=reset
+  ⚙ Settings             │   Start with a two-week validation sprint:                                                   
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#52d0f2 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -81,8 +83,12 @@
  | 69-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @6
-                         │   1. Interview ten customers.                                                                
- | 0-24 fg=#f2f9fc bg=reset
+  ? Help                 │   1. Interview ten customers.                                                                
+ | 0-1 fg=#f2f9fc bg=reset
+ | 2-2 fg=#a2a9b0 bg=reset
+ | 3-3 fg=#f2f9fc bg=reset
+ | 4-7 fg=#a2a9b0 bg=reset
+ | 8-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#58cff3 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -90,10 +96,8 @@
  | 56-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @7
- Recent                  │   2. Price three menu bundles.                                                               
- | 0-0 fg=#f2f9fc bg=reset
- | 1-6 fg=#656b75 bg=reset
- | 7-24 fg=#f2f9fc bg=reset
+                         │   2. Price three menu bundles.                                                               
+ | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#5ecef4 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -101,10 +105,10 @@
  | 57-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @8
- Workspace               │   3. Measure repeat intent.                                                                  
+ Recent                  │   3. Measure repeat intent.                                                                  
  | 0-0 fg=#f2f9fc bg=reset
- | 1-9 fg=#656b75 bg=reset
- | 10-24 fg=#f2f9fc bg=reset
+ | 1-6 fg=#656b75 bg=reset
+ | 7-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#63cdf5 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-28 fg=reset bg=reset
@@ -112,13 +116,19 @@
  | 54-118 fg=reset bg=reset
  | 119-119 fg=#f2f9fc bg=reset
 @9
- workspace               │                                                                                              
- | 0-24 fg=#f2f9fc bg=reset
+ Workspace               │                                                                                              
+ | 0-0 fg=#f2f9fc bg=reset
+ | 1-9 fg=#656b75 bg=reset
+ | 10-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#68cdf6 bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @10
-                         │ ☺ You                                                                                        
- | 0-24 fg=#f2f9fc bg=reset
+ ▸ workspace             │ ☺ You                                                                                        
+ | 0-0 fg=#f2f9fc bg=reset
+ | 1-1 fg=#22d3ee bg=reset
+ | 2-2 fg=#f2f9fc bg=reset
+ | 3-11 fg=#a2a9b0 bg=reset
+ | 12-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#6dccf7 bg=reset
  | 26-26 fg=#f2f9fc bg=reset
  | 27-27 fg=#86bbfc bg=reset bold
@@ -410,7 +420,7 @@
  | 25-25 fg=#a68efa bg=reset
  | 26-119 fg=#f2f9fc bg=reset
 @39
- Settings                │                                                                                              
+                         │                                                                                              
  | 0-24 fg=#f2f9fc bg=reset
  | 25-25 fg=#a78bfa bg=reset
  | 26-119 fg=#f2f9fc bg=reset
