@@ -1,9 +1,9 @@
 use autoharness_domain::{
     AttemptId, ContextAdmissionId, ContextAdmissionReason, ContextEpochId, ContextTurnId,
     EstimatedTokens, MemoryContent, MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryGeneration,
-    MemoryId, MemoryKind, MemoryOperationEnvelope, MemoryRevision, MemoryRevisionId,
-    MemoryRevisionStatus, MemoryScope, MemorySubjectKey, MemoryValidationResult, ModelRef,
-    Sensitivity, SessionId, TimestampMillis,
+    MemoryId, MemoryKind, MemoryOperationEnvelope, MemoryRelationKind, MemoryRevision,
+    MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemorySubjectKey, MemoryValidationIssue,
+    MemoryValidationResult, MemoryValidity, ModelRef, Sensitivity, SessionId, TimestampMillis,
 };
 
 use crate::StoreError;
@@ -1047,6 +1047,40 @@ impl MemoryInspectionRecord {
         self.latest_validation.as_ref()
     }
 
+    /// Derives the exact inspection state at one explicit wall-clock boundary.
+    #[must_use]
+    pub fn effective_status(&self, as_of: TimestampMillis) -> MemoryInspectionStatus {
+        if matches!(
+            self.lifecycle,
+            MemoryRevisionStatus::Active | MemoryRevisionStatus::Proposed
+        ) {
+            let conflicting = self
+                .latest_revision
+                .relations()
+                .iter()
+                .any(|relation| relation.kind() == MemoryRelationKind::Contradicts)
+                || self.latest_validation.as_ref().is_some_and(|validation| {
+                    validation
+                        .issues()
+                        .contains(&MemoryValidationIssue::Contradiction)
+                });
+            if conflicting {
+                return MemoryInspectionStatus::Conflicting;
+            }
+            if !memory_validity_contains(self.latest_revision.validity(), as_of) {
+                return MemoryInspectionStatus::Expired;
+            }
+        }
+        match self.lifecycle {
+            MemoryRevisionStatus::Active => MemoryInspectionStatus::Active,
+            MemoryRevisionStatus::Proposed => MemoryInspectionStatus::Proposed,
+            MemoryRevisionStatus::Superseded => MemoryInspectionStatus::Superseded,
+            MemoryRevisionStatus::Rejected => MemoryInspectionStatus::Rejected,
+            MemoryRevisionStatus::Retracted => MemoryInspectionStatus::Retracted,
+            MemoryRevisionStatus::Deleted => MemoryInspectionStatus::Deleted,
+        }
+    }
+
     /// Returns the currently eligible revision, when any.
     #[must_use]
     pub const fn active_revision_id(&self) -> Option<&MemoryRevisionId> {
@@ -1069,6 +1103,17 @@ impl MemoryInspectionRecord {
     #[must_use]
     pub const fn updated_at(&self) -> TimestampMillis {
         self.updated_at
+    }
+}
+
+const fn memory_validity_contains(validity: MemoryValidity, as_of: TimestampMillis) -> bool {
+    match validity {
+        MemoryValidity::Indefinite => true,
+        MemoryValidity::From { valid_from } => as_of.get() >= valid_from.get(),
+        MemoryValidity::Until { valid_until } => as_of.get() < valid_until.get(),
+        MemoryValidity::Window(window) => {
+            as_of.get() >= window.valid_from().get() && as_of.get() < window.valid_until().get()
+        }
     }
 }
 

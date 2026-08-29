@@ -4397,6 +4397,10 @@ mod tests {
             conflicting.records()[0].memory_id().as_str(),
             "memory-effective-conflicting"
         );
+        assert_eq!(
+            conflicting.records()[0].effective_status(as_of),
+            MemoryInspectionStatus::Conflicting
+        );
 
         let expired = store
             .inspect_memory_page(
@@ -4410,6 +4414,10 @@ mod tests {
             expired.records()[0].memory_id().as_str(),
             "memory-effective-expired"
         );
+        assert_eq!(
+            expired.records()[0].effective_status(as_of),
+            MemoryInspectionStatus::Expired
+        );
 
         let active = store
             .inspect_memory_page(
@@ -4420,10 +4428,11 @@ mod tests {
             .expect("inspect eligible active state");
         assert_eq!(active.records().len(), 4);
         assert!(active.records().iter().all(|record| {
-            record
-                .memory_id()
-                .as_str()
-                .starts_with("memory-effective-active-")
+            record.effective_status(as_of) == MemoryInspectionStatus::Active
+                && record
+                    .memory_id()
+                    .as_str()
+                    .starts_with("memory-effective-active-")
         }));
     }
 

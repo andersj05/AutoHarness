@@ -539,38 +539,15 @@ fn effective_memory_status(
     record: &autoharness_store::MemoryInspectionRecord,
     as_of: TimestampMillis,
 ) -> MemoryStatus {
-    let lifecycle = record.lifecycle();
-    if matches!(
-        lifecycle,
-        MemoryRevisionStatus::Active | MemoryRevisionStatus::Proposed
-    ) {
-        let revision = record.latest_revision();
-        let conflicting =
-            revision.relations().iter().any(|relation| {
-                relation.kind() == autoharness_domain::MemoryRelationKind::Contradicts
-            }) || record.latest_validation().is_some_and(|validation| {
-                validation
-                    .issues()
-                    .contains(&MemoryValidationIssue::Contradiction)
-            });
-        if conflicting {
-            return MemoryStatus::Conflicting;
-        }
-        if !memory_validity_contains(revision.validity(), as_of) {
-            return MemoryStatus::Expired;
-        }
-    }
-    memory_status(lifecycle)
-}
-
-const fn memory_validity_contains(validity: MemoryValidity, as_of: TimestampMillis) -> bool {
-    match validity {
-        MemoryValidity::Indefinite => true,
-        MemoryValidity::From { valid_from } => as_of.get() >= valid_from.get(),
-        MemoryValidity::Until { valid_until } => as_of.get() < valid_until.get(),
-        MemoryValidity::Window(window) => {
-            as_of.get() >= window.valid_from().get() && as_of.get() < window.valid_until().get()
-        }
+    match record.effective_status(as_of) {
+        autoharness_store::MemoryInspectionStatus::Active => MemoryStatus::Active,
+        autoharness_store::MemoryInspectionStatus::Proposed => MemoryStatus::Proposed,
+        autoharness_store::MemoryInspectionStatus::Conflicting => MemoryStatus::Conflicting,
+        autoharness_store::MemoryInspectionStatus::Superseded => MemoryStatus::Superseded,
+        autoharness_store::MemoryInspectionStatus::Rejected => MemoryStatus::Rejected,
+        autoharness_store::MemoryInspectionStatus::Retracted => MemoryStatus::Retracted,
+        autoharness_store::MemoryInspectionStatus::Expired => MemoryStatus::Expired,
+        autoharness_store::MemoryInspectionStatus::Deleted => MemoryStatus::Deleted,
     }
 }
 
