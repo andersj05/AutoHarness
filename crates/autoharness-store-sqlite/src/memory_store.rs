@@ -3503,9 +3503,10 @@ mod tests {
     use autoharness_domain::{
         CommandId, ConfidenceBasisPoints, CorrelationId, InputId, MemoryEvidence,
         MemoryEvidenceExcerpt, MemoryEvidenceId, MemoryEvidenceRelation, MemoryEvidenceSource,
-        MemoryId, MemoryOperationId, MemoryOrigin, MemoryRevisionDraft, MemoryRevisionNumber,
-        MemorySequence, MemorySubjectKey, MemoryValidationResult, MemoryValidationStatus,
-        SessionId, Sha256Digest, TimestampMillis, TrustClass, UserId,
+        MemoryId, MemoryOperationId, MemoryOrigin, MemoryRelation, MemoryRelationKind,
+        MemoryRevisionDraft, MemoryRevisionNumber, MemorySequence, MemorySubjectKey,
+        MemoryValidationResult, MemoryValidationStatus, SessionId, Sha256Digest, TimestampMillis,
+        TrustClass, UserId,
     };
     use autoharness_store::{
         DeletionDisposition, MemoryContentState, MemoryEvidenceContent, MemoryRevisionContent,
@@ -3565,6 +3566,29 @@ mod tests {
         sensitivity: Sensitivity,
         evidence: Vec<MemoryEvidence>,
     ) -> (MemoryRevision, MemoryRevisionContent) {
+        revision_with_relations(
+            revision_id,
+            revision_number,
+            content,
+            status,
+            subject_key,
+            sensitivity,
+            evidence,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn revision_with_relations(
+        revision_id: &str,
+        revision_number: u64,
+        content: &str,
+        status: MemoryRevisionStatus,
+        subject_key: Option<&str>,
+        sensitivity: Sensitivity,
+        evidence: Vec<MemoryEvidence>,
+        relations: Vec<MemoryRelation>,
+    ) -> (MemoryRevision, MemoryRevisionContent) {
         let content = MemoryContent::new(content).expect("valid content");
         let draft = MemoryRevisionDraft::new(
             MemoryRevisionId::new(revision_id).expect("revision ID"),
@@ -3578,7 +3602,7 @@ mod tests {
             sensitivity,
             MemoryValidity::Indefinite,
             evidence,
-            Vec::new(),
+            relations,
         )
         .expect("revision draft");
         let evidence_content = draft
@@ -3888,6 +3912,400 @@ mod tests {
     }
 
     #[test]
+    fn full_rebuild_recreates_every_projection_family_and_is_idempotent() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+
+        let (target_revision, target_sidecar) = revision(
+            "revision-z-rebuild-target",
+            1,
+            "Target memory inserted before the lexically earlier item.",
+            MemoryRevisionStatus::Active,
+        );
+        let target_create = create_operation(
+            "memory-z-rebuild-target",
+            "operation-z-rebuild-target",
+            target_revision.clone(),
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                target_create.clone(),
+                Some(target_sidecar),
+            ))
+            .expect("append target memory first");
+
+        let excerpt =
+            MemoryEvidenceExcerpt::new("retained exact rebuild excerpt").expect("evidence excerpt");
+        let retained_evidence = MemoryEvidence::new(
+            MemoryEvidenceId::new("evidence-rebuild-retained").expect("evidence ID"),
+            MemoryEvidenceSource::UserInput {
+                session_id: SessionId::new("session-rebuild-source").expect("session ID"),
+                input_id: InputId::new("input-rebuild-source").expect("input ID"),
+            },
+            MemoryEvidenceRelation::Supports,
+            Some(excerpt.clone()),
+            Some(raw_digest(excerpt.as_str())),
+        )
+        .expect("retained evidence");
+        let absent_evidence = MemoryEvidence::new(
+            MemoryEvidenceId::new("evidence-rebuild-absent").expect("evidence ID"),
+            MemoryEvidenceSource::ImportedDocument {
+                source_key: autoharness_domain::ContextSourceKey::new("document-rebuild")
+                    .expect("source key"),
+                source_revision: raw_digest("document revision"),
+            },
+            MemoryEvidenceRelation::DerivedFrom,
+            None,
+            None,
+        )
+        .expect("absent evidence");
+        let (proposed_revision, proposed_sidecar) = revision_with_relations(
+            "revision-a-rebuild",
+            1,
+            "Full replay repairs item revision evidence relation validation generation and FTS.",
+            MemoryRevisionStatus::Proposed,
+            Some("rebuild:all-projections"),
+            Sensitivity::Internal,
+            vec![retained_evidence, absent_evidence],
+            vec![MemoryRelation::new(
+                target_create.memory_id().clone(),
+                MemoryRelationKind::Related,
+            )],
+        );
+        let create = create_operation(
+            "memory-a-rebuild",
+            "operation-a-rebuild-create",
+            proposed_revision.clone(),
+        );
+        let validate = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-a-rebuild-validate").expect("operation ID"),
+            create.memory_id().clone(),
+            MemorySequence::new(2).expect("sequence"),
+            TimestampMillis::new(11),
+            MemoryCausation::Operation(create.operation_id().clone()),
+            create.correlation_id().clone(),
+            MemoryOperationPayload::RevisionValidated {
+                revision_id: proposed_revision.revision_id().clone(),
+                validation: MemoryValidationResult::new(
+                    7,
+                    proposed_revision.content_hash().clone(),
+                    MemoryValidationStatus::Accepted,
+                    Vec::new(),
+                )
+                .expect("validation"),
+            },
+        );
+        let activate = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-a-rebuild-activate").expect("operation ID"),
+            create.memory_id().clone(),
+            MemorySequence::new(3).expect("sequence"),
+            TimestampMillis::new(12),
+            MemoryCausation::Operation(validate.operation_id().clone()),
+            create.correlation_id().clone(),
+            MemoryOperationPayload::RevisionActivated {
+                revision_id: proposed_revision.revision_id().clone(),
+            },
+        );
+        store
+            .append_memory_batch(&MemoryAppendBatchRequest::new(
+                0,
+                vec![
+                    MemoryAppendOperation::new(create.clone(), Some(proposed_sidecar)),
+                    MemoryAppendOperation::new(validate, None),
+                    MemoryAppendOperation::new(activate, None),
+                ],
+            ))
+            .expect("append logical proposal batch after target");
+        let expected_generation = store.memory_generation().expect("generation");
+        let expected_mutation = store
+            .memory_mutation_generation()
+            .expect("mutation generation");
+        assert_eq!(expected_generation.get(), 2);
+        assert_eq!(expected_mutation.get(), 2);
+
+        store
+            .connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF; \
+                 DELETE FROM memory_items WHERE memory_id = 'memory-z-rebuild-target'; \
+                 DELETE FROM memory_revisions WHERE revision_id = 'revision-z-rebuild-target'; \
+                 UPDATE memory_items SET lifecycle = 'rejected', latest_revision = 77, \
+                     latest_revision_id = NULL, active_revision_id = NULL, last_sequence = 91 \
+                     WHERE memory_id = 'memory-a-rebuild'; \
+                 UPDATE memory_revisions SET state = 'rejected', content_id = NULL, \
+                     metadata_json = x'00', metadata_sha256 = zeroblob(32) \
+                     WHERE revision_id = 'revision-a-rebuild'; \
+                 DELETE FROM memory_evidence; \
+                 DELETE FROM memory_relations; \
+                 DELETE FROM memory_validations; \
+                 DELETE FROM memory_revision_fts; \
+                 INSERT INTO memory_revision_fts (rowid, content, revision_id, memory_id) \
+                     VALUES (900001, 'bogus damaged index row', 'bogus-revision', 'bogus-memory'); \
+                 DELETE FROM memory_store_state; \
+                 PRAGMA foreign_keys = ON;",
+            )
+            .expect("damage every derived projection family");
+
+        store
+            .rebuild_memory_projections()
+            .expect("full projection replay");
+        assert_eq!(
+            store.memory_generation().expect("rebuilt generation"),
+            expected_generation
+        );
+        assert_eq!(
+            store
+                .memory_mutation_generation()
+                .expect("rebuilt mutation generation"),
+            expected_mutation
+        );
+        assert_eq!(
+            store
+                .load_memory_revisions(target_create.memory_id())
+                .expect("rebuilt target revisions"),
+            vec![target_revision]
+        );
+        let rebuilt = store
+            .load_memory_candidate(proposed_revision.revision_id())
+            .expect("load rebuilt candidate")
+            .expect("rebuilt candidate");
+        assert_eq!(rebuilt.revision().status(), MemoryRevisionStatus::Active);
+        assert!(matches!(rebuilt.content(), MemoryContentState::Retained(_)));
+        let evidence = store
+            .load_memory_evidence_content(proposed_revision.revision_id())
+            .expect("load rebuilt evidence")
+            .expect("rebuilt evidence");
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(
+            evidence[0]
+                .excerpt()
+                .retained()
+                .expect("retained rebuilt excerpt")
+                .as_str(),
+            excerpt.as_str()
+        );
+        assert_eq!(evidence[1].excerpt(), &MemoryEvidenceExcerptState::Absent);
+        let relation = store
+            .connection
+            .query_row(
+                "SELECT to_memory_id, relation FROM memory_relations \
+                 WHERE revision_id = 'revision-a-rebuild' AND ordinal = 0",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("rebuilt relation");
+        assert_eq!(
+            relation,
+            ("memory-z-rebuild-target".to_owned(), "related".to_owned())
+        );
+        let validation = store
+            .connection
+            .query_row(
+                "SELECT validator_version, outcome FROM memory_validations \
+                 WHERE operation_id = 'operation-a-rebuild-validate'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("rebuilt validation");
+        assert_eq!(validation, (7, "accepted".to_owned()));
+        let bogus_fts_rows = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM memory_revision_fts WHERE revision_id = 'bogus-revision'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("bogus FTS count");
+        assert_eq!(bogus_fts_rows, 0);
+        let query = MemorySearchQuery::new(
+            MemoryContent::new("full replay repairs").expect("search query"),
+            vec![MemoryScope::User(UserId::new("user-1").expect("user ID"))],
+            Sensitivity::Internal,
+            TimestampMillis::new(30),
+            8,
+        )
+        .expect("memory search query");
+        assert_eq!(
+            store
+                .search_memory(&query)
+                .expect("rebuilt FTS search")
+                .candidates()
+                .len(),
+            1
+        );
+
+        store
+            .rebuild_memory_projections()
+            .expect("idempotent repeated replay");
+        assert_eq!(
+            store.memory_generation().expect("stable generation"),
+            expected_generation
+        );
+        assert_eq!(
+            store
+                .memory_mutation_generation()
+                .expect("stable mutation generation"),
+            expected_mutation
+        );
+        assert_eq!(
+            store
+                .load_memory_evidence_content(proposed_revision.revision_id())
+                .expect("load evidence after repeated replay")
+                .expect("known revision"),
+            evidence
+        );
+        assert_eq!(
+            store
+                .search_memory(&query)
+                .expect("search after repeated replay")
+                .candidates()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn rebuild_fails_closed_when_a_retained_sidecar_is_missing() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let (revision, sidecar) = revision(
+            "revision-missing-rebuild-sidecar",
+            1,
+            "Retained bytes must never be invented by replay.",
+            MemoryRevisionStatus::Active,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                create_operation(
+                    "memory-missing-rebuild-sidecar",
+                    "operation-missing-rebuild-sidecar",
+                    revision.clone(),
+                ),
+                Some(sidecar),
+            ))
+            .expect("append retained memory");
+        store
+            .connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF; \
+                 DELETE FROM memory_content_blobs \
+                     WHERE content_id = 'memory-content:revision-missing-rebuild-sidecar'; \
+                 PRAGMA foreign_keys = ON;",
+            )
+            .expect("remove authoritative retained sidecar");
+
+        assert!(matches!(
+            store.rebuild_memory_projections(),
+            Err(StoreError::CorruptData {
+                area: CorruptionArea::MemoryProjection
+            })
+        ));
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT lifecycle FROM memory_items \
+                     WHERE memory_id = 'memory-missing-rebuild-sidecar'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("original projection remains"),
+            "active"
+        );
+    }
+
+    #[test]
+    fn replay_failure_rolls_back_projection_clear_atomically() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let (revision, sidecar) = revision(
+            "revision-replay-rollback",
+            1,
+            "Replay rollback retains the pre-rebuild projection on failure.",
+            MemoryRevisionStatus::Active,
+        );
+        let create = create_operation(
+            "memory-replay-rollback",
+            "operation-replay-rollback-create",
+            revision,
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(0, create.clone(), Some(sidecar)))
+            .expect("append active memory");
+        let invalid = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-replay-rollback-invalid").expect("operation ID"),
+            create.memory_id().clone(),
+            MemorySequence::new(2).expect("sequence"),
+            TimestampMillis::new(20),
+            MemoryCausation::Operation(create.operation_id().clone()),
+            CorrelationId::new("correlation-replay-rollback-invalid").expect("correlation ID"),
+            MemoryOperationPayload::RevisionActivated {
+                revision_id: MemoryRevisionId::new("revision-never-introduced")
+                    .expect("revision ID"),
+            },
+        );
+        let encoded = encode_and_validate(&MemoryAppendRequest::new(1, invalid.clone(), None))
+            .expect("encode structurally valid invalid transition");
+        let transaction = store.connection.transaction().expect("ledger transaction");
+        insert_operation(&transaction, &invalid, &encoded).expect("inject invalid ledger fact");
+        transaction
+            .commit()
+            .expect("commit injected replay failure");
+        store
+            .connection
+            .execute(
+                "UPDATE memory_items SET updated_at_ms = 777 \
+                 WHERE memory_id = 'memory-replay-rollback'",
+                [],
+            )
+            .expect("mark pre-rebuild projection");
+        store
+            .connection
+            .execute("DELETE FROM memory_revision_fts", [])
+            .expect("damage FTS before replay");
+
+        assert_eq!(
+            store.rebuild_memory_projections(),
+            Err(StoreError::InvalidMemoryTransition)
+        );
+        let preserved = store
+            .connection
+            .query_row(
+                "SELECT last_sequence, updated_at_ms, lifecycle FROM memory_items \
+                 WHERE memory_id = 'memory-replay-rollback'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("projection survives failed replay");
+        assert_eq!(preserved, (1, 777, "active".to_owned()));
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM memory_revision_fts", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("damaged FTS remains after rollback"),
+            0
+        );
+        assert_eq!(store.memory_generation().expect("generation").get(), 1);
+        assert_eq!(
+            store
+                .memory_mutation_generation()
+                .expect("mutation generation")
+                .get(),
+            1
+        );
+    }
+
+    #[test]
     fn logical_command_batches_are_atomic_contiguous_and_exactly_idempotent() {
         let database = TestDatabase::new();
         let mut store = database.open();
@@ -4051,6 +4469,15 @@ mod tests {
         store
             .rebuild_memory_projections()
             .expect("rebuild after deletion");
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM memory_content_blobs", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("content count after rebuild"),
+            0
+        );
     }
 
     #[test]
@@ -4609,6 +5036,13 @@ mod tests {
             (true, true, Some(session_id.as_str().to_owned()))
         );
         store
+            .connection
+            .execute(
+                "DELETE FROM memory_evidence WHERE evidence_id = 'evidence-session-input'",
+                [],
+            )
+            .expect("damage erased evidence projection");
+        store
             .rebuild_memory_projections()
             .expect("rebuild privacy tombstones");
         assert_eq!(
@@ -4619,6 +5053,22 @@ mod tests {
                 .content(),
             &MemoryContentState::Erased
         );
+        assert_eq!(
+            store
+                .load_memory_evidence_content(cross_scope_revision.revision_id())
+                .expect("load rebuilt cross-scope evidence")
+                .expect("known cross-scope revision")[0]
+                .excerpt(),
+            &MemoryEvidenceExcerptState::Erased
+        );
+        assert!(matches!(
+            store
+                .load_memory_candidate(cross_scope_revision.revision_id())
+                .expect("load rebuilt cross-scope candidate")
+                .expect("known cross-scope memory")
+                .content(),
+            MemoryContentState::Retained(_)
+        ));
     }
 
     #[test]
