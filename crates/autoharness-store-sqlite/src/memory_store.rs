@@ -3992,6 +3992,7 @@ mod tests {
                 sensitivity_ceiling: Sensitivity::Internal,
             },
             observed_sources: Vec::new(),
+            audit_snapshots: Vec::new(),
             memory_candidates,
         }
     }
@@ -4195,14 +4196,21 @@ mod tests {
         store
             .append_memory(&MemoryAppendRequest::new(0, create.clone(), Some(sidecar)))
             .expect("append validated memory");
-        let validation = MemoryValidationResult::new(
+        let duplicate_candidate =
+            MemoryId::new("private-validation-duplicate-sentinel").expect("memory ID");
+        let contradiction_candidate =
+            MemoryId::new("private-validation-contradiction-sentinel").expect("memory ID");
+        let validation = MemoryValidationResult::new_with_candidates(
             9,
             revision.content_hash().clone(),
             MemoryValidationStatus::NeedsReview,
             vec![
+                MemoryValidationIssue::Duplicate,
                 MemoryValidationIssue::Contradiction,
                 MemoryValidationIssue::InjectionPattern,
             ],
+            vec![duplicate_candidate.clone()],
+            vec![contradiction_candidate.clone()],
         )
         .expect("validation result");
         let validation_operation = MemoryOperationEnvelope::new_v1(
@@ -4235,7 +4243,21 @@ mod tests {
             inspected.records()[0].latest_validation(),
             Some(&validation)
         );
+        let inspected_validation = inspected.records()[0]
+            .latest_validation()
+            .expect("latest validation");
+        assert_eq!(
+            inspected_validation.duplicate_candidates(),
+            std::slice::from_ref(&duplicate_candidate)
+        );
+        assert_eq!(
+            inspected_validation.contradiction_candidates(),
+            std::slice::from_ref(&contradiction_candidate)
+        );
         assert!(!format!("{:?}", inspected.records()[0]).contains(CONTENT_SENTINEL));
+        let debug = format!("{:?}", inspected.records()[0]);
+        assert!(!debug.contains(duplicate_candidate.as_str()));
+        assert!(!debug.contains(contradiction_candidate.as_str()));
 
         store
             .connection
