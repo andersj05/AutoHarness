@@ -27,7 +27,8 @@ pub use port::{Catalog, Chat, Provider, ProviderEventStream, ProviderMetadata, S
 pub use secret::{SecretAccumulator, structured_value_may_contain_secret};
 pub use sse::{SseDecoder, SseFrame};
 pub use stream::{
-    ChatContent, ChatMessage, ChatRequest, ChatRole, CompletionReason, ProviderStreamEvent,
-    ProviderToolCall, ProviderToolDefinition, TextDelta, UsageSnapshot,
+    ChatContent, ChatMessage, ChatRequest, ChatRole, CompletionReason, ContextPrelude,
+    MAX_CONTEXT_PRELUDE_BYTES, ProviderStreamEvent, ProviderToolCall, ProviderToolDefinition,
+    TextDelta, UsageSnapshot,
 };
 pub use tokio_util::sync::CancellationToken;
