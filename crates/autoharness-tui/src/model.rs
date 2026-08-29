@@ -801,7 +801,7 @@ impl MemorySensitivity {
 pub struct MemoryEvidence {
     label: String,
     source: String,
-    excerpt: Option<String>,
+    excerpt: Option<Zeroizing<String>>,
     availability: MemoryEvidenceAvailability,
 }
 
@@ -823,11 +823,11 @@ impl MemoryEvidence {
                 MAX_MEMORY_CONTEXT_TEXT_CHARS,
                 "memory evidence source",
             )?,
-            excerpt: Some(bounded_text(
+            excerpt: Some(Zeroizing::new(bounded_text(
                 excerpt.into(),
                 MAX_MEMORY_CONTEXT_TEXT_CHARS,
                 "memory evidence excerpt",
-            )?),
+            )?)),
             availability: MemoryEvidenceAvailability::Retained,
         })
     }
@@ -884,7 +884,8 @@ impl MemoryEvidence {
         match self.availability {
             MemoryEvidenceAvailability::Retained => self
                 .excerpt
-                .as_deref()
+                .as_ref()
+                .map(|excerpt| excerpt.as_str())
                 .expect("retained evidence owns an excerpt"),
             MemoryEvidenceAvailability::Absent => "No excerpt was recorded.",
             MemoryEvidenceAvailability::Erased => "Excerpt erased by logical deletion.",
@@ -894,7 +895,7 @@ impl MemoryEvidence {
     /// Returns retained exact evidence bytes without conflating absent and erased states.
     #[must_use]
     pub fn retained_excerpt(&self) -> Option<&str> {
-        self.excerpt.as_deref()
+        self.excerpt.as_ref().map(|excerpt| excerpt.as_str())
     }
 
     /// Returns the explicit excerpt availability state.
