@@ -5768,6 +5768,76 @@ mod tests {
         }
     }
 
+    struct CompactionProvider {
+        responses: Mutex<VecDeque<String>>,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl CompactionProvider {
+        fn new(responses: impl IntoIterator<Item = String>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Catalog for CompactionProvider {
+        async fn list_models(
+            &self,
+            _request: CatalogRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ModelCatalog, ProviderError> {
+            Ok(ModelCatalog::new(
+                vec![compaction_model_descriptor()],
+                CatalogFreshness::Live,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Chat for CompactionProvider {
+        async fn stream_chat(
+            &self,
+            request: ChatRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<ProviderEventStream, ProviderError> {
+            self.requests.lock().expect("request lock").push(request);
+            let response = self
+                .responses
+                .lock()
+                .expect("response lock")
+                .pop_front()
+                .unwrap_or_else(|| "compaction follow-up complete".to_owned());
+            Ok(Box::pin(futures_util::stream::iter([
+                Ok(ProviderStreamEvent::Started),
+                Ok(ProviderStreamEvent::TextDelta(
+                    TextDelta::new(response).expect("text delta"),
+                )),
+                Ok(ProviderStreamEvent::Completed {
+                    reason: CompletionReason::Stop,
+                }),
+            ])))
+        }
+    }
+
+    impl autoharness_provider::SecretRedactor for CompactionProvider {
+        fn redact_secrets(&self, value: &str) -> String {
+            value.replace("configured-secret", "[REDACTED]")
+        }
+    }
+
+    impl ProviderMetadata for CompactionProvider {
+        fn provider_id(&self) -> &ProviderId {
+            &FAKE_PROVIDER_ID
+        }
+
+        fn availability(&self) -> ProviderAvailability {
+            ProviderAvailability::Ready
+        }
+    }
+
     enum ProposalProviderTurn {
         Tools(Vec<ProviderToolCall>),
         Complete(&'static str),
@@ -6183,6 +6253,25 @@ mod tests {
         }
     }
 
+    fn compaction_model_descriptor() -> ModelDescriptor {
+        let model = fixture_model();
+        ModelDescriptor {
+            provider_id: model.provider_id().clone(),
+            model_id: model.model_id().clone(),
+            display_name: "Compaction fixture".to_owned(),
+            description: None,
+            input_token_limit: Some(900),
+            output_token_limit: Some(8_192),
+            capabilities: ModelCapabilities {
+                chat: CapabilitySupport::Supported,
+                streaming: CapabilitySupport::Supported,
+                managed_interactions: CapabilitySupport::Unknown,
+                thinking: CapabilitySupport::Unknown,
+                tool_calling: CapabilitySupport::Unsupported,
+            },
+        }
+    }
+
     fn alternate_model() -> ModelRef {
         ModelRef::new(
             ProviderId::new("google-ai-studio").expect("provider ID"),
@@ -6246,6 +6335,39 @@ mod tests {
             .expect("notice timeout")
             .expect("notice sender remains open");
         assert_eq!(notice, UiNotice::IntentCommitted { request_id });
+    }
+
+    async fn submit_and_wait_for_completion(
+        ui: &mut UiPorts,
+        request_id: RequestId,
+        prompt: &str,
+        completed_attempts: usize,
+    ) {
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id,
+                prompt: prompt.to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(ui, request_id).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection
+                .transcript
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::Assistant {
+                            status: autoharness_tui::AttemptStatus::Completed,
+                            ..
+                        }
+                    )
+                })
+                .count()
+                == completed_attempts
+        })
+        .await;
     }
 
     struct SeededMemory {
@@ -7894,6 +8016,303 @@ mod tests {
                     == autoharness_domain::CapabilityKind::InvalidToolCall
         }));
         reopened.shutdown().await.expect("reopened actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn compaction_survives_restart_without_reexpanding_raw_history() {
+        const FIRST_INPUT: &str = "old input that must not reappear after compaction";
+        const FIRST_OUTPUT_PREFIX: &str = "old-output-";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("compaction-restart.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database.clone()).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(CompactionProvider::new([
+            format!("{FIRST_OUTPUT_PREFIX}{}", "history".repeat(1_200)),
+            "second response".to_owned(),
+        ]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace.clone();
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        submit_and_wait_for_completion(&mut ui, RequestId::new(2), FIRST_INPUT, 1).await;
+        submit_and_wait_for_completion(
+            &mut ui,
+            RequestId::new(3),
+            "second input triggers compaction",
+            2,
+        )
+        .await;
+
+        let checkpoint = handle
+            .load_latest_compaction_checkpoint(session_id.clone())
+            .await
+            .expect("load checkpoint")
+            .expect("compaction checkpoint");
+        let summary_revision_id = checkpoint
+            .boundary()
+            .summary_revision_id()
+            .expect("summary proposal")
+            .clone();
+        let proposal_page = handle
+            .inspect_memories(
+                MemoryInspectionQuery::new(
+                    vec![DomainMemoryScope::Session(session_id.clone())],
+                    vec![MemoryRevisionStatus::Proposed],
+                    None,
+                    10,
+                )
+                .expect("proposal query"),
+            )
+            .await
+            .expect("proposal page");
+        assert_eq!(proposal_page.records().len(), 1);
+        let proposal = &proposal_page.records()[0];
+        assert_eq!(
+            proposal.latest_revision().revision_id(),
+            &summary_revision_id
+        );
+        assert_eq!(
+            proposal.latest_revision().origin(),
+            MemoryOrigin::Compaction
+        );
+        assert_eq!(
+            proposal.latest_revision().trust_class(),
+            TrustClass::UntrustedProposal
+        );
+        assert_eq!(
+            proposal.latest_revision().status(),
+            MemoryRevisionStatus::Proposed
+        );
+        let operations = handle
+            .load_memory_operations(proposal.memory_id().clone(), 0, 16)
+            .await
+            .expect("proposal operations");
+        assert_eq!(operations.len(), 2);
+        assert!(operations.iter().all(|operation| {
+            !matches!(
+                operation.payload(),
+                MemoryOperationPayload::RevisionActivated { .. }
+            )
+        }));
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1].messages.len(), 1);
+            assert!(
+                requests[1]
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| context.as_str().contains(FIRST_INPUT))
+            );
+        }
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+
+        let (reopened, reopened_session_id, reopened_session) =
+            crate::engine_actor::EngineActor::start(database).expect("reopened actor");
+        assert_eq!(reopened_session_id, session_id);
+        let reopened_handle = reopened.handle();
+        let restart_provider = Arc::new(CompactionProvider::new(["third response".to_owned()]));
+        let (mut restart_ui, restart_app) = bounded_ports(
+            Arc::new(projection::session(&reopened_session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let restart_shutdown = CancellationToken::new();
+        let mut restart_coordinator = Coordinator::with_provider_factory(
+            reopened_session_id,
+            reopened_session,
+            reopened_handle,
+            ProviderComposition {
+                initial: Some(restart_provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            restart_app,
+            restart_shutdown.clone(),
+        );
+        restart_coordinator.workspace = workspace;
+        let restart_task = tokio::spawn(restart_coordinator.run());
+        wait_for_catalog(&mut restart_ui).await;
+        submit_and_wait_for_completion(
+            &mut restart_ui,
+            RequestId::new(4),
+            "third input after restart",
+            3,
+        )
+        .await;
+        let requests = restart_provider.requests.lock().expect("request lock");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].messages.iter().all(|message| {
+            message
+                .content()
+                .is_none_or(|content| !content.as_str().contains(FIRST_INPUT))
+        }));
+        assert!(requests[0].messages.iter().all(|message| {
+            message
+                .content()
+                .is_none_or(|content| !content.as_str().contains(FIRST_OUTPUT_PREFIX))
+        }));
+        assert!(
+            requests[0]
+                .context
+                .as_ref()
+                .is_some_and(|context| context.as_str().contains(FIRST_INPUT))
+        );
+        drop(requests);
+
+        restart_shutdown.cancel();
+        restart_task
+            .await
+            .expect("restart coordinator join")
+            .expect("restart shutdown");
+        reopened.shutdown().await.expect("reopened shutdown");
+    }
+
+    #[tokio::test]
+    async fn secret_bearing_compaction_writes_neither_proposal_nor_boundary() {
+        const SENTINEL: &str = "configured-secret";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("compaction-secret.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(CompactionProvider::new([format!(
+            "{SENTINEL}-{}",
+            "history".repeat(1_200)
+        )]));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace;
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        submit_and_wait_for_completion(
+            &mut ui,
+            RequestId::new(2),
+            "produce secret-bearing old history",
+            1,
+        )
+        .await;
+        let compact_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: compact_request,
+                prompt: "this request would require compaction".to_owned(),
+            })
+            .await
+            .expect("submit compaction prompt");
+        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+            .await
+            .expect("notice timeout")
+            .expect("notice sender remains open");
+        assert!(matches!(
+            notice,
+            UiNotice::IntentRejected { request_id, failure }
+                if request_id == compact_request && failure.code == "context_not_committed"
+        ));
+
+        assert!(
+            handle
+                .load_latest_compaction_checkpoint(session_id.clone())
+                .await
+                .expect("checkpoint lookup")
+                .is_none()
+        );
+        let proposals = handle
+            .inspect_memories(
+                MemoryInspectionQuery::new(
+                    vec![DomainMemoryScope::Session(session_id)],
+                    vec![MemoryRevisionStatus::Proposed],
+                    None,
+                    10,
+                )
+                .expect("proposal query"),
+            )
+            .await
+            .expect("proposal page");
+        assert!(proposals.records().is_empty());
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]
