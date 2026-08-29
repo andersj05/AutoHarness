@@ -11,19 +11,20 @@ use autoharness_domain::{
     MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus, MemoryScope as DomainMemoryScope,
     MemorySequence, MemoryValidity, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage,
     ResponseText, RetryAdvice, RunLimits, Sensitivity, SessionId, SessionSequence, SessionTitle,
-    TimestampMillis, ToolCallId, ToolOutput, TrustClass, UsageSnapshot as DomainUsage,
+    Sha256Digest, TimestampMillis, ToolCallId, ToolOutput, TrustClass,
+    UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
 };
 use autoharness_memory::{
     MAX_CONTEXT_SOURCE_VALUE_BYTES, MemoryCandidate, RetainedContextSource,
-    normalized_content_hash, verify_admission_rendered_hash,
+    normalized_content_hash, verify_admission_rendered_hash, verify_rendered_context_hash,
 };
 use autoharness_provider::{
-    CancellationToken, CatalogRequest, ChatContent, ChatMessage, ChatRequest, ChatRole,
-    ModelCatalog, ModelDescriptor, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
-    ProviderToolCall, ProviderToolDefinition,
+    CancellationToken, CatalogFreshness, CatalogRequest, ChatContent, ChatMessage, ChatRequest,
+    ChatRole, ContextPrelude, ModelCatalog, ModelDescriptor, Provider, ProviderError,
+    ProviderErrorKind, ProviderStreamEvent, ProviderToolCall, ProviderToolDefinition,
 };
 use autoharness_provider_codex_cli::{CodexAuthProgress, login_with_browser};
 #[cfg(test)]
@@ -3791,6 +3792,7 @@ impl Coordinator {
         self.catalog_cancellation = None;
         match result {
             Ok(catalog) => {
+                let freshness = catalog.freshness();
                 let stale = catalog.is_stale();
                 let models = catalog.into_models();
                 telemetry::catalog_ready(models.len());
@@ -3807,6 +3809,9 @@ impl Coordinator {
                             model,
                         })
                         .await;
+                }
+                if freshness == CatalogFreshness::Live {
+                    self.maybe_resume_bound_turn_after_live_catalog().await;
                 }
                 self.publish_profiles();
                 if let Some(request_id) = request_id {
@@ -3833,6 +3838,159 @@ impl Coordinator {
             }
         }
         Ok(())
+    }
+
+    async fn maybe_resume_bound_turn_after_live_catalog(&mut self) {
+        if self.active.is_some() {
+            return;
+        }
+        if let Err(error) = self.resume_bound_turn_after_live_catalog().await {
+            tracing::warn!(
+                error = %error,
+                "recovered provider turn did not match durable dispatch authority"
+            );
+        }
+    }
+
+    async fn resume_bound_turn_after_live_catalog(&mut self) -> Result<(), AppError> {
+        let Some((attempt_id, model, run_turn)) = self.pending_bound_turn() else {
+            return Ok(());
+        };
+        let provider = self.provider.as_ref().ok_or(AppError::Configuration)?;
+        if provider.provider_id() != model.provider_id() {
+            return Err(AppError::Configuration);
+        }
+        let descriptor = self
+            .catalog_models
+            .iter()
+            .find(|descriptor| {
+                descriptor.provider_id == *model.provider_id()
+                    && descriptor.model_id == *model.model_id()
+                    && descriptor.capabilities.supports_streamed_chat()
+            })
+            .ok_or(AppError::Configuration)?;
+        let manifest = self
+            .engine
+            .load_attempt_context_turn(attempt_id.clone(), run_turn)
+            .await?
+            .ok_or(AppError::Configuration)?;
+        if manifest.session_id() != &self.session_id
+            || manifest.attempt_id() != &attempt_id
+            || manifest.run_turn() != run_turn
+            || manifest.model() != &model
+        {
+            return Err(AppError::Configuration);
+        }
+        let epoch = self
+            .engine
+            .load_context_epoch(manifest.epoch_id().clone())
+            .await?
+            .ok_or(AppError::Configuration)?;
+        if epoch.session_id() != &self.session_id
+            || epoch.epoch_id() != manifest.epoch_id()
+            || epoch.memory_generation() != manifest.memory_generation()
+        {
+            return Err(AppError::Configuration);
+        }
+
+        let checkpoint = self
+            .engine
+            .load_latest_compaction_checkpoint(self.session_id.clone())
+            .await?;
+        let retained_history = match checkpoint.as_ref() {
+            Some(checkpoint) => Some(self.load_compacted_history(checkpoint).await?),
+            None => None,
+        };
+        let compacted_through = retained_history
+            .as_ref()
+            .map(CompactedHistoryV1::cutoff_sequence)
+            .map(SessionSequence::new)
+            .transpose()
+            .map_err(|_| AppError::Configuration)?;
+        let advertise_tools = descriptor.capabilities.supports_tool_calling();
+        let request = build_request_after_cutoff(
+            &self.session,
+            &attempt_id,
+            advertise_tools,
+            compacted_through,
+        )?;
+        let retrieval_scope = self
+            .context_scope()?
+            .retrieval_scope(self.session_id.clone(), epoch.started_at());
+        let compatibility = EpochCompatibility::new(
+            &request,
+            Some(descriptor),
+            &retrieval_scope,
+            epoch.token_budget(),
+            manifest.budget().durable_memory_limit(),
+        )?;
+        if compatibility.hashes() != epoch.hashes() {
+            return Err(AppError::Configuration);
+        }
+        let content = self.load_frozen_context_content(&manifest).await?;
+        let prelude = content.prelude().cloned();
+        if !verify_rendered_context_hash(
+            prelude.as_ref().map_or("", |value| value.as_str()),
+            manifest.rendered_hash(),
+        )? {
+            return Err(AppError::Configuration);
+        }
+        let request = match prelude {
+            Some(prelude) => {
+                request.with_context(ContextPrelude::new(prelude.as_str().to_owned())?)
+            }
+            None => request,
+        };
+        if exact_provider_request_hash(&request)? != *manifest.request_hash() {
+            return Err(AppError::Configuration);
+        }
+
+        let attempt = self
+            .session
+            .attempt(&attempt_id)
+            .ok_or(AppError::Configuration)?;
+        let mut budget = restore_run_budget(&self.session, attempt)
+            .map_err(|error| AppError::Provider(tool_provider_error(&error)))?;
+        budget
+            .start_turn()
+            .map_err(|error| AppError::Provider(tool_provider_error(&error)))?;
+        let usage_base = attempt.usage().unwrap_or_default();
+        let reply = self
+            .engine
+            .start_recovered_run_turn(request.clone(), manifest)
+            .await?;
+        if reply.session.session_id() != &self.session_id {
+            return Err(AppError::Configuration);
+        }
+        self.session = reply.session;
+        self.ports
+            .sessions
+            .send_replace(Arc::new(projection::session(&self.session)));
+        let cancellation = self.shutdown.child_token();
+        self.spawn_stream(attempt_id.clone(), request, cancellation.clone(), None);
+        self.active = Some(ActiveAttempt {
+            attempt_id,
+            cancellation,
+            budget,
+            usage_base,
+        });
+        Ok(())
+    }
+
+    fn pending_bound_turn(&self) -> Option<(AttemptId, autoharness_domain::ModelRef, u32)> {
+        self.session.attempts().iter().rev().find_map(|attempt| {
+            if attempt.status() != EngineAttemptStatus::InFlight
+                || !attempt.is_provider_dispatch_ready()
+            {
+                return None;
+            }
+            let binding = attempt.pending_context_turn()?;
+            Some((
+                attempt.attempt_id().clone(),
+                attempt.model().clone(),
+                binding.run_turn(),
+            ))
+        })
     }
 
     async fn handle_stream(
@@ -5096,6 +5254,19 @@ fn recover_active_attempt(
         .iter()
         .rev()
         .find(|attempt| attempt.status() == EngineAttemptStatus::AwaitingTools)?;
+    let budget = restore_run_budget(session, attempt).ok()?;
+    Some(ActiveAttempt {
+        attempt_id: attempt.attempt_id().clone(),
+        cancellation: shutdown.child_token(),
+        budget,
+        usage_base: attempt.usage().unwrap_or_default(),
+    })
+}
+
+fn restore_run_budget(
+    session: &SessionAggregate,
+    attempt: &autoharness_engine::AttemptProjection,
+) -> Result<RunBudget, ToolError> {
     let limits = attempt.run_limits().unwrap_or_default();
     let tokens = attempt
         .usage()
@@ -5120,7 +5291,7 @@ fn recover_active_attempt(
         .and_then(|timestamp| u64::try_from(timestamp.get()).ok())
         .unwrap_or(now_ms);
     let elapsed = std::time::Duration::from_millis(now_ms.saturating_sub(started_ms));
-    let budget = RunBudget::restore(
+    RunBudget::restore(
         limits,
         elapsed,
         attempt.turns_started(),
@@ -5128,13 +5299,16 @@ fn recover_active_attempt(
         output_bytes,
         0,
     )
-    .expect("durable run counters fit configured limits");
-    Some(ActiveAttempt {
-        attempt_id: attempt.attempt_id().clone(),
-        cancellation: shutdown.child_token(),
-        budget,
-        usage_base: attempt.usage().unwrap_or_default(),
-    })
+}
+
+fn exact_provider_request_hash(request: &ChatRequest) -> Result<Sha256Digest, AppError> {
+    use sha2::{Digest as _, Sha256};
+
+    let digest = Sha256::digest(serde_json::to_vec(request)?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Sha256Digest::new(digest).map_err(|_| AppError::Configuration)
 }
 
 fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
@@ -6484,6 +6658,107 @@ mod tests {
                 tool_calling: CapabilitySupport::Supported,
             },
         }
+    }
+
+    async fn seed_pending_bound_turn(
+        database: std::path::PathBuf,
+        workspace: &std::path::Path,
+    ) -> (SessionId, AttemptId, ChatRequest) {
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let (_ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(Arc::new(RecordingProvider::default())),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(workspace),
+            app,
+            shutdown,
+        );
+        coordinator.workspace = workspace.to_path_buf();
+        coordinator
+            .initialize_context_scope()
+            .await
+            .expect("initialize context scope");
+        coordinator.catalog_models = vec![fixture_model_descriptor()];
+        coordinator
+            .execute(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model: fixture_model(),
+            })
+            .await
+            .expect("select fixture model");
+        let attempt_id = ids::attempt_id();
+        coordinator
+            .execute(CommandPayload::AdmitPromptAndPrepareAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                input_id: ids::input_id(),
+                prompt: PromptText::new("resume the exact durable provider request")
+                    .expect("prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            })
+            .await
+            .expect("prepare attempt");
+        coordinator
+            .execute(CommandPayload::ConfigureRunBudget {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                limits: RunLimits::default(),
+            })
+            .await
+            .expect("configure budget");
+        coordinator
+            .execute(CommandPayload::StartAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            })
+            .await
+            .expect("start attempt");
+        let prepared = coordinator
+            .prepare_and_bind_context(&attempt_id, true)
+            .await
+            .expect("bind exact context");
+        let request = prepared.request().clone();
+        let attempt = coordinator
+            .session
+            .attempt(&attempt_id)
+            .expect("bound attempt");
+        assert_eq!(attempt.status(), EngineAttemptStatus::InFlight);
+        assert!(attempt.is_provider_dispatch_ready());
+        assert_eq!(attempt.turns_started(), 0);
+        drop(coordinator);
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+        (session_id, attempt_id, request)
+    }
+
+    async fn wait_for_provider_calls(provider: &RecordingProvider, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if provider.calls.load(Ordering::SeqCst) == expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("provider call timeout");
     }
 
     async fn wait_for_catalog(ui: &mut UiPorts) {
@@ -8959,6 +9234,150 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn bound_turn_recovery_waits_for_an_exact_live_catalog_and_dispatches_once() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            "Keep recovered provider requests byte identical.",
+        )
+        .expect("workspace instructions");
+        let database = directory.path().join("bound-turn-recovery.sqlite3");
+        let (session_id, attempt_id, expected_request) =
+            seed_pending_bound_turn(database.clone(), &workspace).await;
+
+        let (actor, recovered_session_id, recovered) =
+            crate::engine_actor::EngineActor::start(database).expect("reopen engine actor");
+        assert_eq!(recovered_session_id, session_id);
+        let recovered_attempt = recovered.attempt(&attempt_id).expect("recovered attempt");
+        assert_eq!(recovered_attempt.status(), EngineAttemptStatus::InFlight);
+        assert!(recovered_attempt.is_provider_dispatch_ready());
+        assert_eq!(recovered_attempt.turns_started(), 0);
+
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (_ui, app) = bounded_ports(
+            Arc::new(projection::session(&recovered)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            recovered,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown.clone(),
+        );
+        coordinator.workspace = workspace;
+        coordinator
+            .initialize_context_scope()
+            .await
+            .expect("initialize recovered context scope");
+
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        coordinator
+            .handle_catalog(
+                0,
+                None,
+                Ok(ModelCatalog::new(
+                    vec![fixture_model_descriptor()],
+                    CatalogFreshness::Cached,
+                )),
+            )
+            .await
+            .expect("cached catalog");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        coordinator
+            .handle_catalog(
+                0,
+                None,
+                Ok(ModelCatalog::new(
+                    vec![fixture_model_descriptor()],
+                    CatalogFreshness::Stale,
+                )),
+            )
+            .await
+            .expect("stale catalog");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+
+        let mut incompatible = fixture_model_descriptor();
+        incompatible.capabilities.tool_calling = CapabilitySupport::Unsupported;
+        coordinator
+            .handle_catalog(
+                0,
+                None,
+                Ok(ModelCatalog::new(
+                    vec![incompatible],
+                    CatalogFreshness::Live,
+                )),
+            )
+            .await
+            .expect("incompatible live catalog fails closed");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        let still_pending = coordinator
+            .session
+            .attempt(&attempt_id)
+            .expect("still-pending attempt");
+        assert!(still_pending.is_provider_dispatch_ready());
+        assert_eq!(still_pending.turns_started(), 0);
+
+        coordinator
+            .handle_catalog(
+                0,
+                None,
+                Ok(ModelCatalog::new(
+                    vec![fixture_model_descriptor()],
+                    CatalogFreshness::Live,
+                )),
+            )
+            .await
+            .expect("matching live catalog");
+        wait_for_provider_calls(&provider, 1).await;
+        assert_eq!(
+            provider.requests.lock().expect("request lock").as_slice(),
+            std::slice::from_ref(&expected_request),
+            "restart recovery must dispatch the byte-identical provider-neutral request"
+        );
+        let started = coordinator
+            .session
+            .attempt(&attempt_id)
+            .expect("started recovered attempt");
+        assert_eq!(started.turns_started(), 1);
+        assert!(!started.is_provider_dispatch_ready());
+
+        coordinator
+            .handle_catalog(
+                0,
+                None,
+                Ok(ModelCatalog::new(
+                    vec![fixture_model_descriptor()],
+                    CatalogFreshness::Live,
+                )),
+            )
+            .await
+            .expect("repeated live catalog");
+        tokio::task::yield_now().await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+
+        shutdown.cancel();
+        drop(coordinator);
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]
