@@ -1436,7 +1436,7 @@ fn lifecycle_review_lines(model: &Model) -> Vec<Line<'static>> {
                     lines.push(Line::styled(display_safe(evidence.excerpt()), muted));
                 }
                 lines.push(Line::from(""));
-                lines.push(Line::styled("Duplicate and contradiction checks", muted));
+                lines.push(Line::styled("Validation findings", muted));
                 if context.findings().is_empty() {
                     lines.push(Line::styled(
                         "No findings in the loaded validation.",
