@@ -1359,7 +1359,9 @@ fn validate_frozen_epoch_continuation(
         || turn.memory_generation() != baseline.turn.memory_generation()
         || turn.model() != baseline.turn.model()
         || turn.eligibility() != baseline.turn.eligibility()
-        || turn.budget() != baseline.turn.budget()
+        || turn.budget().token_budget() != baseline.turn.budget().token_budget()
+        || turn.budget().durable_memory_limit() != baseline.turn.budget().durable_memory_limit()
+        || baseline.turn.rendered_token_count().get() > turn.budget().rendered_limit()
         || turn.sources() != baseline.turn.sources()
         || turn.rendered_hash() != baseline.turn.rendered_hash()
         || turn.rendered_token_count() != baseline.turn.rendered_token_count()
@@ -2385,6 +2387,48 @@ mod tests {
         expected_sequence: u64,
         workspace_id: &str,
     ) -> ContextTurnManifest {
+        turn_at_with_budget(
+            turn_id,
+            epoch_id,
+            run_turn,
+            expected_sequence,
+            workspace_id,
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(0).expect("reserved tokens"),
+                EstimatedTokens::new(2_048).expect("memory limit"),
+            )
+            .expect("budget allocation"),
+        )
+    }
+
+    fn turn_at_with_budget(
+        turn_id: &str,
+        epoch_id: &str,
+        run_turn: u32,
+        expected_sequence: u64,
+        workspace_id: &str,
+        budget: ContextBudgetAllocation,
+    ) -> ContextTurnManifest {
+        try_turn_at_with_budget(
+            turn_id,
+            epoch_id,
+            run_turn,
+            expected_sequence,
+            workspace_id,
+            budget,
+        )
+        .expect("turn")
+    }
+
+    fn try_turn_at_with_budget(
+        turn_id: &str,
+        epoch_id: &str,
+        run_turn: u32,
+        expected_sequence: u64,
+        workspace_id: &str,
+        budget: ContextBudgetAllocation,
+    ) -> Result<ContextTurnManifest, autoharness_domain::ValueError> {
         const RENDERED_ADMISSION: &str = "<source>workspace agents</source>";
         const RENDERED_PRELUDE: &str = "<context>workspace agents</context>";
         let snapshot = ContextSourceSnapshot::new(
@@ -2449,18 +2493,12 @@ mod tests {
                 None,
                 Sensitivity::Internal,
             ),
-            ContextBudgetAllocation::new(
-                ContextTokenBudget::new(4_096).expect("budget"),
-                EstimatedTokens::new(0).expect("reserved tokens"),
-                EstimatedTokens::new(2_048).expect("memory limit"),
-            )
-            .expect("budget allocation"),
+            budget,
             EstimatedTokens::new(32).expect("tokens"),
             TimestampMillis::new(6 + i64::from(run_turn)),
             vec![snapshot],
             vec![admission],
-        )
-        .expect("turn placeholder");
+        )?;
         let manifest_hash = context_manifest_hash(&placeholder).expect("manifest hash");
         ContextTurnManifest::new(
             placeholder.context_turn_id().clone(),
@@ -2481,7 +2519,6 @@ mod tests {
             placeholder.sources().to_vec(),
             placeholder.admissions().to_vec(),
         )
-        .expect("turn")
     }
 
     fn turn_content(turn: &ContextTurnManifest) -> ContextTurnContent {
@@ -2639,6 +2676,147 @@ mod tests {
                 .expect("exact bound retry")
                 .disposition(),
             ContextCommitDisposition::AlreadyCommitted
+        );
+    }
+
+    #[test]
+    fn frozen_epoch_allows_dynamic_reservation_only_while_exact_baseline_still_fits() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_dispatch_ready_attempt(&mut store);
+        let first_epoch = epoch("epoch-dynamic-budget", ContextEpochReason::NewAttempt, None);
+        let first_turn = turn_at_with_budget(
+            "turn-dynamic-budget-1",
+            "epoch-dynamic-budget",
+            1,
+            5,
+            "workspace-1",
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(0).expect("reserved"),
+                EstimatedTokens::new(0).expect("durable memory"),
+            )
+            .expect("first budget"),
+        );
+        let first_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(
+                Some(first_epoch),
+                first_turn.clone(),
+                turn_content(&first_turn),
+            ),
+            session_event(
+                6,
+                EventPayload::ContextTurnBound {
+                    attempt_id: first_turn.attempt_id().clone(),
+                    run_turn: 1,
+                    context_turn_id: first_turn.context_turn_id().clone(),
+                    manifest_hash: first_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        store
+            .commit_context_turn_and_bind(&first_request)
+            .expect("bind first baseline");
+        store
+            .append(&AppendRequest::new(
+                first_turn.session_id().clone(),
+                6,
+                vec![
+                    session_event(
+                        7,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: first_turn.attempt_id().clone(),
+                            turn: 1,
+                        },
+                    ),
+                    session_event(
+                        8,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        9,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("prepare second turn");
+
+        let second_turn = turn_at_with_budget(
+            "turn-dynamic-budget-2",
+            "epoch-dynamic-budget",
+            2,
+            9,
+            "workspace-1",
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(512).expect("reserved"),
+                EstimatedTokens::new(0).expect("durable memory"),
+            )
+            .expect("second budget"),
+        );
+        let second_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(None, second_turn.clone(), turn_content(&second_turn)),
+            session_event(
+                10,
+                EventPayload::ContextTurnBound {
+                    attempt_id: second_turn.attempt_id().clone(),
+                    run_turn: 2,
+                    context_turn_id: second_turn.context_turn_id().clone(),
+                    manifest_hash: second_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        store
+            .commit_context_turn_and_bind(&second_request)
+            .expect("changed dynamic history budget still fits frozen baseline");
+        store
+            .append(&AppendRequest::new(
+                second_turn.session_id().clone(),
+                10,
+                vec![
+                    session_event(
+                        11,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: second_turn.attempt_id().clone(),
+                            turn: 2,
+                        },
+                    ),
+                    session_event(
+                        12,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: second_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        13,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: second_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("prepare third turn");
+
+        let too_small = try_turn_at_with_budget(
+            "turn-dynamic-budget-3",
+            "epoch-dynamic-budget",
+            3,
+            13,
+            "workspace-1",
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(4_080).expect("reserved"),
+                EstimatedTokens::new(0).expect("durable memory"),
+            )
+            .expect("third budget"),
+        );
+        assert_eq!(
+            too_small,
+            Err(autoharness_domain::ValueError::InvalidContextManifest)
         );
     }
 
