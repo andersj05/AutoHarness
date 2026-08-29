@@ -1,5 +1,6 @@
 use autoharness_domain::{
-    ContextSection, ContextSourceKey, EstimatedTokens, MemoryId, MemoryRevisionId, Sha256Digest,
+    ContextAdmission, ContextSection, ContextSourceKey, EstimatedTokens, MemoryId,
+    MemoryRevisionId, Sha256Digest,
 };
 
 use crate::{
@@ -149,6 +150,43 @@ pub fn render_context_prelude(
     Some(output)
 }
 
+/// Verifies exact retained admission bytes using the renderer contract named by its metadata.
+///
+/// Durable-memory admissions require the owning memory identity because the canonical digest binds
+/// both the memory and revision identities. Registered-source admissions must not supply one.
+pub fn verify_admission_rendered_hash(
+    admission: &ContextAdmission,
+    memory_id: Option<&MemoryId>,
+    rendered: &str,
+) -> Result<bool, MemoryError> {
+    let mut encoder = CanonicalEncoder::new();
+    if admission.renderer_version() != crate::CONTEXT_RENDERER_VERSION {
+        return Ok(false);
+    }
+    if admission.section() == ContextSection::DurableMemory {
+        let (Some(memory_id), Some(revision_id)) = (memory_id, admission.memory_revision_id())
+        else {
+            return Ok(false);
+        };
+        encoder.field("renderer", MEMORY_RENDERER_V1.as_bytes())?;
+        encoder.field("memory_id", memory_id.as_str().as_bytes())?;
+        encoder.field("revision_id", revision_id.as_str().as_bytes())?;
+    } else {
+        if memory_id.is_some() || admission.memory_revision_id().is_some() {
+            return Ok(false);
+        }
+        encoder.field("renderer", SOURCE_RENDERER_V1.as_bytes())?;
+        encoder.field("source_key", admission.source_key().as_str().as_bytes())?;
+        encoder.field(
+            "source_revision",
+            admission.source_revision().as_str().as_bytes(),
+        )?;
+        encoder.field("section", section_name(admission.section()).as_bytes())?;
+    }
+    encoder.field("rendered", rendered.as_bytes())?;
+    Ok(encoder.finish()? == *admission.rendered_hash())
+}
+
 fn boundary_safe_json_string(value: &str) -> Result<String, MemoryError> {
     let json = serde_json::to_string(value).map_err(|_| MemoryError::InvalidDomainValue)?;
     Ok(json
@@ -160,13 +198,37 @@ fn boundary_safe_json_string(value: &str) -> Result<String, MemoryError> {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        ConfidenceBasisPoints, MemoryContent, MemoryId, MemoryKind, MemoryRevisionId,
-        MemoryRevisionStatus, MemoryScope, MemoryValidity, Sensitivity, SessionId, TimestampMillis,
-        TrustClass, UserId,
+        ConfidenceBasisPoints, ContextAdmissionId, ContextTurnId, MemoryContent, MemoryId,
+        MemoryKind, MemoryRevisionId, MemoryRevisionStatus, MemoryScope, MemoryValidity,
+        Sensitivity, SessionId, TimestampMillis, TrustClass, UserId,
     };
 
     use super::*;
-    use crate::{MemoryCandidate, RankFactor, RankedMemory, Utf8ByteSizerV1};
+    use crate::{
+        CONTEXT_RENDERER_VERSION, ContextSource, ContextSourcePolicy, ContextSourceRead,
+        ContextSourceRegistry, ContextSourceValue, MemoryCandidate, RankFactor, RankedMemory,
+        Utf8ByteSizerV1,
+    };
+
+    #[derive(Clone)]
+    struct FixedSource {
+        key: ContextSourceKey,
+        read: ContextSourceRead,
+    }
+
+    impl ContextSource for FixedSource {
+        fn key(&self) -> &ContextSourceKey {
+            &self.key
+        }
+
+        fn policy(&self) -> ContextSourcePolicy {
+            ContextSourcePolicy::Optional
+        }
+
+        fn observe(&self) -> ContextSourceRead {
+            self.read.clone()
+        }
+    }
 
     fn ranked(content: &str) -> RankedMemory {
         RankedMemory {
@@ -228,5 +290,102 @@ mod tests {
     #[test]
     fn helper_types_remain_constructible_for_multiple_scopes() {
         let _session = MemoryScope::Session(SessionId::new("session-1").expect("ID"));
+    }
+
+    #[test]
+    fn durable_admission_verification_binds_memory_revision_and_exact_bytes() {
+        let memory = ranked("remember the exact boundary");
+        let memory_id = memory.candidate.memory_id.clone();
+        let rendered = render_memory(&memory, &Utf8ByteSizerV1).expect("render");
+        let admission = ContextAdmission::new(
+            ContextAdmissionId::new("admission-1").expect("admission ID"),
+            ContextTurnId::new("turn-1").expect("turn ID"),
+            ContextSection::DurableMemory,
+            ContextSourceKey::new("memory:fixture").expect("source key"),
+            memory.candidate.content_hash,
+            Some(rendered.revision_id.clone()),
+            CONTEXT_RENDERER_VERSION,
+            rendered.rendered_hash.clone(),
+            1,
+            memory.score,
+            rendered.estimated_tokens,
+            TimestampMillis::new(1),
+            Vec::new(),
+        )
+        .expect("admission");
+
+        assert!(
+            verify_admission_rendered_hash(&admission, Some(&memory_id), &rendered.rendered)
+                .expect("verify")
+        );
+        assert!(
+            !verify_admission_rendered_hash(
+                &admission,
+                Some(&MemoryId::new("memory-other").expect("memory ID")),
+                &rendered.rendered,
+            )
+            .expect("verify identity")
+        );
+        assert!(
+            !verify_admission_rendered_hash(
+                &admission,
+                Some(&memory_id),
+                &format!("{} ", rendered.rendered),
+            )
+            .expect("verify bytes")
+        );
+    }
+
+    #[test]
+    fn source_admission_verification_binds_section_revision_and_exact_bytes() {
+        let mut registry = ContextSourceRegistry::new();
+        registry
+            .register(FixedSource {
+                key: ContextSourceKey::new("workspace:instructions").expect("source key"),
+                read: ContextSourceRead::Available {
+                    section: ContextSection::AuthorizedInstruction,
+                    source_revision: Sha256Digest::new("b".repeat(64)).expect("revision"),
+                    value: ContextSourceValue::new("Use the checked workspace contract.")
+                        .expect("value"),
+                },
+            })
+            .expect("register");
+        let observed = registry
+            .observe_all(TimestampMillis::new(2), Vec::new())
+            .expect("observe");
+        let rendered = render_source(&observed[0], &Utf8ByteSizerV1)
+            .expect("render")
+            .expect("available");
+        let admission = ContextAdmission::new(
+            ContextAdmissionId::new("admission-source").expect("admission ID"),
+            ContextTurnId::new("turn-source").expect("turn ID"),
+            rendered.section,
+            rendered.source_key.clone(),
+            rendered.source_revision.clone(),
+            None,
+            CONTEXT_RENDERER_VERSION,
+            rendered.rendered_hash.clone(),
+            1,
+            0,
+            rendered.estimated_tokens,
+            TimestampMillis::new(2),
+            Vec::new(),
+        )
+        .expect("admission");
+
+        assert!(
+            verify_admission_rendered_hash(&admission, None, &rendered.rendered).expect("verify")
+        );
+        assert!(
+            !verify_admission_rendered_hash(
+                &admission,
+                Some(&ranked("x").candidate.memory_id),
+                &rendered.rendered
+            )
+            .expect("verify wrong identity kind")
+        );
+        assert!(
+            !verify_admission_rendered_hash(&admission, None, "tampered").expect("verify bytes")
+        );
     }
 }

@@ -159,7 +159,7 @@ where
             Some(value) => self.sizer.estimate(value)?,
             None => EstimatedTokens::new(0).map_err(|_| MemoryError::InvalidDomainValue)?,
         };
-        let rendered_hash = hash_rendered_context(prelude.as_deref().unwrap_or(""))?;
+        let rendered_hash = rendered_context_hash(prelude.as_deref().unwrap_or(""))?;
         let admissions = build_admissions(
             &request,
             &request.observed_sources,
@@ -349,6 +349,21 @@ pub fn verify_context_manifest_hash(manifest: &ContextTurnManifest) -> Result<bo
     Ok(context_manifest_hash(manifest)? == *manifest.manifest_hash())
 }
 
+/// Computes the canonical digest of the complete provider-neutral context prelude.
+pub fn rendered_context_hash(rendered: &str) -> Result<Sha256Digest, MemoryError> {
+    let mut encoder = CanonicalEncoder::new();
+    encoder.field("context_renderer_v1", rendered.as_bytes())?;
+    encoder.finish()
+}
+
+/// Verifies exact retained prelude bytes against a durable turn manifest digest.
+pub fn verify_rendered_context_hash(
+    rendered: &str,
+    expected: &Sha256Digest,
+) -> Result<bool, MemoryError> {
+    Ok(rendered_context_hash(rendered)? == *expected)
+}
+
 fn validate_request(request: &ContextBuildRequest) -> Result<(), MemoryError> {
     if request.run_turn == 0 || request.reserved_tokens.get() > request.token_budget.get() {
         return Err(MemoryError::BudgetExceeded);
@@ -514,12 +529,6 @@ fn memory_source_key(revision_id: &MemoryRevisionId) -> Result<ContextSourceKey,
     let digest = encoder.finish()?;
     ContextSourceKey::new(format!("memory:{}", digest.as_str()))
         .map_err(|_| MemoryError::InvalidDomainValue)
-}
-
-fn hash_rendered_context(rendered: &str) -> Result<Sha256Digest, MemoryError> {
-    let mut encoder = CanonicalEncoder::new();
-    encoder.field("context_renderer_v1", rendered.as_bytes())?;
-    encoder.finish()
 }
 
 struct ManifestHashMaterial<'a> {
@@ -758,6 +767,17 @@ mod tests {
         let tampered: ContextTurnManifest = serde_json::from_value(json).expect("manifest shape");
 
         assert!(!verify_context_manifest_hash(&tampered).expect("verify"));
+    }
+
+    #[test]
+    fn retained_context_hash_verification_binds_exact_utf8_bytes() {
+        let rendered = "provider context with snow: 雪";
+        let hash = rendered_context_hash(rendered).expect("hash");
+
+        assert!(verify_rendered_context_hash(rendered, &hash).expect("verify"));
+        assert!(
+            !verify_rendered_context_hash("provider context with snow", &hash).expect("verify")
+        );
     }
 
     #[test]
