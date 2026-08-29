@@ -11,7 +11,7 @@ use autoharness_domain::{
     MemoryRevisionId, MemoryRevisionNumber, MemoryRevisionStatus, MemoryScope as DomainMemoryScope,
     MemorySequence, MemoryValidity, PermissionAnswer, PermissionOutcome, PromptText, PublicMessage,
     ResponseText, RetryAdvice, RunLimits, Sensitivity, SessionId, SessionSequence, SessionTitle,
-    ToolCallId, ToolOutput, TrustClass, UsageSnapshot as DomainUsage,
+    TimestampMillis, ToolCallId, ToolOutput, TrustClass, UsageSnapshot as DomainUsage,
 };
 use autoharness_engine::{
     AttemptStatus as EngineAttemptStatus, DurableEngineError, SessionAggregate,
@@ -32,17 +32,19 @@ use autoharness_settings::{DisplayLabel, ProfileId, ProviderKind, ProviderProfil
 use autoharness_store::{
     ContextAdmissionContent, ContextCompactionBoundary, ContextCompactionCheckpoint,
     ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryContentState,
-    MemoryInspectionQuery, MemorySearchQuery, SessionStatus,
+    MemoryInspectionCursor, MemoryInspectionQuery, MemoryInspectionStatus, MemorySearchQuery,
+    SessionStatus,
 };
 use autoharness_tool::{
     IncomingToolCall, MemoryProposal, RunBudget, ToolError, ToolRuntime, definitions, plan, replan,
 };
 use autoharness_tui::{
     ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
-    LocalPreferenceChange, LocalUserProfileProjection, ProfileConnectionState,
-    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
-    ProviderProfileProjection, RequestId, RetryPolicy, SessionBrowserEntry, SessionsProjection,
-    SettingsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
+    LocalPreferenceChange, LocalUserProfileProjection, MEMORY_VIEW_PAGE_SIZE, MemoryPageDirection,
+    MemoryProjection, MemoryScopeFilter, MemoryStatusFilter, MemoryViewCursor, MemoryViewQuery,
+    ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
+    ProviderProfileDraft, ProviderProfileProjection, RequestId, RetryPolicy, SessionBrowserEntry,
+    SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -217,9 +219,20 @@ enum MemoryProposalPersistenceError {
 }
 
 struct FrozenContextBaseline {
-    epoch: autoharness_domain::ContextEpochManifest,
+    epoch: ContextEpochMode,
     turn: autoharness_domain::ContextTurnManifest,
     content: ContextTurnContent,
+}
+
+impl FrozenContextBaseline {
+    fn epoch(&self) -> &autoharness_domain::ContextEpochManifest {
+        match &self.epoch {
+            ContextEpochMode::Existing(epoch) => epoch,
+            ContextEpochMode::NewAttempt { .. } | ContextEpochMode::Compaction { .. } => {
+                unreachable!("a frozen baseline always names an existing epoch")
+            }
+        }
+    }
 }
 
 struct PreparedContextSnapshot {
@@ -232,6 +245,12 @@ struct CompactionCandidate {
     request: ChatRequest,
     predecessor_epoch_id: ContextEpochId,
     epoch_id: ContextEpochId,
+}
+
+#[derive(Clone)]
+struct MemoryViewState {
+    generation: u64,
+    query: MemoryViewQuery,
 }
 
 /// Owns application orchestration while the terminal runner owns UI state.
@@ -255,6 +274,7 @@ pub struct Coordinator {
     codex_login: Option<(RequestId, CancellationToken)>,
     context_scope: Option<ContextScope>,
     workspace: std::path::PathBuf,
+    memory_view: Option<MemoryViewState>,
 }
 
 impl Coordinator {
@@ -342,6 +362,7 @@ impl Coordinator {
             codex_login: None,
             context_scope: None,
             workspace,
+            memory_view: None,
         }
     }
 
@@ -592,9 +613,13 @@ impl Coordinator {
             } => {
                 self.export_transcript(request_id, session_id).await?;
             }
-            UiIntent::QueryMemory { request_id, .. } => {
-                self.publish_memories().await?;
-                self.commit(request_id).await?;
+            UiIntent::QueryMemory {
+                request_id,
+                view_generation,
+                query,
+            } => {
+                self.query_memories(request_id, view_generation, query)
+                    .await?;
             }
             UiIntent::RememberMemory {
                 request_id,
@@ -700,18 +725,79 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Rebuilds the bounded all-lifecycle Memory workspace from durable projections.
-    async fn publish_memories(&self) -> Result<(), AppError> {
+    /// Rebuilds the latest accepted bounded Memory workspace view from durable projections.
+    async fn publish_memories(&mut self) -> Result<(), AppError> {
+        let view = match self.memory_view.clone() {
+            Some(view) => view,
+            None => {
+                let view = MemoryViewState {
+                    generation: 0,
+                    query: default_memory_view_query()?,
+                };
+                self.memory_view = Some(view.clone());
+                view
+            }
+        };
+        let projection = self.load_memory_view(&view).await?;
+        self.ports.memories.send_replace(Arc::new(projection));
+        Ok(())
+    }
+
+    async fn query_memories(
+        &mut self,
+        request_id: RequestId,
+        view_generation: u64,
+        query: MemoryViewQuery,
+    ) -> Result<(), AppError> {
+        self.memory_view = Some(MemoryViewState {
+            generation: view_generation,
+            query,
+        });
+        match self.publish_memories().await {
+            Ok(()) => self.commit(request_id).await,
+            Err(error) => {
+                tracing::warn!(error = %error, "authoritative Memory view query failed");
+                let failure = memory_view_failure();
+                let ledger_generation = self.ports.memories.borrow().generation();
+                self.ports.memories.send_replace(Arc::new(
+                    MemoryProjection::failed(ledger_generation, failure.clone())
+                        .with_view_page(view_generation, None),
+                ));
+                self.reject(request_id, failure).await
+            }
+        }
+    }
+
+    async fn load_memory_view(&self, view: &MemoryViewState) -> Result<MemoryProjection, AppError> {
         let generation = self.engine.memory_mutation_generation().await?;
-        let scopes = self.authorized_memory_scopes()?;
-        let query = MemoryInspectionQuery::new(
-            scopes,
+        let as_of = ids::now();
+        let before = view
+            .query
+            .before()
+            .map(decode_memory_view_cursor)
+            .transpose()?;
+        let mut query = MemoryInspectionQuery::new(
+            self.memory_view_scopes(view.query.scope())?,
             Vec::new(),
-            None,
-            projection::memory_projection_page_size(),
-        )?;
+            before,
+            u32::from(view.query.limit()),
+        )?
+        .with_effective_statuses(memory_view_statuses(view.query.status()), as_of);
+        if !view.query.literal().trim().is_empty() {
+            query = query.with_literal_search(
+                MemoryContent::new(view.query.literal().to_owned())
+                    .map_err(|_| AppError::Configuration)?,
+            );
+        }
         let page = self.engine.inspect_memories(query).await?;
-        let stale = page.has_more();
+        let has_more = page.has_more();
+        let next_cursor = if has_more {
+            Some(encode_memory_view_cursor(
+                page.records().last().ok_or(AppError::Configuration)?,
+            )?)
+        } else {
+            None
+        };
         let mut rows = Vec::with_capacity(page.records().len());
         for record in page.into_records() {
             let query = MemoryAdmissionQuery::new(
@@ -722,10 +808,32 @@ impl Coordinator {
             let admissions = self.engine.load_memory_admissions(query).await?;
             rows.push((record, admissions));
         }
-        let projection = projection::memory(generation.get(), rows, stale)
-            .map_err(|_| AppError::Configuration)?;
-        self.ports.memories.send_replace(Arc::new(projection));
-        Ok(())
+        projection::memory_at(generation.get(), rows, has_more, as_of)
+            .map(|projection| projection.with_view_page(view.generation, next_cursor))
+            .map_err(|_| AppError::Configuration)
+    }
+
+    fn memory_view_scopes(
+        &self,
+        filter: MemoryScopeFilter,
+    ) -> Result<Vec<DomainMemoryScope>, AppError> {
+        let scope = self.context_scope()?;
+        let scopes = match filter {
+            MemoryScopeFilter::All => self.authorized_memory_scopes()?,
+            MemoryScopeFilter::User => {
+                vec![DomainMemoryScope::User(scope.user_id().clone())]
+            }
+            MemoryScopeFilter::Workspace => {
+                vec![DomainMemoryScope::Workspace(scope.workspace_id().clone())]
+            }
+            MemoryScopeFilter::Session => {
+                vec![DomainMemoryScope::Session(self.session_id.clone())]
+            }
+            MemoryScopeFilter::Agent => {
+                vec![DomainMemoryScope::Agent(scope.agent_id().clone())]
+            }
+        };
+        Ok(scopes)
     }
 
     fn authorized_memory_scopes(&self) -> Result<Vec<DomainMemoryScope>, AppError> {
@@ -2918,16 +3026,18 @@ impl Coordinator {
         };
         let token_budget = frozen.as_ref().map_or_else(
             || context_token_budget(descriptor.as_ref()),
-            |baseline| Ok(baseline.epoch.token_budget()),
+            |baseline| Ok(baseline.epoch().token_budget()),
         )?;
         let durable_memory_limit = frozen.as_ref().map_or_else(
             || EstimatedTokens::new(token_budget.get() / 4).map_err(|_| AppError::Configuration),
             |baseline| Ok(baseline.turn.budget().durable_memory_limit()),
         )?;
-        let ordinary = if let Some(baseline) = frozen.as_ref() {
+        let ordinary = if !exact_request_fits(&request, token_budget)? {
+            None
+        } else if let Some(baseline) = frozen.as_ref() {
             let retrieval_scope = self
                 .context_scope()?
-                .retrieval_scope(self.session_id.clone(), baseline.epoch.started_at());
+                .retrieval_scope(self.session_id.clone(), baseline.epoch().started_at());
             let compatibility = EpochCompatibility::new(
                 &request,
                 descriptor.as_ref(),
@@ -2935,41 +3045,45 @@ impl Coordinator {
                 token_budget,
                 durable_memory_limit,
             )?;
-            prepare_frozen_continuation(FrozenContinuationInput {
+            Some(prepare_frozen_continuation(FrozenContinuationInput {
                 request: request.clone(),
                 expected_session_sequence,
                 run_turn,
                 committed_at: ids::now(),
-                epoch: baseline.epoch.clone(),
+                epoch: baseline.epoch().clone(),
                 baseline_turn: baseline.turn.clone(),
                 baseline_content: baseline.content.clone(),
                 compatibility,
-            })
+            }))
         } else {
-            self.prepare_new_context_epoch(
-                attempt_id,
-                run_turn,
-                expected_session_sequence,
-                &model,
-                request.clone(),
-                descriptor.as_ref(),
-                token_budget,
-                durable_memory_limit,
-                ContextEpochMode::NewAttempt { explicit_retry },
-                retained_history.as_ref(),
-                ids::now(),
+            Some(
+                self.prepare_new_context_epoch(
+                    attempt_id,
+                    run_turn,
+                    expected_session_sequence,
+                    &model,
+                    request.clone(),
+                    descriptor.as_ref(),
+                    token_budget,
+                    durable_memory_limit,
+                    ContextEpochMode::NewAttempt { explicit_retry },
+                    retained_history.as_ref(),
+                    ids::now(),
+                )
+                .await,
             )
-            .await
         };
         match ordinary {
-            Ok(turn) if exact_request_fits(turn.request(), token_budget)? => {
+            Some(Ok(turn)) if exact_request_fits(turn.request(), token_budget)? => {
                 return Ok(PreparedContextSnapshot {
                     turn,
                     compaction_boundary: None,
                 });
             }
-            Ok(_) | Err(AppError::Memory(autoharness_memory::MemoryError::BudgetExceeded)) => {}
-            Err(error) => return Err(error),
+            None
+            | Some(Ok(_))
+            | Some(Err(AppError::Memory(autoharness_memory::MemoryError::BudgetExceeded))) => {}
+            Some(Err(error)) => return Err(error),
         }
 
         let candidate = self
@@ -3074,7 +3188,7 @@ impl Coordinator {
             .ok_or(AppError::Configuration)?;
         let content = self.load_frozen_context_content(&turn).await?;
         Ok(FrozenContextBaseline {
-            epoch,
+            epoch: ContextEpochMode::Existing(epoch),
             turn,
             content,
         })
@@ -3288,7 +3402,7 @@ impl Coordinator {
                     .map(|completed| (completed, attempt))
             })
             .collect::<Vec<_>>();
-        attempts.sort_by(|left, right| right.0.cmp(&left.0));
+        attempts.sort_by_key(|(completed, _)| std::cmp::Reverse(*completed));
         for (_, attempt) in attempts {
             let Some(binding) = attempt.context_turn_bindings().last() else {
                 continue;
@@ -5430,6 +5544,71 @@ fn context_failure(error: &AppError) -> UiFailure {
     UiFailure::new(class, message, retry).with_code("context_not_committed")
 }
 
+fn default_memory_view_query() -> Result<MemoryViewQuery, AppError> {
+    MemoryViewQuery::new(
+        "",
+        MemoryStatusFilter::All,
+        MemoryScopeFilter::All,
+        MemoryPageDirection::First,
+        None,
+        MEMORY_VIEW_PAGE_SIZE,
+    )
+    .map_err(|_| AppError::Configuration)
+}
+
+fn memory_view_statuses(filter: MemoryStatusFilter) -> Vec<MemoryInspectionStatus> {
+    match filter {
+        MemoryStatusFilter::Eligible | MemoryStatusFilter::Active => {
+            vec![MemoryInspectionStatus::Active]
+        }
+        MemoryStatusFilter::Proposed => vec![MemoryInspectionStatus::Proposed],
+        MemoryStatusFilter::Inactive => vec![
+            MemoryInspectionStatus::Conflicting,
+            MemoryInspectionStatus::Superseded,
+            MemoryInspectionStatus::Rejected,
+            MemoryInspectionStatus::Retracted,
+            MemoryInspectionStatus::Expired,
+            MemoryInspectionStatus::Deleted,
+        ],
+        MemoryStatusFilter::All => Vec::new(),
+    }
+}
+
+fn decode_memory_view_cursor(
+    cursor: &MemoryViewCursor,
+) -> Result<MemoryInspectionCursor, AppError> {
+    let (updated_at, memory_id) = cursor
+        .as_str()
+        .split_once(':')
+        .ok_or(AppError::Configuration)?;
+    let updated_at = updated_at
+        .parse::<i64>()
+        .map(TimestampMillis::new)
+        .map_err(|_| AppError::Configuration)?;
+    let memory_id = MemoryId::new(memory_id.to_owned()).map_err(|_| AppError::Configuration)?;
+    Ok(MemoryInspectionCursor::new(updated_at, memory_id))
+}
+
+fn encode_memory_view_cursor(
+    record: &autoharness_store::MemoryInspectionRecord,
+) -> Result<MemoryViewCursor, AppError> {
+    MemoryViewCursor::new(format!(
+        "{}:{}",
+        record.updated_at().get(),
+        record.memory_id().as_str()
+    ))
+    .map_err(|_| AppError::Configuration)
+}
+
+fn memory_view_failure() -> UiFailure {
+    UiFailure::new(
+        ErrorClass::Storage,
+        "The requested Memory view could not be loaded from durable storage",
+        RetryPolicy::Now,
+    )
+    .with_code("memory_query")
+}
+
 fn stale_memory_failure() -> UiFailure {
     UiFailure::new(
         ErrorClass::Conflict,
@@ -5841,6 +6020,7 @@ mod tests {
     enum ProposalProviderTurn {
         Tools(Vec<ProviderToolCall>),
         Complete(&'static str),
+        CompleteOwned(String),
     }
 
     struct ProposalProvider {
@@ -5898,6 +6078,14 @@ mod tests {
                     }));
                 }
                 ProposalProviderTurn::Complete(text) => {
+                    events.push(Ok(ProviderStreamEvent::TextDelta(
+                        TextDelta::new(text).expect("scripted text"),
+                    )));
+                    events.push(Ok(ProviderStreamEvent::Completed {
+                        reason: CompletionReason::Stop,
+                    }));
+                }
+                ProposalProviderTurn::CompleteOwned(text) => {
                     events.push(Ok(ProviderStreamEvent::TextDelta(
                         TextDelta::new(text).expect("scripted text"),
                     )));
@@ -6370,6 +6558,17 @@ mod tests {
         .await;
     }
 
+    async fn handle_next_provider_message(coordinator: &mut Coordinator) {
+        let message = tokio::time::timeout(Duration::from_secs(5), coordinator.message_rx.recv())
+            .await
+            .expect("provider message timeout")
+            .expect("provider message channel remains open");
+        coordinator
+            .handle_async(message)
+            .await
+            .expect("handle provider message");
+    }
+
     struct SeededMemory {
         memory_id: MemoryId,
         revision_id: MemoryRevisionId,
@@ -6387,6 +6586,14 @@ mod tests {
             )
             .await
             .expect("workspace binding");
+        seed_memory_in_scope(handle, DomainMemoryScope::Workspace(workspace_id), content).await
+    }
+
+    async fn seed_memory_in_scope(
+        handle: &EngineHandle,
+        scope: DomainMemoryScope,
+        content: &str,
+    ) -> SeededMemory {
         let memory_id = ids::memory_id();
         let revision = user_memory_draft(
             MemoryRevisionNumber::FIRST,
@@ -6404,7 +6611,7 @@ mod tests {
                 memory_id.clone(),
                 None,
                 MemoryCommandPayload::CreateMemory {
-                    scope: DomainMemoryScope::Workspace(workspace_id),
+                    scope,
                     memory_kind: MemoryKind::Preference,
                     revision,
                 },
@@ -6416,6 +6623,129 @@ mod tests {
             revision_id,
             last_sequence: commit.receipt().last_sequence(),
         }
+    }
+
+    #[tokio::test]
+    async fn authoritative_memory_query_filters_before_paging() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory.path().join("memory-query.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let first_seeded = seed_workspace_memory(&handle, &workspace, "needle first").await;
+        let second_seeded = seed_workspace_memory(&handle, &workspace, "needle second").await;
+        let distractor = seed_workspace_memory(&handle, &workspace, "newest distractor").await;
+        let inactive = seed_workspace_memory(&handle, &workspace, "needle inactive").await;
+        handle
+            .execute_memory_command(ids::memory_command(
+                inactive.memory_id,
+                Some(MemorySequence::new(inactive.last_sequence).expect("inactive sequence")),
+                MemoryCommandPayload::DeleteMemory {
+                    revision_id: inactive.revision_id,
+                },
+            ))
+            .await
+            .expect("delete inactive fixture");
+        let _session_scoped = seed_memory_in_scope(
+            &handle,
+            DomainMemoryScope::Session(session_id.clone()),
+            "needle session scoped",
+        )
+        .await;
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::new(session_id, session, handle, None, app, shutdown);
+        coordinator.workspace = workspace;
+        coordinator
+            .initialize_context_scope()
+            .await
+            .expect("context scope");
+
+        let first_query = MemoryViewQuery::new(
+            "needle",
+            MemoryStatusFilter::Active,
+            MemoryScopeFilter::Workspace,
+            MemoryPageDirection::First,
+            None,
+            1,
+        )
+        .expect("first query");
+        let first = coordinator
+            .load_memory_view(&MemoryViewState {
+                generation: 41,
+                query: first_query,
+            })
+            .await
+            .expect("first authoritative page");
+        assert_eq!(first.view_generation(), 41);
+        assert_eq!(first.summaries().len(), 1);
+        assert!(first.summaries()[0].preview().contains("needle"));
+        let cursor = first.next_cursor().cloned().expect("next page cursor");
+
+        let second_query = MemoryViewQuery::new(
+            "needle",
+            MemoryStatusFilter::Active,
+            MemoryScopeFilter::Workspace,
+            MemoryPageDirection::Next,
+            Some(cursor),
+            1,
+        )
+        .expect("second query");
+        coordinator.memory_view = Some(MemoryViewState {
+            generation: 42,
+            query: second_query.clone(),
+        });
+        let second = coordinator
+            .load_memory_view(&MemoryViewState {
+                generation: 42,
+                query: second_query,
+            })
+            .await
+            .expect("second authoritative page");
+        assert_eq!(second.view_generation(), 42);
+        assert_eq!(second.summaries().len(), 1);
+        assert!(second.summaries()[0].preview().contains("needle"));
+        assert_ne!(first.summaries()[0].id(), second.summaries()[0].id());
+        let expected = [
+            first_seeded.memory_id.as_str(),
+            second_seeded.memory_id.as_str(),
+        ];
+        assert!(expected.contains(&first.summaries()[0].id()));
+        assert!(expected.contains(&second.summaries()[0].id()));
+        assert!(second.next_cursor().is_none());
+
+        let refreshed_id = second.summaries()[0].id().to_owned();
+        let mutation_request = RequestId::new(500);
+        coordinator
+            .commit_memory_command(
+                mutation_request,
+                ids::memory_command(
+                    distractor.memory_id,
+                    Some(
+                        MemorySequence::new(distractor.last_sequence).expect("distractor sequence"),
+                    ),
+                    MemoryCommandPayload::DeleteMemory {
+                        revision_id: distractor.revision_id,
+                    },
+                ),
+            )
+            .await
+            .expect("lifecycle mutation");
+        expect_commit(&mut ui, mutation_request).await;
+        let refreshed = ui.memories.borrow().clone();
+        assert_eq!(refreshed.view_generation(), 42);
+        assert_eq!(refreshed.summaries().len(), 1);
+        assert_eq!(refreshed.summaries()[0].id(), refreshed_id);
+        assert!(refreshed.summaries()[0].preview().contains("needle"));
+        assert!(refreshed.next_cursor().is_none());
+
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]
@@ -8185,25 +8515,26 @@ mod tests {
             3,
         )
         .await;
-        let requests = restart_provider.requests.lock().expect("request lock");
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].messages.iter().all(|message| {
-            message
-                .content()
-                .is_none_or(|content| !content.as_str().contains(FIRST_INPUT))
-        }));
-        assert!(requests[0].messages.iter().all(|message| {
-            message
-                .content()
-                .is_none_or(|content| !content.as_str().contains(FIRST_OUTPUT_PREFIX))
-        }));
-        assert!(
-            requests[0]
-                .context
-                .as_ref()
-                .is_some_and(|context| context.as_str().contains(FIRST_INPUT))
-        );
-        drop(requests);
+        {
+            let requests = restart_provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].messages.iter().all(|message| {
+                message
+                    .content()
+                    .is_none_or(|content| !content.as_str().contains(FIRST_INPUT))
+            }));
+            assert!(requests[0].messages.iter().all(|message| {
+                message
+                    .content()
+                    .is_none_or(|content| !content.as_str().contains(FIRST_OUTPUT_PREFIX))
+            }));
+            assert!(
+                requests[0]
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| context.as_str().contains(FIRST_INPUT))
+            );
+        }
 
         restart_shutdown.cancel();
         restart_task
@@ -8211,6 +8542,211 @@ mod tests {
             .expect("restart coordinator join")
             .expect("restart shutdown");
         reopened.shutdown().await.expect("reopened shutdown");
+    }
+
+    #[tokio::test]
+    async fn post_compaction_tool_continuation_freezes_replacement_epoch() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        let database = directory
+            .path()
+            .join("compaction-tool-continuation.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::CompleteOwned(format!("old-{}", "history".repeat(1_200))),
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "invalid-before-compaction",
+                "not_a_registered_tool",
+                serde_json::json!({"stage":1,"payload":"x".repeat(6_000)}),
+            )]),
+            ProposalProviderTurn::Tools(vec![scripted_tool_call(
+                "invalid-after-compaction",
+                "still_not_registered",
+                serde_json::json!({"stage":2}),
+            )]),
+            ProposalProviderTurn::Complete("replacement epoch remained frozen"),
+        ]));
+        let (_ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let mut coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: Some(provider.clone()),
+                factory: Arc::new(|_| {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::MissingCredential,
+                        RetryAdvice::Never,
+                    ))
+                }),
+            },
+            test_tool_runtime_at(&workspace),
+            app,
+            shutdown,
+        );
+        coordinator.workspace = workspace;
+        coordinator
+            .initialize_context_scope()
+            .await
+            .expect("context scope");
+        coordinator.catalog_models = vec![fixture_model_descriptor()];
+        coordinator
+            .execute(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+
+        let prior_attempt = ids::attempt_id();
+        coordinator
+            .execute(CommandPayload::AdmitPromptAndPrepareAttempt {
+                session_id: session_id.clone(),
+                attempt_id: prior_attempt.clone(),
+                input_id: ids::input_id(),
+                prompt: PromptText::new("old turn").expect("prior prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            })
+            .await
+            .expect("prepare prior attempt");
+        assert!(
+            coordinator.start_attempt(prior_attempt, None).await.is_ok(),
+            "prior attempt starts"
+        );
+        while coordinator.active.is_some() {
+            handle_next_provider_message(&mut coordinator).await;
+        }
+
+        let current_attempt = ids::attempt_id();
+        coordinator
+            .execute(CommandPayload::AdmitPromptAndPrepareAttempt {
+                session_id: session_id.clone(),
+                attempt_id: current_attempt.clone(),
+                input_id: ids::input_id(),
+                prompt: PromptText::new("current tool turn").expect("current prompt"),
+                delivery_mode: DeliveryMode::NextTurn,
+            })
+            .await
+            .expect("prepare current attempt");
+        let initial_request =
+            build_request(&coordinator.session, &current_attempt, true).expect("initial request");
+        let exact_bytes = u64::try_from(
+            serde_json::to_vec(&initial_request)
+                .expect("serialize initial request")
+                .len(),
+        )
+        .expect("request byte count");
+        let minimum_budget = exact_bytes
+            .checked_mul(4)
+            .expect("context sizing scale")
+            .checked_add(2)
+            .expect("context sizing rounding")
+            / 3;
+        let exact_token_limit = minimum_budget
+            .checked_add(256)
+            .expect("context sizing slack")
+            .checked_add(CONTEXT_SIZER_BYTES_PER_TOKEN - 1)
+            .expect("rounded byte count")
+            / CONTEXT_SIZER_BYTES_PER_TOKEN;
+        coordinator.catalog_models[0].input_token_limit = Some(exact_token_limit);
+        match coordinator
+            .start_attempt(current_attempt.clone(), None)
+            .await
+        {
+            Ok(()) => {}
+            Err(StartAttemptError::Engine(error)) => panic!("engine start failure: {error}"),
+            Err(StartAttemptError::Provider(error)) => panic!("provider start failure: {error}"),
+            Err(StartAttemptError::Context(error)) => panic!("context start failure: {error}"),
+        }
+
+        for _ in 0..3 {
+            handle_next_provider_message(&mut coordinator).await;
+        }
+        let turn_two = handle
+            .load_attempt_context_turn(current_attempt.clone(), 2)
+            .await
+            .expect("load turn two")
+            .expect("compaction turn two");
+        let replacement_epoch = handle
+            .load_context_epoch(turn_two.epoch_id().clone())
+            .await
+            .expect("load replacement epoch")
+            .expect("replacement epoch");
+        assert_eq!(
+            replacement_epoch.reason(),
+            autoharness_domain::ContextEpochReason::Compaction
+        );
+        assert_eq!(turn_two.run_turn(), 2);
+        assert_eq!(
+            handle
+                .load_latest_compaction_checkpoint(session_id.clone())
+                .await
+                .expect("checkpoint lookup")
+                .expect("checkpoint")
+                .baseline_turn(),
+            &turn_two
+        );
+
+        for _ in 0..2 {
+            handle_next_provider_message(&mut coordinator).await;
+        }
+        let prepared = coordinator
+            .prepare_context_snapshot(&current_attempt, true)
+            .await
+            .expect("frozen continuation preparation");
+        assert!(prepared.compaction_boundary.is_none());
+        let prepared_turn_three = prepared.turn.manifest();
+        assert_eq!(prepared_turn_three.epoch_id(), turn_two.epoch_id());
+        assert_eq!(
+            prepared_turn_three.rendered_hash(),
+            turn_two.rendered_hash()
+        );
+        assert_eq!(
+            prepared_turn_three.admissions().len(),
+            turn_two.admissions().len()
+        );
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[2].context, prepared.turn.request().context);
+        }
+
+        handle_next_provider_message(&mut coordinator).await;
+        let turn_three = handle
+            .load_attempt_context_turn(current_attempt.clone(), 3)
+            .await
+            .expect("load turn three")
+            .expect("frozen continuation turn");
+        assert_eq!(turn_three.run_turn(), 3);
+        assert_eq!(turn_three.epoch_id(), turn_two.epoch_id());
+        assert_eq!(turn_three.rendered_hash(), turn_two.rendered_hash());
+        assert_eq!(turn_three.admissions().len(), turn_two.admissions().len());
+        {
+            let requests = provider.requests.lock().expect("request lock");
+            assert_eq!(requests.len(), 4);
+            assert_eq!(requests[2].context, requests[3].context);
+        }
+        for _ in 0..3 {
+            handle_next_provider_message(&mut coordinator).await;
+        }
+        assert_eq!(
+            coordinator
+                .session
+                .attempt(&current_attempt)
+                .expect("current attempt")
+                .status(),
+            EngineAttemptStatus::Completed
+        );
+
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]
