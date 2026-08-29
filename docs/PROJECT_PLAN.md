@@ -478,7 +478,7 @@ Exit criteria:
 
 ### Phase 4: Persistent context and memory
 
-**Status:** Implementation authorized; release remains gated by the Phase 3.9 and Phase 3.10 evidence
+**Status:** Implemented and locally validated on the Phase 4 feature branch; inherited Phase 3.9 and Phase 3.10 release evidence remains pending
 
 **Goal:** Turn durable history into useful, bounded, auditable model context.
 
@@ -507,6 +507,22 @@ Implementation stages:
 7. Add no-authority model and tool proposals plus compaction summaries that require independent validation or approval.
 8. Complete the integrated migration, crash, privacy, performance, conformance, export, and PTY matrix.
 
+Local implementation evidence as of 2026-08-29:
+
+- Stages 1 through 8 are implemented across typed domain contracts, the pure `autoharness-memory` crate, SQLite migrations 4 through 6, durable context and memory store ports, provider-native context framing, application operations, the Memory terminal workspace, and the integrated validation matrix.
+- Model-authored and verified-tool-authored proposals use one no-authority proposal sink, retain exact evidence provenance and validation results, and require a distinct user-approved revision before activation.
+- Explicit workspace-document import canonicalizes one normalized relative path inside the active workspace, accepts only safe UTF-8 text up to 16 KiB, hashes the exact source bytes, retains opaque typed provenance, creates only an imported review proposal, and requires a separate explicit-user revision for activation.
+- Production context compaction starts a replacement epoch, binds a verified durable-facts boundary before dispatch, creates only an untrusted compaction proposal, excludes compacted raw history on later turns, and preserves the retained baseline across restart and tool continuations.
+- Memory inspection projects retained, absent, and erased evidence, every relation kind, validator findings, and effective conflicting or expired risk states without giving the terminal mutation authority.
+- The terminal lifecycle has focused keyboard, mouse, responsive, accessibility, authoritative-query, generation, paging, timer-dispatch, and empty-state coverage plus ten Memory surfaces in the 7,685-case visual manifest.
+- The all-profile exact raw credential boundary fails closed when configured sentinels cannot be recovered, redacts exact values from submitted prompts before durable admission, and rejects or cancels matching memory and evidence writes, workspace sources, context construction, reconstructed provider requests, streamed text, normalized call identities, structured argument keys and values, local tool output, compaction, and recovered continuations before the completing value reaches provider-neutral durable state.
+- Local migration rehearsal, projection and FTS rebuild, physical-order ranking, failure injection, privacy deletion, standalone and session export, bounded render cost, restart, visual conformance, and the real-PTY lifecycle pass on the feature branch.
+- The real-PTY lifecycle covers remember, import, provenance review, deliberate approval, clean exit, restart, authoritative literal no-match search, compact resize, correction, export, retraction, deletion with content-sidecar erasure, future eligibility, and terminal restoration.
+- Formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, documentation links, the 7,685-case conformance manifest, focused Memory render cost, visual review, and the exact ignored Memory PTY journey pass locally.
+- The credential checks target exact raw configured values and conservative reconstruction of their normalized value sequences, and they do not claim encoded or component-derived data-loss prevention or artifact-at-rest secret scanning.
+- Detection of fragmented active or session-only credential values depends on provider adapters preserving their ordered stream fragments because the application does not own those raw sentinels.
+- Phase 4 is therefore implemented locally but is not released, and the inherited cross-platform, live-provider, platform-vault, reference-machine benchmark, rollback, human-terminal, checklist, and approval gates remain open.
+
 Exit criteria:
 
 - Every injected memory can answer where it came from, why it was selected, and which exact provider attempt and run turn saw it.
@@ -517,8 +533,8 @@ Exit criteria:
 - Retraction and deletion prevent future admission, and deletion removes application-owned content and derived indexes without making an unsupported forensic-erasure claim.
 - The Memory route passes the complete responsive, theme, color, glyph, reduced-motion, compact, single-column, color-depth, hit-region, and render-cost matrix.
 
-Implementation work proceeds on an isolated feature branch because the user explicitly authorized Phase 4 integration.
-Release and completion status remain blocked by the already documented Phase 3.9 and Phase 3.10 candidate evidence until those gates are genuinely satisfied.
+Implementation work proceeds on the isolated `feat/persistent-context-memory` branch because the user explicitly authorized Phase 4 integration.
+Release status remains blocked by the already documented Phase 3.9 and Phase 3.10 evidence and independent candidate review until those gates are genuinely satisfied.
 
 ### Phase 5: Evaluation and self-improvement
 
@@ -566,8 +582,8 @@ Phases 3.2 through 3.7 now provide durable sessions, multiple secure provider pr
 Proceed in this order:
 
 1. Close the remaining Phase 3.9 and Phase 3.10 cross-platform, human-terminal, migration, benchmark, vault, provider, rollback, checklist, and approval evidence on one candidate.
-2. Implement Phase 4 in the ordered slices defined by the [persistent context and memory plan](design/PERSISTENT_CONTEXT_MEMORY_PLAN.md), beginning with per-turn manifests and a separate untrusted memory ledger.
-3. Keep every Phase 4 slice runnable and independently testable while the earlier release evidence proceeds in parallel.
+2. Preserve the locally validated Phase 4 implementation and review its context, memory, privacy, terminal, migration, and export evidence on the exact candidate.
+3. Obtain the independent decision and release-checklist approvals required for the proposed Phase 4 ADRs while the earlier release evidence proceeds in parallel.
 4. Declare Phase 4 released only after its local gates and the inherited Phase 3 promotion gates are complete.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.

@@ -2,23 +2,33 @@
 
 **Last reviewed:** 2026-08-29
 
-**Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
+**Phase:** 4 persistent context and memory integration, locally validated with inherited Phase 3 release evidence pending
 
-**Status:** Phase 3.10 implementation is on `dev` and `main`; the settings-selection refinement on `feat/tui-settings-selection-redesign` passes formatting, strict workspace Clippy, the complete locked workspace suite, and visual conformance, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
+**Status:** `feat/persistent-context-memory` implements and locally validates the Phase 4 context, memory, provider, storage, application, import, credential-safety, and terminal slices, while the inherited Phase 3.9 and Phase 3.10 release evidence remains pending
 
 ## Current objective
 
-Promote one final Phase 3.10 candidate, including the conversation-flow polish, without changing route semantics, overlay ownership, durable intents, or the settings schema.
+Preserve and independently review the exact locally validated Phase 4 feature-branch candidate while closing the inherited Phase 3 release evidence without describing the phase as released.
 
-Keep the Phase 3.9 release-candidate evidence gates open in parallel.
-Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until the same candidate passes Windows, macOS, and Linux PTY CI, three human terminal smokes, and the approved release checklist.
-
-Phase 3.10 steps 0 through 10 are implemented and promoted through `dev` to `main`.
-The remaining release evidence is recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
+Keep the Phase 3.9 and Phase 3.10 release-candidate evidence gates open in parallel.
+Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md), [ADR-0017](../adr/0017-use-auditable-provider-turn-context.md), or [ADR-0018](../adr/0018-use-a-separate-revisioned-memory-ledger.md) accepted until their candidate evidence and independent review requirements are satisfied.
+The remaining terminal release evidence is recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
 
 ## Current repository state
 
-- The repository contains an eleven-crate Rust 2024 workspace pinned to Rust 1.97.1 and a runnable `autoharness` terminal binary.
+- The repository contains a thirteen-crate Rust 2024 workspace pinned to Rust 1.97.1 and a runnable `autoharness` terminal binary.
+- `autoharness-memory` owns deterministic source observation, validation, fixed-point ranking, bounded fitting, canonical inert rendering, manifest hashing, and compaction fact verification without depending on providers, SQLite, Ratatui, credentials, or process lifecycle.
+- The domain, engine, store, and SQLite crates implement typed opaque scope identities, context epochs, per-provider-turn manifests, request hashes, source snapshots, exact admissions, compaction boundaries, a separate event-sourced memory ledger, erasable content and evidence sidecars, validation, relations, lifecycle operations, and explicitly maintained FTS5 indexes.
+- The single storage actor atomically verifies and binds context before every first provider call and tool continuation, rejects stale generations, retains distinct audit-only history and tool-state hashes for each run turn, and recovers the exact already bound provider request after restart.
+- Production compaction creates a replacement epoch over complete settled history groups, verifies a canonical durable-facts snapshot, writes only an untrusted session-scoped summary proposal, excludes compacted raw history from later requests, and preserves the replacement baseline through restart and later tool turns.
+- Explicit memory is available through typed create, retrieve, admit, inspect, correct, retract, standalone export, and logical-delete operations, while model and verified-tool proposals remain review-only until a separate user-approved revision activates them.
+- The explicit import workflow accepts a normalized workspace-relative path, canonicalizes it within the workspace, reads one regular safe UTF-8 text file of at most 16 KiB, records opaque hash-based provenance, and creates only a reviewable workspace Fact proposal until a separate user approval activates a new revision.
+- Memory inspection preserves exact origin, trust, scope identity, retained, absent, or erased evidence availability, all relation kinds, validator findings, effective conflict and expiry states, and exact provider-turn admission coordinates.
+- The sixth primary Memory route matches the current terminal theme and presentation rules while providing debounced literal search, status and scope filters, authoritative bounded paging, responsive progressive disclosure, admission audit, proposal review, lifecycle dialogs, command and Settings entry points, keyboard navigation, and measured mouse actions.
+- Phase 4 evidence includes schema-3 migration and rollback-copy rehearsal, projection and FTS rebuild and corruption tests, physical-row-order ranking, atomic failure injection, export and deletion privacy coverage, restart and compaction paths, a 7,685-case visual conformance manifest with ten Memory surfaces, bounded eight-row and one-hundred-row render tests, and a real PTY lifecycle from import through review, approval, restart, correction, export, retraction, and deletion.
+- Memory visual conformance, navigation, workspace behavior, render-cost, and real-PTY checks pass locally, including responsive import review at 80 by 24 and 40 by 12 cells and terminal restoration after the complete lifecycle.
+- The all-profile credential boundary loads exact raw environment and saved-profile credentials, fails closed when required saved credentials cannot be recovered, redacts those values from submitted prompts, and rejects or cancels matching workspace sources, memory and evidence, context and reconstructed requests, streamed provider data, tool calls, and local tool output before the complete credential reaches persistence or model-visible use.
+- The credential boundary does not claim encoded or component-derived data-loss prevention or artifact-at-rest secret scanning, and fragmented active or session-only output values continue to depend on provider adapters preserving ordered stream fragments.
 - `autoharness-domain` and `autoharness-engine` define schema-v1 commands and events, deterministic replay, durable attempt and tool lifecycles, immutable run limits, explicit permissions, cancellation state, usage, safe failures, and retry lineage.
 - `autoharness-tool` provides the trusted versioned tool registry, deny, ask, and allow policy, restart-aware run budgets, content-addressed artifacts, and workspace filesystem, direct-process, and exact-origin HTTP capability ports.
 - `autoharness-provider` exposes provider-neutral catalog, streaming, versioned tool definition, complete tool call, and tool-result ports.
@@ -32,28 +42,28 @@ The remaining release evidence is recorded in [the validation report](../release
 - `autoharness-app::vault` defines the credential-vault port with an operating-system implementation through the `keyring` crate and a fake implementation for tests; Windows Credential Manager save, load, replace, and delete passed the opt-in platform smoke.
 - Startup and runtime switching resolve one provider-matched credential source in precedence order: environment, then the active profile's vault entry, then session-only; locked or unavailable vaults preserve offline use without plaintext fallback.
 - Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; the Models tab saves a compatible model and reasoning effort as the active profile default, fresh sessions select it durably, and catalog refresh does not overwrite an intentional session-specific model.
-- The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
+- The terminal consumes live safe settings, profile, context, and memory projections through one typed shell with Chat, Sessions, Profiles, Settings, Help, and Memory routes.
 - `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
 - Wide terminals show a persistent transparent navigation rail separated by one vertical accent rule; the active route has one full-width theme fill with a caret and icon, the active recent session uses a quieter selected surface, duplicate footer routes are absent, the rail is 26 columns at `Lg` and 32 at `Xl`, and narrower terminals collapse it without introducing a compact Chat Profile|Settings footer.
 - Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `StatusBar`, and `SearchField`, keeps You / Agent roles without a redundant per-message vertical rule, places the gradient rule above the prompt, preserves the terminal background through its rail, transcript, and composer, keeps the hardware cursor hidden behind its styled software cursor, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
 - The transcript and composer share one scroll flow: a blank conversation places the composer at the top, short conversations place it immediately after the final message, long conversations tail-follow with the composer visible, and Page Up, Page Down, Alt+Up, Alt+Down, or the mouse wheel can scroll it out of view; manual scrolling clamps at the oldest complete viewport instead of clearing or accumulating an unreachable offset, while typing, pasting, command entry, focus, and Ctrl+End resume the tail.
 - Empty Chat sessions render no onboarding hero or numbered provider and model instructions, and successful session switches do not spend a row on a redundant `Session opened` notice.
 - The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, collapses recognized home paths to `~/` with forward separators, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
-- Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
+- Sessions, Profiles, Settings, Help, and Memory are primary routes with contextual action bars.
 - Settings is a responsive two-pane workspace with nine categories, a persistent selected-category surface, gradient page accents, translucent focused rows, explicit selected glyphs and fills for typed controls, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
 - Sessions is a responsive grouped list and detail workspace with deterministic relative ages, exact UTC date and time details, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, a shared search field, and action buttons whose measured render and mouse regions share one geometry.
 - Deleting the current session is allowed when another open session exists, exports the authoritative event stream first, and atomically presents the newest replacement session after the deletion succeeds.
 - Models persists the selected model and thinking level together from one workspace and visually distinguishes saved defaults from the current unsaved draft, while Providers preserves selection across catalog and saved-connection focus with strong and quiet translucent surfaces, grouped identity, connection, credential, and default tables, and measured action buttons.
 - Every modal-like dialog now uses the shared transparent scrim, reset-background panel body, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
 - The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
-- The Phase 3.10 conformance harness pins 5,035 style-aware cells across nineteen routes and overlays, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
+- The conformance harness pins 7,685 deterministic style-aware cases across the existing terminal and ten Memory surfaces, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
 - Reduced motion produces identical frames at different tick times for every conformance surface, NoColor semantic states have distinct modifier signatures, and source guards keep presentation colors and symbols in their declared authorities.
 - Tail-following Chat rendering scans only the visible transcript window, so 32-turn and 4,096-turn release renders use the same 417 allocations and approximately 69 KiB while remaining inside the recorded pre-redesign allocation envelope.
 - Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
 - Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
 - Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
 - Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
-- Eight real-PTY scenario binaries now contain thirteen tests for first run, routed shell navigation, long-session conversation scrolling, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, and Basic16 color output.
+- Nine real-PTY scenario binaries now contain fourteen tests for first run, routed shell navigation, long-session conversation scrolling, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, Basic16 color output, and the Memory lifecycle.
 - The instrumented release binary and three-sample real-PTY loopback runner produce valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render intervals outside network time; the result is local smoke evidence, not authoritative reference-machine evidence.
 - Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
 - Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
@@ -76,6 +86,12 @@ The remaining release evidence is recorded in [the validation report](../release
 
 ## Recently completed
 
+- On 2026-08-29, `feat/persistent-context-memory` added the typed context and memory contracts, proposed ADR-0017 and ADR-0018, the provider-neutral context prelude, the pure `autoharness-memory` policy crate, SQLite migrations 4 through 6, the separate memory ledger, durable context commits, and provider-native instruction framing.
+- On 2026-08-29, the branch connected explicit memory and no-authority model and verified-tool proposals through typed application operations, preserved validation candidate identities and complete provenance in inspection projections, and required a distinct user-approved revision before any proposal becomes active.
+- On 2026-08-29, the branch delivered the themed sixth Memory route with authoritative literal search and status and scope filtering before bounded paging, exact request and view generation matching, responsive list-detail-history layouts, keyboard and mouse lifecycle actions, and deliberate conflict, expiry, evidence-availability, and validation states.
+- On 2026-08-29, production compaction gained verified durable-facts boundaries, replacement epochs, raw-history cutoffs, untrusted summary proposals, restart-safe retained history, post-compaction frozen tool continuations, dynamic audit-only history and tool-state snapshots, and exact bound-turn recovery after restart.
+- On 2026-08-29, Phase 4 added schema-3 migration and rollback-copy rehearsal, complete memory projection and FTS rebuilds, corruption and failure injection, privacy-aware standalone and session exports, logical deletion, physical-order search determinism, ten Memory surfaces in the 7,685-case conformance manifest, bounded Memory render-cost coverage, and a passing real PTY lifecycle test.
+- On 2026-08-29, Phase 4 completed the bounded workspace-document import workflow, the all-profile exact raw credential boundary, responsive visual review, formatting, strict workspace Clippy, the complete locked workspace suite, documentation links, visual conformance, focused render cost, migration and restart coverage, and the real PTY import and memory lifecycle on one local candidate.
 - On 2026-08-29, `feat/tui-settings-selection-redesign` unified Settings, Models, and Providers around persistent translucent selection surfaces, gradient headings and dividers, selected glyphs, saved-default and unsaved-draft labels, clearer thinking focus, responsive summary and footer guidance, and strong-versus-quiet provider selection across pane focus; formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, the refreshed 5,035-cell conformance matrix, and responsive visual reviews pass.
 - On 2026-08-28, `feat/tui-conversation-flow` gave the shared wide rail one full-width theme-selected primary route with a caret and icon, moved active-session context to the quieter selected surface, removed the duplicate Settings footer action, added spacing below the brand, and reused robust home-relative workspace paths in both the rail and prompt bar; formatting, strict workspace Clippy, the complete locked workspace suite, documentation links, refreshed goldens, full visual conformance, and the real Windows routed-shell PTY journey pass.
 
@@ -160,12 +176,10 @@ The remaining release evidence is recorded in [the validation report](../release
 
 ## Immediate next actions
 
-1. Merge the validated conversation-flow branch through `dev`, designate the resulting final candidate, and collect green Windows, macOS, and Linux CI links for that exact commit.
-2. Perform and record the Nerd Font, no-Nerd-Font, and sixteen-color human terminal smokes against the same candidate.
-3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
-4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
-5. Obtain independent release-checklist approval, then mark ADR-0016 Accepted.
-6. Promote the validated final candidate into `main` and reconcile memory with the final evidence.
+1. Independently review the exact Phase 4 context, memory, privacy, migration, terminal, import, credential-safety, and export evidence without accepting ADR-0017 or ADR-0018 or describing the phase as released prematurely.
+2. Obtain the configured-router live check, macOS Keychain and Linux Secret Service vault smokes, approved reference-machine reports, cross-platform PTY CI, three human terminal smokes, operator-owned rollback evidence, and final release-checklist approval required by the inherited Phase 3.9 and Phase 3.10 gates.
+3. Obtain independent acceptance for ADR-0016, ADR-0017, and ADR-0018 after their recorded evidence requirements are satisfied.
+4. Promote the validated candidate through the normal `feat` to `dev` to `main` workflow only after every release gate is complete.
 
 ## Open questions
 
@@ -173,14 +187,15 @@ The remaining release evidence is recorded in [the validation report](../release
 
 ## Blockers
 
-The implementation and local Windows validation are complete, but the conversation-flow candidate has not run through macOS and Linux CI or the three human terminal smokes.
-Configured router access, macOS and Linux platform vault environments, an approved reference machine, operator-owned rollback inputs, and an independent reviewer remain prerequisites for release approval.
+The Phase 4 runtime and terminal slices are locally implemented and validated with no known local blocker.
+Configured router access, macOS and Linux platform vault environments, an approved reference machine, cross-platform and human terminal environments, operator-owned rollback inputs, release approval, promotion, and independent reviewers remain prerequisites for release.
 
 ## Handoff note
 
-Phase 3.10 steps 0 through 10 are implemented and promoted through `dev` to `main`.
-The follow-up conversation-flow polish is locally validated on `feat/tui-conversation-flow` and still requires the normal merge and cross-platform evidence path.
-The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
-ADR-0016 stays Proposed until the cross-platform, human terminal, and release-approval gates pass on one candidate.
-Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
-Do not treat the automated glyph-emission tests as evidence that a particular terminal font draws the intended shapes.
+Continue from `feat/persistent-context-memory` and preserve its small conventional-commit sequence.
+The latest committed Phase 4 state includes authoritative Memory queries, durable validation candidates, dynamic audit-only provider-history and tool-state snapshots, production compaction, exact bound-turn restart recovery, bounded workspace-document import, and the all-profile exact raw credential boundary.
+Do not claim broad data-loss prevention from the exact raw configured-credential sentinel boundary.
+The checked-in real-PTY journey passes the complete import, review, approval, restart, correction, export, retraction, deletion, and terminal-restoration path on the local candidate.
+Do not describe Phase 4 as released until the inherited external evidence, independent approvals, release checklist, and promotion are complete.
+ADR-0016, ADR-0017, and ADR-0018 stay Proposed until their cross-platform, human-terminal, candidate, and independent-approval gates pass.
+Do not treat automated glyph-emission tests as evidence that a particular terminal font draws the intended shapes.
