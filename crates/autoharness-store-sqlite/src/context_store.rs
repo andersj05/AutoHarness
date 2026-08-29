@@ -1,9 +1,10 @@
 use autoharness_domain::{
     AgentId, Causation, ContextAdmission, ContextAdmissionFactor, ContextEpochId,
     ContextEpochManifest, ContextEpochReason, ContextObservationState, ContextSection,
-    ContextTurnId, ContextTurnManifest, EVENT_SCHEMA_V1, EventEnvelope, EventPayload,
-    MemoryContent, MemoryId, MemoryKind, MemoryRelationKind, MemoryRevisionStatus, MemoryScope,
-    MemoryValidity, Sensitivity, SessionId, SessionSequence, Sha256Digest, UserId, WorkspaceId,
+    ContextSourceSnapshot, ContextSourceVisibility, ContextTurnId, ContextTurnManifest,
+    EVENT_SCHEMA_V1, EventEnvelope, EventPayload, MemoryContent, MemoryId, MemoryKind,
+    MemoryRelationKind, MemoryRevisionStatus, MemoryScope, MemoryValidity, Sensitivity, SessionId,
+    SessionSequence, Sha256Digest, UserId, WorkspaceId,
 };
 use autoharness_memory::{
     COMPACTION_FACTS_VERSION, EffectiveDurableFactsFingerprint, MemoryCandidate, RetrievalScope,
@@ -1444,6 +1445,13 @@ fn validate_context_sidecars(request: &ContextTurnCommitRequest) -> Result<(), S
     let turn = request.turn();
     if turn.admissions().is_empty() != request.content().prelude().is_none()
         || turn.admissions().len() != request.content().admissions().len()
+        || turn.sources().iter().any(|source| {
+            source.visibility() == ContextSourceVisibility::AuditOnly
+                && turn
+                    .admissions()
+                    .iter()
+                    .any(|admission| admission.source_key() == source.source_key())
+        })
         || turn
             .admissions()
             .iter()
@@ -1749,7 +1757,7 @@ fn validate_frozen_epoch_continuation(
         || turn.budget().token_budget() != baseline.turn.budget().token_budget()
         || turn.budget().durable_memory_limit() != baseline.turn.budget().durable_memory_limit()
         || baseline.turn.rendered_token_count().get() > turn.budget().rendered_limit()
-        || turn.sources() != baseline.turn.sources()
+        || !frozen_source_snapshots_match(turn.sources(), baseline.turn.sources())
         || turn.rendered_hash() != baseline.turn.rendered_hash()
         || turn.rendered_token_count() != baseline.turn.rendered_token_count()
         || request.content().prelude() != baseline.prelude.as_ref()
@@ -1806,6 +1814,31 @@ fn validate_frozen_epoch_continuation(
         }
     }
     Ok(())
+}
+
+fn frozen_source_snapshots_match(
+    current: &[ContextSourceSnapshot],
+    baseline: &[ContextSourceSnapshot],
+) -> bool {
+    let current_prelude = current
+        .iter()
+        .filter(|source| source.visibility() == ContextSourceVisibility::PreludeEligible);
+    let baseline_prelude = baseline
+        .iter()
+        .filter(|source| source.visibility() == ContextSourceVisibility::PreludeEligible);
+    if !current_prelude.eq(baseline_prelude) {
+        return false;
+    }
+
+    let current_audit_keys = current
+        .iter()
+        .filter(|source| source.visibility() == ContextSourceVisibility::AuditOnly)
+        .map(ContextSourceSnapshot::source_key);
+    let baseline_audit_keys = baseline
+        .iter()
+        .filter(|source| source.visibility() == ContextSourceVisibility::AuditOnly)
+        .map(ContextSourceSnapshot::source_key);
+    current_audit_keys.eq(baseline_audit_keys)
 }
 
 fn valid_at(validity: MemoryValidity, at_ms: i64) -> bool {
@@ -3099,6 +3132,24 @@ mod tests {
             TimestampMillis::new(4),
         )
         .expect("snapshot");
+        let audit_snapshot = |source_key: &str, offset: u32| {
+            let revision_digit =
+                char::from_digit((run_turn + offset) % 16, 16).expect("hex revision digit");
+            let value_digit =
+                char::from_digit((run_turn + offset + 1) % 16, 16).expect("hex value digit");
+            ContextSourceSnapshot::audit_only(
+                ContextSourceKey::new(source_key).expect("audit source key"),
+                digest(revision_digit),
+                digest(value_digit),
+                TimestampMillis::new(4 + i64::from(run_turn)),
+            )
+            .expect("audit snapshot")
+        };
+        let sources = vec![
+            audit_snapshot("session:provider-history:v1", 0),
+            audit_snapshot("session:provider-tool-state:v1", 8),
+            snapshot,
+        ];
         let mut rendered_encoder = CanonicalEncoder::new();
         rendered_encoder
             .field("renderer", SOURCE_RENDERER_V1.as_bytes())
@@ -3156,7 +3207,7 @@ mod tests {
             budget,
             EstimatedTokens::new(32).expect("tokens"),
             TimestampMillis::new(6 + i64::from(run_turn)),
-            vec![snapshot],
+            sources,
             vec![admission],
         )?;
         let manifest_hash = context_manifest_hash(&placeholder).expect("manifest hash");
@@ -3195,6 +3246,75 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    fn rehash_turn_sources(
+        turn: &ContextTurnManifest,
+        mut sources: Vec<ContextSourceSnapshot>,
+    ) -> ContextTurnManifest {
+        sources.sort_by(|left, right| left.source_key().cmp(right.source_key()));
+        let build = |manifest_hash| {
+            ContextTurnManifest::new(
+                turn.context_turn_id().clone(),
+                turn.epoch_id().clone(),
+                turn.session_id().clone(),
+                turn.attempt_id().clone(),
+                turn.run_turn(),
+                turn.expected_session_sequence(),
+                turn.memory_generation(),
+                turn.model().clone(),
+                turn.request_hash().clone(),
+                turn.rendered_hash().clone(),
+                manifest_hash,
+                turn.eligibility().clone(),
+                turn.budget(),
+                turn.rendered_token_count(),
+                turn.committed_at(),
+                sources.clone(),
+                turn.admissions().to_vec(),
+            )
+            .expect("turn with replacement sources")
+        };
+        let placeholder = build(digest('0'));
+        build(context_manifest_hash(&placeholder).expect("replacement manifest hash"))
+    }
+
+    #[test]
+    fn audit_only_snapshot_cannot_back_a_rendered_admission() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        let original = turn("turn-audit-admission", "epoch-audit-admission", 1);
+        let sources = original
+            .sources()
+            .iter()
+            .map(|source| {
+                if source.visibility() == ContextSourceVisibility::PreludeEligible {
+                    ContextSourceSnapshot::audit_only(
+                        source.source_key().clone(),
+                        source.source_revision().expect("source revision").clone(),
+                        source.value_hash().expect("value hash").clone(),
+                        source.observed_at(),
+                    )
+                    .expect("audit-only replacement")
+                } else {
+                    source.clone()
+                }
+            })
+            .collect();
+        let turn = rehash_turn_sources(&original, sources);
+
+        assert_eq!(
+            store.commit_context_turn(&ContextTurnCommitRequest::new(
+                Some(epoch(
+                    "epoch-audit-admission",
+                    ContextEpochReason::NewAttempt,
+                    None,
+                )),
+                turn.clone(),
+                turn_content(&turn),
+            )),
+            Err(StoreError::InvalidContextTransition)
+        );
     }
 
     #[test]
@@ -3417,6 +3537,88 @@ mod tests {
                 EstimatedTokens::new(0).expect("durable memory"),
             )
             .expect("second budget"),
+        );
+        let bind_second = |turn: &ContextTurnManifest| {
+            BoundContextTurnCommitRequest::new(
+                ContextTurnCommitRequest::new(None, turn.clone(), turn_content(turn)),
+                session_event(
+                    10,
+                    EventPayload::ContextTurnBound {
+                        attempt_id: turn.attempt_id().clone(),
+                        run_turn: 2,
+                        context_turn_id: turn.context_turn_id().clone(),
+                        manifest_hash: turn.manifest_hash().clone(),
+                    },
+                ),
+            )
+        };
+        let missing_audit_sources = rehash_turn_sources(
+            &second_turn,
+            second_turn
+                .sources()
+                .iter()
+                .filter(|source| source.visibility() == ContextSourceVisibility::PreludeEligible)
+                .cloned()
+                .collect(),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(&bind_second(&missing_audit_sources)),
+            Err(StoreError::InvalidContextTransition),
+            "a continuation cannot omit the baseline audit source keys"
+        );
+        let missing_prelude_sources = rehash_turn_sources(
+            &second_turn,
+            second_turn
+                .sources()
+                .iter()
+                .filter(|source| source.visibility() == ContextSourceVisibility::AuditOnly)
+                .cloned()
+                .collect(),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(&bind_second(&missing_prelude_sources)),
+            Err(StoreError::InvalidContextTransition),
+            "a continuation cannot omit a frozen prelude source"
+        );
+        let mut changed_prelude_sources = second_turn.sources().to_vec();
+        let changed_prelude = changed_prelude_sources
+            .iter_mut()
+            .find(|source| source.visibility() == ContextSourceVisibility::PreludeEligible)
+            .expect("prelude source");
+        *changed_prelude = ContextSourceSnapshot::new(
+            changed_prelude.source_key().clone(),
+            ContextObservationState::Available,
+            Some(digest('7')),
+            Some(digest('8')),
+            changed_prelude.observed_at(),
+        )
+        .expect("changed prelude snapshot");
+        let changed_prelude_sources = rehash_turn_sources(&second_turn, changed_prelude_sources);
+        assert_eq!(
+            store.commit_context_turn_and_bind(&bind_second(&changed_prelude_sources)),
+            Err(StoreError::InvalidContextTransition),
+            "a continuation cannot change a frozen prelude source"
+        );
+        let mut changed_audit_sources = second_turn.sources().to_vec();
+        let changed_audit = changed_audit_sources
+            .iter_mut()
+            .find(|source| source.visibility() == ContextSourceVisibility::AuditOnly)
+            .expect("dynamic audit source");
+        *changed_audit = ContextSourceSnapshot::audit_only(
+            ContextSourceKey::new("session:provider-renamed-state:v1").expect("renamed source key"),
+            changed_audit
+                .source_revision()
+                .expect("source revision")
+                .clone(),
+            changed_audit.value_hash().expect("value hash").clone(),
+            changed_audit.observed_at(),
+        )
+        .expect("renamed audit snapshot");
+        let changed_audit_sources = rehash_turn_sources(&second_turn, changed_audit_sources);
+        assert_eq!(
+            store.commit_context_turn_and_bind(&bind_second(&changed_audit_sources)),
+            Err(StoreError::InvalidContextTransition),
+            "a continuation cannot rename a frozen audit source key"
         );
         let second_request = BoundContextTurnCommitRequest::new(
             ContextTurnCommitRequest::new(None, second_turn.clone(), turn_content(&second_turn)),
