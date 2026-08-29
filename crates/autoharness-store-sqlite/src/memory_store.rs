@@ -1100,56 +1100,25 @@ impl MemoryStore for SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(map_sqlite_error)?;
-        transaction
-            .execute("DELETE FROM memory_revision_fts", [])
-            .map_err(map_sqlite_error)?;
-
-        let revisions = load_revision_introduction_states(&transaction)?;
-        for (revision_id, state) in revisions {
-            transaction
-                .execute(
-                    "UPDATE memory_revisions SET state = ?2 WHERE revision_id = ?1",
-                    params![revision_id, encode_revision_status(state)],
-                )
-                .map_err(map_sqlite_error)?;
-        }
-        transaction
-            .execute(
-                "UPDATE memory_items SET lifecycle = 'proposed', last_sequence = 0, \
-                 latest_revision = 0, latest_revision_id = NULL, active_revision_id = NULL",
-                [],
-            )
-            .map_err(map_sqlite_error)?;
-
         let operations = load_all_operations(&transaction)?;
-        for operation in &operations {
-            apply_rebuild_operation(&transaction, operation)?;
+        let erasures = load_rebuild_erasures(&transaction, &operations)?;
+        let privacy_blobs = verify_rebuild_sidecars(&transaction, &operations, &erasures)?;
+        transaction
+            .execute_batch("PRAGMA defer_foreign_keys = ON;")
+            .map_err(map_sqlite_error)?;
+        clear_memory_projections(&transaction)?;
+        for content_id in privacy_blobs {
             transaction
                 .execute(
-                    "UPDATE memory_items SET last_sequence = ?2, updated_at_ms = ?3 \
-                     WHERE memory_id = ?1",
-                    params![
-                        operation.memory_id().as_str(),
-                        to_sql_sequence(operation.sequence().get())?,
-                        operation.occurred_at().get(),
-                    ],
+                    "DELETE FROM memory_content_blobs WHERE content_id = ?1",
+                    params![content_id],
                 )
                 .map_err(map_sqlite_error)?;
         }
-        apply_session_erasure_tombstones(&transaction)?;
+        let replay = replay_memory_operations(&transaction, &operations, &erasures)?;
         rebuild_fts(&transaction)?;
-        let incomplete = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM memory_items WHERE last_sequence = 0",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(map_sqlite_error)?;
-        if incomplete != 0 {
-            return Err(StoreError::CorruptData {
-                area: CorruptionArea::MemoryProjection,
-            });
-        }
+        replace_memory_store_state(&transaction, replay)?;
+        verify_rebuilt_projection(&transaction, &operations)?;
         transaction.commit().map_err(map_sqlite_error)
     }
 }
@@ -2351,55 +2320,881 @@ fn rebuild_fts(transaction: &Transaction<'_>) -> Result<(), StoreError> {
 fn load_all_operations(
     transaction: &Transaction<'_>,
 ) -> Result<Vec<MemoryOperationEnvelope>, StoreError> {
+    struct OperationRow {
+        operation_id: String,
+        memory_id: String,
+        sequence: i64,
+        schema_version: i64,
+        operation_kind: String,
+        revision_id: Option<String>,
+        caused_by_command_id: Option<String>,
+        caused_by_operation_id: Option<String>,
+        correlation_id: String,
+        occurred_at_ms: i64,
+        envelope_json: Vec<u8>,
+        operation_sha256: Vec<u8>,
+    }
+
     let mut statement = transaction
         .prepare(
-            "SELECT envelope_json, operation_sha256 FROM memory_operations \
+            "SELECT operation_id, memory_id, sequence, schema_version, operation_kind, \
+                    revision_id, caused_by_command_id, caused_by_operation_id, correlation_id, \
+                    occurred_at_ms, envelope_json, operation_sha256 \
+             FROM memory_operations \
              ORDER BY memory_id, sequence",
         )
         .map_err(map_sqlite_error)?;
     let rows = statement
         .query_map([], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            Ok(OperationRow {
+                operation_id: row.get(0)?,
+                memory_id: row.get(1)?,
+                sequence: row.get(2)?,
+                schema_version: row.get(3)?,
+                operation_kind: row.get(4)?,
+                revision_id: row.get(5)?,
+                caused_by_command_id: row.get(6)?,
+                caused_by_operation_id: row.get(7)?,
+                correlation_id: row.get(8)?,
+                occurred_at_ms: row.get(9)?,
+                envelope_json: row.get(10)?,
+                operation_sha256: row.get(11)?,
+            })
         })
         .map_err(map_sqlite_error)?;
-    rows.map(|row| {
-        let (json, hash) = row.map_err(map_sqlite_error)?;
-        if Sha256::digest(&json).as_slice() != hash.as_slice() {
+
+    let mut operations = Vec::new();
+    let mut current_memory_id = None::<String>;
+    let mut expected_sequence = 1_u64;
+    let mut seen_operations = BTreeMap::<String, (String, u64)>::new();
+    let mut seen_commands = BTreeSet::new();
+    for row in rows {
+        let row = row.map_err(map_sqlite_error)?;
+        if Sha256::digest(&row.envelope_json).as_slice() != row.operation_sha256.as_slice() {
             return Err(corrupt_memory_ledger());
         }
-        serde_json::from_slice(&json).map_err(|_| corrupt_memory_ledger())
-    })
-    .collect()
+        let operation: MemoryOperationEnvelope =
+            serde_json::from_slice(&row.envelope_json).map_err(|_| corrupt_memory_ledger())?;
+        let sequence = u64::try_from(row.sequence).map_err(|_| corrupt_memory_ledger())?;
+        let scalar_causation_matches = match operation.causation() {
+            MemoryCausation::Command(command_id) => {
+                row.caused_by_command_id.as_deref() == Some(command_id.as_str())
+                    && row.caused_by_operation_id.is_none()
+            }
+            MemoryCausation::Operation(operation_id) => {
+                row.caused_by_command_id.is_none()
+                    && row.caused_by_operation_id.as_deref() == Some(operation_id.as_str())
+            }
+        };
+        if operation.operation_id().as_str() != row.operation_id
+            || operation.memory_id().as_str() != row.memory_id
+            || operation.sequence().get() != sequence
+            || i64::from(operation.schema_version()) != row.schema_version
+            || operation_kind(operation.payload()) != row.operation_kind
+            || payload_revision_id(operation.payload()) != row.revision_id.as_deref()
+            || operation.correlation_id().as_str() != row.correlation_id
+            || operation.occurred_at().get() != row.occurred_at_ms
+            || !scalar_causation_matches
+        {
+            return Err(corrupt_memory_ledger());
+        }
+        if operation.schema_version() != MEMORY_SCHEMA_V1 {
+            return Err(StoreError::UnsupportedMemorySchema {
+                found: operation.schema_version(),
+            });
+        }
+
+        if current_memory_id.as_deref() != Some(operation.memory_id().as_str()) {
+            current_memory_id = Some(operation.memory_id().as_str().to_owned());
+            expected_sequence = 1;
+        }
+        if operation.sequence().get() != expected_sequence
+            || (expected_sequence == 1)
+                != matches!(
+                    operation.payload(),
+                    MemoryOperationPayload::MemoryCreated { .. }
+                )
+        {
+            return Err(corrupt_memory_ledger());
+        }
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or(StoreError::SequenceOutOfRange)?;
+
+        match operation.causation() {
+            MemoryCausation::Command(command_id) => {
+                if !seen_commands.insert(command_id.as_str().to_owned()) {
+                    return Err(corrupt_memory_ledger());
+                }
+            }
+            MemoryCausation::Operation(cause_id) => {
+                let Some((cause_memory_id, cause_sequence)) =
+                    seen_operations.get(cause_id.as_str())
+                else {
+                    return Err(corrupt_memory_ledger());
+                };
+                if cause_memory_id != operation.memory_id().as_str()
+                    || *cause_sequence >= operation.sequence().get()
+                {
+                    return Err(corrupt_memory_ledger());
+                }
+            }
+        }
+        if seen_operations
+            .insert(
+                operation.operation_id().as_str().to_owned(),
+                (
+                    operation.memory_id().as_str().to_owned(),
+                    operation.sequence().get(),
+                ),
+            )
+            .is_some()
+        {
+            return Err(corrupt_memory_ledger());
+        }
+        operations.push(operation);
+    }
+    Ok(operations)
 }
 
-fn load_revision_introduction_states(
+#[derive(Clone)]
+struct RebuildEvidenceMetadata {
+    memory_id: String,
+    source: MemoryEvidenceSource,
+    has_excerpt: bool,
+}
+
+#[derive(Clone)]
+struct RebuildEvidenceErasure {
+    session_id: SessionId,
+    erased_at_ms: i64,
+}
+
+#[derive(Default)]
+struct RebuildSessionErasure {
+    session_last_sequence: Option<u64>,
+    erased_at_ms: i64,
+    memory_ids: BTreeSet<String>,
+    evidence_keys: BTreeSet<(String, String)>,
+}
+
+#[derive(Default)]
+struct RebuildErasures {
+    deleted_memories: BTreeSet<String>,
+    evidence: BTreeMap<(String, String), RebuildEvidenceErasure>,
+    sessions: BTreeMap<String, RebuildSessionErasure>,
+}
+
+fn record_rebuild_session_erasure(
+    erasures: &mut RebuildErasures,
+    session_id: &SessionId,
+    session_last_sequence: Option<u64>,
+    erased_at_ms: i64,
+) -> Result<(), StoreError> {
+    if let Some(existing) = erasures.sessions.get_mut(session_id.as_str()) {
+        if existing.erased_at_ms != erased_at_ms
+            || (existing.session_last_sequence.is_some()
+                && session_last_sequence.is_some()
+                && existing.session_last_sequence != session_last_sequence)
+        {
+            return Err(corrupt_memory_projection());
+        }
+        if existing.session_last_sequence.is_none() {
+            existing.session_last_sequence = session_last_sequence;
+        }
+    } else {
+        erasures.sessions.insert(
+            session_id.as_str().to_owned(),
+            RebuildSessionErasure {
+                session_last_sequence,
+                erased_at_ms,
+                memory_ids: BTreeSet::new(),
+                evidence_keys: BTreeSet::new(),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn load_rebuild_erasures(
     transaction: &Transaction<'_>,
-) -> Result<Vec<(String, MemoryRevisionStatus)>, StoreError> {
+    operations: &[MemoryOperationEnvelope],
+) -> Result<RebuildErasures, StoreError> {
+    let mut erasures = RebuildErasures::default();
+    let mut memory_scopes = BTreeMap::<String, MemoryScope>::new();
+    let mut evidence_metadata = BTreeMap::<(String, String), RebuildEvidenceMetadata>::new();
+    let mut evidence_ids = BTreeSet::new();
+    for operation in operations {
+        if let MemoryOperationPayload::MemoryCreated { scope, .. } = operation.payload()
+            && memory_scopes
+                .insert(operation.memory_id().as_str().to_owned(), scope.clone())
+                .is_some()
+        {
+            return Err(corrupt_memory_ledger());
+        }
+        if matches!(
+            operation.payload(),
+            MemoryOperationPayload::MemoryDeleted { .. }
+        ) {
+            erasures
+                .deleted_memories
+                .insert(operation.memory_id().as_str().to_owned());
+        }
+        if let Some(revision) = introduced_revision(operation.payload()) {
+            for evidence in revision.evidence() {
+                if !evidence_ids.insert(evidence.evidence_id().as_str().to_owned())
+                    || evidence_metadata
+                        .insert(
+                            (
+                                revision.revision_id().as_str().to_owned(),
+                                evidence.evidence_id().as_str().to_owned(),
+                            ),
+                            RebuildEvidenceMetadata {
+                                memory_id: operation.memory_id().as_str().to_owned(),
+                                source: evidence.source().clone(),
+                                has_excerpt: evidence.excerpt_hash().is_some(),
+                            },
+                        )
+                        .is_some()
+                {
+                    return Err(corrupt_memory_ledger());
+                }
+            }
+        }
+    }
+
     let mut statement = transaction
-        .prepare("SELECT revision_id, metadata_json, metadata_sha256 FROM memory_revisions")
+        .prepare(
+            "SELECT memory_id, session_id, session_last_sequence, erased_at_ms \
+             FROM memory_session_erasure_tombstones ORDER BY session_id, memory_id",
+        )
         .map_err(map_sqlite_error)?;
     let rows = statement
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })
         .map_err(map_sqlite_error)?;
-    rows.map(|row| {
-        let (id, json, hash) = row.map_err(map_sqlite_error)?;
-        if Sha256::digest(&json).as_slice() != hash.as_slice() {
+    for row in rows {
+        let (memory_id, session_id, last_sequence, erased_at_ms) = row.map_err(map_sqlite_error)?;
+        let session_id = SessionId::new(session_id).map_err(|_| corrupt_memory_projection())?;
+        let last_sequence =
+            u64::try_from(last_sequence).map_err(|_| corrupt_memory_projection())?;
+        if !matches!(
+            memory_scopes.get(&memory_id),
+            Some(MemoryScope::Session(scope_session_id)) if scope_session_id == &session_id
+        ) {
             return Err(corrupt_memory_projection());
         }
-        let revision: MemoryRevision =
-            serde_json::from_slice(&json).map_err(|_| corrupt_memory_projection())?;
-        if revision.revision_id().as_str() != id {
+        record_rebuild_session_erasure(
+            &mut erasures,
+            &session_id,
+            Some(last_sequence),
+            erased_at_ms,
+        )?;
+        erasures.deleted_memories.insert(memory_id.clone());
+        erasures
+            .sessions
+            .get_mut(session_id.as_str())
+            .ok_or_else(corrupt_memory_projection)?
+            .memory_ids
+            .insert(memory_id);
+    }
+    drop(statement);
+
+    let mut statement = transaction
+        .prepare(
+            "SELECT revision_id, evidence_id, erased_by_session_id, erased_at_ms \
+             FROM memory_evidence \
+             WHERE erased_by_session_id IS NOT NULL OR erased_at_ms IS NOT NULL \
+             ORDER BY revision_id, ordinal",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })
+        .map_err(map_sqlite_error)?;
+    for row in rows {
+        let (revision_id, evidence_id, session_id, erased_at_ms) = row.map_err(map_sqlite_error)?;
+        let (Some(session_id), Some(erased_at_ms)) = (session_id, erased_at_ms) else {
+            return Err(corrupt_memory_projection());
+        };
+        let session_id = SessionId::new(session_id).map_err(|_| corrupt_memory_projection())?;
+        let key = (revision_id, evidence_id);
+        let metadata = evidence_metadata
+            .get(&key)
+            .ok_or_else(corrupt_memory_projection)?;
+        if !metadata.has_excerpt || !evidence_belongs_to_session(&metadata.source, &session_id) {
             return Err(corrupt_memory_projection());
         }
-        Ok((id, revision.status()))
-    })
-    .collect()
+        record_rebuild_session_erasure(&mut erasures, &session_id, None, erased_at_ms)?;
+        if erasures
+            .evidence
+            .insert(
+                key.clone(),
+                RebuildEvidenceErasure {
+                    session_id: session_id.clone(),
+                    erased_at_ms,
+                },
+            )
+            .is_some()
+        {
+            return Err(corrupt_memory_projection());
+        }
+        erasures
+            .sessions
+            .get_mut(session_id.as_str())
+            .ok_or_else(corrupt_memory_projection)?
+            .evidence_keys
+            .insert(key);
+    }
+
+    let deleted_sessions = erasures
+        .sessions
+        .iter()
+        .filter_map(|(session_id, erasure)| {
+            erasure
+                .session_last_sequence
+                .map(|_| (session_id.clone(), erasure.erased_at_ms))
+        })
+        .collect::<Vec<_>>();
+    for ((revision_id, evidence_id), metadata) in evidence_metadata {
+        if !metadata.has_excerpt || erasures.deleted_memories.contains(&metadata.memory_id) {
+            continue;
+        }
+        let Some((session_id, erased_at_ms)) = deleted_sessions.iter().find(|(session_id, _)| {
+            SessionId::new(session_id.clone())
+                .is_ok_and(|session_id| evidence_belongs_to_session(&metadata.source, &session_id))
+        }) else {
+            continue;
+        };
+        let session_id =
+            SessionId::new(session_id.clone()).map_err(|_| corrupt_memory_projection())?;
+        let key = (revision_id, evidence_id);
+        if let Some(existing) = erasures.evidence.get(&key) {
+            if existing.session_id != session_id || existing.erased_at_ms != *erased_at_ms {
+                return Err(corrupt_memory_projection());
+            }
+            continue;
+        }
+        erasures.evidence.insert(
+            key.clone(),
+            RebuildEvidenceErasure {
+                session_id: session_id.clone(),
+                erased_at_ms: *erased_at_ms,
+            },
+        );
+        erasures
+            .sessions
+            .get_mut(session_id.as_str())
+            .ok_or_else(corrupt_memory_projection)?
+            .evidence_keys
+            .insert(key);
+    }
+    Ok(erasures)
+}
+
+struct RebuildBlob {
+    media_type: String,
+    content: Vec<u8>,
+    content_sha256: Vec<u8>,
+    created_at_ms: i64,
+}
+
+fn verify_retained_rebuild_blob(blob: &RebuildBlob, created_at_ms: i64) -> Result<(), StoreError> {
+    if blob.media_type != "text/plain; charset=utf-8"
+        || blob.created_at_ms != created_at_ms
+        || Sha256::digest(&blob.content).as_slice() != blob.content_sha256.as_slice()
+    {
+        return Err(corrupt_memory_projection());
+    }
+    Ok(())
+}
+
+fn verify_rebuild_sidecars(
+    transaction: &Transaction<'_>,
+    operations: &[MemoryOperationEnvelope],
+    erasures: &RebuildErasures,
+) -> Result<BTreeSet<String>, StoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT content_id, media_type, content_utf8, content_sha256, created_at_ms \
+             FROM memory_content_blobs ORDER BY content_id",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                RebuildBlob {
+                    media_type: row.get(1)?,
+                    content: row.get(2)?,
+                    content_sha256: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                },
+            ))
+        })
+        .map_err(map_sqlite_error)?;
+    let mut blobs = rows
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(map_sqlite_error)?;
+    let mut privacy_blobs = BTreeSet::new();
+    let mut revision_ids = BTreeSet::new();
+    let mut evidence_ids = BTreeSet::new();
+    for operation in operations {
+        let Some(revision) = introduced_revision(operation.payload()) else {
+            continue;
+        };
+        if revision.sensitivity() == Sensitivity::Secret
+            || !revision_ids.insert(revision.revision_id().as_str().to_owned())
+        {
+            return Err(corrupt_memory_ledger());
+        }
+        let content_id = format!("memory-content:{}", revision.revision_id().as_str());
+        if erasures
+            .deleted_memories
+            .contains(operation.memory_id().as_str())
+        {
+            if blobs.remove(&content_id).is_some() {
+                privacy_blobs.insert(content_id);
+            }
+        } else {
+            let blob = blobs
+                .remove(&content_id)
+                .ok_or_else(corrupt_memory_projection)?;
+            verify_retained_rebuild_blob(&blob, revision.created_at().get())?;
+            let text =
+                std::str::from_utf8(&blob.content).map_err(|_| corrupt_memory_projection())?;
+            MemoryContent::new(text.to_owned()).map_err(|_| corrupt_memory_projection())?;
+            if normalized_content_hash(text).map_err(|_| corrupt_memory_projection())?
+                != *revision.content_hash()
+            {
+                return Err(corrupt_memory_projection());
+            }
+        }
+
+        for evidence in revision.evidence() {
+            if !evidence_ids.insert(evidence.evidence_id().as_str().to_owned()) {
+                return Err(corrupt_memory_ledger());
+            }
+            let evidence_content_id =
+                format!("memory-evidence:{}", evidence.evidence_id().as_str());
+            let key = (
+                revision.revision_id().as_str().to_owned(),
+                evidence.evidence_id().as_str().to_owned(),
+            );
+            let is_erased = erasures
+                .deleted_memories
+                .contains(operation.memory_id().as_str())
+                || erasures.evidence.contains_key(&key);
+            match (evidence.excerpt_hash(), is_erased) {
+                (None, _) | (Some(_), true) => {
+                    if blobs.remove(&evidence_content_id).is_some() {
+                        privacy_blobs.insert(evidence_content_id);
+                    }
+                }
+                (Some(expected_hash), false) => {
+                    let blob = blobs
+                        .remove(&evidence_content_id)
+                        .ok_or_else(corrupt_memory_projection)?;
+                    verify_retained_rebuild_blob(&blob, revision.created_at().get())?;
+                    let expected_hash = digest_bytes(expected_hash.as_str())
+                        .map_err(|_| corrupt_memory_ledger())?;
+                    if blob.content_sha256.as_slice() != expected_hash.as_slice() {
+                        return Err(corrupt_memory_projection());
+                    }
+                    let text = std::str::from_utf8(&blob.content)
+                        .map_err(|_| corrupt_memory_projection())?;
+                    MemoryEvidenceExcerpt::new(text.to_owned())
+                        .map_err(|_| corrupt_memory_projection())?;
+                }
+            }
+        }
+    }
+    privacy_blobs.extend(blobs.into_keys());
+    Ok(privacy_blobs)
+}
+
+fn clear_memory_projections(transaction: &Transaction<'_>) -> Result<(), StoreError> {
+    transaction
+        .execute_batch(
+            "DELETE FROM memory_revision_fts; \
+             DELETE FROM memory_validations; \
+             DELETE FROM memory_evidence; \
+             DELETE FROM memory_relations; \
+             DELETE FROM memory_revisions; \
+             DELETE FROM memory_items; \
+             DELETE FROM memory_store_state;",
+        )
+        .map_err(map_sqlite_error)
+}
+
+fn insert_rebuilt_revision(
+    transaction: &Transaction<'_>,
+    operation: &MemoryOperationEnvelope,
+    revision: &MemoryRevision,
+    erasures: &RebuildErasures,
+) -> Result<(), StoreError> {
+    let latest_revision = transaction
+        .query_row(
+            "SELECT latest_revision FROM memory_items WHERE memory_id = ?1",
+            params![operation.memory_id().as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    let expected_revision = u64::try_from(latest_revision)
+        .map_err(|_| corrupt_memory_projection())?
+        .checked_add(1)
+        .ok_or(StoreError::SequenceOutOfRange)?;
+    if revision.revision().get() != expected_revision {
+        return Err(StoreError::InvalidMemoryTransition);
+    }
+    let memory_is_deleted = erasures
+        .deleted_memories
+        .contains(operation.memory_id().as_str());
+    let content_id =
+        (!memory_is_deleted).then(|| format!("memory-content:{}", revision.revision_id().as_str()));
+    let metadata_json = serde_json::to_vec(revision).map_err(|_| StoreError::Backend)?;
+    let metadata_hash = Sha256::digest(&metadata_json);
+    let (valid_from, valid_until) = validity_bounds(revision.validity());
+    transaction
+        .execute(
+            "INSERT INTO memory_revisions (revision_id, memory_id, revision, subject_key, \
+             introduced_operation_id, state, content_id, content_hash_sha256, metadata_json, \
+             metadata_sha256, origin, trust_class, confidence_basis_points, sensitivity, \
+             valid_from_ms, valid_until_ms, created_at_ms, supersedes_revision_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+                     ?15, ?16, ?17, ?18)",
+            params![
+                revision.revision_id().as_str(),
+                operation.memory_id().as_str(),
+                to_sql_sequence(revision.revision().get())?,
+                revision.subject_key().map(|key| key.as_str()),
+                operation.operation_id().as_str(),
+                encode_revision_status(revision.status()),
+                content_id,
+                digest_bytes(revision.content_hash().as_str())?.as_slice(),
+                metadata_json,
+                metadata_hash.as_slice(),
+                encode_origin(revision.origin()),
+                encode_trust(revision.trust_class()),
+                i64::from(revision.confidence().get()),
+                encode_sensitivity(revision.sensitivity()),
+                valid_from,
+                valid_until,
+                revision.created_at().get(),
+                revision.supersedes_revision_id().map(|id| id.as_str()),
+            ],
+        )
+        .map_err(map_sqlite_error)?;
+
+    for (ordinal, evidence) in revision.evidence().iter().enumerate() {
+        let key = (
+            revision.revision_id().as_str().to_owned(),
+            evidence.evidence_id().as_str().to_owned(),
+        );
+        let erasure = erasures.evidence.get(&key);
+        let retains_excerpt =
+            evidence.excerpt_hash().is_some() && !memory_is_deleted && erasure.is_none();
+        let excerpt_content_id =
+            retains_excerpt.then(|| format!("memory-evidence:{}", evidence.evidence_id().as_str()));
+        let excerpt_sha256 = if retains_excerpt {
+            evidence
+                .excerpt_hash()
+                .map(|hash| digest_bytes(hash.as_str()))
+                .transpose()?
+        } else {
+            None
+        };
+        let source_json = serde_json::to_vec(evidence.source()).map_err(|_| StoreError::Backend)?;
+        transaction
+            .execute(
+                "INSERT INTO memory_evidence (revision_id, ordinal, evidence_id, source_json, \
+                 relation, excerpt_content_id, excerpt_sha256, erased_by_session_id, erased_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    revision.revision_id().as_str(),
+                    i64::try_from(ordinal).map_err(|_| StoreError::LimitExceeded)?,
+                    evidence.evidence_id().as_str(),
+                    source_json,
+                    encode_evidence_relation(evidence.relation()),
+                    excerpt_content_id,
+                    excerpt_sha256,
+                    erasure.map(|erasure| erasure.session_id.as_str()),
+                    erasure.map(|erasure| erasure.erased_at_ms),
+                ],
+            )
+            .map_err(map_sqlite_error)?;
+    }
+    for (ordinal, relation) in revision.relations().iter().enumerate() {
+        transaction
+            .execute(
+                "INSERT INTO memory_relations (revision_id, ordinal, to_memory_id, relation) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    revision.revision_id().as_str(),
+                    i64::try_from(ordinal).map_err(|_| StoreError::LimitExceeded)?,
+                    relation.memory_id().as_str(),
+                    encode_relation_kind(relation.kind()),
+                ],
+            )
+            .map_err(map_sqlite_error)?;
+    }
+    Ok(())
+}
+
+fn insert_rebuilt_validation(
+    transaction: &Transaction<'_>,
+    operation: &MemoryOperationEnvelope,
+) -> Result<(), StoreError> {
+    let MemoryOperationPayload::RevisionValidated {
+        revision_id,
+        validation,
+    } = operation.payload()
+    else {
+        return Ok(());
+    };
+    let json = serde_json::to_vec(validation).map_err(|_| StoreError::Backend)?;
+    transaction
+        .execute(
+            "INSERT INTO memory_validations (operation_id, revision_id, validator_version, \
+             content_sha256, outcome, validation_json, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                operation.operation_id().as_str(),
+                revision_id.as_str(),
+                i64::from(validation.validator_version()),
+                digest_bytes(validation.content_hash().as_str())?.as_slice(),
+                encode_validation_status(validation.status()),
+                json,
+                operation.occurred_at().get(),
+            ],
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct RebuildStoreState {
+    generation: u64,
+    mutation_generation: u64,
+    updated_at_ms: i64,
+}
+
+fn replay_batch_end(operations: &[MemoryOperationEnvelope], start: usize) -> usize {
+    let first = &operations[start];
+    let mut preceding_ids = BTreeSet::from([first.operation_id().as_str()]);
+    let mut end = start + 1;
+    while let Some(operation) = operations.get(end) {
+        if operation.memory_id() != first.memory_id()
+            || operation.correlation_id() != first.correlation_id()
+            || !matches!(
+                operation.causation(),
+                MemoryCausation::Operation(cause_id) if preceding_ids.contains(cause_id.as_str())
+            )
+        {
+            break;
+        }
+        preceding_ids.insert(operation.operation_id().as_str());
+        end += 1;
+    }
+    end
+}
+
+fn replay_memory_operations(
+    transaction: &Transaction<'_>,
+    operations: &[MemoryOperationEnvelope],
+    erasures: &RebuildErasures,
+) -> Result<RebuildStoreState, StoreError> {
+    let mut replay = RebuildStoreState {
+        generation: 0,
+        mutation_generation: 0,
+        updated_at_ms: 0,
+    };
+    let mut start = 0;
+    while start < operations.len() {
+        let end = replay_batch_end(operations, start);
+        let first = &operations[start];
+        let active_before = current_active_revision(transaction, first.memory_id().as_str())?;
+        for operation in &operations[start..end] {
+            if matches!(
+                operation.payload(),
+                MemoryOperationPayload::MemoryCreated { .. }
+            ) {
+                insert_memory_item_shell(transaction, operation)?;
+            }
+            if let Some(revision) = introduced_revision(operation.payload()) {
+                insert_rebuilt_revision(transaction, operation, revision, erasures)?;
+            }
+            insert_rebuilt_validation(transaction, operation)?;
+            apply_rebuild_operation(transaction, operation)?;
+            let changed = transaction
+                .execute(
+                    "UPDATE memory_items SET last_sequence = ?2, updated_at_ms = ?3 \
+                     WHERE memory_id = ?1",
+                    params![
+                        operation.memory_id().as_str(),
+                        to_sql_sequence(operation.sequence().get())?,
+                        operation.occurred_at().get(),
+                    ],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed != 1 {
+                return Err(StoreError::InvalidMemoryTransition);
+            }
+        }
+        let active_after = current_active_revision(transaction, first.memory_id().as_str())?;
+        replay.mutation_generation = replay
+            .mutation_generation
+            .checked_add(1)
+            .ok_or(StoreError::SequenceOutOfRange)?;
+        if active_before != active_after {
+            replay.generation = replay
+                .generation
+                .checked_add(1)
+                .ok_or(StoreError::SequenceOutOfRange)?;
+        }
+        replay.updated_at_ms = replay
+            .updated_at_ms
+            .max(operations[end - 1].occurred_at().get());
+        start = end;
+    }
+
+    for erasure in erasures.sessions.values() {
+        let eligibility_changed =
+            erasure
+                .memory_ids
+                .iter()
+                .try_fold(false, |changed, memory_id| {
+                    current_active_revision(transaction, memory_id)
+                        .map(|active| changed || active.is_some())
+                })?;
+        if eligibility_changed {
+            replay.generation = replay
+                .generation
+                .checked_add(1)
+                .ok_or(StoreError::SequenceOutOfRange)?;
+        }
+        if !erasure.memory_ids.is_empty() || !erasure.evidence_keys.is_empty() {
+            replay.mutation_generation = replay
+                .mutation_generation
+                .checked_add(1)
+                .ok_or(StoreError::SequenceOutOfRange)?;
+            replay.updated_at_ms = replay.updated_at_ms.max(erasure.erased_at_ms);
+        }
+    }
+    apply_session_erasure_tombstones(transaction)?;
+    Ok(replay)
+}
+
+fn replace_memory_store_state(
+    transaction: &Transaction<'_>,
+    replay: RebuildStoreState,
+) -> Result<(), StoreError> {
+    transaction
+        .execute(
+            "INSERT INTO memory_store_state (singleton, generation, mutation_generation, updated_at_ms) \
+             VALUES (1, ?1, ?2, ?3)",
+            params![
+                to_sql_sequence(replay.generation)?,
+                to_sql_sequence(replay.mutation_generation)?,
+                replay.updated_at_ms,
+            ],
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(())
+}
+
+fn verify_rebuilt_projection(
+    transaction: &Transaction<'_>,
+    operations: &[MemoryOperationEnvelope],
+) -> Result<(), StoreError> {
+    let expected_items = operations
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation.payload(),
+                MemoryOperationPayload::MemoryCreated { .. }
+            )
+        })
+        .count();
+    let expected_revisions = operations
+        .iter()
+        .filter(|operation| introduced_revision(operation.payload()).is_some())
+        .count();
+    let expected_validations = operations
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation.payload(),
+                MemoryOperationPayload::RevisionValidated { .. }
+            )
+        })
+        .count();
+    let expected_evidence = operations
+        .iter()
+        .filter_map(|operation| introduced_revision(operation.payload()))
+        .map(|revision| revision.evidence().len())
+        .sum::<usize>();
+    let expected_relations = operations
+        .iter()
+        .filter_map(|operation| introduced_revision(operation.payload()))
+        .map(|revision| revision.relations().len())
+        .sum::<usize>();
+    for (table, expected) in [
+        ("memory_items", expected_items),
+        ("memory_revisions", expected_revisions),
+        ("memory_validations", expected_validations),
+        ("memory_evidence", expected_evidence),
+        ("memory_relations", expected_relations),
+    ] {
+        let count = transaction
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(map_sqlite_error)?;
+        if usize::try_from(count).ok() != Some(expected) {
+            return Err(corrupt_memory_projection());
+        }
+    }
+    let fts_mismatch = transaction
+        .query_row(
+            "SELECT ( \
+                 (SELECT COUNT(*) FROM memory_revision_fts) != \
+                 (SELECT COUNT(*) FROM memory_revisions WHERE state = 'active' AND content_id IS NOT NULL) \
+                 OR EXISTS ( \
+                     SELECT 1 FROM memory_revision_fts AS f \
+                     LEFT JOIN memory_revisions AS r ON r.search_rowid = f.rowid \
+                     LEFT JOIN memory_content_blobs AS b ON b.content_id = r.content_id \
+                     WHERE r.state IS NULL OR r.state != 'active' \
+                        OR f.revision_id != r.revision_id OR f.memory_id != r.memory_id \
+                        OR f.content != CAST(b.content_utf8 AS TEXT) \
+                 ) \
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(map_sqlite_error)?;
+    if fts_mismatch {
+        return Err(corrupt_memory_projection());
+    }
+    let mut foreign_keys = transaction
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(map_sqlite_error)?;
+    if foreign_keys.exists([]).map_err(map_sqlite_error)? {
+        return Err(corrupt_memory_projection());
+    }
+    Ok(())
 }
 
 fn apply_rebuild_operation(
