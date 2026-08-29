@@ -18,7 +18,6 @@ use autoharness_tui::{
     MemoryTrust, MemoryValidationFinding,
 };
 
-const MEMORY_PROJECTION_PAGE_SIZE: u32 = 100;
 const MEMORY_ADMISSION_PAGE_SIZE: u32 = 64;
 
 /// Converts the authoritative aggregate into the complete visible TUI state.
@@ -180,18 +179,6 @@ pub fn catalog(models: Vec<ModelDescriptor>, stale: bool) -> CatalogProjection {
     CatalogProjection::Ready { models, stale }
 }
 
-/// Converts bounded authorized store rows into the complete Memory workspace projection.
-pub fn memory(
-    generation: u64,
-    records: Vec<(
-        autoharness_store::MemoryInspectionRecord,
-        Vec<autoharness_store::MemoryAdmissionRecord>,
-    )>,
-    stale: bool,
-) -> Result<MemoryProjection, &'static str> {
-    memory_projection(generation, records, stale, None)
-}
-
 /// Converts authorized store rows at an explicit wall-clock boundary.
 pub fn memory_at(
     generation: u64,
@@ -202,7 +189,7 @@ pub fn memory_at(
     stale: bool,
     as_of: TimestampMillis,
 ) -> Result<MemoryProjection, &'static str> {
-    memory_projection(generation, records, stale, Some(as_of))
+    memory_projection(generation, records, stale, as_of)
 }
 
 fn memory_projection(
@@ -212,7 +199,7 @@ fn memory_projection(
         Vec<autoharness_store::MemoryAdmissionRecord>,
     )>,
     stale: bool,
-    as_of: Option<TimestampMillis>,
+    as_of: TimestampMillis,
 ) -> Result<MemoryProjection, &'static str> {
     let total = u32::try_from(records.len()).unwrap_or(u32::MAX);
     let mut summaries = Vec::with_capacity(records.len());
@@ -228,10 +215,7 @@ fn memory_projection(
             .collect::<Result<Vec<_>, _>>()?;
         let admission_count = u32::try_from(admissions.len()).unwrap_or(u32::MAX);
         let revision = record.latest_revision();
-        let status = as_of.map_or_else(
-            || memory_status(record.lifecycle()),
-            |as_of| effective_memory_status(&record, as_of),
-        );
+        let status = effective_memory_status(&record, as_of);
         summaries.push(MemorySummary::new(
             record.memory_id().as_str(),
             preview,
@@ -265,11 +249,6 @@ fn memory_projection(
         details.push(detail.with_revision_context(memory_revision_context(&record)?));
     }
     MemoryProjection::ready(generation, summaries, details, total, stale)
-}
-
-#[must_use]
-pub const fn memory_projection_page_size() -> u32 {
-    MEMORY_PROJECTION_PAGE_SIZE
 }
 
 #[must_use]
@@ -415,22 +394,38 @@ fn memory_revision_context(
         if validation.content_hash() != revision.content_hash() {
             return Err("memory validation does not match the latest revision");
         }
-        let has_duplicate_relation = revision
-            .relations()
-            .iter()
-            .any(|relation| relation.kind() == autoharness_domain::MemoryRelationKind::DuplicateOf);
-        let has_contradiction_relation = revision
-            .relations()
-            .iter()
-            .any(|relation| relation.kind() == autoharness_domain::MemoryRelationKind::Contradicts);
+        for candidate in validation.duplicate_candidates() {
+            push_memory_finding(
+                &mut findings,
+                MemoryFindingKind::Duplicate,
+                candidate.as_str(),
+                format!(
+                    "Validator v{} identified exact duplicate content",
+                    validation.validator_version()
+                ),
+            )?;
+        }
+        for candidate in validation.contradiction_candidates() {
+            push_memory_finding(
+                &mut findings,
+                MemoryFindingKind::Contradiction,
+                candidate.as_str(),
+                format!(
+                    "Validator v{} identified the same subject with different content",
+                    validation.validator_version()
+                ),
+            )?;
+        }
         let validation_anchor = format!("validation result v{}", validation.validator_version());
         for issue in validation.issues() {
-            if (*issue == MemoryValidationIssue::Duplicate && has_duplicate_relation)
-                || (*issue == MemoryValidationIssue::Contradiction && has_contradiction_relation)
+            let kind = memory_finding_kind(*issue);
+            if matches!(
+                kind,
+                MemoryFindingKind::Duplicate | MemoryFindingKind::Contradiction
+            ) && findings.iter().any(|finding| finding.kind() == kind)
             {
                 continue;
             }
-            let kind = memory_finding_kind(*issue);
             findings.push(MemoryValidationFinding::new(
                 kind,
                 &validation_anchor,
@@ -454,6 +449,26 @@ fn memory_revision_context(
         relations,
         findings,
     )
+}
+
+fn push_memory_finding(
+    findings: &mut Vec<MemoryValidationFinding>,
+    kind: MemoryFindingKind,
+    related_memory_id: &str,
+    summary: String,
+) -> Result<(), &'static str> {
+    if findings
+        .iter()
+        .any(|finding| finding.kind() == kind && finding.related_memory_id() == related_memory_id)
+    {
+        return Ok(());
+    }
+    findings.push(MemoryValidationFinding::new(
+        kind,
+        related_memory_id,
+        summary,
+    )?);
+    Ok(())
 }
 
 const fn memory_evidence_relation(relation: MemoryEvidenceRelation) -> &'static str {
@@ -521,17 +536,6 @@ const fn memory_finding_kind(issue: MemoryValidationIssue) -> MemoryFindingKind 
         MemoryValidationIssue::Contradiction => MemoryFindingKind::Contradiction,
         MemoryValidationIssue::InjectionPattern => MemoryFindingKind::InjectionPattern,
         MemoryValidationIssue::UngroundedEvidence => MemoryFindingKind::UngroundedEvidence,
-    }
-}
-
-const fn memory_status(status: MemoryRevisionStatus) -> MemoryStatus {
-    match status {
-        MemoryRevisionStatus::Active => MemoryStatus::Active,
-        MemoryRevisionStatus::Proposed => MemoryStatus::Proposed,
-        MemoryRevisionStatus::Superseded => MemoryStatus::Superseded,
-        MemoryRevisionStatus::Rejected => MemoryStatus::Rejected,
-        MemoryRevisionStatus::Retracted => MemoryStatus::Retracted,
-        MemoryRevisionStatus::Deleted => MemoryStatus::Deleted,
     }
 }
 
@@ -814,11 +818,16 @@ mod tests {
             MemoryValidationIssue::InjectionPattern,
             MemoryValidationIssue::UngroundedEvidence,
         ];
-        let validation = MemoryValidationResult::new(
+        let validation_duplicate_id = MemoryId::new("a".repeat(512)).expect("maximum memory ID");
+        let validation_contradiction_id =
+            MemoryId::new("memory-validation-contradiction").expect("memory ID");
+        let validation = MemoryValidationResult::new_with_candidates(
             3,
             revision.content_hash().clone(),
             MemoryValidationStatus::NeedsReview,
             validation_issues,
+            vec![validation_duplicate_id.clone()],
+            vec![validation_contradiction_id.clone()],
         )
         .expect("validation");
         let evidence_content = vec![
@@ -921,7 +930,7 @@ mod tests {
                 UiMemoryRelationKind::Related,
             ]
         );
-        assert_eq!(context.findings().len(), 8);
+        assert_eq!(context.findings().len(), 10);
         assert_eq!(
             context
                 .findings()
@@ -929,6 +938,8 @@ mod tests {
                 .map(MemoryValidationFinding::kind)
                 .collect::<Vec<_>>(),
             vec![
+                MemoryFindingKind::Duplicate,
+                MemoryFindingKind::Contradiction,
                 MemoryFindingKind::Duplicate,
                 MemoryFindingKind::Contradiction,
                 MemoryFindingKind::SecretDetected,
@@ -947,14 +958,24 @@ mod tests {
             context.findings()[1].related_memory_id(),
             "memory-related-1"
         );
+        assert_eq!(
+            context.findings()[2].related_memory_id(),
+            validation_duplicate_id.as_str()
+        );
+        assert_eq!(
+            context.findings()[3].related_memory_id(),
+            validation_contradiction_id.as_str()
+        );
         assert!(
-            context.findings()[2]
+            context.findings()[4]
                 .related_memory_id()
                 .starts_with("validation result v")
         );
         let debug = format!("{projected:?}");
         assert!(!debug.contains(CONTENT_SENTINEL));
         assert!(!debug.contains(EVIDENCE_SENTINEL));
+        assert!(!debug.contains(validation_duplicate_id.as_str()));
+        assert!(!debug.contains(validation_contradiction_id.as_str()));
 
         let expired = inspection_record_with_validity(
             "memory-projection-expired",

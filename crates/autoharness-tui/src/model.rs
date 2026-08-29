@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use autoharness_domain::{ErrorClass, ModelRef, RetryAdvice};
+use autoharness_domain::{
+    ErrorClass, MAX_MEMORY_VALIDATION_CANDIDATES, MAX_MEMORY_VALIDATION_ISSUES, ModelRef,
+    RetryAdvice,
+};
 use autoharness_settings::{
     ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
     PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
@@ -15,7 +18,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::ui::{ColorDepth, Theme, Token};
 
 const MAX_CREDENTIAL_BYTES: usize = 4_096;
-const MAX_MEMORY_ID_CHARS: usize = 128;
+const MAX_MEMORY_ID_CHARS: usize = 512;
 const MAX_MEMORY_PREVIEW_CHARS: usize = 240;
 const MAX_MEMORY_CONTENT_CHARS: usize = 16_384;
 const MAX_MEMORY_SOURCE_CHARS: usize = 512;
@@ -26,7 +29,8 @@ const MAX_MEMORY_DETAILS: usize = 100;
 const MAX_MEMORY_ADMISSIONS: usize = 64;
 const MAX_MEMORY_EVIDENCE: usize = 64;
 const MAX_MEMORY_RELATIONS: usize = 64;
-const MAX_MEMORY_FINDINGS: usize = 80;
+const MAX_MEMORY_FINDINGS: usize =
+    MAX_MEMORY_RELATIONS + MAX_MEMORY_VALIDATION_CANDIDATES + MAX_MEMORY_VALIDATION_ISSUES;
 const MAX_MEMORY_REASON_FACTORS: usize = 16;
 const MAX_MEMORY_VIEW_CURSOR_CHARS: usize = 512;
 /// Maximum literal characters accepted by one Memory workspace query.

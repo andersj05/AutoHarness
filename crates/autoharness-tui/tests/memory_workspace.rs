@@ -394,7 +394,19 @@ fn ascii_and_no_color_memory_view_is_legible_and_terminal_safe() {
 fn memory_projection_bounds_and_debug_redaction_are_enforced() {
     assert!(
         MemorySummary::new(
-            "x".repeat(129),
+            "x".repeat(512),
+            "safe preview",
+            MemoryStatus::Active,
+            MemoryScope::User,
+            0,
+            None,
+            0,
+        )
+        .is_ok()
+    );
+    assert!(
+        MemorySummary::new(
+            "x".repeat(513),
             "safe preview",
             MemoryStatus::Active,
             MemoryScope::User,
