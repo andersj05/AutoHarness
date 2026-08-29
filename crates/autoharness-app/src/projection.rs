@@ -1,4 +1,7 @@
-use autoharness_domain::{ErrorClass, ModelRef};
+use autoharness_domain::{
+    ContextAdmissionFactor, ErrorClass, MemoryOrigin, MemoryRevisionStatus,
+    MemoryScope as DomainMemoryScope, MemoryValidity, ModelRef, TrustClass,
+};
 use autoharness_engine::{AttemptStatus as EngineAttemptStatus, SessionAggregate};
 use autoharness_provider::{CapabilitySupport, ModelDescriptor};
 use autoharness_tui::{
@@ -6,6 +9,15 @@ use autoharness_tui::{
     PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, ToolRowView,
     TranscriptItem, UiFailure, UsageView,
 };
+use autoharness_tui::{
+    MemoryAdmission, MemoryAdmissionContext, MemoryDetail, MemoryFindingKind,
+    MemoryOrigin as UiMemoryOrigin, MemoryProjection, MemoryRelation as UiMemoryRelation,
+    MemoryRelationKind as UiMemoryRelationKind, MemoryRevisionContext, MemoryScope,
+    MemorySensitivity, MemoryStatus, MemorySummary, MemoryTrust, MemoryValidationFinding,
+};
+
+const MEMORY_PROJECTION_PAGE_SIZE: u32 = 100;
+const MEMORY_ADMISSION_PAGE_SIZE: u32 = 64;
 
 /// Converts the authoritative aggregate into the complete visible TUI state.
 #[must_use]
@@ -163,6 +175,281 @@ pub fn catalog(models: Vec<ModelDescriptor>, stale: bool) -> CatalogProjection {
         })
         .collect();
     CatalogProjection::Ready { models, stale }
+}
+
+/// Converts bounded authorized store rows into the complete Memory workspace projection.
+pub fn memory(
+    generation: u64,
+    records: Vec<(
+        autoharness_store::MemoryInspectionRecord,
+        Vec<autoharness_store::MemoryAdmissionRecord>,
+    )>,
+    stale: bool,
+) -> Result<MemoryProjection, &'static str> {
+    let total = u32::try_from(records.len()).unwrap_or(u32::MAX);
+    let mut summaries = Vec::with_capacity(records.len());
+    let mut details = Vec::with_capacity(records.len());
+    for (record, admission_records) in records {
+        let preview = record.content().map_or_else(
+            || "Content erased".to_owned(),
+            |value| memory_preview(value.as_str()),
+        );
+        let admissions = admission_records
+            .iter()
+            .map(memory_admission)
+            .collect::<Result<Vec<_>, _>>()?;
+        let admission_count = u32::try_from(admissions.len()).unwrap_or(u32::MAX);
+        let revision = record.latest_revision();
+        summaries.push(MemorySummary::new(
+            record.memory_id().as_str(),
+            preview,
+            memory_status(record.lifecycle()),
+            memory_scope(record.scope()),
+            record.updated_at().get(),
+            Some(revision.confidence().get()),
+            admission_count,
+        )?);
+        let detail = match record.content() {
+            Some(content) => MemoryDetail::new(
+                record.memory_id().as_str(),
+                u32::try_from(revision.revision().get()).unwrap_or(u32::MAX),
+                content.as_str(),
+                memory_source(revision.origin()),
+                memory_trust(revision.trust_class()),
+                revision.created_at().get(),
+                memory_valid_until(revision.validity()),
+                admissions,
+            )?,
+            None => MemoryDetail::metadata_only(
+                record.memory_id().as_str(),
+                u32::try_from(revision.revision().get()).unwrap_or(u32::MAX),
+                memory_source(revision.origin()),
+                memory_trust(revision.trust_class()),
+                revision.created_at().get(),
+                memory_valid_until(revision.validity()),
+                admissions,
+            )?,
+        };
+        details.push(detail.with_revision_context(memory_revision_context(&record)?));
+    }
+    MemoryProjection::ready(generation, summaries, details, total, stale)
+}
+
+#[must_use]
+pub const fn memory_projection_page_size() -> u32 {
+    MEMORY_PROJECTION_PAGE_SIZE
+}
+
+#[must_use]
+pub const fn memory_admission_page_size() -> u32 {
+    MEMORY_ADMISSION_PAGE_SIZE
+}
+
+fn memory_preview(content: &str) -> String {
+    let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&normalized, 240)
+}
+
+fn memory_admission(
+    record: &autoharness_store::MemoryAdmissionRecord,
+) -> Result<MemoryAdmission, &'static str> {
+    let model = truncate_chars(
+        &format!(
+            "{}/{}",
+            record.model().provider_id().as_str(),
+            record.model().model_id().as_str()
+        ),
+        256,
+    );
+    let factors = record
+        .reasons()
+        .iter()
+        .map(|reason| admission_factor(reason.factor()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reason = if factors.is_empty() {
+        format!("turn {}", record.run_turn())
+    } else {
+        format!("turn {}: {factors}", record.run_turn())
+    };
+    let context = MemoryAdmissionContext::new(
+        record.attempt_id().as_str(),
+        record.run_turn(),
+        record.epoch_id().as_str(),
+        u32::try_from(record.token_count().get()).unwrap_or(u32::MAX),
+        record.memory_revision_id().as_str(),
+        format!("v{}", record.renderer_version()),
+        record
+            .reasons()
+            .iter()
+            .map(|reason| {
+                format!(
+                    "{} {:+}",
+                    admission_factor(reason.factor()),
+                    reason.contribution()
+                )
+            })
+            .collect(),
+    )?;
+    Ok(MemoryAdmission::new(
+        truncate_chars(record.session_id().as_str(), 256),
+        model,
+        truncate_chars(&reason, 256),
+        record.admitted_at().get(),
+        record.rank(),
+    )?
+    .with_context(context))
+}
+
+fn memory_revision_context(
+    record: &autoharness_store::MemoryInspectionRecord,
+) -> Result<MemoryRevisionContext, &'static str> {
+    let revision = record.latest_revision();
+    let relations = revision
+        .relations()
+        .iter()
+        .filter_map(|relation| {
+            let kind = match relation.kind() {
+                autoharness_domain::MemoryRelationKind::DuplicateOf => {
+                    UiMemoryRelationKind::DuplicateOf
+                }
+                autoharness_domain::MemoryRelationKind::Contradicts => {
+                    UiMemoryRelationKind::Contradicts
+                }
+                autoharness_domain::MemoryRelationKind::Supersedes => {
+                    UiMemoryRelationKind::Supersedes
+                }
+                autoharness_domain::MemoryRelationKind::Refines
+                | autoharness_domain::MemoryRelationKind::Related => return None,
+            };
+            UiMemoryRelation::new(kind, relation.memory_id().as_str()).ok()
+        })
+        .collect::<Vec<_>>();
+    let findings = revision
+        .relations()
+        .iter()
+        .filter_map(|relation| {
+            let (kind, summary) = match relation.kind() {
+                autoharness_domain::MemoryRelationKind::DuplicateOf => {
+                    (MemoryFindingKind::Duplicate, "Exact duplicate relation")
+                }
+                autoharness_domain::MemoryRelationKind::Contradicts => (
+                    MemoryFindingKind::Contradiction,
+                    "Contradictory memory relation",
+                ),
+                autoharness_domain::MemoryRelationKind::Refines
+                | autoharness_domain::MemoryRelationKind::Supersedes
+                | autoharness_domain::MemoryRelationKind::Related => return None,
+            };
+            MemoryValidationFinding::new(kind, relation.memory_id().as_str(), summary).ok()
+        })
+        .collect();
+    MemoryRevisionContext::new(
+        record.last_sequence(),
+        revision.revision_id().as_str(),
+        (record.lifecycle() == MemoryRevisionStatus::Proposed)
+            .then(|| revision.revision_id().as_str().to_owned()),
+        memory_scope_identity(record.scope()),
+        memory_origin(revision.origin()),
+        memory_sensitivity(revision.sensitivity()),
+        Vec::new(),
+        relations,
+        findings,
+    )
+}
+
+const fn memory_status(status: MemoryRevisionStatus) -> MemoryStatus {
+    match status {
+        MemoryRevisionStatus::Active => MemoryStatus::Active,
+        MemoryRevisionStatus::Proposed => MemoryStatus::Proposed,
+        MemoryRevisionStatus::Superseded => MemoryStatus::Superseded,
+        MemoryRevisionStatus::Rejected => MemoryStatus::Rejected,
+        MemoryRevisionStatus::Retracted => MemoryStatus::Retracted,
+        MemoryRevisionStatus::Deleted => MemoryStatus::Deleted,
+    }
+}
+
+const fn memory_scope(scope: &DomainMemoryScope) -> MemoryScope {
+    match scope {
+        DomainMemoryScope::User(_) => MemoryScope::User,
+        DomainMemoryScope::Workspace(_) => MemoryScope::Workspace,
+        DomainMemoryScope::Session(_) => MemoryScope::Session,
+        DomainMemoryScope::Agent(_) => MemoryScope::Agent,
+    }
+}
+
+fn memory_scope_identity(scope: &DomainMemoryScope) -> &str {
+    match scope {
+        DomainMemoryScope::User(id) => id.as_str(),
+        DomainMemoryScope::Workspace(id) => id.as_str(),
+        DomainMemoryScope::Session(id) => id.as_str(),
+        DomainMemoryScope::Agent(id) => id.as_str(),
+    }
+}
+
+const fn memory_origin(origin: MemoryOrigin) -> UiMemoryOrigin {
+    match origin {
+        MemoryOrigin::ExplicitUser => UiMemoryOrigin::ExplicitUser,
+        MemoryOrigin::VerifiedTool => UiMemoryOrigin::VerifiedTool,
+        MemoryOrigin::ImportedDocument => UiMemoryOrigin::ImportedDocument,
+        MemoryOrigin::ModelProposal => UiMemoryOrigin::ModelProposal,
+        MemoryOrigin::Compaction => UiMemoryOrigin::Compaction,
+    }
+}
+
+const fn memory_sensitivity(sensitivity: autoharness_domain::Sensitivity) -> MemorySensitivity {
+    match sensitivity {
+        autoharness_domain::Sensitivity::Public => MemorySensitivity::Public,
+        autoharness_domain::Sensitivity::Internal => MemorySensitivity::Internal,
+        autoharness_domain::Sensitivity::Sensitive => MemorySensitivity::Sensitive,
+        autoharness_domain::Sensitivity::Secret => MemorySensitivity::Secret,
+    }
+}
+
+const fn memory_trust(trust: TrustClass) -> MemoryTrust {
+    match trust {
+        TrustClass::UserApproved => MemoryTrust::UserApproved,
+        TrustClass::VerifiedObservation => MemoryTrust::VerifiedObservation,
+        TrustClass::Imported => MemoryTrust::Imported,
+        TrustClass::UntrustedProposal => MemoryTrust::UntrustedProposal,
+    }
+}
+
+const fn memory_source(origin: MemoryOrigin) -> &'static str {
+    match origin {
+        MemoryOrigin::ExplicitUser => "Explicit user request",
+        MemoryOrigin::VerifiedTool => "Verified tool observation",
+        MemoryOrigin::ImportedDocument => "Imported document",
+        MemoryOrigin::ModelProposal => "Model proposal",
+        MemoryOrigin::Compaction => "Context compaction proposal",
+    }
+}
+
+const fn memory_valid_until(validity: MemoryValidity) -> Option<i64> {
+    match validity {
+        MemoryValidity::Indefinite | MemoryValidity::From { .. } => None,
+        MemoryValidity::Until { valid_until } => Some(valid_until.get()),
+        MemoryValidity::Window(window) => Some(window.valid_until().get()),
+    }
+}
+
+const fn admission_factor(factor: ContextAdmissionFactor) -> &'static str {
+    match factor {
+        ContextAdmissionFactor::Pin => "pinned",
+        ContextAdmissionFactor::Authority => "authority",
+        ContextAdmissionFactor::ExactMatch => "exact match",
+        ContextAdmissionFactor::ScopeSpecificity => "scope",
+        ContextAdmissionFactor::LexicalOverlap => "lexical match",
+        ContextAdmissionFactor::Freshness => "freshness",
+        ContextAdmissionFactor::Confidence => "confidence",
+        ContextAdmissionFactor::PriorUtility => "prior utility",
+        ContextAdmissionFactor::Diversity => "diversity",
+        ContextAdmissionFactor::BudgetFit => "budget fit",
+    }
+}
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
 }
 
 fn catalog_detail(descriptor: &ModelDescriptor) -> String {

@@ -28,6 +28,7 @@ benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
 async-trait.workspace = true
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
+autoharness-memory.workspace = true
 autoharness-provider.workspace = true
 autoharness-provider-gemini.workspace = true
 autoharness-provider-codex-cli.workspace = true
@@ -42,6 +43,7 @@ futures-util.workspace = true
 keyring.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
