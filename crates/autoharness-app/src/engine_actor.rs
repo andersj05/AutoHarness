@@ -37,6 +37,11 @@ pub enum StorageRequest {
     ListSessions {
         reply: oneshot::Sender<Result<Vec<SessionSummary>, AppError>>,
     },
+    /// Reloads one replay-derived session aggregate after an optimistic conflict.
+    LoadSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<Option<SessionAggregate>, AppError>>,
+    },
     /// Resolves a canonical-locator digest to a random persisted workspace ID.
     ResolveWorkspaceId {
         locator_digest: Sha256Digest,
@@ -105,7 +110,7 @@ pub enum StorageRequest {
     /// Lists a bounded all-lifecycle page for the Memory workspace.
     InspectMemories {
         query: autoharness_store::MemoryInspectionQuery,
-        reply: oneshot::Sender<Result<Vec<autoharness_store::MemoryInspectionRecord>, AppError>>,
+        reply: oneshot::Sender<Result<autoharness_store::MemoryInspectionPage, AppError>>,
     },
     /// Loads bounded newest-first memory admission history.
     LoadMemoryAdmissions {
@@ -135,10 +140,30 @@ pub enum StorageRequest {
         command: Box<CommandEnvelope>,
         reply: oneshot::Sender<Result<EngineReply, DurableEngineError>>,
     },
+    /// Atomically commits a verified compaction turn and its exact binding event.
+    CommitCompactionContextTurnAndBind {
+        context: autoharness_store::ContextTurnCommitRequest,
+        boundary: autoharness_store::ContextCompactionBoundary,
+        command: Box<CommandEnvelope>,
+        reply: oneshot::Sender<Result<EngineReply, DurableEngineError>>,
+    },
     /// Loads one immutable context epoch.
     LoadContextEpoch {
         epoch_id: autoharness_domain::ContextEpochId,
         reply: oneshot::Sender<Result<Option<autoharness_domain::ContextEpochManifest>, AppError>>,
+    },
+    /// Loads the newest verified compaction checkpoint for one session.
+    LoadLatestCompactionCheckpoint {
+        session_id: SessionId,
+        reply: oneshot::Sender<
+            Result<Option<autoharness_store::ContextCompactionCheckpoint>, AppError>,
+        >,
+    },
+    /// Samples the canonical durable facts for one prospective compaction turn.
+    LoadCompactionFactsSnapshot {
+        epoch: autoharness_domain::ContextEpochManifest,
+        turn: autoharness_domain::ContextTurnManifest,
+        reply: oneshot::Sender<Result<autoharness_store::CompactionFactsSnapshot, AppError>>,
     },
     /// Loads one exact immutable provider-turn context manifest.
     LoadContextTurn {
@@ -164,6 +189,11 @@ pub enum StorageRequest {
     LoadAttemptContextTurn {
         attempt_id: autoharness_domain::AttemptId,
         run_turn: u32,
+        reply: oneshot::Sender<Result<Option<autoharness_domain::ContextTurnManifest>, AppError>>,
+    },
+    /// Loads the first bound provider turn that established one exact epoch.
+    LoadContextEpochBaseline {
+        epoch_id: autoharness_domain::ContextEpochId,
         reply: oneshot::Sender<Result<Option<autoharness_domain::ContextTurnManifest>, AppError>>,
     },
     Shutdown,
@@ -200,6 +230,19 @@ impl EngineHandle {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(StorageRequest::ListSessions { reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Reloads one replay-derived session aggregate from the storage owner.
+    pub async fn load_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<SessionAggregate>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadSession { session_id, reply })
             .await
             .map_err(|_| AppError::WorkerStopped)?;
         response.await.map_err(|_| AppError::WorkerStopped)?
@@ -395,7 +438,7 @@ impl EngineHandle {
     pub async fn inspect_memories(
         &self,
         query: autoharness_store::MemoryInspectionQuery,
-    ) -> Result<Vec<autoharness_store::MemoryInspectionRecord>, AppError> {
+    ) -> Result<autoharness_store::MemoryInspectionPage, AppError> {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(StorageRequest::InspectMemories { query, reply })
@@ -484,6 +527,28 @@ impl EngineHandle {
             .map_err(|_| DurableEngineError::StoreInvariant)?
     }
 
+    /// Atomically commits a verified compaction turn and its exact session binding.
+    pub async fn commit_compaction_context_turn_and_bind(
+        &self,
+        context: autoharness_store::ContextTurnCommitRequest,
+        boundary: autoharness_store::ContextCompactionBoundary,
+        command: CommandEnvelope,
+    ) -> Result<EngineReply, DurableEngineError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::CommitCompactionContextTurnAndBind {
+                context,
+                boundary,
+                command: Box::new(command),
+                reply,
+            })
+            .await
+            .map_err(|_| DurableEngineError::StoreInvariant)?;
+        response
+            .await
+            .map_err(|_| DurableEngineError::StoreInvariant)?
+    }
+
     /// Loads one exact durable context epoch.
     pub async fn load_context_epoch(
         &self,
@@ -492,6 +557,33 @@ impl EngineHandle {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(StorageRequest::LoadContextEpoch { epoch_id, reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Loads the newest verified compaction checkpoint for one session.
+    pub async fn load_latest_compaction_checkpoint(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<autoharness_store::ContextCompactionCheckpoint>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadLatestCompactionCheckpoint { session_id, reply })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Samples canonical durable facts for one prospective compaction turn.
+    pub async fn load_compaction_facts_snapshot(
+        &self,
+        epoch: autoharness_domain::ContextEpochManifest,
+        turn: autoharness_domain::ContextTurnManifest,
+    ) -> Result<autoharness_store::CompactionFactsSnapshot, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadCompactionFactsSnapshot { epoch, turn, reply })
             .await
             .map_err(|_| AppError::WorkerStopped)?;
         response.await.map_err(|_| AppError::WorkerStopped)?
@@ -574,6 +666,19 @@ impl EngineHandle {
                 run_turn,
                 reply,
             })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
+    }
+
+    /// Loads the first bound provider turn that established one exact epoch.
+    pub async fn load_context_epoch_baseline(
+        &self,
+        epoch_id: autoharness_domain::ContextEpochId,
+    ) -> Result<Option<autoharness_domain::ContextTurnManifest>, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::LoadContextEpochBaseline { epoch_id, reply })
             .await
             .map_err(|_| AppError::WorkerStopped)?;
         response.await.map_err(|_| AppError::WorkerStopped)?
@@ -665,6 +770,9 @@ fn run(
             }
             StorageRequest::ListSessions { reply } => {
                 let _ = reply.send(engine.store().list_sessions().map_err(AppError::from));
+            }
+            StorageRequest::LoadSession { session_id, reply } => {
+                let _ = reply.send(Ok(engine.session(&session_id).cloned()));
             }
             StorageRequest::ResolveWorkspaceId {
                 locator_digest,
@@ -843,7 +951,7 @@ fn run(
 
                 let result = engine
                     .store()
-                    .inspect_memories(&query)
+                    .inspect_memory_page(&query)
                     .map_err(AppError::from);
                 let _ = reply.send(result);
             }
@@ -910,12 +1018,52 @@ fn run(
                     });
                 let _ = reply.send(result);
             }
+            StorageRequest::CommitCompactionContextTurnAndBind {
+                context,
+                boundary,
+                command,
+                reply,
+            } => {
+                let session_id = command.session_id().clone();
+                let result = engine
+                    .commit_compaction_context_turn_and_bind(context, boundary, &command)
+                    .and_then(|events| {
+                        let session = engine
+                            .session(&session_id)
+                            .cloned()
+                            .ok_or(DurableEngineError::StoreInvariant)?;
+                        telemetry::command_committed(
+                            events.len(),
+                            session.last_sequence().map_or(0, |sequence| sequence.get()),
+                        );
+                        Ok(EngineReply { session })
+                    });
+                let _ = reply.send(result);
+            }
             StorageRequest::LoadContextEpoch { epoch_id, reply } => {
                 use autoharness_store::ContextStore as _;
 
                 let result = engine
                     .store()
                     .load_context_epoch(&epoch_id)
+                    .map_err(AppError::from);
+                let _ = reply.send(result);
+            }
+            StorageRequest::LoadLatestCompactionCheckpoint { session_id, reply } => {
+                use autoharness_store::ContextStore as _;
+
+                let result = engine
+                    .store()
+                    .load_latest_compaction_checkpoint(&session_id)
+                    .map_err(AppError::from);
+                let _ = reply.send(result);
+            }
+            StorageRequest::LoadCompactionFactsSnapshot { epoch, turn, reply } => {
+                use autoharness_store::ContextStore as _;
+
+                let result = engine
+                    .store_mut()
+                    .load_compaction_facts_snapshot(&epoch, &turn)
                     .map_err(AppError::from);
                 let _ = reply.send(result);
             }
@@ -977,6 +1125,15 @@ fn run(
                 let result = engine
                     .store()
                     .load_attempt_context_turn(&attempt_id, run_turn)
+                    .map_err(AppError::from);
+                let _ = reply.send(result);
+            }
+            StorageRequest::LoadContextEpochBaseline { epoch_id, reply } => {
+                use autoharness_store::ContextStore as _;
+
+                let result = engine
+                    .store()
+                    .load_context_epoch_baseline(&epoch_id)
                     .map_err(AppError::from);
                 let _ = reply.send(result);
             }
