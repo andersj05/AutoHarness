@@ -47,6 +47,7 @@ impl ContextStore for SqliteStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(map_sqlite_error)?;
 
+        bind_session_workspace(&transaction, request.context().turn())?;
         reconcile_unbound_turn_conflict(&transaction, request.context().turn())?;
         let context_disposition = commit_context_in_transaction(&transaction, request.context())?;
         persist_compaction_boundary(
@@ -169,6 +170,40 @@ impl ContextStore for SqliteStore {
             .map_err(map_sqlite_error)?;
         row.map(|(json, hash)| decode_context_json(&json, &hash))
             .transpose()
+    }
+}
+
+fn bind_session_workspace(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+) -> Result<(), StoreError> {
+    let workspace_id = turn.eligibility().workspace_id();
+    let existing = transaction
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE session_id = ?1",
+            params![turn.session_id().as_str()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?
+        .ok_or(StoreError::InvalidContextTransition)?;
+    match existing {
+        Some(existing) if existing == workspace_id.as_str() => Ok(()),
+        Some(_) => Err(StoreError::InvalidContextTransition),
+        None => {
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET workspace_id = ?2 \
+                     WHERE session_id = ?1 AND workspace_id IS NULL",
+                    params![turn.session_id().as_str(), workspace_id.as_str()],
+                )
+                .map_err(map_sqlite_error)?;
+            if changed == 1 {
+                Ok(())
+            } else {
+                Err(StoreError::InvalidContextTransition)
+            }
+        }
     }
 }
 
@@ -1056,6 +1091,7 @@ fn validate_context_boundary(
     request: &ContextTurnCommitRequest,
 ) -> Result<(), StoreError> {
     let turn = request.turn();
+    let frozen_baseline = load_frozen_epoch_baseline(transaction, turn)?;
     let budget = turn.budget();
     let durable_tokens = turn
         .admissions()
@@ -1084,19 +1120,21 @@ fn validate_context_boundary(
         return Err(StoreError::InvalidContextTransition);
     }
 
-    let generation = transaction
-        .query_row(
-            "SELECT generation FROM memory_store_state WHERE singleton = 1",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(map_sqlite_error)?;
-    let generation = u64::try_from(generation).map_err(|_| corrupt_context())?;
-    if generation != turn.memory_generation().get() {
-        return Err(StoreError::ContextGenerationConflict {
-            expected: turn.memory_generation().get(),
-            actual: generation,
-        });
+    if frozen_baseline.is_none() {
+        let generation = transaction
+            .query_row(
+                "SELECT generation FROM memory_store_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(map_sqlite_error)?;
+        let generation = u64::try_from(generation).map_err(|_| corrupt_context())?;
+        if generation != turn.memory_generation().get() {
+            return Err(StoreError::ContextGenerationConflict {
+                expected: turn.memory_generation().get(),
+                actual: generation,
+            });
+        }
     }
 
     let session = transaction
@@ -1130,6 +1168,23 @@ fn validate_context_boundary(
         || model_id != turn.model().model_id().as_str()
     {
         return Err(StoreError::InvalidContextTransition);
+    }
+
+    let eligibility_at_ms = match request.epoch() {
+        Some(epoch) => epoch.started_at().get(),
+        None => transaction
+            .query_row(
+                "SELECT started_at_ms FROM context_epochs WHERE epoch_id = ?1",
+                params![turn.epoch_id().as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?
+            .ok_or(StoreError::InvalidContextTransition)?,
+    };
+
+    if let Some(frozen_baseline) = frozen_baseline {
+        return validate_frozen_epoch_continuation(transaction, request, &frozen_baseline);
     }
 
     for admission in turn.admissions() {
@@ -1174,7 +1229,8 @@ fn validate_context_boundary(
             || content_id.is_none()
             || metadata.status() != MemoryRevisionStatus::Active
             || metadata.content_hash() != admission.source_revision()
-            || !valid_at(metadata.validity(), turn.committed_at().get())
+            || metadata.created_at().get() > eligibility_at_ms
+            || !valid_at(metadata.validity(), eligibility_at_ms)
             || !turn.eligibility().permits_scope(&scope)
             || !turn
                 .eligibility()
@@ -1185,6 +1241,152 @@ fn validate_context_boundary(
                 rendered.rendered().as_str(),
             )
             .map_err(|_| StoreError::InvalidContextTransition)?
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+    }
+    Ok(())
+}
+
+struct FrozenEpochBaseline {
+    turn: ContextTurnManifest,
+    prelude: Option<RenderedContextText>,
+    admissions: Vec<(ContextAdmission, RenderedContextText)>,
+}
+
+fn load_frozen_epoch_baseline(
+    transaction: &Transaction<'_>,
+    turn: &ContextTurnManifest,
+) -> Result<Option<FrozenEpochBaseline>, StoreError> {
+    let row = transaction
+        .query_row(
+            "SELECT t.manifest_json, t.manifest_json_sha256 \
+             FROM context_turns AS t \
+             JOIN context_turn_bindings AS b ON b.context_turn_id = t.context_turn_id \
+             WHERE t.epoch_id = ?1 AND t.session_id = ?2 AND t.attempt_id = ?3 \
+               AND t.run_turn < ?4 \
+             ORDER BY t.run_turn ASC LIMIT 1",
+            params![
+                turn.epoch_id().as_str(),
+                turn.session_id().as_str(),
+                turn.attempt_id().as_str(),
+                i64::from(turn.run_turn())
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(map_sqlite_error)?;
+    let Some((turn_json, turn_hash)) = row else {
+        return Ok(None);
+    };
+    let baseline_turn: ContextTurnManifest = decode_context_json(&turn_json, &turn_hash)?;
+    if !verify_context_manifest_hash(&baseline_turn).map_err(|_| corrupt_context())? {
+        return Err(corrupt_context());
+    }
+    let prelude = load_context_turn_rendered_content(transaction, baseline_turn.context_turn_id())?;
+    let mut statement = transaction
+        .prepare(
+            "SELECT admission_json, admission_json_sha256, rendered_state, rendered_utf8, \
+                    rendered_content_sha256 \
+             FROM context_admissions WHERE context_turn_id = ?1 ORDER BY rank ASC",
+        )
+        .map_err(map_sqlite_error)?;
+    let rows = statement
+        .query_map(params![baseline_turn.context_turn_id().as_str()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<Vec<u8>>>(3)?,
+                row.get::<_, Option<Vec<u8>>>(4)?,
+            ))
+        })
+        .map_err(map_sqlite_error)?;
+    let mut admissions = Vec::new();
+    for row in rows {
+        let (json, hash, state, rendered, rendered_hash) = row.map_err(map_sqlite_error)?;
+        let admission: ContextAdmission = decode_context_json(&json, &hash)?;
+        let rendered = decode_rendered_content(&state, rendered, rendered_hash)?
+            .ok_or(StoreError::InvalidContextTransition)?;
+        admissions.push((admission, rendered));
+    }
+    if admissions.len() != baseline_turn.admissions().len()
+        || (admissions.is_empty() != prelude.is_none())
+    {
+        return Err(corrupt_context());
+    }
+    Ok(Some(FrozenEpochBaseline {
+        turn: baseline_turn,
+        prelude,
+        admissions,
+    }))
+}
+
+fn validate_frozen_epoch_continuation(
+    transaction: &Transaction<'_>,
+    request: &ContextTurnCommitRequest,
+    baseline: &FrozenEpochBaseline,
+) -> Result<(), StoreError> {
+    let turn = request.turn();
+    if turn.epoch_id() != baseline.turn.epoch_id()
+        || turn.session_id() != baseline.turn.session_id()
+        || turn.attempt_id() != baseline.turn.attempt_id()
+        || turn.memory_generation() != baseline.turn.memory_generation()
+        || turn.model() != baseline.turn.model()
+        || turn.eligibility() != baseline.turn.eligibility()
+        || turn.budget() != baseline.turn.budget()
+        || turn.sources() != baseline.turn.sources()
+        || turn.rendered_hash() != baseline.turn.rendered_hash()
+        || turn.rendered_token_count() != baseline.turn.rendered_token_count()
+        || request.content().prelude() != baseline.prelude.as_ref()
+        || turn.admissions().len() != baseline.admissions.len()
+    {
+        return Err(StoreError::InvalidContextTransition);
+    }
+
+    for ((admission, content), (baseline_admission, baseline_content)) in turn
+        .admissions()
+        .iter()
+        .zip(request.content().admissions())
+        .zip(&baseline.admissions)
+    {
+        if admission.section() != baseline_admission.section()
+            || admission.source_key() != baseline_admission.source_key()
+            || admission.source_revision() != baseline_admission.source_revision()
+            || admission.memory_revision_id() != baseline_admission.memory_revision_id()
+            || admission.renderer_version() != baseline_admission.renderer_version()
+            || admission.rendered_hash() != baseline_admission.rendered_hash()
+            || admission.rank() != baseline_admission.rank()
+            || admission.rank_score() != baseline_admission.rank_score()
+            || admission.token_count() != baseline_admission.token_count()
+            || admission.reasons() != baseline_admission.reasons()
+            || content.rendered() != baseline_content
+        {
+            return Err(StoreError::InvalidContextTransition);
+        }
+        let memory_id = admission
+            .memory_revision_id()
+            .map(|revision_id| {
+                transaction
+                    .query_row(
+                        "SELECT memory_id FROM memory_revisions WHERE revision_id = ?1",
+                        params![revision_id.as_str()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(map_sqlite_error)?
+                    .map(MemoryId::new)
+                    .transpose()
+                    .map_err(|_| corrupt_context())?
+                    .ok_or(StoreError::InvalidContextTransition)
+            })
+            .transpose()?;
+        if !verify_admission_rendered_hash(
+            admission,
+            memory_id.as_ref(),
+            content.rendered().as_str(),
+        )
+        .map_err(|_| StoreError::InvalidContextTransition)?
         {
             return Err(StoreError::InvalidContextTransition);
         }
@@ -1687,17 +1889,25 @@ const fn corrupt_context() -> StoreError {
 #[cfg(test)]
 mod tests {
     use autoharness_domain::{
-        AttemptId, ContextAdmissionId, ContextAdmissionReason, ContextBudgetAllocation,
-        ContextEligibility, ContextEpochHashes, ContextEpochVersions, ContextSourceKey,
-        ContextSourceSnapshot, ContextTokenBudget, EstimatedTokens, MemoryGeneration, ModelId,
-        ModelRef, ProviderId, SessionId, SessionSequence, Sha256Digest, TimestampMillis, UserId,
-        WorkspaceId,
+        AttemptId, Causation, CommandId, ConfidenceBasisPoints, ContextAdmissionId,
+        ContextAdmissionReason, ContextBudgetAllocation, ContextEligibility, ContextEpochHashes,
+        ContextEpochVersions, ContextSourceKey, ContextSourceSnapshot, ContextTokenBudget,
+        CorrelationId, DeliveryMode, EstimatedTokens, EventEnvelope, EventId, EventPayload,
+        InputId, MemoryContent, MemoryGeneration, MemoryId, MemoryKind, MemoryOperationEnvelope,
+        MemoryOperationId, MemoryOperationPayload, MemoryOrigin, MemoryRevisionDraft,
+        MemoryRevisionId, MemoryRevisionNumber, MemoryScope, MemorySequence, MemoryValidity,
+        ModelId, ModelRef, PromptText, ProviderId, SessionId, SessionSequence, Sha256Digest,
+        TimestampMillis, TrustClass, UserId, WorkspaceId,
     };
     use autoharness_memory::{
-        CONTEXT_RENDERER_VERSION, CanonicalEncoder, SOURCE_RENDERER_V1, context_manifest_hash,
-        rendered_context_hash,
+        COMPACTION_FACTS_VERSION, CONTEXT_RENDERER_VERSION, CanonicalEncoder, MEMORY_RENDERER_V1,
+        SOURCE_RENDERER_V1, context_manifest_hash, normalized_content_hash, rendered_context_hash,
     };
-    use autoharness_store::{ContextAdmissionContent, ContextTurnContent, RenderedContextText};
+    use autoharness_store::{
+        AppendRequest, BoundContextTurnCommitRequest, ContextAdmissionContent,
+        ContextCompactionBoundary, ContextTurnContent, MemoryAdmissionKey, MemoryAdmissionQuery,
+        MemoryAppendRequest, MemoryRevisionContent, MemoryStore, RenderedContextText, SessionStore,
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -1724,6 +1934,210 @@ mod tests {
 
     fn digest(character: char) -> Sha256Digest {
         Sha256Digest::new(character.to_string().repeat(64)).expect("digest")
+    }
+
+    fn session_event(sequence: u64, payload: EventPayload) -> EventEnvelope {
+        EventEnvelope::new_v1(
+            EventId::new(format!("event-context-{sequence}")).expect("event ID"),
+            SessionId::new("session-context").expect("session ID"),
+            SessionSequence::new(sequence).expect("session sequence"),
+            TimestampMillis::new(i64::try_from(sequence).expect("timestamp")),
+            Causation::Command(
+                CommandId::new(format!("command-context-{sequence}")).expect("command ID"),
+            ),
+            CorrelationId::new(format!("correlation-context-{sequence}")).expect("correlation ID"),
+            payload,
+        )
+    }
+
+    fn seed_dispatch_ready_attempt(store: &mut SqliteStore) {
+        let session_id = SessionId::new("session-context").expect("session ID");
+        let input_id = InputId::new("input-context").expect("input ID");
+        let attempt_id = AttemptId::new("attempt-context").expect("attempt ID");
+        let events = vec![
+            session_event(1, EventPayload::SessionCreated),
+            session_event(2, EventPayload::ModelSelected { model: model() }),
+            session_event(
+                3,
+                EventPayload::InputAdmitted {
+                    input_id: input_id.clone(),
+                    prompt: PromptText::new("context binding test").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ),
+            session_event(
+                4,
+                EventPayload::AttemptPrepared {
+                    attempt_id: attempt_id.clone(),
+                    input_id,
+                    model: model(),
+                    retry_of: None,
+                },
+            ),
+            session_event(5, EventPayload::AttemptStarted { attempt_id }),
+        ];
+        store
+            .append(&AppendRequest::new(session_id, 0, events))
+            .expect("seed dispatch-ready attempt");
+    }
+
+    fn seed_expiring_active_memory(store: &mut SqliteStore) -> (MemoryId, MemoryRevision) {
+        let memory_id = MemoryId::new("memory-expiring").expect("memory ID");
+        let content = MemoryContent::new("Fact frozen at the epoch boundary").expect("content");
+        let draft = MemoryRevisionDraft::new(
+            MemoryRevisionId::new("revision-expiring").expect("revision ID"),
+            MemoryRevisionNumber::FIRST,
+            None,
+            content.clone(),
+            normalized_content_hash(content.as_str()).expect("content hash"),
+            MemoryOrigin::ExplicitUser,
+            TrustClass::UserApproved,
+            ConfidenceBasisPoints::new(9_000).expect("confidence"),
+            Sensitivity::Internal,
+            MemoryValidity::Until {
+                valid_until: TimestampMillis::new(10),
+            },
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("revision draft");
+        let revision = MemoryRevision::from_draft(
+            MemoryRevisionStatus::Active,
+            &draft,
+            TimestampMillis::new(3),
+            None,
+        );
+        let operation = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-expiring").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::FIRST,
+            TimestampMillis::new(3),
+            autoharness_domain::MemoryCausation::Command(
+                CommandId::new("command-expiring").expect("command ID"),
+            ),
+            CorrelationId::new("correlation-expiring").expect("correlation ID"),
+            MemoryOperationPayload::MemoryCreated {
+                scope: MemoryScope::User(UserId::new("user-1").expect("user ID")),
+                memory_kind: MemoryKind::Fact,
+                revision: revision.clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(
+                0,
+                operation,
+                Some(MemoryRevisionContent::new(
+                    draft.revision_id().clone(),
+                    content,
+                    Vec::new(),
+                )),
+            ))
+            .expect("append expiring memory");
+        (memory_id, revision)
+    }
+
+    fn memory_turn(
+        turn_id: &str,
+        epoch_id: &str,
+        run_turn: u32,
+        expected_sequence: u64,
+        committed_at_ms: i64,
+        memory_id: &MemoryId,
+        revision: &MemoryRevision,
+    ) -> (ContextTurnManifest, ContextTurnContent) {
+        const RENDERED: &str = "<memory>frozen epoch fact</memory>";
+        let context_turn_id = ContextTurnId::new(turn_id).expect("turn ID");
+        let mut rendered_encoder = CanonicalEncoder::new();
+        rendered_encoder
+            .field("renderer", MEMORY_RENDERER_V1.as_bytes())
+            .expect("renderer field");
+        rendered_encoder
+            .field("memory_id", memory_id.as_str().as_bytes())
+            .expect("memory ID field");
+        rendered_encoder
+            .field("revision_id", revision.revision_id().as_str().as_bytes())
+            .expect("revision ID field");
+        rendered_encoder
+            .field("rendered", RENDERED.as_bytes())
+            .expect("rendered field");
+        let admission = ContextAdmission::new(
+            ContextAdmissionId::new(format!("memory-admission-{run_turn}")).expect("admission ID"),
+            context_turn_id.clone(),
+            ContextSection::DurableMemory,
+            ContextSourceKey::new("memory:expiring").expect("source key"),
+            revision.content_hash().clone(),
+            Some(revision.revision_id().clone()),
+            CONTEXT_RENDERER_VERSION,
+            rendered_encoder.finish().expect("rendered hash"),
+            1,
+            100,
+            EstimatedTokens::new(8).expect("tokens"),
+            TimestampMillis::new(committed_at_ms),
+            vec![
+                ContextAdmissionReason::new(1, ContextAdmissionFactor::ExactMatch, 100)
+                    .expect("reason"),
+            ],
+        )
+        .expect("admission");
+        let placeholder = ContextTurnManifest::new(
+            context_turn_id,
+            ContextEpochId::new(epoch_id).expect("epoch ID"),
+            SessionId::new("session-context").expect("session ID"),
+            AttemptId::new("attempt-context").expect("attempt ID"),
+            run_turn,
+            SessionSequence::new(expected_sequence).expect("sequence"),
+            MemoryGeneration::new(1).expect("generation"),
+            model(),
+            digest('3'),
+            rendered_context_hash(RENDERED).expect("context hash"),
+            digest('5'),
+            ContextEligibility::new(
+                UserId::new("user-1").expect("user ID"),
+                WorkspaceId::new("workspace-1").expect("workspace ID"),
+                SessionId::new("session-context").expect("session ID"),
+                None,
+                Sensitivity::Internal,
+            ),
+            ContextBudgetAllocation::new(
+                ContextTokenBudget::new(4_096).expect("budget"),
+                EstimatedTokens::new(0).expect("reserved tokens"),
+                EstimatedTokens::new(2_048).expect("memory limit"),
+            )
+            .expect("budget allocation"),
+            EstimatedTokens::new(8).expect("tokens"),
+            TimestampMillis::new(committed_at_ms),
+            Vec::new(),
+            vec![admission],
+        )
+        .expect("turn placeholder");
+        let turn = ContextTurnManifest::new(
+            placeholder.context_turn_id().clone(),
+            placeholder.epoch_id().clone(),
+            placeholder.session_id().clone(),
+            placeholder.attempt_id().clone(),
+            placeholder.run_turn(),
+            placeholder.expected_session_sequence(),
+            placeholder.memory_generation(),
+            placeholder.model().clone(),
+            placeholder.request_hash().clone(),
+            placeholder.rendered_hash().clone(),
+            context_manifest_hash(&placeholder).expect("manifest hash"),
+            placeholder.eligibility().clone(),
+            placeholder.budget(),
+            placeholder.rendered_token_count(),
+            placeholder.committed_at(),
+            placeholder.sources().to_vec(),
+            placeholder.admissions().to_vec(),
+        )
+        .expect("turn");
+        let content = ContextTurnContent::new(
+            Some(RenderedContextText::new(RENDERED).expect("prelude")),
+            vec![ContextAdmissionContent::new(
+                turn.admissions()[0].admission_id().clone(),
+                RenderedContextText::new(RENDERED).expect("rendered memory"),
+            )],
+        );
+        (turn, content)
     }
 
     fn seed_attempt(store: &SqliteStore) {
@@ -1795,22 +2209,42 @@ mod tests {
         reason: ContextEpochReason,
         predecessor: Option<&str>,
     ) -> ContextEpochManifest {
+        epoch_at(epoch_id, reason, predecessor, MemoryGeneration::INITIAL, 3)
+    }
+
+    fn epoch_at(
+        epoch_id: &str,
+        reason: ContextEpochReason,
+        predecessor: Option<&str>,
+        generation: MemoryGeneration,
+        started_at_ms: i64,
+    ) -> ContextEpochManifest {
         ContextEpochManifest::new(
             ContextEpochId::new(epoch_id).expect("epoch ID"),
             SessionId::new("session-context").expect("session ID"),
-            MemoryGeneration::INITIAL,
+            generation,
             reason,
             predecessor.map(|id| ContextEpochId::new(id).expect("predecessor ID")),
             digest('a'),
             ContextEpochVersions::new(1, 1, 1, 1, 1).expect("versions"),
             ContextEpochHashes::new(digest('b'), digest('c'), digest('d'), digest('e')),
             ContextTokenBudget::new(4_096).expect("budget"),
-            TimestampMillis::new(3),
+            TimestampMillis::new(started_at_ms),
         )
         .expect("epoch")
     }
 
     fn turn(turn_id: &str, epoch_id: &str, run_turn: u32) -> ContextTurnManifest {
+        turn_at(turn_id, epoch_id, run_turn, 2, "workspace-1")
+    }
+
+    fn turn_at(
+        turn_id: &str,
+        epoch_id: &str,
+        run_turn: u32,
+        expected_sequence: u64,
+        workspace_id: &str,
+    ) -> ContextTurnManifest {
         const RENDERED_ADMISSION: &str = "<source>workspace agents</source>";
         const RENDERED_PRELUDE: &str = "<context>workspace agents</context>";
         let snapshot = ContextSourceSnapshot::new(
@@ -1862,7 +2296,7 @@ mod tests {
             SessionId::new("session-context").expect("session ID"),
             AttemptId::new("attempt-context").expect("attempt ID"),
             run_turn,
-            SessionSequence::new(2).expect("sequence"),
+            SessionSequence::new(expected_sequence).expect("sequence"),
             MemoryGeneration::INITIAL,
             model(),
             digest('3'),
@@ -1870,7 +2304,7 @@ mod tests {
             digest('5'),
             ContextEligibility::new(
                 UserId::new("user-1").expect("user ID"),
-                WorkspaceId::new("workspace-1").expect("workspace ID"),
+                WorkspaceId::new(workspace_id).expect("workspace ID"),
                 SessionId::new("session-context").expect("session ID"),
                 None,
                 Sensitivity::Internal,
@@ -1977,6 +2411,405 @@ mod tests {
                 .expect("retained rendered turn")
                 .as_str(),
             "<context>workspace agents</context>"
+        );
+    }
+
+    #[test]
+    fn atomic_binding_freezes_workspace_and_persists_verified_compaction_boundary() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_dispatch_ready_attempt(&mut store);
+
+        let first_epoch = epoch("epoch-bound", ContextEpochReason::NewAttempt, None);
+        let first_turn = turn_at("turn-bound", "epoch-bound", 1, 5, "workspace-1");
+        let first_context = ContextTurnCommitRequest::new(
+            Some(first_epoch.clone()),
+            first_turn.clone(),
+            turn_content(&first_turn),
+        );
+        let first_binding = session_event(
+            6,
+            EventPayload::ContextTurnBound {
+                attempt_id: first_turn.attempt_id().clone(),
+                run_turn: 1,
+                context_turn_id: first_turn.context_turn_id().clone(),
+                manifest_hash: first_turn.manifest_hash().clone(),
+            },
+        );
+        let first_request =
+            BoundContextTurnCommitRequest::new(first_context, first_binding.clone());
+        let receipt = store
+            .commit_context_turn_and_bind(&first_request)
+            .expect("atomically bind first turn");
+        assert_eq!(receipt.disposition(), ContextCommitDisposition::Committed);
+        assert_eq!(receipt.last_sequence(), 6);
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&first_request)
+                .expect("retry atomic bind")
+                .disposition(),
+            ContextCommitDisposition::AlreadyCommitted
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT workspace_id FROM sessions WHERE session_id = 'session-context'",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .expect("session workspace"),
+            Some("workspace-1".to_owned())
+        );
+
+        let mismatched_turn = turn_at(
+            "turn-workspace-mismatch",
+            "epoch-bound",
+            2,
+            6,
+            "workspace-2",
+        );
+        let mismatched_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(
+                None,
+                mismatched_turn.clone(),
+                turn_content(&mismatched_turn),
+            ),
+            session_event(
+                7,
+                EventPayload::ContextTurnBound {
+                    attempt_id: mismatched_turn.attempt_id().clone(),
+                    run_turn: 2,
+                    context_turn_id: mismatched_turn.context_turn_id().clone(),
+                    manifest_hash: mismatched_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(&mismatched_request),
+            Err(StoreError::InvalidContextTransition)
+        );
+        assert!(
+            store
+                .load_context_turn(mismatched_turn.context_turn_id())
+                .expect("load mismatched turn")
+                .is_none()
+        );
+
+        store
+            .append(&AppendRequest::new(
+                SessionId::new("session-context").expect("session ID"),
+                6,
+                vec![
+                    session_event(
+                        7,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: first_turn.attempt_id().clone(),
+                            turn: 1,
+                        },
+                    ),
+                    session_event(
+                        8,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        9,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("advance to second dispatch boundary");
+
+        let compacted_epoch = epoch(
+            "epoch-compaction-bound",
+            ContextEpochReason::Compaction,
+            Some("epoch-bound"),
+        );
+        let compacted_turn = turn_at(
+            "turn-compaction-bound",
+            "epoch-compaction-bound",
+            2,
+            9,
+            "workspace-1",
+        );
+        let compacted_context = ContextTurnCommitRequest::new(
+            Some(compacted_epoch.clone()),
+            compacted_turn.clone(),
+            turn_content(&compacted_turn),
+        );
+        let compacted_binding = session_event(
+            10,
+            EventPayload::ContextTurnBound {
+                attempt_id: compacted_turn.attempt_id().clone(),
+                run_turn: 2,
+                context_turn_id: compacted_turn.context_turn_id().clone(),
+                manifest_hash: compacted_turn.manifest_hash().clone(),
+            },
+        );
+        let missing_boundary = BoundContextTurnCommitRequest::new(
+            compacted_context.clone(),
+            compacted_binding.clone(),
+        );
+        assert_eq!(
+            store.commit_context_turn_and_bind(&missing_boundary),
+            Err(StoreError::InvalidContextTransition)
+        );
+        assert!(
+            store
+                .load_context_turn(compacted_turn.context_turn_id())
+                .expect("load rolled-back compacted turn")
+                .is_none()
+        );
+
+        let boundary = ContextCompactionBoundary::new(
+            compacted_epoch.epoch_id().clone(),
+            first_epoch.epoch_id().clone(),
+            compacted_turn.session_id().clone(),
+            compacted_turn.expected_session_sequence(),
+            compacted_turn.memory_generation(),
+            COMPACTION_FACTS_VERSION,
+            digest('9'),
+            0,
+            2,
+            None,
+            TimestampMillis::new(9),
+        );
+        let compacted_request =
+            BoundContextTurnCommitRequest::new(compacted_context, compacted_binding)
+                .with_compaction_boundary(boundary.clone());
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&compacted_request)
+                .expect("commit compacted context")
+                .last_sequence(),
+            10
+        );
+        assert_eq!(
+            store
+                .load_compaction_boundary(compacted_epoch.epoch_id())
+                .expect("load compaction boundary"),
+            Some(boundary.clone())
+        );
+        assert_eq!(
+            store
+                .commit_context_turn_and_bind(&compacted_request)
+                .expect("retry compacted context")
+                .disposition(),
+            ContextCommitDisposition::AlreadyCommitted
+        );
+        store
+            .rebuild_projections()
+            .expect("rebuild session projections around retained context audit rows");
+        assert_eq!(
+            store
+                .load_context_turn(compacted_turn.context_turn_id())
+                .expect("load compacted turn after rebuild"),
+            Some(compacted_turn)
+        );
+        assert_eq!(
+            store
+                .load_compaction_boundary(compacted_epoch.epoch_id())
+                .expect("load boundary after rebuild"),
+            Some(boundary)
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM context_turn_bindings", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("binding count after rebuild"),
+            2
+        );
+    }
+
+    #[test]
+    fn frozen_epoch_continuation_survives_retraction_but_not_content_deletion() {
+        let database = TestDatabase::new();
+        let mut store = database.open();
+        seed_dispatch_ready_attempt(&mut store);
+        let (memory_id, revision) = seed_expiring_active_memory(&mut store);
+        let epoch = epoch_at(
+            "epoch-frozen-memory",
+            ContextEpochReason::NewAttempt,
+            None,
+            MemoryGeneration::new(1).expect("generation"),
+            4,
+        );
+        let (first_turn, first_content) = memory_turn(
+            "turn-frozen-memory-1",
+            "epoch-frozen-memory",
+            1,
+            5,
+            20,
+            &memory_id,
+            &revision,
+        );
+        let first_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(Some(epoch.clone()), first_turn.clone(), first_content),
+            session_event(
+                6,
+                EventPayload::ContextTurnBound {
+                    attempt_id: first_turn.attempt_id().clone(),
+                    run_turn: 1,
+                    context_turn_id: first_turn.context_turn_id().clone(),
+                    manifest_hash: first_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        store
+            .commit_context_turn_and_bind(&first_request)
+            .expect("bind memory after its wall-clock expiry but inside epoch eligibility");
+
+        store
+            .append(&AppendRequest::new(
+                SessionId::new("session-context").expect("session ID"),
+                6,
+                vec![
+                    session_event(
+                        7,
+                        EventPayload::RunTurnStarted {
+                            attempt_id: first_turn.attempt_id().clone(),
+                            turn: 1,
+                        },
+                    ),
+                    session_event(
+                        8,
+                        EventPayload::AttemptPausedForTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                    session_event(
+                        9,
+                        EventPayload::AttemptResumedAfterTools {
+                            attempt_id: first_turn.attempt_id().clone(),
+                        },
+                    ),
+                ],
+            ))
+            .expect("advance frozen attempt");
+
+        let retract = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-expiring-retract").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::new(2).expect("memory sequence"),
+            TimestampMillis::new(25),
+            autoharness_domain::MemoryCausation::Command(
+                CommandId::new("command-expiring-retract").expect("command ID"),
+            ),
+            CorrelationId::new("correlation-expiring-retract").expect("correlation ID"),
+            MemoryOperationPayload::MemoryRetracted {
+                revision_id: revision.revision_id().clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(1, retract, None))
+            .expect("retract memory outside frozen epoch");
+        assert_eq!(store.memory_generation().expect("generation").get(), 2);
+
+        let (second_turn, second_content) = memory_turn(
+            "turn-frozen-memory-2",
+            "epoch-frozen-memory",
+            2,
+            9,
+            30,
+            &memory_id,
+            &revision,
+        );
+        let second_request = BoundContextTurnCommitRequest::new(
+            ContextTurnCommitRequest::new(None, second_turn.clone(), second_content),
+            session_event(
+                10,
+                EventPayload::ContextTurnBound {
+                    attempt_id: second_turn.attempt_id().clone(),
+                    run_turn: 2,
+                    context_turn_id: second_turn.context_turn_id().clone(),
+                    manifest_hash: second_turn.manifest_hash().clone(),
+                },
+            ),
+        );
+        store
+            .commit_context_turn_and_bind(&second_request)
+            .expect("continue exact frozen baseline after retraction");
+
+        let history = store
+            .load_memory_admissions(
+                &MemoryAdmissionQuery::new(MemoryAdmissionKey::Memory(memory_id.clone()), None, 8)
+                    .expect("history query"),
+            )
+            .expect("load admission history");
+        assert_eq!(history.len(), 2);
+        assert!(
+            history
+                .iter()
+                .all(|record| record.rendered_content_available())
+        );
+
+        let delete = MemoryOperationEnvelope::new_v1(
+            MemoryOperationId::new("operation-expiring-delete").expect("operation ID"),
+            memory_id.clone(),
+            MemorySequence::new(3).expect("memory sequence"),
+            TimestampMillis::new(35),
+            autoharness_domain::MemoryCausation::Command(
+                CommandId::new("command-expiring-delete").expect("command ID"),
+            ),
+            CorrelationId::new("correlation-expiring-delete").expect("correlation ID"),
+            MemoryOperationPayload::MemoryDeleted {
+                revision_id: revision.revision_id().clone(),
+            },
+        );
+        store
+            .append_memory(&MemoryAppendRequest::new(2, delete, None))
+            .expect("delete memory and frozen sidecars");
+        let erased_history = store
+            .load_memory_admissions(
+                &MemoryAdmissionQuery::new(
+                    MemoryAdmissionKey::Revision(revision.revision_id().clone()),
+                    None,
+                    8,
+                )
+                .expect("erased history query"),
+            )
+            .expect("load erased admission history");
+        assert_eq!(erased_history.len(), 2);
+        assert!(
+            erased_history
+                .iter()
+                .all(|record| !record.rendered_content_available())
+        );
+        assert!(
+            store
+                .load_context_turn_content(first_turn.context_turn_id())
+                .expect("load erased first prelude")
+                .is_none()
+        );
+
+        let (third_turn, third_content) = memory_turn(
+            "turn-frozen-memory-3",
+            "epoch-frozen-memory",
+            3,
+            10,
+            40,
+            &memory_id,
+            &revision,
+        );
+        assert_eq!(
+            store.commit_context_turn(&ContextTurnCommitRequest::new(
+                None,
+                third_turn.clone(),
+                third_content,
+            )),
+            Err(StoreError::InvalidContextTransition)
+        );
+        assert!(
+            store
+                .load_context_turn(third_turn.context_turn_id())
+                .expect("load rejected third turn")
+                .is_none()
         );
     }
 

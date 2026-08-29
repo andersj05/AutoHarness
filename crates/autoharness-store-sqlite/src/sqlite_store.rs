@@ -609,8 +609,12 @@ impl SessionStore for SqliteStore {
                 "DELETE FROM context_turn_bindings; \
                  DELETE FROM transcript_segments; \
                  DELETE FROM transcript_messages; \
-                 DELETE FROM provider_attempts; \
-                 DELETE FROM admitted_inputs; \
+                 UPDATE provider_attempts \
+                 SET state = 'prepared', started_event_id = NULL, settled_event_id = NULL, \
+                     cancellation_requested_event_id = NULL, usage_event_id = NULL, \
+                     started_at_ms = NULL, settled_at_ms = NULL, \
+                     cancellation_requested_at_ms = NULL, usage_json = NULL, failure_json = NULL; \
+                 UPDATE admitted_inputs SET state = 'admitted', promoted_at_ms = NULL; \
                  UPDATE sessions \
                  SET status = 'active', title = NULL, selected_provider_id = NULL, \
                      selected_model_id = NULL, last_sequence = 0, created_at_ms = 0, \
@@ -1117,29 +1121,53 @@ fn apply_projection(
                 .optional()
                 .map_err(map_sqlite_error)?
                 .is_some();
-            if input_exists {
+            if input_exists && mode == ProjectionMode::Append {
                 return Err(identity_projection_error(mode, IdentityKind::Input));
             }
             let content = prompt.as_str().as_bytes();
             let content_hash = Sha256::digest(content);
-            transaction
-                .execute(
-                    "INSERT INTO admitted_inputs (\
-                        session_id, input_id, admitted_event_id, admitted_sequence, delivery_mode, \
-                        state, prompt_utf8, content_sha256, admitted_at_ms, promoted_at_ms\
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'admitted', ?6, ?7, ?8, NULL)",
-                    params![
-                        event.session_id().as_str(),
-                        input_id.as_str(),
-                        event.event_id().as_str(),
-                        to_sql_sequence(event.sequence().get())?,
-                        delivery_mode_name(*delivery_mode),
-                        content,
-                        content_hash.as_slice(),
-                        event.occurred_at().get()
-                    ],
-                )
-                .map_err(map_sqlite_error)?;
+            if input_exists {
+                let changed = transaction
+                    .execute(
+                        "UPDATE admitted_inputs SET admitted_event_id = ?3, \
+                            admitted_sequence = ?4, delivery_mode = ?5, state = 'admitted', \
+                            prompt_utf8 = ?6, content_sha256 = ?7, admitted_at_ms = ?8, \
+                            promoted_at_ms = NULL \
+                         WHERE session_id = ?1 AND input_id = ?2",
+                        params![
+                            event.session_id().as_str(),
+                            input_id.as_str(),
+                            event.event_id().as_str(),
+                            to_sql_sequence(event.sequence().get())?,
+                            delivery_mode_name(*delivery_mode),
+                            content,
+                            content_hash.as_slice(),
+                            event.occurred_at().get()
+                        ],
+                    )
+                    .map_err(map_sqlite_error)?;
+                require_transition(changed, mode)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO admitted_inputs (\
+                            session_id, input_id, admitted_event_id, admitted_sequence, \
+                            delivery_mode, state, prompt_utf8, content_sha256, admitted_at_ms, \
+                            promoted_at_ms\
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, 'admitted', ?6, ?7, ?8, NULL)",
+                        params![
+                            event.session_id().as_str(),
+                            input_id.as_str(),
+                            event.event_id().as_str(),
+                            to_sql_sequence(event.sequence().get())?,
+                            delivery_mode_name(*delivery_mode),
+                            content,
+                            content_hash.as_slice(),
+                            event.occurred_at().get()
+                        ],
+                    )
+                    .map_err(map_sqlite_error)?;
+            }
             transaction
                 .execute(
                     "INSERT INTO transcript_messages (\
@@ -1184,7 +1212,7 @@ fn apply_projection(
                 .optional()
                 .map_err(map_sqlite_error)?
                 .is_some();
-            if attempt_exists {
+            if attempt_exists && mode == ProjectionMode::Append {
                 return Err(identity_projection_error(mode, IdentityKind::Attempt));
             }
             if let Some(retry_of) = retry_of {
@@ -1219,31 +1247,58 @@ fn apply_projection(
                 )
                 .map_err(map_sqlite_error)?;
             require_transition(promoted, mode)?;
-            transaction
-                .execute(
-                    "INSERT INTO provider_attempts (\
-                        attempt_id, session_id, input_id, provider_id, model_id, \
-                        retry_of_attempt_id, state, prepared_event_id, prepared_sequence, \
-                        started_event_id, settled_event_id, cancellation_requested_event_id, \
-                        usage_event_id, prepared_at_ms, started_at_ms, settled_at_ms, \
-                        cancellation_requested_at_ms, usage_json, failure_json\
-                     ) VALUES (\
-                        ?1, ?2, ?3, ?4, ?5, ?6, 'prepared', ?7, ?8, \
-                        NULL, NULL, NULL, NULL, ?9, NULL, NULL, NULL, NULL, NULL\
-                     )",
-                    params![
-                        attempt_id.as_str(),
-                        event.session_id().as_str(),
-                        input_id.as_str(),
-                        model.provider_id().as_str(),
-                        model.model_id().as_str(),
-                        retry_of.as_ref().map(AttemptId::as_str),
-                        event.event_id().as_str(),
-                        to_sql_sequence(event.sequence().get())?,
-                        event.occurred_at().get()
-                    ],
-                )
-                .map_err(map_sqlite_error)?;
+            if attempt_exists {
+                let changed = transaction
+                    .execute(
+                        "UPDATE provider_attempts SET session_id = ?2, input_id = ?3, \
+                            provider_id = ?4, model_id = ?5, retry_of_attempt_id = ?6, \
+                            state = 'prepared', prepared_event_id = ?7, prepared_sequence = ?8, \
+                            started_event_id = NULL, settled_event_id = NULL, \
+                            cancellation_requested_event_id = NULL, usage_event_id = NULL, \
+                            prepared_at_ms = ?9, started_at_ms = NULL, settled_at_ms = NULL, \
+                            cancellation_requested_at_ms = NULL, usage_json = NULL, \
+                            failure_json = NULL WHERE attempt_id = ?1",
+                        params![
+                            attempt_id.as_str(),
+                            event.session_id().as_str(),
+                            input_id.as_str(),
+                            model.provider_id().as_str(),
+                            model.model_id().as_str(),
+                            retry_of.as_ref().map(AttemptId::as_str),
+                            event.event_id().as_str(),
+                            to_sql_sequence(event.sequence().get())?,
+                            event.occurred_at().get()
+                        ],
+                    )
+                    .map_err(map_sqlite_error)?;
+                require_transition(changed, mode)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO provider_attempts (\
+                            attempt_id, session_id, input_id, provider_id, model_id, \
+                            retry_of_attempt_id, state, prepared_event_id, prepared_sequence, \
+                            started_event_id, settled_event_id, cancellation_requested_event_id, \
+                            usage_event_id, prepared_at_ms, started_at_ms, settled_at_ms, \
+                            cancellation_requested_at_ms, usage_json, failure_json\
+                         ) VALUES (\
+                            ?1, ?2, ?3, ?4, ?5, ?6, 'prepared', ?7, ?8, \
+                            NULL, NULL, NULL, NULL, ?9, NULL, NULL, NULL, NULL, NULL\
+                         )",
+                        params![
+                            attempt_id.as_str(),
+                            event.session_id().as_str(),
+                            input_id.as_str(),
+                            model.provider_id().as_str(),
+                            model.model_id().as_str(),
+                            retry_of.as_ref().map(AttemptId::as_str),
+                            event.event_id().as_str(),
+                            to_sql_sequence(event.sequence().get())?,
+                            event.occurred_at().get()
+                        ],
+                    )
+                    .map_err(map_sqlite_error)?;
+            }
         }
         EventPayload::AttemptStarted { attempt_id } => {
             let changed = transaction
