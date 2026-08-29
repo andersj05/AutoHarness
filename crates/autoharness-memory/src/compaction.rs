@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoharness_domain::{
-    AttemptId, Causation, CommandId, DeliveryMode, EVENT_SCHEMA_V1, EventEnvelope, EventId,
-    EventPayload, InputId, MemoryRevisionStatus, PermissionAnswer, PermissionDecisionId,
+    AttemptId, Causation, CommandId, CorrelationId, DeliveryMode, EVENT_SCHEMA_V1, EventEnvelope,
+    EventId, EventPayload, InputId, MemoryRevisionStatus, PermissionAnswer, PermissionDecisionId,
     PermissionOutcome, PromptText, SessionId, SessionSequence, Sha256Digest, ToolCallId,
     ToolCallSpec,
 };
@@ -411,7 +411,7 @@ fn validate_event_prefix(
     {
         return Err(MemoryError::InvalidCompactionEventStream);
     }
-    let mut event_ids = BTreeSet::<EventId>::new();
+    let mut event_ids = BTreeMap::<EventId, CorrelationId>::new();
     let mut command_ids = BTreeSet::<CommandId>::new();
     for (index, event) in events.iter().enumerate() {
         let expected = u64::try_from(index)
@@ -421,12 +421,12 @@ fn validate_event_prefix(
         if event.schema_version() != EVENT_SCHEMA_V1
             || event.session_id() != session_id
             || event.sequence().get() != expected
-            || !event_ids.insert(event.event_id().clone())
+            || event_ids.contains_key(event.event_id())
         {
             return Err(MemoryError::InvalidCompactionEventStream);
         }
         if let Causation::Event(cause) = event.causation()
-            && !event_ids.contains(cause)
+            && event_ids.get(cause) != Some(event.correlation_id())
         {
             return Err(MemoryError::InvalidCompactionEventStream);
         }
@@ -435,6 +435,7 @@ fn validate_event_prefix(
         {
             return Err(MemoryError::InvalidCompactionEventStream);
         }
+        event_ids.insert(event.event_id().clone(), event.correlation_id().clone());
     }
     Ok(())
 }
@@ -597,8 +598,8 @@ mod tests {
         CapabilityKind, CapabilityRequest, CommandId, ConfidenceBasisPoints, CorrelationId,
         EventId, MemoryContent, MemoryId, MemoryKind, MemoryRevisionId, MemoryScope,
         MemoryValidity, ModelId, ModelRef, PermissionDecisionId, ProviderCallId, ProviderId,
-        ResourceRef, Sensitivity, SessionId, TimestampMillis, ToolArguments, ToolCallId, ToolName,
-        TrustClass, UserId, WorkspaceId,
+        ResourceRef, Sensitivity, SessionId, SessionTitle, TimestampMillis, ToolArguments,
+        ToolCallId, ToolName, TrustClass, UserId, WorkspaceId,
     };
     use serde_json::json;
 
@@ -640,13 +641,27 @@ mod tests {
     }
 
     fn event(sequence: u64, payload: EventPayload) -> EventEnvelope {
+        event_with_causation(
+            sequence,
+            Causation::Command(CommandId::new(format!("command-{sequence}")).expect("command ID")),
+            &format!("correlation-{sequence}"),
+            payload,
+        )
+    }
+
+    fn event_with_causation(
+        sequence: u64,
+        causation: Causation,
+        correlation_id: &str,
+        payload: EventPayload,
+    ) -> EventEnvelope {
         EventEnvelope::new_v1(
             EventId::new(format!("event-{sequence}")).expect("event ID"),
             SessionId::new("session-1").expect("session ID"),
             SessionSequence::new(sequence).expect("sequence"),
             TimestampMillis::new(i64::try_from(sequence).expect("timestamp")),
-            Causation::Command(CommandId::new(format!("command-{sequence}")).expect("command ID")),
-            CorrelationId::new(format!("correlation-{sequence}")).expect("correlation ID"),
+            causation,
+            CorrelationId::new(correlation_id).expect("correlation ID"),
             payload,
         )
     }
@@ -915,6 +930,95 @@ mod tests {
             pending_session_facts_from_events(
                 &SessionId::new("session-1").expect("session ID"),
                 SessionSequence::new(7).expect("sequence"),
+                &events,
+            ),
+            Err(MemoryError::InvalidCompactionEventStream)
+        );
+    }
+
+    #[test]
+    fn contiguous_multi_event_command_chain_uses_one_correlation_and_command_once() {
+        let input_id = InputId::new("input-batch").expect("input ID");
+        let attempt_id = AttemptId::new("attempt-batch").expect("attempt ID");
+        let model = ModelRef::new(
+            ProviderId::new("provider").expect("provider ID"),
+            ModelId::new("model").expect("model ID"),
+        );
+        let mut events = vec![
+            event_with_causation(
+                1,
+                Causation::Command(CommandId::new("command-create").expect("command ID")),
+                "correlation-create",
+                EventPayload::SessionCreated,
+            ),
+            event_with_causation(
+                2,
+                Causation::Command(CommandId::new("command-batch").expect("command ID")),
+                "correlation-batch",
+                EventPayload::InputAdmitted {
+                    input_id: input_id.clone(),
+                    prompt: PromptText::new("atomic prompt").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ),
+            event_with_causation(
+                3,
+                Causation::Event(EventId::new("event-2").expect("event ID")),
+                "correlation-batch",
+                EventPayload::SessionRenamed {
+                    title: SessionTitle::new("atomic prompt").expect("title"),
+                },
+            ),
+            event_with_causation(
+                4,
+                Causation::Event(EventId::new("event-3").expect("event ID")),
+                "correlation-batch",
+                EventPayload::AttemptPrepared {
+                    attempt_id,
+                    input_id,
+                    model: model.clone(),
+                    retry_of: None,
+                },
+            ),
+        ];
+        assert!(
+            pending_session_facts_from_events(
+                &SessionId::new("session-1").expect("session ID"),
+                SessionSequence::new(4).expect("sequence"),
+                &events,
+            )
+            .expect("multi-event batch")
+            .is_empty()
+        );
+
+        let mut mismatched_correlation = events.clone();
+        mismatched_correlation[2] = event_with_causation(
+            3,
+            Causation::Event(EventId::new("event-2").expect("event ID")),
+            "correlation-forged",
+            EventPayload::SessionRenamed {
+                title: SessionTitle::new("atomic prompt").expect("title"),
+            },
+        );
+        assert_eq!(
+            pending_session_facts_from_events(
+                &SessionId::new("session-1").expect("session ID"),
+                SessionSequence::new(4).expect("sequence"),
+                &mismatched_correlation,
+            ),
+            Err(MemoryError::InvalidCompactionEventStream)
+        );
+
+        events.push(event_with_causation(
+            5,
+            Causation::Command(CommandId::new("command-batch").expect("command ID")),
+            "correlation-batch",
+            EventPayload::ModelSelected { model },
+        ));
+        assert_eq!(
+            pending_session_facts_from_events(
+                &SessionId::new("session-1").expect("session ID"),
+                SessionSequence::new(5).expect("sequence"),
                 &events,
             ),
             Err(MemoryError::InvalidCompactionEventStream)
