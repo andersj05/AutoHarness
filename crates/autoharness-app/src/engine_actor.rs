@@ -10,6 +10,7 @@ use autoharness_engine::{
 };
 use autoharness_store::{DeletionDisposition, SessionStatus, SessionStore, SessionSummary};
 use autoharness_store_sqlite::SqliteStore;
+use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::AppError;
@@ -146,6 +147,12 @@ pub enum StorageRequest {
         boundary: autoharness_store::ContextCompactionBoundary,
         command: Box<CommandEnvelope>,
         reply: oneshot::Sender<Result<EngineReply, DurableEngineError>>,
+    },
+    /// Verifies and starts one recovered pre-dispatch turn without rebuilding its context.
+    StartRecoveredRunTurn {
+        request: Box<autoharness_provider::ChatRequest>,
+        manifest: Box<autoharness_domain::ContextTurnManifest>,
+        reply: oneshot::Sender<Result<EngineReply, AppError>>,
     },
     /// Loads one immutable context epoch.
     LoadContextEpoch {
@@ -547,6 +554,29 @@ impl EngineHandle {
         response
             .await
             .map_err(|_| DurableEngineError::StoreInvariant)?
+    }
+
+    /// Starts one recovered turn only when the supplied request and manifest exactly match the
+    /// still-adjacent durable pre-dispatch binding.
+    ///
+    /// Callers must wait for the matching provider and a successful catalog before invoking this
+    /// boundary. The actor performs no network work and cannot itself establish provider
+    /// readiness.
+    pub async fn start_recovered_run_turn(
+        &self,
+        request: autoharness_provider::ChatRequest,
+        manifest: autoharness_domain::ContextTurnManifest,
+    ) -> Result<EngineReply, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(StorageRequest::StartRecoveredRunTurn {
+                request: Box::new(request),
+                manifest: Box::new(manifest),
+                reply,
+            })
+            .await
+            .map_err(|_| AppError::WorkerStopped)?;
+        response.await.map_err(|_| AppError::WorkerStopped)?
     }
 
     /// Loads one exact durable context epoch.
@@ -1040,6 +1070,14 @@ fn run(
                     });
                 let _ = reply.send(result);
             }
+            StorageRequest::StartRecoveredRunTurn {
+                request,
+                manifest,
+                reply,
+            } => {
+                let result = start_recovered_run_turn(&mut engine, &request, &manifest);
+                let _ = reply.send(result);
+            }
             StorageRequest::LoadContextEpoch { epoch_id, reply } => {
                 use autoharness_store::ContextStore as _;
 
@@ -1210,6 +1248,110 @@ fn read_workspace_binding(path: &std::path::Path) -> Result<WorkspaceId, AppErro
     WorkspaceId::new(value.trim().to_owned()).map_err(|_| AppError::Configuration)
 }
 
+fn load_exact_pending_context_turn(
+    engine: &LocalEngine,
+    session_id: &SessionId,
+    attempt_id: &autoharness_domain::AttemptId,
+) -> Result<Option<autoharness_domain::ContextTurnManifest>, AppError> {
+    use autoharness_store::ContextStore as _;
+
+    let session = engine.session(session_id).ok_or(AppError::Configuration)?;
+    let attempt = session.attempt(attempt_id).ok_or(AppError::Configuration)?;
+    if !attempt.is_provider_dispatch_ready() {
+        return Ok(None);
+    }
+    let Some(binding) = attempt.pending_context_turn() else {
+        return Ok(None);
+    };
+    if session.last_sequence() != Some(binding.bound_sequence()) {
+        return Ok(None);
+    }
+    let context_turn_id = binding.context_turn_id().clone();
+    let manifest_hash = binding.manifest_hash().clone();
+    let run_turn = binding.run_turn();
+    let Some(turn) = engine.store().load_context_turn(&context_turn_id)? else {
+        return Err(AppError::Configuration);
+    };
+    if turn.session_id() != session_id
+        || turn.attempt_id() != attempt_id
+        || turn.run_turn() != run_turn
+        || turn.context_turn_id() != &context_turn_id
+        || turn.manifest_hash() != &manifest_hash
+        || turn
+            .expected_session_sequence()
+            .checked_next()
+            .is_none_or(|sequence| sequence != binding.bound_sequence())
+        || !autoharness_memory::verify_context_manifest_hash(&turn)?
+    {
+        return Err(AppError::Configuration);
+    }
+
+    let admissions = engine.store().load_context_admissions(&context_turn_id)?;
+    if admissions != turn.admissions() {
+        return Err(AppError::Configuration);
+    }
+    let prelude = engine.store().load_context_turn_content(&context_turn_id)?;
+    if turn.admissions().is_empty() {
+        if prelude.is_some() {
+            return Err(AppError::Configuration);
+        }
+    } else if prelude.is_none() {
+        return Ok(None);
+    }
+    for admission in turn.admissions() {
+        if engine
+            .store()
+            .load_context_admission_content(admission.admission_id())?
+            .is_none()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(turn))
+}
+
+fn start_recovered_run_turn(
+    engine: &mut LocalEngine,
+    request: &autoharness_provider::ChatRequest,
+    expected_manifest: &autoharness_domain::ContextTurnManifest,
+) -> Result<EngineReply, AppError> {
+    let manifest = load_exact_pending_context_turn(
+        engine,
+        expected_manifest.session_id(),
+        expected_manifest.attempt_id(),
+    )?
+    .ok_or(AppError::Configuration)?;
+    if &manifest != expected_manifest || provider_request_hash(request)? != *manifest.request_hash()
+    {
+        return Err(AppError::Configuration);
+    }
+    let session_id = manifest.session_id().clone();
+    let events = engine.execute(&ids::command(CommandPayload::StartRunTurn {
+        session_id: session_id.clone(),
+        attempt_id: manifest.attempt_id().clone(),
+    }))?;
+    let session = engine
+        .session(&session_id)
+        .cloned()
+        .ok_or(AppError::Configuration)?;
+    telemetry::command_committed(
+        events.len(),
+        session.last_sequence().map_or(0, |sequence| sequence.get()),
+    );
+    Ok(EngineReply { session })
+}
+
+fn provider_request_hash(
+    request: &autoharness_provider::ChatRequest,
+) -> Result<Sha256Digest, AppError> {
+    let bytes = serde_json::to_vec(request)?;
+    let digest = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Sha256Digest::new(digest).map_err(|_| AppError::Configuration)
+}
+
 fn open(database_path: PathBuf) -> Result<(LocalEngine, SessionId, SessionAggregate), AppError> {
     let artifact_root = database_path
         .parent()
@@ -1329,12 +1471,24 @@ fn reconcile_interrupted_attempts(
                     attempt.attempt_id().clone(),
                     attempt.status(),
                     attempt.turns_started(),
+                    attempt.is_provider_dispatch_ready(),
                 )
             })
             .collect();
-        for (attempt_id, status, turns_started) in interrupted {
+        for (attempt_id, status, turns_started, provider_dispatch_ready) in interrupted {
+            let exact_pending_context = if provider_dispatch_ready {
+                load_exact_pending_context_turn(engine, session_id, &attempt_id)?.is_some()
+            } else {
+                false
+            };
             let payload = match status {
                 AttemptStatus::Prepared => CommandPayload::FailAttempt {
+                    session_id: session_id.clone(),
+                    attempt_id,
+                    failure: interrupted_before_dispatch(),
+                },
+                AttemptStatus::InFlight if exact_pending_context => continue,
+                AttemptStatus::InFlight if provider_dispatch_ready => CommandPayload::FailAttempt {
                     session_id: session_id.clone(),
                     attempt_id,
                     failure: interrupted_before_dispatch(),
@@ -1362,6 +1516,9 @@ fn reconcile_interrupted_attempts(
             };
             match status {
                 AttemptStatus::Prepared => failed_before_dispatch += 1,
+                AttemptStatus::InFlight if provider_dispatch_ready => {
+                    failed_before_dispatch += 1;
+                }
                 AttemptStatus::InFlight | AttemptStatus::CancellationRequested
                     if turns_started == 0 =>
                 {
@@ -1505,26 +1662,229 @@ mod tests {
         (session_id, attempt_id)
     }
 
+    fn seed_bound_attempt(
+        database: PathBuf,
+    ) -> (
+        SessionId,
+        autoharness_domain::AttemptId,
+        ChatRequest,
+        autoharness_domain::ContextTurnManifest,
+    ) {
+        let (mut engine, session_id, _) = open(database).expect("open fixture store");
+        let model = ModelRef::new(
+            ProviderId::new("gemini").expect("provider ID"),
+            ModelId::new("models/gemini-fixture").expect("model ID"),
+        );
+        engine
+            .execute(&ids::command(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model: model.clone(),
+            }))
+            .expect("select model");
+        let attempt_id = ids::attempt_id();
+        engine
+            .execute(&ids::command(
+                CommandPayload::AdmitPromptAndPrepareAttempt {
+                    session_id: session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    input_id: InputId::new("input-bound-recovery").expect("input ID"),
+                    prompt: PromptText::new("recover exact bound request").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ))
+            .expect("prepare attempt");
+        engine
+            .execute(&ids::command(CommandPayload::StartAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("start attempt");
+        let request = ChatRequest::new(
+            model.model_id().clone(),
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("recover exact bound request").expect("chat content"),
+            )],
+        )
+        .expect("chat request");
+        let prepared =
+            bind_next_provider_context(&mut engine, &session_id, &attempt_id, request.clone());
+        let manifest = prepared.manifest().clone();
+        drop(engine);
+        (session_id, attempt_id, request, manifest)
+    }
+
+    fn seed_bound_continuation(
+        database: PathBuf,
+    ) -> (
+        SessionId,
+        autoharness_domain::AttemptId,
+        ChatRequest,
+        autoharness_domain::ContextTurnManifest,
+    ) {
+        let (mut engine, session_id, _) = open(database).expect("open fixture store");
+        let model = ModelRef::new(
+            ProviderId::new("gemini").expect("provider ID"),
+            ModelId::new("models/gemini-fixture").expect("model ID"),
+        );
+        engine
+            .execute(&ids::command(CommandPayload::SelectModel {
+                session_id: session_id.clone(),
+                model: model.clone(),
+            }))
+            .expect("select model");
+        let attempt_id = ids::attempt_id();
+        engine
+            .execute(&ids::command(
+                CommandPayload::AdmitPromptAndPrepareAttempt {
+                    session_id: session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    input_id: InputId::new("input-bound-continuation").expect("input ID"),
+                    prompt: PromptText::new("recover exact continuation").expect("prompt"),
+                    delivery_mode: DeliveryMode::NextTurn,
+                },
+            ))
+            .expect("prepare attempt");
+        engine
+            .execute(&ids::command(CommandPayload::StartAttempt {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("start attempt");
+        mark_provider_dispatched(&mut engine, &session_id, &attempt_id);
+
+        let planned = plan(IncomingToolCall {
+            tool_call_id: ids::tool_call_id(),
+            provider_call_id: ProviderCallId::new("provider-call-bound-continuation")
+                .expect("provider call ID"),
+            tool_name: ToolName::new("fs_write").expect("tool name"),
+            arguments: ToolArguments::new(serde_json::json!({
+                "path": "recovered.txt",
+                "content": "durable"
+            }))
+            .expect("tool arguments"),
+        })
+        .expect("planned tool call");
+        let tool_call_id = planned.spec().tool_call_id.clone();
+        engine
+            .execute(&ids::command(CommandPayload::ProposeToolCall {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                call: planned.spec().clone(),
+            }))
+            .expect("propose tool call");
+        engine
+            .execute(&ids::command(CommandPayload::RecordToolPermission {
+                session_id: session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                decision_id: PermissionDecisionId::new("permission-bound-continuation")
+                    .expect("permission ID"),
+                outcome: PermissionOutcome::Allow,
+            }))
+            .expect("allow tool call");
+        engine
+            .execute(&ids::command(CommandPayload::StartToolCall {
+                session_id: session_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+            }))
+            .expect("start tool call");
+        engine
+            .execute(&ids::command(CommandPayload::PauseAttemptForTools {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("pause for tools");
+        engine
+            .execute(&ids::command(CommandPayload::CompleteToolCall {
+                session_id: session_id.clone(),
+                tool_call_id,
+                output: autoharness_domain::ToolOutput::new("done".to_owned(), None, 4, false)
+                    .expect("tool output"),
+            }))
+            .expect("complete tool call");
+        engine
+            .execute(&ids::command(CommandPayload::ResumeAttemptAfterTools {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("resume attempt");
+        let request = ChatRequest::new(
+            model.model_id().clone(),
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("recover exact continuation").expect("chat content"),
+            )],
+        )
+        .expect("continuation request");
+        let prepared =
+            bind_next_provider_context(&mut engine, &session_id, &attempt_id, request.clone());
+        let manifest = prepared.manifest().clone();
+        drop(engine);
+        (session_id, attempt_id, request, manifest)
+    }
+
     fn mark_provider_dispatched(
         engine: &mut LocalEngine,
         session_id: &SessionId,
         attempt_id: &autoharness_domain::AttemptId,
     ) {
-        let session = engine.session(session_id).expect("session");
-        let attempt = session.attempt(attempt_id).expect("attempt");
-        let committed_at = TimestampMillis::new(10);
-        let scope = crate::context_runtime::ContextScope::local(
-            WorkspaceId::new("workspace-recovery-fixture").expect("workspace ID"),
-        );
-        let retrieval_scope = scope.retrieval_scope(session_id.clone(), committed_at);
+        let model_id = engine
+            .session(session_id)
+            .and_then(|session| session.attempt(attempt_id))
+            .expect("attempt")
+            .model()
+            .model_id()
+            .clone();
         let request = ChatRequest::new(
-            attempt.model().model_id().clone(),
+            model_id,
             vec![ChatMessage::text(
                 ChatRole::User,
                 ChatContent::new("recovery fixture").expect("chat content"),
             )],
         )
         .expect("chat request");
+        bind_next_provider_context(engine, session_id, attempt_id, request);
+        engine
+            .execute(&ids::command(CommandPayload::StartRunTurn {
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+            }))
+            .expect("start run turn");
+    }
+
+    fn bind_next_provider_context(
+        engine: &mut LocalEngine,
+        session_id: &SessionId,
+        attempt_id: &autoharness_domain::AttemptId,
+        request: ChatRequest,
+    ) -> crate::context_runtime::PreparedContextTurn {
+        let session = engine.session(session_id).expect("session");
+        let attempt = session.attempt(attempt_id).expect("attempt");
+        let run_turn = attempt.turns_started().checked_add(1).expect("next turn");
+        let expected_session_sequence = session.last_sequence().expect("session sequence");
+        let model = attempt.model().clone();
+        let epoch = if run_turn == 1 {
+            crate::context_runtime::ContextEpochMode::NewAttempt {
+                explicit_retry: false,
+            }
+        } else {
+            let baseline = engine
+                .store()
+                .load_attempt_context_turn(attempt_id, 1)
+                .expect("load baseline turn")
+                .expect("baseline turn");
+            let epoch = engine
+                .store()
+                .load_context_epoch(baseline.epoch_id())
+                .expect("load context epoch")
+                .expect("context epoch");
+            crate::context_runtime::ContextEpochMode::Existing(epoch)
+        };
+        let committed_at = TimestampMillis::new(10 + i64::from(run_turn));
+        let scope = crate::context_runtime::ContextScope::local(
+            WorkspaceId::new("workspace-recovery-fixture").expect("workspace ID"),
+        );
+        let retrieval_scope = scope.retrieval_scope(session_id.clone(), committed_at);
         let compatibility = crate::context_runtime::EpochCompatibility::new(
             &request,
             None,
@@ -1537,16 +1897,14 @@ mod tests {
             crate::context_runtime::ContextPreparationInput {
                 session_id: session_id.clone(),
                 attempt_id: attempt_id.clone(),
-                run_turn: 1,
-                expected_session_sequence: session.last_sequence().expect("session sequence"),
+                run_turn,
+                expected_session_sequence,
                 memory_generation: engine.store().memory_generation().expect("generation"),
-                model: attempt.model().clone(),
+                model,
                 request,
                 retrieval_scope,
                 compatibility,
-                epoch: crate::context_runtime::ContextEpochMode::NewAttempt {
-                    explicit_retry: false,
-                },
+                epoch,
                 observed_sources: Vec::new(),
                 memory_candidates: Vec::new(),
                 committed_at,
@@ -1561,17 +1919,12 @@ mod tests {
             .execute(&ids::command(CommandPayload::BindContextTurn {
                 session_id: session_id.clone(),
                 attempt_id: attempt_id.clone(),
-                run_turn: 1,
+                run_turn,
                 context_turn_id: prepared.manifest().context_turn_id().clone(),
                 manifest_hash: prepared.manifest().manifest_hash().clone(),
             }))
             .expect("bind context turn");
-        engine
-            .execute(&ids::command(CommandPayload::StartRunTurn {
-                session_id: session_id.clone(),
-                attempt_id: attempt_id.clone(),
-            }))
-            .expect("start run turn");
+        prepared
     }
 
     fn seed_tool_state(
@@ -1798,6 +2151,125 @@ mod tests {
 
         let (_, _, recovered_again) = open(database).expect("recover settled store");
         assert_eq!(recovered_again.last_sequence(), settled_sequence);
+    }
+
+    #[test]
+    fn recovery_preserves_an_exact_bound_first_turn_without_starting_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("bound-first-turn-recovery.sqlite3");
+        let (_, attempt_id, _, manifest) = seed_bound_attempt(database.clone());
+
+        let (engine, _, recovered) = open(database.clone()).expect("recover store");
+        let attempt = recovered.attempt(&attempt_id).expect("recovered attempt");
+        assert_eq!(attempt.status(), AttemptStatus::InFlight);
+        assert!(attempt.is_provider_dispatch_ready());
+        assert_eq!(attempt.turns_started(), 0);
+        assert_eq!(
+            attempt
+                .pending_context_turn()
+                .expect("pending context")
+                .context_turn_id(),
+            manifest.context_turn_id()
+        );
+        let preserved_sequence = recovered.last_sequence();
+        drop(engine);
+
+        let (_, _, recovered_again) = open(database).expect("recover store again");
+        assert_eq!(recovered_again.last_sequence(), preserved_sequence);
+        assert_eq!(
+            recovered_again
+                .attempt(&attempt_id)
+                .expect("recovered attempt")
+                .turns_started(),
+            0,
+            "storage recovery must never cross the provider dispatch boundary"
+        );
+    }
+
+    #[test]
+    fn recovery_preserves_an_exact_bound_continuation_for_explicit_resume() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("bound-continuation-recovery.sqlite3");
+        let (_, attempt_id, request, manifest) = seed_bound_continuation(database.clone());
+
+        let (mut engine, _, recovered) = open(database).expect("recover store");
+        let attempt = recovered.attempt(&attempt_id).expect("recovered attempt");
+        assert_eq!(attempt.status(), AttemptStatus::InFlight);
+        assert!(attempt.is_provider_dispatch_ready());
+        assert_eq!(attempt.turns_started(), 1);
+        assert_eq!(
+            attempt
+                .pending_context_turn()
+                .expect("pending continuation")
+                .context_turn_id(),
+            manifest.context_turn_id()
+        );
+
+        let reply = start_recovered_run_turn(&mut engine, &request, &manifest)
+            .expect("start exact recovered continuation");
+        let started = reply.session.attempt(&attempt_id).expect("started attempt");
+        assert_eq!(started.turns_started(), 2);
+        assert!(!started.is_provider_dispatch_ready());
+        assert!(started.pending_context_turn().is_none());
+    }
+
+    #[test]
+    fn recovered_turn_start_checks_request_and_manifest_before_advancing_once() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("exact-recovered-start.sqlite3");
+        let (_, attempt_id, request, manifest) = seed_bound_attempt(database.clone());
+        let foreign_database = directory.path().join("foreign-bound-turn.sqlite3");
+        let (_, _, foreign_request, foreign_manifest) = seed_bound_attempt(foreign_database);
+        let (mut engine, _, recovered) = open(database).expect("recover store");
+        let pending_sequence = recovered.last_sequence();
+
+        assert!(matches!(
+            start_recovered_run_turn(&mut engine, &foreign_request, &foreign_manifest),
+            Err(AppError::Configuration)
+        ));
+        let wrong_request = ChatRequest::new(
+            request.model_id.clone(),
+            vec![ChatMessage::text(
+                ChatRole::User,
+                ChatContent::new("different request bytes").expect("chat content"),
+            )],
+        )
+        .expect("wrong request");
+        assert!(matches!(
+            start_recovered_run_turn(&mut engine, &wrong_request, &manifest),
+            Err(AppError::Configuration)
+        ));
+        assert_eq!(
+            engine
+                .session(manifest.session_id())
+                .expect("session")
+                .last_sequence(),
+            pending_sequence
+        );
+
+        let reply = start_recovered_run_turn(&mut engine, &request, &manifest)
+            .expect("start exact recovered turn");
+        assert_eq!(
+            reply
+                .session
+                .attempt(&attempt_id)
+                .expect("started attempt")
+                .turns_started(),
+            1
+        );
+        let started_sequence = reply.session.last_sequence();
+        assert!(matches!(
+            start_recovered_run_turn(&mut engine, &request, &manifest),
+            Err(AppError::Configuration)
+        ));
+        assert_eq!(
+            engine
+                .session(manifest.session_id())
+                .expect("session")
+                .last_sequence(),
+            started_sequence,
+            "a recovered boundary cannot start the same provider turn twice"
+        );
     }
 
     #[test]
