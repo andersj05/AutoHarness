@@ -76,6 +76,8 @@ impl<'de> Deserialize<'de> for ToolArguments {
 pub enum CapabilityKind {
     /// No external authority because trusted planning rejected the model call.
     InvalidToolCall,
+    /// Submit an untrusted memory candidate to the application-owned review sink.
+    MemoryProposal,
     /// Read bytes from a workspace-confined path.
     FilesystemRead,
     /// Create or replace bytes at a workspace-confined path.

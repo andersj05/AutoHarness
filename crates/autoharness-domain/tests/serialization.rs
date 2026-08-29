@@ -71,6 +71,14 @@ fn tool_call() -> ToolCallSpec {
 }
 
 #[test]
+fn memory_proposal_capability_has_a_stable_serialized_name() {
+    assert_eq!(
+        serde_json::to_value(CapabilityKind::MemoryProposal).expect("serialize capability"),
+        serde_json::json!("memory_proposal")
+    );
+}
+
+#[test]
 fn every_v1_event_payload_has_a_stable_serialized_shape() {
     let events = [
         EventEnvelope::new_v1(
