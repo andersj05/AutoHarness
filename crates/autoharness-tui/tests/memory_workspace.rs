@@ -3,13 +3,14 @@ use std::sync::Arc;
 use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
-    CatalogProjection, Focus, MemoryAdmission, MemoryAdmissionContext, MemoryDetail,
-    MemoryEvidence, MemoryFindingKind, MemoryLifecycleMode, MemoryOrigin, MemoryPane,
-    MemoryProjection, MemoryRelation, MemoryRelationKind, MemoryRevisionContext, MemoryScope,
-    MemorySensitivity, MemoryStatus, MemoryStatusFilter, MemorySummary, MemoryTrust,
-    MemoryValidationFinding, Message, Model, ModelSummary, MouseAction, OverlayKind, RetryPolicy,
-    Route, SessionProjection, SessionsProjection, SettingsProjection, UiEffect, UiFailure,
-    UiIntent, UiNotice, hit_test, update, view,
+    CatalogProjection, Focus, MEMORY_VIEW_PAGE_SIZE, MemoryAdmission, MemoryAdmissionContext,
+    MemoryDetail, MemoryEvidence, MemoryFindingKind, MemoryLifecycleMode, MemoryOrigin,
+    MemoryPageDirection, MemoryPane, MemoryProjection, MemoryRelation, MemoryRelationKind,
+    MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus, MemoryStatusFilter,
+    MemorySummary, MemoryTrust, MemoryValidationFinding, MemoryViewCursor, MemoryViewQuery,
+    Message, Model, ModelSummary, MouseAction, OverlayKind, RetryPolicy, Route, SessionProjection,
+    SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
+    hit_test, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -445,6 +446,202 @@ fn stale_memory_generations_cannot_roll_the_workspace_back() {
 }
 
 #[test]
+fn memory_view_query_is_literal_bounded_and_debug_redacted() {
+    let cursor = MemoryViewCursor::new("1725000000000:memory-literal").expect("cursor");
+    let query = MemoryViewQuery::new(
+        "$term* [literal]",
+        MemoryStatusFilter::All,
+        autoharness_tui::MemoryScopeFilter::Workspace,
+        MemoryPageDirection::Next,
+        Some(cursor.clone()),
+        MEMORY_VIEW_PAGE_SIZE,
+    )
+    .expect("query");
+    assert_eq!(query.literal(), "$term* [literal]");
+    assert_eq!(query.status(), MemoryStatusFilter::All);
+    assert_eq!(query.scope(), autoharness_tui::MemoryScopeFilter::Workspace);
+    assert_eq!(query.direction(), MemoryPageDirection::Next);
+    assert_eq!(query.before(), Some(&cursor));
+    assert_eq!(query.limit(), MEMORY_VIEW_PAGE_SIZE);
+    assert!(!format!("{query:?}").contains("$term"));
+    assert!(!format!("{cursor:?}").contains("memory-literal"));
+    assert!(
+        MemoryViewQuery::new(
+            "query",
+            MemoryStatusFilter::All,
+            autoharness_tui::MemoryScopeFilter::All,
+            MemoryPageDirection::Next,
+            None,
+            MEMORY_VIEW_PAGE_SIZE,
+        )
+        .is_err()
+    );
+    assert!(
+        MemoryViewQuery::new(
+            "query",
+            MemoryStatusFilter::All,
+            autoharness_tui::MemoryScopeFilter::All,
+            MemoryPageDirection::First,
+            Some(cursor),
+            MEMORY_VIEW_PAGE_SIZE,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn memory_query_and_filters_coalesce_after_local_feedback() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(alt('6')));
+    assert!(update(&mut model, Message::Mouse(MouseAction::MemoryCycleStatus)).is_empty());
+    assert!(update(&mut model, Message::Mouse(MouseAction::MemoryCycleScope)).is_empty());
+    let _ = update(&mut model, Message::Input(key(Key::Char('/'))));
+    type_text(&mut model, "keyboard");
+
+    assert_eq!(model.memory_selection(), Some("memory-keyboard"));
+    assert!(model.memory_view_loading());
+    assert!(text(&render(&model, 60, 18)).contains("Searching all memory"));
+    assert!(
+        update(
+            &mut model,
+            Message::Tick(UiClock::new(149, 1_725_000_000_000))
+        )
+        .is_empty()
+    );
+
+    let effects = update(
+        &mut model,
+        Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+    );
+    let [
+        UiEffect::Dispatch(UiIntent::QueryMemory {
+            view_generation,
+            query,
+            ..
+        }),
+    ] = effects.as_slice()
+    else {
+        panic!("expected one coalesced Memory query");
+    };
+    assert_eq!(*view_generation, model.memory_view_generation());
+    assert_eq!(query.literal(), "keyboard");
+    assert_eq!(query.status(), MemoryStatusFilter::All);
+    assert_eq!(query.scope(), autoharness_tui::MemoryScopeFilter::User);
+    assert_eq!(query.direction(), MemoryPageDirection::First);
+    assert!(query.before().is_none());
+    assert_eq!(query.limit(), MEMORY_VIEW_PAGE_SIZE);
+    assert!(
+        update(
+            &mut model,
+            Message::Tick(UiClock::new(400, 1_725_000_000_000))
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn memory_view_generation_rejects_stale_responses_independently() {
+    let mut model = model();
+    let _ = update(&mut model, Message::Input(alt('6')));
+    type_text(&mut model, "concise");
+    let desired = model.memory_view_generation();
+
+    let future_durable_stale_view = MemoryProjection::ready(99, Vec::new(), Vec::new(), 0, false)
+        .expect("stale view")
+        .with_view_page(desired.saturating_sub(1), None);
+    let _ = update(
+        &mut model,
+        Message::MemoryChanged(Arc::new(future_durable_stale_view)),
+    );
+    assert_eq!(model.memory().generation(), 7);
+    assert!(model.memory_view_loading());
+
+    let effects = update(
+        &mut model,
+        Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::QueryMemory { view_generation, .. })]
+            if *view_generation == desired
+    ));
+    let matching = MemoryProjection::ready(8, Vec::new(), Vec::new(), 0, false)
+        .expect("matching view")
+        .with_view_page(desired, None);
+    let _ = update(&mut model, Message::MemoryChanged(Arc::new(matching)));
+    assert_eq!(model.memory().generation(), 8);
+    assert!(!model.memory_view_loading());
+
+    let stale_durable = MemoryProjection::ready(6, Vec::new(), Vec::new(), 0, false)
+        .expect("stale durable")
+        .with_view_page(desired, None);
+    let _ = update(&mut model, Message::MemoryChanged(Arc::new(stale_durable)));
+    assert_eq!(model.memory().generation(), 8);
+}
+
+#[test]
+fn memory_pages_have_loading_keyboard_and_mouse_affordances() {
+    let mut model = model();
+    model.apply_memory(Arc::new(memory_projection().with_view_page(
+        0,
+        Some(MemoryViewCursor::new("page-two-boundary").expect("next cursor")),
+    )));
+    let _ = update(&mut model, Message::Input(alt('6')));
+
+    let effects = update(&mut model, Message::Input(key(Key::PageDown)));
+    let [
+        UiEffect::Dispatch(UiIntent::QueryMemory {
+            view_generation,
+            query,
+            ..
+        }),
+    ] = effects.as_slice()
+    else {
+        panic!("expected next-page query");
+    };
+    assert_eq!(query.direction(), MemoryPageDirection::Next);
+    assert_eq!(
+        query.before().map(MemoryViewCursor::as_str),
+        Some("page-two-boundary")
+    );
+    let next_generation = *view_generation;
+    assert!(text(&render(&model, 40, 12)).contains("Loading next page"));
+    assert!(
+        update(&mut model, Message::Input(key(Key::PageDown))).is_empty(),
+        "an in-flight page request must coalesce duplicate navigation"
+    );
+
+    let page_two = memory_projection().with_view_page(
+        next_generation,
+        Some(MemoryViewCursor::new("page-three-boundary").expect("third cursor")),
+    );
+    let _ = update(&mut model, Message::MemoryChanged(Arc::new(page_two)));
+    assert!(model.memory_has_previous_page());
+    assert!(model.memory_has_next_page());
+    let rendered = text(&render(&model, 80, 24));
+    assert!(rendered.contains("PgUp"));
+    assert!(rendered.contains("PgDn"));
+
+    let mut actions = Vec::new();
+    for column in 0..80 {
+        for row in 0..24 {
+            if let Some(action) = hit_test(&model, 80, 24, column, row) {
+                actions.push(action);
+            }
+        }
+    }
+    assert!(actions.contains(&MouseAction::MemoryPreviousPage));
+    assert!(actions.contains(&MouseAction::MemoryNextPage));
+
+    let effects = update(&mut model, Message::Mouse(MouseAction::MemoryPreviousPage));
+    let [UiEffect::Dispatch(UiIntent::QueryMemory { query, .. })] = effects.as_slice() else {
+        panic!("expected previous-page query");
+    };
+    assert_eq!(query.direction(), MemoryPageDirection::Previous);
+    assert!(query.before().is_none());
+}
+
+#[test]
 fn partial_memory_page_never_claims_a_global_search_miss() {
     let mut model = model();
     let summary = MemorySummary::new(
@@ -464,8 +661,7 @@ fn partial_memory_page_never_claims_a_global_search_miss() {
     let _ = update(&mut model, Message::Input(key(Key::Char('/'))));
     type_text(&mut model, "not-on-first-page");
     let rendered = text(&render(&model, 60, 18));
-    assert!(rendered.contains("loaded page"));
-    assert!(rendered.contains("No matches in the loaded page"));
+    assert!(rendered.contains("Searching all memory"));
     assert!(!rendered.contains("No memories match these filters"));
 }
 

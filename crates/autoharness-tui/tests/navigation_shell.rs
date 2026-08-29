@@ -801,6 +801,8 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::MemorySelectAdmission(_) => "MemorySelectAdmission",
         MouseAction::MemoryCycleStatus => "MemoryCycleStatus",
         MouseAction::MemoryCycleScope => "MemoryCycleScope",
+        MouseAction::MemoryPreviousPage => "MemoryPreviousPage",
+        MouseAction::MemoryNextPage => "MemoryNextPage",
         MouseAction::MemoryOpen => "MemoryOpen",
         MouseAction::MemoryBack => "MemoryBack",
         MouseAction::MemoryAdmissions => "MemoryAdmissions",

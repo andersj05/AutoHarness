@@ -184,10 +184,12 @@ fn render_header(buf: &mut Buffer, area: Rect, model: &Model) {
     }
     let visible = model.memory_entries().len().to_string();
     let visible_label = format!("{visible} visible");
-    let total_label = format!("{} total", model.memory().total());
+    let total_label = format!("{} on page", model.memory().summaries().len());
     let state_label = match model.memory().state() {
+        _ if model.memory_view_loading() => "refreshing view",
         MemoryLoadState::Loading => "loading",
-        MemoryLoadState::Ready if model.memory().stale() => "loaded page only",
+        MemoryLoadState::Ready if model.memory_has_next_page() => "more available",
+        MemoryLoadState::Ready if model.memory().stale() => "partial result",
         MemoryLoadState::Ready => "ready",
         MemoryLoadState::Failed(_) => "unavailable",
     };
@@ -205,6 +207,7 @@ fn render_header(buf: &mut Buffer, area: Rect, model: &Model) {
         StatusSegment {
             priority: 1,
             icon: Some(match model.memory().state() {
+                _ if model.memory_view_loading() => Icon::Pending,
                 MemoryLoadState::Failed(_) => Icon::Warning,
                 MemoryLoadState::Loading => Icon::Pending,
                 MemoryLoadState::Ready => Icon::Success,
@@ -317,6 +320,7 @@ fn render_list(buf: &mut Buffer, area: Rect, model: &Model) {
     let rows = list_rows(area, model);
     if rows.is_empty() {
         let message = match model.memory().state() {
+            _ if model.memory_view_loading() => memory_loading_label(model),
             MemoryLoadState::Loading => "Loading memory index...",
             MemoryLoadState::Failed(_) => model
                 .memory()
@@ -327,8 +331,8 @@ fn render_list(buf: &mut Buffer, area: Rect, model: &Model) {
             MemoryLoadState::Ready if model.memory().summaries().is_empty() => {
                 "No admitted memories yet."
             }
-            MemoryLoadState::Ready if model.memory().stale() => {
-                "No matches in the loaded page; more memories exist."
+            MemoryLoadState::Ready if model.memory_has_next_page() || model.memory().stale() => {
+                "No matches on this page; use Next for older results."
             }
             MemoryLoadState::Ready => "No memories match these filters.",
         };
@@ -856,6 +860,9 @@ fn render_admission_context(buf: &mut Buffer, area: Rect, model: &Model) {
 }
 
 fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
+    if model.memory_view_loading() {
+        return Vec::new();
+    }
     let mut buttons = vec![Button::new(
         "Remember",
         None,
@@ -912,6 +919,64 @@ fn footer_buttons(model: &Model, width: u16) -> Vec<Button<MouseAction>> {
             MouseAction::MemoryBack,
         ),
     });
+    let compact_page_keys = width < MEMORY_ACTIONS_FULL_WIDTH;
+    if model.memory_has_previous_page() {
+        buttons.push(Button::new(
+            if compact_page_keys {
+                "< PgUp"
+            } else {
+                "Previous"
+            },
+            if compact_page_keys {
+                None
+            } else {
+                Some("PgUp".to_owned())
+            },
+            ButtonVariant::Secondary,
+            MouseAction::MemoryPreviousPage,
+        ));
+    }
+    if model.memory_has_next_page() {
+        buttons.push(Button::new(
+            if compact_page_keys { "PgDn >" } else { "Next" },
+            if compact_page_keys {
+                None
+            } else {
+                Some("PgDn".to_owned())
+            },
+            ButtonVariant::Secondary,
+            MouseAction::MemoryNextPage,
+        ));
+    }
+    while ButtonRow::new(model.theme(), &buttons).measure() > width {
+        let removable = buttons
+            .iter()
+            .position(|button| {
+                matches!(
+                    button.action,
+                    MouseAction::MemoryReview | MouseAction::MemoryRevise
+                )
+            })
+            .or_else(|| {
+                buttons
+                    .iter()
+                    .position(|button| button.action == MouseAction::MemoryRemember)
+            })
+            .or_else(|| {
+                buttons.iter().position(|button| {
+                    matches!(
+                        button.action,
+                        MouseAction::MemoryOpen
+                            | MouseAction::MemoryAdmissions
+                            | MouseAction::MemoryBack
+                    )
+                })
+            });
+        let Some(index) = removable else {
+            break;
+        };
+        buttons.remove(index);
+    }
     buttons
 }
 
@@ -923,9 +988,14 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
     let button_row = ButtonRow::new(model.theme(), &buttons);
     let button_width = button_row.measure().min(area.width);
     let hint_width = area.width.saturating_sub(button_width).saturating_sub(ROW);
+    let loading_hint = memory_loading_label(model);
     let full_hint = "Alt+N remember  Alt+A actions";
     let compact_hint = "Alt+N remember";
-    let hint = if u16::try_from(full_hint.width()).unwrap_or(u16::MAX) <= hint_width {
+    let hint = if model.memory_view_loading()
+        && u16::try_from(loading_hint.width()).unwrap_or(u16::MAX) <= hint_width
+    {
+        Some(loading_hint)
+    } else if u16::try_from(full_hint.width()).unwrap_or(u16::MAX) <= hint_width {
         Some(full_hint)
     } else if u16::try_from(compact_hint.width()).unwrap_or(u16::MAX) <= hint_width {
         Some(compact_hint)
@@ -943,6 +1013,14 @@ fn render_footer(buf: &mut Buffer, area: Rect, model: &Model) {
         );
     }
     button_row.render(buf, area);
+}
+
+fn memory_loading_label(model: &Model) -> &'static str {
+    match model.memory_workspace.page_direction {
+        crate::model::MemoryPageDirection::First => "Searching all memory...",
+        crate::model::MemoryPageDirection::Next => "Loading next page...",
+        crate::model::MemoryPageDirection::Previous => "Loading previous page...",
+    }
 }
 
 /// Buttons shared by Memory lifecycle rendering and paint-order hit testing.
