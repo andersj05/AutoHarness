@@ -12,8 +12,9 @@ use autoharness_domain::{
 };
 use autoharness_store::{
     ContextStore as _, DEFAULT_EVENT_PAGE_SIZE, MAX_MEMORY_INSPECTION_PAGE_SIZE,
-    MemoryAdmissionCursor, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryInspectionCursor,
-    MemoryInspectionQuery, MemoryStore as _, SessionStore as _, SessionSummary,
+    MemoryAdmissionCursor, MemoryAdmissionKey, MemoryAdmissionQuery, MemoryEvidenceExcerptState,
+    MemoryInspectionCursor, MemoryInspectionQuery, MemoryStore as _, SessionStore as _,
+    SessionSummary,
 };
 use autoharness_store_sqlite::SqliteStore;
 use uuid::Uuid;
@@ -21,9 +22,9 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 /// Schema version of the exported JSON document.
-pub const EXPORT_SCHEMA_VERSION: u32 = 2;
+pub const EXPORT_SCHEMA_VERSION: u32 = 3;
 /// Schema version of one standalone memory export.
-pub const MEMORY_EXPORT_SCHEMA_VERSION: u32 = 1;
+pub const MEMORY_EXPORT_SCHEMA_VERSION: u32 = 2;
 
 /// Writes one provider-neutral JSON export for a session.
 ///
@@ -246,10 +247,35 @@ fn export_memory_revisions(
                     .map(|content| content.as_str().to_owned());
                 (retained_state(content.is_some()), content)
             };
+            let evidence_excerpts = store
+                .load_memory_evidence_content(revision.revision_id())?
+                .ok_or(AppError::Configuration)?
+                .into_iter()
+                .map(|evidence| {
+                    let (excerpt_state, excerpt) = match evidence.excerpt() {
+                        MemoryEvidenceExcerptState::Absent => ("absent", None),
+                        MemoryEvidenceExcerptState::Erased => ("erased", None),
+                        MemoryEvidenceExcerptState::Retained(_)
+                            if revision.sensitivity() == Sensitivity::Secret =>
+                        {
+                            ("redacted_by_policy", None)
+                        }
+                        MemoryEvidenceExcerptState::Retained(excerpt) => {
+                            ("retained", Some(excerpt.as_str()))
+                        }
+                    };
+                    serde_json::json!({
+                        "evidence_id": evidence.evidence_id().as_str(),
+                        "excerpt_state": excerpt_state,
+                        "excerpt": excerpt,
+                    })
+                })
+                .collect::<Vec<_>>();
             Ok(serde_json::json!({
                 "metadata": revision,
                 "content_state": content_state,
                 "content": content,
+                "evidence_excerpts": evidence_excerpts,
             }))
         })
         .collect()
@@ -808,6 +834,20 @@ mod tests {
         .expect("memory evidence")
     }
 
+    fn user_input_evidence_without_excerpt(evidence_id: &str) -> MemoryEvidence {
+        MemoryEvidence::new(
+            MemoryEvidenceId::new(evidence_id).expect("evidence ID"),
+            MemoryEvidenceSource::UserInput {
+                session_id: SessionId::new("session-x").expect("session ID"),
+                input_id: InputId::new("input-1").expect("input ID"),
+            },
+            MemoryEvidenceRelation::Supports,
+            None,
+            None,
+        )
+        .expect("memory evidence")
+    }
+
     #[test]
     fn export_writes_complete_history_and_survives_deletion() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -862,10 +902,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_v2_exports_context_memory_lifecycles_and_privacy_states() {
-        // Seed the evidence sidecar directly to model a configured credential that an ingress
-        // guard must reject. The exporter has no evidence-content read and must not leak it.
-        const CONFIGURED_SECRET_SENTINEL: &str = "configured-credential-never-export";
+    fn schema_v3_exports_context_memory_lifecycles_and_exact_privacy_states() {
+        const EVIDENCE_SENTINEL: &str = "retained-evidence-export-sentinel";
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = directory.path().join("composed-export.sqlite3");
@@ -897,10 +935,10 @@ mod tests {
             session_scope.clone(),
             MemoryRevisionStatus::Proposed,
             "Review this model-authored proposal.",
-            vec![user_input_evidence(
-                "evidence-proposal",
-                CONFIGURED_SECRET_SENTINEL,
-            )],
+            vec![
+                user_input_evidence("evidence-proposal", EVIDENCE_SENTINEL),
+                user_input_evidence_without_excerpt("evidence-proposal-absent"),
+            ],
             30,
         );
         let retracted = append_created_memory(
@@ -929,11 +967,10 @@ mod tests {
             "A user-scoped fact survives deletion of its evidence session.",
             vec![user_input_evidence(
                 "evidence-cross-scope",
-                CONFIGURED_SECRET_SENTINEL,
+                EVIDENCE_SENTINEL,
             )],
             60,
         );
-
         commit_export_context(
             &mut store,
             &[
@@ -974,9 +1011,9 @@ mod tests {
             "archive bytes must be deterministic"
         );
         assert!(
-            !first_bytes
-                .windows(CONFIGURED_SECRET_SENTINEL.len())
-                .any(|window| window == CONFIGURED_SECRET_SENTINEL.as_bytes())
+            first_bytes
+                .windows(EVIDENCE_SENTINEL.len())
+                .any(|window| { window == EVIDENCE_SENTINEL.as_bytes() })
         );
         assert_eq!(document["schema_version"], EXPORT_SCHEMA_VERSION);
         assert_eq!(document["event_count"], 8);
@@ -1029,6 +1066,19 @@ mod tests {
             proposed_row["revisions"][0]["metadata"]["trust_class"],
             "untrusted_proposal"
         );
+        assert_eq!(
+            proposed_row["revisions"][0]["evidence_excerpts"][0]["excerpt_state"],
+            "retained"
+        );
+        assert_eq!(
+            proposed_row["revisions"][0]["evidence_excerpts"][0]["excerpt"],
+            EVIDENCE_SENTINEL
+        );
+        assert_eq!(
+            proposed_row["revisions"][0]["evidence_excerpts"][1]["excerpt_state"],
+            "absent"
+        );
+        assert!(proposed_row["revisions"][0]["evidence_excerpts"][1]["excerpt"].is_null());
         let retracted_row = session_memory(&document, "memory-retracted");
         assert_eq!(retracted_row["lifecycle"], "retracted");
         assert_eq!(
@@ -1084,8 +1134,8 @@ mod tests {
         let (cross_scope_bytes, cross_scope_document) = read_export(&cross_scope_path);
         assert!(
             !cross_scope_bytes
-                .windows(CONFIGURED_SECRET_SENTINEL.len())
-                .any(|window| window == CONFIGURED_SECRET_SENTINEL.as_bytes())
+                .windows(EVIDENCE_SENTINEL.len())
+                .any(|window| window == EVIDENCE_SENTINEL.as_bytes())
         );
         assert_eq!(cross_scope_document["memory_id"], "memory-cross-scope");
         assert_eq!(
@@ -1098,8 +1148,13 @@ mod tests {
         );
         assert_eq!(
             cross_scope_document["revisions"][0]["metadata"]["evidence"][0]["excerpt_hash"],
-            raw_digest(CONFIGURED_SECRET_SENTINEL).as_str()
+            raw_digest(EVIDENCE_SENTINEL).as_str()
         );
+        assert_eq!(
+            cross_scope_document["revisions"][0]["evidence_excerpts"][0]["excerpt_state"],
+            "erased"
+        );
+        assert!(cross_scope_document["revisions"][0]["evidence_excerpts"][0]["excerpt"].is_null());
         assert_eq!(
             cross_scope.revision_id().as_str(),
             "revision-memory-cross-scope"

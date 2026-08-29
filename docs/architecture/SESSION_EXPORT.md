@@ -5,21 +5,21 @@
 **Last updated:** 2026-08-29
 
 AutoHarness writes a provider-neutral JSON archive before destructive session deletion.
-Schema v2 extends the complete session event stream with the exact durable context audit records and current session-scoped memory inspection records that still exist at export time.
-AutoHarness can also export one explicitly authorized memory item through a separate schema-v1 artifact.
+Schema v3 includes the complete session event stream, exact durable context audit records, current session-scoped memory inspection records, and explicit evidence excerpt availability that still exists at export time.
+AutoHarness can also export one explicitly authorized memory item through a separate schema-v2 artifact.
 
 ## File names and atomicity
 
 Session exports use this shape:
 
 ```text
-autoharness-session-{session_id}.export.v2-{unique_suffix}.json
+autoharness-session-{session_id}.export.v3-{unique_suffix}.json
 ```
 
 Standalone memory exports use this shape:
 
 ```text
-autoharness-memory-{memory_id}.export.v1-{unique_suffix}.json
+autoharness-memory-{memory_id}.export.v2-{unique_suffix}.json
 ```
 
 The exporter replaces characters outside ASCII letters, digits, `-`, and `_` in the identity portion and limits that portion to 96 characters.
@@ -30,13 +30,13 @@ A failed export removes the temporary file and never leaves a truncated destinat
 The unique file name is intentionally nondeterministic.
 The JSON bytes are deterministic for a fixed durable database state.
 
-## Session export schema v2
+## Session export schema v3
 
 The top-level document has this shape:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "session": {
     "session_id": "session-...",
     "status": "active",
@@ -146,7 +146,14 @@ One revision has this shape:
     "created_at": 1724000000000
   },
   "content_state": "retained",
-  "content": "Prefer concise status updates."
+  "content": "Prefer concise status updates.",
+  "evidence_excerpts": [
+    {
+      "evidence_id": "evidence-...",
+      "excerpt_state": "retained",
+      "excerpt": "Exact bounded supporting text."
+    }
+  ]
 }
 ```
 
@@ -169,7 +176,7 @@ Session export intentionally excludes user-, workspace-, and agent-scoped memori
 Those records require a separate export under their own exact scope authority.
 The session memory section is an inspection snapshot and not a second replayable memory ledger because it does not duplicate memory operations.
 
-## Standalone memory export schema v1
+## Standalone memory export schema v2
 
 `export_memory` requires the caller to supply an authorized scope equal to the scope in the memory's creation operation.
 An unknown memory or a scope mismatch fails before any output file is written.
@@ -178,7 +185,7 @@ The document has this shape:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "memory_id": "memory-...",
   "scope": {"kind": "workspace", "id": "workspace-..."},
   "operation_count": 2,
@@ -193,20 +200,25 @@ The document has this shape:
 `revisions` and `admissions` use the same shapes and privacy states as the session export.
 The complete operation ledger plus retained sidecars supports lifecycle inspection without the original SQLite database.
 
-## Evidence excerpt limitation
+## Evidence excerpt availability
 
 Revision metadata exports typed evidence identities, source references, relations, and expected excerpt hashes.
-Exact evidence excerpt sidecars are not exported because the current `MemoryStore` read port exposes revision content but has no authorized, hash-verifying evidence-content read.
-The archive therefore cannot distinguish a retained evidence excerpt from an excerpt erased by session deletion.
-It also cannot reproduce the exact excerpt bytes from the hash.
+The bounded `load_memory_evidence_content(revision_id)` store read independently verifies evidence identity, metadata order, source, relation, excerpt hash, and retained content hash before the exporter can copy any excerpt bytes.
+Each `evidence_excerpts` row names the exact evidence identity and one explicit availability state.
 
-The smallest completing API is a bounded `load_memory_evidence_content(revision_id)` read that returns exact evidence identities and hash-verified excerpt sidecars after the caller has authorized the owning memory scope.
-An export can then pair each evidence metadata record with `retained` or `unavailable` state without reading SQLite tables directly.
-Until that API exists, AutoHarness must not claim that standalone memory export contains exact evidence excerpts or proves their erasure state.
+| Value | Meaning |
+| --- | --- |
+| `absent` | Immutable metadata never named an excerpt, so `excerpt` is `null`. |
+| `retained` | The exact hash-verified excerpt remains available in `excerpt`. |
+| `erased` | Metadata proves an excerpt once existed, but logical deletion removed its sidecar and `excerpt` is `null`. |
+| `redacted_by_policy` | A retained excerpt belongs to a secret-labeled revision, so export forces `excerpt` to `null`. |
+
+Evidence rows remain in immutable revision metadata even when their excerpt sidecars are erased.
+The exporter never follows a typed evidence source into content owned by another session, tool result, imported source, or memory revision.
 
 Deleting a session erases session-owned memory content and evidence excerpts on memories in other scopes when their typed evidence source names the deleted session.
 The cross-scope memory content and its contentless evidence source reference remain.
-A post-deletion standalone export can therefore show the surviving source reference but not the erased excerpt state.
+A post-deletion standalone export therefore shows the surviving source reference together with the explicit `erased` excerpt state.
 
 ## Security and privacy boundaries
 
@@ -214,7 +226,7 @@ A post-deletion standalone export can therefore show the surviving source refere
 - Export files must be handled as sensitive local artifacts and are not encrypted by this format.
 - Provider credentials and authentication material must be rejected or redacted before durable persistence.
 - The exporter does not reinterpret arbitrary session event text as a credential and does not replace the ingress secret gate.
-- Exact evidence excerpts are omitted under the current read contract.
+- Exact retained evidence excerpts are included only through the hash-verifying read contract and the owning export authority.
 - Secret-labeled revision content is never serialized by the exporter.
 - Memory scope authorization is checked before a standalone memory file is written.
 - Session export includes only exact session-scoped memories and never widens memory scope authority.
