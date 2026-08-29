@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Last updated:** 2026-08-23
+**Last updated:** 2026-08-29
 
 **Planning horizon:** Foundation through distributed self-improvement
 
@@ -451,7 +451,7 @@ Focused `autoharness-tui` compilation, unit tests, navigation tests, help tests,
 
 ### Phase 3.10: Terminal visual overhaul
 
-**Status:** Planned
+**Status:** Validation in progress
 
 **Goal:** Replace ad hoc per-surface styling with one typed presentation layer so every route shares a consistent, beautiful, responsive visual language that stays fully usable without color, without a Nerd Font, and on terminals that do not report truecolor.
 
@@ -478,25 +478,47 @@ Exit criteria:
 
 ### Phase 4: Persistent context and memory
 
-**Status:** Designed; implementation gated by Phase 3.1 through Phase 3.10
+**Status:** Implementation authorized; release remains gated by the Phase 3.9 and Phase 3.10 evidence
 
 **Goal:** Turn durable history into useful, bounded, auditable model context.
 
+Authoritative documents: [persistent memory architecture](architecture/PERSISTENT_MEMORY.md), [Phase 4 implementation plan](design/PERSISTENT_CONTEXT_MEMORY_PLAN.md), proposed [ADR-0017](adr/0017-use-auditable-provider-turn-context.md), and proposed [ADR-0018](adr/0018-use-a-separate-revisioned-memory-ledger.md).
+
 Deliverables:
 
-- Context-source registry and deterministic context builder.
-- Context epochs, snapshots, admissions, and compaction.
-- User-, workspace-, session-, and agent-scoped memory records.
-- Memory proposal, validation, deduplication, supersession, retraction, and deletion flows.
-- SQLite FTS retrieval with a replaceable ranking interface.
-- Memory inspection UI showing source, confidence, scope, age, and admission history.
+- A real `autoharness-memory` core with a context-source registry, deterministic observations, conservative versioned sizing, stable budget fitting, canonical rendering, and manifest hashing.
+- Context epochs, source snapshots, per-provider-turn manifests, admissions, typed ranking reasons, request hashes, and compaction boundaries that commit before dispatch.
+- Typed opaque user, workspace, session, and agent scope identities without using display labels, provider profiles, or raw paths as authority.
+- A separate event-sourced memory ledger with erasable content sidecars, revisions, evidence, validation, exact deduplication, contradiction candidates, supersession, retraction, and logical deletion.
+- Explicit user memory plus tool-, model-, import-, and compaction-authored proposals whose immutable origin cannot authorize their own promotion.
+- SQLite FTS5 candidate retrieval maintained inside memory transactions, with bounded literal queries and a replaceable Rust ranking interface using fixed-point scores and stable ties.
+- Provider-neutral context preludes mapped to native Gemini, OpenAI-compatible, and Codex instruction channels instead of fabricated user messages.
+- A sixth primary Memory route with search, filters, responsive list, detail, admission history, proposal review, correction, retraction, deletion, export, help, and visible keyboard and mouse actions.
+- Migration, projection and FTS rebuild, crash, restart, compaction, secret, deletion, performance, visual conformance, and real-PTY evidence.
+
+Implementation stages:
+
+1. Pin the corrected context and cross-scope memory decisions, typed serialized contracts, and release-gate distinction.
+2. Implement the pure deterministic memory and context core with shuffled-input, budget, injection, validation, and ranking tests.
+3. Add the memory ledger, context store, FTS5 retrieval, explicit transaction boundaries, rebuilds, and migration evidence.
+4. Bind every first provider call and tool continuation to an exact durable turn manifest before dispatch.
+5. Deliver explicit useful memory through the full remember, retrieve, admit, inspect, correct, retract, delete, and restart path.
+6. Build the themed responsive Memory terminal workspace over typed projections and intents.
+7. Add no-authority model and tool proposals plus compaction summaries that require independent validation or approval.
+8. Complete the integrated migration, crash, privacy, performance, conformance, export, and PTY matrix.
 
 Exit criteria:
 
-- Every injected memory can answer where it came from, why it was selected, and which provider turns saw it.
+- Every injected memory can answer where it came from, why it was selected, and which exact provider attempt and run turn saw it.
 - Model-generated memory is never silently promoted to trusted memory.
 - Context construction is deterministic for a fixed event log, catalog snapshot, configuration, and token budget.
 - Compaction and restart do not change the effective durable facts.
+- A user can create, find, inspect, correct, retract, export, and logically delete memory from the terminal without shell or database access.
+- Retraction and deletion prevent future admission, and deletion removes application-owned content and derived indexes without making an unsupported forensic-erasure claim.
+- The Memory route passes the complete responsive, theme, color, glyph, reduced-motion, compact, single-column, color-depth, hit-region, and render-cost matrix.
+
+Implementation work proceeds on an isolated feature branch because the user explicitly authorized Phase 4 integration.
+Release and completion status remain blocked by the already documented Phase 3.9 and Phase 3.10 candidate evidence until those gates are genuinely satisfied.
 
 ### Phase 5: Evaluation and self-improvement
 
@@ -543,11 +565,10 @@ Phases 1 through 3 established the engine, provider, storage, replay, and safe t
 Phases 3.2 through 3.7 now provide durable sessions, multiple secure provider profiles, and one stable responsive terminal shell with typed route, focus, overlay, and recovery boundaries.
 Proceed in this order:
 
-1. Promote the Phase 3.7 implementation through green baseline and cross-platform serial PTY pull-request gates.
-2. Implement Phase 3.8 settings, personalization, and accessibility on top of the stable route-based shell.
-3. Execute Phase 3.9 against one release-candidate commit, including the deferred live-provider, cross-platform vault, visual, benchmark, migration, and rollback evidence.
-4. Execute Phase 3.10 in the order defined by the [terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md), building the presentation layer before rebuilding any surface.
-5. Begin Phase 4 with deterministic context epochs and untrusted memory proposal contracts.
+1. Close the remaining Phase 3.9 and Phase 3.10 cross-platform, human-terminal, migration, benchmark, vault, provider, rollback, checklist, and approval evidence on one candidate.
+2. Implement Phase 4 in the ordered slices defined by the [persistent context and memory plan](design/PERSISTENT_CONTEXT_MEMORY_PLAN.md), beginning with per-turn manifests and a separate untrusted memory ledger.
+3. Keep every Phase 4 slice runnable and independently testable while the earlier release evidence proceeds in parallel.
+4. Declare Phase 4 released only after its local gates and the inherited Phase 3 promotion gates are complete.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
