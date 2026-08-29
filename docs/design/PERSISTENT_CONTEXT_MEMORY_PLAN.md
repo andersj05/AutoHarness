@@ -17,7 +17,7 @@ The implementation must preserve the existing provider-neutral engine, event-aut
 No provider call may receive context that cannot be reconstructed from a durable provider-turn manifest.
 No model-authored statement may become active memory through the same authority that proposed it.
 
-Phase 4 implementation may proceed on its feature branch while the external Phase 3.9 and Phase 3.10 evidence is collected.
+Phase 4 implementation proceeded on its feature branch and is now merged into `dev` while the external Phase 3.9 and Phase 3.10 evidence is collected.
 Phase 4 must not be described as released until those earlier promotion gates and the Phase 4 local gates are satisfied on the intended candidate.
 
 ## Binding design corrections
@@ -268,39 +268,39 @@ Exit criteria:
 
 ## Verified implementation state
 
-Slice 4.0 is complete in the feature branch.
+Slice 4.0 is complete in `dev`.
 The serialized context and memory contracts, logical-deletion boundary, proposed [ADR-0017](../adr/0017-use-auditable-provider-turn-context.md), and proposed [ADR-0018](../adr/0018-use-a-separate-revisioned-memory-ledger.md) are checked in with domain round-trip and rejection tests.
 
-Slice 4.1 is complete in the feature branch.
+Slice 4.1 is complete in `dev`.
 The `autoharness-memory` crate implements deterministic source observation, validation, integer ranking, bounded fitting, canonical inert rendering, manifest hashing, and compaction fact verification with shuffled-input, Unicode, injection-shape, budget-edge, eligibility, and stable-tie coverage.
 
-Slice 4.2 is complete in the feature branch.
+Slice 4.2 is complete in `dev`.
 SQLite migrations 4 through 6 add opaque scope bindings, the separate memory ledger, erasable sidecars, validation, evidence, relations, context records, and explicitly maintained FTS5 indexes.
 The store tests cover optimistic and idempotent lifecycle batches, atomic rollback, literalized and scope-filtered retrieval, status and sensitivity filtering before page limits, deterministic physical-order rebuilds, complete projection replay, missing-sidecar failure, and logical deletion.
 
-Slice 4.3 is complete in the feature branch.
+Slice 4.3 is complete in `dev`.
 Both first provider calls and tool continuations bind an exact manifest and request hash before dispatch through the single storage actor.
 Gemini, OpenAI-compatible, and native Codex adapters map the provider-neutral prelude to their native instruction boundary with request-shape coverage.
 Each run turn retains audit-only hashes for its exact provider history and tool definitions plus settled tool messages, while frozen prelude-eligible sources remain unchanged and audit-only sources can never back an admission.
 Frozen continuation tests prove restart reuse of the exact retained instruction and memory bytes while later mutations wait for a new epoch, and erased retained bytes fail closed before dispatch.
 Recovery waits for an exact live catalog match, reconstructs and verifies the already bound request hash, restores its run budget, and dispatches that turn once without creating a replacement manifest.
 
-Slice 4.4 is complete in the feature branch.
+Slice 4.4 is complete in `dev`.
 Explicit workspace memory follows the create, validate, activate, retrieve, admit, inspect, correct, retract, export, delete, and restart path through typed application operations.
 Durable admissions retain exact attempt, run-turn, model, epoch, rank, reason, source-revision, renderer, and retained-content coordinates, while later retraction or correction preserves prior audit identity.
 
-Slice 4.5 is complete in the feature branch.
+Slice 4.5 is complete in `dev`.
 The sixth themed primary route provides debounced literal search, status and scope filters, authoritative bounded paging, loading and no-match states, responsive list-detail-history layouts, proposal review, all lifecycle actions, command and Settings entry points, keyboard navigation, and measured mouse targets.
 Ten Memory surfaces participate in the complete five-size, theme, color-treatment, glyph, reduced-motion, density, single-column, Indexed256, and Basic16 conformance matrix.
 The focused render-cost gate covers both an eight-record view and the one-hundred-record page limit.
 
-Slice 4.6 is complete in the feature branch.
+Slice 4.6 is complete in `dev`.
 The no-authority proposal sink verifies inline or artifact evidence bytes, persists deterministic validation, duplicate and contradiction candidate identities, and provenance, settles proposal tool output without content, reconciles exact retries idempotently after restart, and never activates its own proposal.
 Production compaction selects complete settled history groups, commits a verified durable-facts boundary and replacement epoch atomically, creates only an untrusted session-scoped summary proposal, preserves the replacement baseline across later tool turns, and excludes compacted raw history after restart.
 Explicit import accepts one normalized workspace-relative path, verifies canonical containment, reads at most 16 KiB of safe UTF-8 text, hashes the exact source bytes, derives opaque path-free source identity, and creates only a workspace-scoped imported proposal with typed document evidence.
 The terminal presents import through Alt+I, `/memory-import`, the command palette, and measured mouse controls, explains the size and review boundary at wide and narrow sizes, and requires a separate explicit-user revision before imported content can become active.
 
-Slice 4.7 is complete and locally validated in the feature branch.
+Slice 4.7 is complete and locally validated in `dev`.
 The checked-in evidence covers schema-3 migration and rollback-copy rehearsal, FTS and projection corruption recovery, context and memory transaction failure injection, exact raw configured-credential rejection, session and standalone exports, logical deletion, restart, the 7,685-case visual conformance manifest, bounded Memory rendering, and a real PTY remember-import-review-approve-to-delete journey.
 The all-profile exact raw credential boundary fails closed when configured sentinels cannot be recovered, redacts exact values from submitted prompts before durable admission, and rejects or cancels matching context construction, reconstructed provider requests, streamed text, normalized call identities, structured argument keys and values, local tool output, memory writes, compaction, and recovered bound requests.
 This credential boundary does not claim encoded or component-derived data-loss prevention or artifact-at-rest secret scanning, and fragmented active or session-only values depend on provider adapters preserving ordered stream fragments because the application does not own those raw sentinels.

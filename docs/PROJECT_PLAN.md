@@ -478,7 +478,7 @@ Exit criteria:
 
 ### Phase 4: Persistent context and memory
 
-**Status:** Implemented and locally validated on the Phase 4 feature branch; inherited Phase 3.9 and Phase 3.10 release evidence remains pending
+**Status:** Implemented, locally validated, and merged into `dev`; inherited Phase 3.9 and Phase 3.10 release evidence remains pending
 
 **Goal:** Turn durable history into useful, bounded, auditable model context.
 
@@ -516,7 +516,7 @@ Local implementation evidence as of 2026-08-29:
 - Memory inspection projects retained, absent, and erased evidence, every relation kind, validator findings, and effective conflicting or expired risk states without giving the terminal mutation authority.
 - The terminal lifecycle has focused keyboard, mouse, responsive, accessibility, authoritative-query, generation, paging, timer-dispatch, and empty-state coverage plus ten Memory surfaces in the 7,685-case visual manifest.
 - The all-profile exact raw credential boundary fails closed when configured sentinels cannot be recovered, redacts exact values from submitted prompts before durable admission, and rejects or cancels matching memory and evidence writes, workspace sources, context construction, reconstructed provider requests, streamed text, normalized call identities, structured argument keys and values, local tool output, compaction, and recovered continuations before the completing value reaches provider-neutral durable state.
-- Local migration rehearsal, projection and FTS rebuild, physical-order ranking, failure injection, privacy deletion, standalone and session export, bounded render cost, restart, visual conformance, and the real-PTY lifecycle pass on the feature branch.
+- Local migration rehearsal, projection and FTS rebuild, physical-order ranking, failure injection, privacy deletion, standalone and session export, bounded render cost, restart, visual conformance, and the real-PTY lifecycle pass on the implementation merged into `dev`.
 - The real-PTY lifecycle covers remember, import, provenance review, deliberate approval, clean exit, restart, authoritative literal no-match search, compact resize, correction, export, retraction, deletion with content-sidecar erasure, future eligibility, and terminal restoration.
 - Formatting, strict all-target and all-feature workspace Clippy, the complete locked workspace suite, documentation links, the 7,685-case conformance manifest, focused Memory render cost, visual review, and the exact ignored Memory PTY journey pass locally.
 - The credential checks target exact raw configured values and conservative reconstruction of their normalized value sequences, and they do not claim encoded or component-derived data-loss prevention or artifact-at-rest secret scanning.
@@ -533,7 +533,7 @@ Exit criteria:
 - Retraction and deletion prevent future admission, and deletion removes application-owned content and derived indexes without making an unsupported forensic-erasure claim.
 - The Memory route passes the complete responsive, theme, color, glyph, reduced-motion, compact, single-column, color-depth, hit-region, and render-cost matrix.
 
-Implementation work proceeds on the isolated `feat/persistent-context-memory` branch because the user explicitly authorized Phase 4 integration.
+Implementation proceeded on the isolated `feat/persistent-context-memory` branch and was merged into `dev` after local validation.
 Release status remains blocked by the already documented Phase 3.9 and Phase 3.10 evidence and independent candidate review until those gates are genuinely satisfied.
 
 ### Phase 5: Evaluation and self-improvement

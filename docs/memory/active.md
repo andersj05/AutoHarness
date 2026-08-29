@@ -4,11 +4,11 @@
 
 **Phase:** 4 persistent context and memory integration, locally validated with inherited Phase 3 release evidence pending
 
-**Status:** `feat/persistent-context-memory` implements and locally validates the Phase 4 context, memory, provider, storage, application, import, credential-safety, and terminal slices, while the inherited Phase 3.9 and Phase 3.10 release evidence remains pending
+**Status:** `dev` contains the locally validated Phase 4 context, memory, provider, storage, application, import, credential-safety, and terminal slices after merge commit `85dc150`, while the inherited Phase 3.9 and Phase 3.10 release evidence remains pending
 
 ## Current objective
 
-Preserve and independently review the exact locally validated Phase 4 feature-branch candidate while closing the inherited Phase 3 release evidence without describing the phase as released.
+Preserve and independently review the exact locally validated Phase 4 implementation on `dev` while closing the inherited Phase 3 release evidence without describing the phase as released.
 
 Keep the Phase 3.9 and Phase 3.10 release-candidate evidence gates open in parallel.
 Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md), [ADR-0017](../adr/0017-use-auditable-provider-turn-context.md), or [ADR-0018](../adr/0018-use-a-separate-revisioned-memory-ledger.md) accepted until their candidate evidence and independent review requirements are satisfied.
@@ -192,7 +192,7 @@ Configured router access, macOS and Linux platform vault environments, an approv
 
 ## Handoff note
 
-Continue from `feat/persistent-context-memory` and preserve its small conventional-commit sequence.
+Continue from `dev` after merge commit `85dc150`, and preserve the feature branch until the remote integration is confirmed.
 The latest committed Phase 4 state includes authoritative Memory queries, durable validation candidates, dynamic audit-only provider-history and tool-state snapshots, production compaction, exact bound-turn restart recovery, bounded workspace-document import, and the all-profile exact raw credential boundary.
 Do not claim broad data-loss prevention from the exact raw configured-credential sentinel boundary.
 The checked-in real-PTY journey passes the complete import, review, approval, restart, correction, export, retraction, deletion, and terminal-restoration path on the local candidate.
