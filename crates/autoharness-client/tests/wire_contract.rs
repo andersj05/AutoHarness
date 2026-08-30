@@ -248,10 +248,60 @@ fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
 
     assert_eq!(ingress.credential(), sentinel);
     assert!(!format!("{ingress:?}").contains(sentinel));
+}
+
+#[test]
+fn secret_ingress_accepts_exact_visible_ascii_boundary() {
+    let credential = "x".repeat(MAX_CREDENTIAL_BYTES);
+    let ingress = SecretIngress::new(
+        ConnectionId::new("connection-gemini-primary").expect("valid connection identity"),
+        credential.clone(),
+    )
+    .expect("4096 visible ASCII bytes must be accepted");
+
+    assert_eq!(ingress.credential(), credential);
+}
+
+#[test]
+fn secret_ingress_rejects_values_above_legacy_boundary() {
+    let error = SecretIngress::new(
+        ConnectionId::new("connection-gemini-primary").expect("valid connection identity"),
+        "x".repeat(MAX_CREDENTIAL_BYTES + 1),
+    )
+    .expect_err("4097 bytes must be rejected");
+
+    assert_eq!(
+        error,
+        ValidationError::TooLong {
+            field: "credential",
+            max_bytes: MAX_CREDENTIAL_BYTES,
+            actual_bytes: MAX_CREDENTIAL_BYTES + 1,
+        }
+    );
+}
+
+#[test]
+fn secret_ingress_rejects_empty_whitespace_and_control_characters() {
+    for credential in [
+        "", " ", "abc def", "abc\tdef", "abc\ndef", "abc\rdef", "abc\0def",
+    ] {
+        assert!(
+            SecretIngress::new(
+                ConnectionId::new("connection-gemini-primary").expect("valid connection identity"),
+                credential,
+            )
+            .is_err(),
+            "credential containing non-graphic ASCII was accepted"
+        );
+    }
+}
+
+#[test]
+fn secret_ingress_rejects_non_ascii_characters() {
     assert!(
         SecretIngress::new(
             ConnectionId::new("connection-gemini-primary").expect("valid connection identity"),
-            "x".repeat(MAX_CREDENTIAL_BYTES + 1),
+            "credential-é",
         )
         .is_err()
     );

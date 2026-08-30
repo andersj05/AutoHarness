@@ -30,8 +30,29 @@ pub const MAX_PERMISSION_DETAILS: usize = 32;
 pub const MAX_CATALOG_MODELS: usize = 4_096;
 /// Maximum provider states in one complete client snapshot.
 pub const MAX_PROVIDERS: usize = 64;
-/// Maximum UTF-8 bytes accepted by dedicated secret ingress.
-pub const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
+/// Maximum visible-ASCII bytes accepted by dedicated secret ingress.
+pub const MAX_CREDENTIAL_BYTES: usize = 4 * 1024;
+
+pub(crate) fn validate_credential(value: &str) -> Result<(), ValidationError> {
+    if value.is_empty() {
+        return Err(ValidationError::Empty {
+            field: "credential",
+        });
+    }
+    if value.len() > MAX_CREDENTIAL_BYTES {
+        return Err(ValidationError::TooLong {
+            field: "credential",
+            max_bytes: MAX_CREDENTIAL_BYTES,
+            actual_bytes: value.len(),
+        });
+    }
+    if !value.chars().all(|character| character.is_ascii_graphic()) {
+        return Err(ValidationError::Invalid {
+            field: "credential",
+        });
+    }
+    Ok(())
+}
 
 pub(crate) fn validate_non_empty_text(
     field: &'static str,

@@ -4,7 +4,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroizing;
 
-use crate::bounds::{MAX_CREDENTIAL_BYTES, validate_non_empty_text};
+use crate::bounds::validate_credential;
 use crate::{
     AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, RequestId,
     SafeFailure, SessionId, ToolCallId, TransportRevision, ValidationError,
@@ -149,13 +149,13 @@ pub struct SecretIngress {
 }
 
 impl SecretIngress {
-    /// Takes ownership of one bounded non-blank credential.
+    /// Takes ownership of one nonempty visible-ASCII credential of at most 4096 bytes.
     pub fn new(
         connection_id: ConnectionId,
         credential: impl Into<String>,
     ) -> Result<Self, ValidationError> {
         let credential = Zeroizing::new(credential.into());
-        validate_non_empty_text("credential", credential.as_str(), MAX_CREDENTIAL_BYTES)?;
+        validate_credential(credential.as_str())?;
         Ok(Self {
             connection_id,
             credential,
