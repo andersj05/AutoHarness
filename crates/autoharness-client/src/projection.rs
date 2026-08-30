@@ -394,7 +394,8 @@ impl<'de> Deserialize<'de> for SessionProjection {
 pub struct SessionSummary {
     pub session_id: SessionId,
     pub title: SessionTitle,
-    pub revision: SessionRevision,
+    /// Durable projection revision, or `None` when the source row omits it.
+    pub revision: Option<SessionRevision>,
     pub selected_model: Option<ModelRef>,
     /// Durable last-update time, or `None` when the row is synthetic.
     pub updated_at_ms: Option<UnixMillis>,
@@ -409,7 +410,7 @@ impl SessionSummary {
     pub const fn new(
         session_id: SessionId,
         title: SessionTitle,
-        revision: SessionRevision,
+        revision: Option<u64>,
         selected_model: Option<ModelRef>,
         updated_at_ms: Option<i64>,
         message_count: Option<u64>,
@@ -418,7 +419,10 @@ impl SessionSummary {
         Self {
             session_id,
             title,
-            revision,
+            revision: match revision {
+                Some(value) => Some(SessionRevision::new(value)),
+                None => None,
+            },
             selected_model,
             updated_at_ms: match updated_at_ms {
                 Some(value) => Some(UnixMillis::new(value)),

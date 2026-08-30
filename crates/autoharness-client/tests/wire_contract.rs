@@ -82,7 +82,7 @@ fn sample_snapshot() -> ClientSnapshot {
         vec![SessionSummary::new(
             identity,
             SessionTitle::new("New conversation").expect("valid title"),
-            SessionRevision::new(7),
+            Some(7),
             Some(model_ref()),
             Some(1_788_100_000_000),
             Some(2),
@@ -177,7 +177,7 @@ fn synthetic_session_summary_preserves_unknown_durable_metadata() {
     let summary = SessionSummary::new(
         session_id("session-synthetic"),
         SessionTitle::new("New session").expect("valid title"),
-        SessionRevision::new(0),
+        None,
         None,
         None,
         None,
@@ -185,6 +185,7 @@ fn synthetic_session_summary_preserves_unknown_durable_metadata() {
     );
 
     let value = serde_json::to_value(&summary).expect("serialize synthetic summary");
+    assert_eq!(value["revision"], serde_json::Value::Null);
     assert_eq!(value["updated_at_ms"], serde_json::Value::Null);
     assert_eq!(value["message_count"], serde_json::Value::Null);
     assert_eq!(
