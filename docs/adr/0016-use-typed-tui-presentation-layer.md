@@ -1,6 +1,6 @@
 # ADR-0016: Use a typed terminal presentation layer
 
-**Status:** Proposed
+**Status:** Superseded by ADR-0019
 
 **Date:** 2026-08-27
 
@@ -95,3 +95,4 @@ Option 4 was rejected because the product's visual identity, accessibility degra
 
 - [ADR-0001](0001-use-rust-modular-monolith.md) constrains this layer to stay inside the modular monolith until a measured need justifies a crate boundary.
 - [ADR-0012](0012-use-typed-settings-resolver.md) owns the preference keys this layer reads; no new key is introduced.
+- [ADR-0019](0019-use-tauri-web-rendered-desktop-client.md) replaces the terminal as the future product presentation boundary while retaining this layer as migration evidence and a temporary parity reference.

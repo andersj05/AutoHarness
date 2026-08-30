@@ -8,6 +8,8 @@ This index routes humans and agents to the smallest authoritative document for a
 
 ## Design
 
+- [GUI design system](design/GUI_DESIGN_SYSTEM.md): desktop visual language, layout, components, interaction, accessibility, and validation rules.
+- [GUI implementation plan](design/GUI_IMPLEMENTATION_PLAN.md): ordered migration from the terminal client to the desktop GUI.
 - [Terminal design system](design/TUI_DESIGN_SYSTEM.md): terminal visual tokens, gradients, icon triples, components, and responsive rules.
 - [Terminal interface audit](design/TUI_AUDIT.md): the evidence-backed defect baseline the redesign closes.
 - [Terminal interface redesign plan](design/TUI_REDESIGN_PLAN.md): the ordered Phase 3.10 steps and exit criteria.
@@ -15,6 +17,7 @@ This index routes humans and agents to the smallest authoritative document for a
 
 ## Architecture
 
+- [GUI architecture](architecture/GUI.md): desktop client ownership, protocol, carrier, security, recovery, and testing contracts.
 - [System overview](architecture/OVERVIEW.md): component boundaries, dependency rules, runtime flow, and proposed workspace.
 - [Persistent memory](architecture/PERSISTENT_MEMORY.md): durable session, context, knowledge, and experiment memory contracts.
 - [Session export format](architecture/SESSION_EXPORT.md): the provider-neutral JSON export written before destructive deletion.
