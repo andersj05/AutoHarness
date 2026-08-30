@@ -95,9 +95,10 @@ It remains available until the GUI passes the migrated release gates, after whic
 
 ## Evidence
 
-- [DeepSeek Harness GUI layering and RPC protocol](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/archived/architecture/2026-07-19-gui-layering-and-rpc-protocol.md)
-- [DeepSeek Harness Web Client architecture](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/web-client.md)
-- [DeepSeek Harness Web application manifest](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/web/package.json)
+- [DeepSeek Harness GUI reference review](../research/deepseek-harness-gui-patterns.md)
+- [DeepSeek Harness GUI layering and RPC protocol at the reviewed commit](https://github.com/deepseek-ai/deepseek-harness/blob/0a53fb55bea101816fa226bb964ae2bed71c343b/.agents/notes/archived/architecture/2026-07-19-gui-layering-and-rpc-protocol.md)
+- [DeepSeek Harness Web Client architecture at the reviewed commit](https://github.com/deepseek-ai/deepseek-harness/blob/0a53fb55bea101816fa226bb964ae2bed71c343b/docs/subsystems/web-client.md)
+- [DeepSeek Harness Web application manifest at the reviewed commit](https://github.com/deepseek-ai/deepseek-harness/blob/0a53fb55bea101816fa226bb964ae2bed71c343b/apps/web/package.json)
 - [Tauri 2 architecture](https://v2.tauri.app/concept/architecture/)
 - [Tauri command and Channel documentation](https://v2.tauri.app/develop/calling-rust/)
 - [Tauri security capabilities](https://v2.tauri.app/security/capabilities/)
@@ -110,4 +111,3 @@ It remains available until the GUI passes the migrated release gates, after whic
 - [ADR-0001](0001-use-rust-modular-monolith.md) remains authoritative for Rust and the modular-monolith boundary, while this record replaces its Ratatui presentation choice.
 - [ADR-0005](0005-use-ephemeral-in-app-credentials.md) remains authoritative for ephemeral non-persistence and zeroization, while this record replaces its terminal-only editor mechanism.
 - [ADR-0016](0016-use-typed-tui-presentation-layer.md) is superseded for future product presentation work, while its tested theme and accessibility principles remain migration inputs.
-

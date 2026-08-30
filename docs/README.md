@@ -39,6 +39,7 @@ This index routes humans and agents to the smallest authoritative document for a
 ## Research
 
 - [Agent memory patterns](research/agent-memory-patterns.md): source review and the conventions adopted for AutoHarness.
+- [DeepSeek Harness GUI patterns](research/deepseek-harness-gui-patterns.md): commit-pinned review of the client layering, protocol, recovery, and packaging patterns adopted or rejected for the desktop migration.
 
 ## Release
 
