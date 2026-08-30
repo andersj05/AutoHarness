@@ -5,6 +5,7 @@ fn main() {
             "gui_connect",
             "gui_dispatch",
             "gui_submit_credential",
+            "gui_acknowledge_frame",
         ]),
     ))
     .expect("Tauri build integration failed");

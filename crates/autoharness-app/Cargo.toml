@@ -29,7 +29,7 @@ gui = ["dep:autoharness-client", "dep:tauri", "dep:tauri-build"]
 
 [dependencies]
 async-trait.workspace = true
-autoharness-client = { path = "../autoharness-client", optional = true }
+autoharness-client = { workspace = true, optional = true }
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
 autoharness-memory.workspace = true

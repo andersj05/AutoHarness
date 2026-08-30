@@ -1,6 +1,6 @@
 //! Feature-gated Tauri carrier over the existing application coordinator ports.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,12 +42,16 @@ use tokio_util::sync::CancellationToken;
 use crate::error::AppError;
 
 const HOST_REQUEST_CAPACITY: usize = 32;
+const FRAME_ACK_CAPACITY: usize = 1;
 const MAX_PENDING_REQUESTS: usize = HOST_REQUEST_CAPACITY;
+const MAX_PENDING_NOTICES: usize = MAX_PENDING_REQUESTS * 2 + 2;
 const PROJECTION_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+const SHUTDOWN_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct GuiState {
     requests: mpsc::Sender<HostRequest>,
+    acknowledgements: mpsc::Sender<FrameAcknowledgement>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -69,6 +73,13 @@ impl GuiIpcError {
         Self {
             code: "host_disconnected",
             message: "the application host is no longer available",
+        }
+    }
+
+    const fn renderer_restart_required() -> Self {
+        Self {
+            code: "renderer_restart_required",
+            message: "restart AutoHarness to recover the native renderer",
         }
     }
 
@@ -109,6 +120,11 @@ enum HostRequest {
     },
 }
 
+struct FrameAcknowledgement {
+    revision: TransportRevision,
+    reply: oneshot::Sender<Result<(), GuiIpcError>>,
+}
+
 #[tauri::command]
 async fn gui_connect(
     state: tauri::State<'_, GuiState>,
@@ -116,13 +132,13 @@ async fn gui_connect(
 ) -> Result<(), GuiIpcError> {
     let requests = state.requests.clone();
     let (reply, response) = oneshot::channel();
-    requests
-        .send(HostRequest::Connect {
+    try_enqueue_host_request(
+        &requests,
+        HostRequest::Connect {
             channel: on_frame,
             reply,
-        })
-        .await
-        .map_err(|_| GuiIpcError::disconnected())?;
+        },
+    )?;
     response.await.map_err(|_| GuiIpcError::disconnected())?
 }
 
@@ -133,13 +149,13 @@ async fn gui_dispatch(
 ) -> Result<CommandReceipt, GuiIpcError> {
     let requests = state.requests.clone();
     let (reply, response) = oneshot::channel();
-    requests
-        .send(HostRequest::Dispatch {
+    try_enqueue_host_request(
+        &requests,
+        HostRequest::Dispatch {
             command: command.command,
             reply,
-        })
-        .await
-        .map_err(|_| GuiIpcError::disconnected())?;
+        },
+    )?;
     response.await.map_err(|_| GuiIpcError::disconnected())?
 }
 
@@ -153,45 +169,92 @@ async fn gui_submit_credential(
         .map_err(|_| GuiIpcError::invalid_credential())?;
     let requests = state.requests.clone();
     let (reply, response) = oneshot::channel();
-    requests
-        .send(HostRequest::Credential { ingress, reply })
-        .await
-        .map_err(|_| GuiIpcError::disconnected())?;
+    try_enqueue_host_request(&requests, HostRequest::Credential { ingress, reply })?;
     response.await.map_err(|_| GuiIpcError::disconnected())?
+}
+
+#[tauri::command]
+async fn gui_acknowledge_frame(
+    state: tauri::State<'_, GuiState>,
+    revision: TransportRevision,
+) -> Result<(), GuiIpcError> {
+    let acknowledgements = state.acknowledgements.clone();
+    let (reply, response) = oneshot::channel();
+    try_enqueue_frame_ack(&acknowledgements, FrameAcknowledgement { revision, reply })?;
+    response.await.map_err(|_| GuiIpcError::disconnected())?
+}
+
+fn try_enqueue_host_request(
+    requests: &mpsc::Sender<HostRequest>,
+    request: HostRequest,
+) -> Result<(), GuiIpcError> {
+    match requests.try_send(request) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(_)) => Err(GuiIpcError::busy()),
+        Err(TrySendError::Closed(_)) => Err(GuiIpcError::disconnected()),
+    }
+}
+
+fn try_enqueue_frame_ack(
+    acknowledgements: &mpsc::Sender<FrameAcknowledgement>,
+    acknowledgement: FrameAcknowledgement,
+) -> Result<(), GuiIpcError> {
+    match acknowledgements.try_send(acknowledgement) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(_)) => Err(GuiIpcError::busy()),
+        Err(TrySendError::Closed(_)) => Err(GuiIpcError::disconnected()),
+    }
 }
 
 pub(crate) async fn run(ui_ports: UiPorts, shutdown: CancellationToken) -> Result<(), AppError> {
     let (request_tx, request_rx) = mpsc::channel(HOST_REQUEST_CAPACITY);
+    let (acknowledgement_tx, acknowledgement_rx) = mpsc::channel(FRAME_ACK_CAPACITY);
     let bridge_shutdown = shutdown.clone();
+    let exit_ready = CancellationToken::new();
+    let bridge_exit_ready = exit_ready.clone();
     let bridge_task = tokio::spawn(async move {
-        BridgeActor::new(ui_ports, request_rx, bridge_shutdown)
+        let result = BridgeActor::new(ui_ports, request_rx, acknowledgement_rx, bridge_shutdown)
+            .with_exit_ready(bridge_exit_ready.clone())
             .run()
-            .await
+            .await;
+        bridge_exit_ready.cancel();
+        result
     });
 
     let app = tauri::Builder::default()
         .manage(GuiState {
             requests: request_tx,
+            acknowledgements: acknowledgement_tx,
         })
         .invoke_handler(tauri::generate_handler![
             gui_connect,
             gui_dispatch,
-            gui_submit_credential
+            gui_submit_credential,
+            gui_acknowledge_frame
         ])
         .build(tauri::generate_context!())
         .map_err(|_| AppError::Configuration)?;
 
     let handle = app.handle().clone();
-    let exit_shutdown = shutdown.clone();
+    let event_exit_ready = exit_ready.clone();
     let exit_task = tokio::spawn(async move {
-        exit_shutdown.cancelled().await;
+        exit_ready.cancelled().await;
         handle.exit(0);
     });
     let event_shutdown = shutdown.clone();
-    app.run(move |_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+    app.run(move |_handle, event| match event {
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if !event_exit_ready.is_cancelled() => {
+            api.prevent_close();
             event_shutdown.cancel();
         }
+        tauri::RunEvent::ExitRequested { api, .. } if !event_exit_ready.is_cancelled() => {
+            api.prevent_exit();
+            event_shutdown.cancel();
+        }
+        _ => {}
     });
 
     shutdown.cancel();
@@ -200,6 +263,27 @@ pub(crate) async fn run(ui_ports: UiPorts, shutdown: CancellationToken) -> Resul
         Ok(result) => result,
         Err(_) => Err(AppError::WorkerStopped),
     }
+}
+
+#[derive(Clone)]
+struct QueuedNotice {
+    notice: ClientNotice,
+    terminal_request_id: Option<u64>,
+    wait_for_projection: bool,
+}
+
+enum InFlightPayload {
+    Snapshot,
+    Notice(QueuedNotice),
+}
+
+struct InFlightFrame {
+    revision: TransportRevision,
+    payload: InFlightPayload,
+}
+
+struct PendingResynchronization {
+    request_id: ClientRequestId,
 }
 
 struct BridgeActor {
@@ -211,21 +295,30 @@ struct BridgeActor {
     settings: tokio::sync::watch::Receiver<Arc<TuiSettingsProjection>>,
     notices: mpsc::Receiver<UiNotice>,
     requests: mpsc::Receiver<HostRequest>,
+    acknowledgements: mpsc::Receiver<FrameAcknowledgement>,
     channel: Option<Channel<ServerFrame>>,
     last_snapshot: Option<ClientSnapshot>,
     next_request_id: u64,
     next_revision: TransportRevision,
     pending_requests: BTreeSet<u64>,
+    pending_notices: VecDeque<QueuedNotice>,
+    in_flight: Option<InFlightFrame>,
+    pending_resynchronization: Option<PendingResynchronization>,
     catalog_generation: u64,
     projection_dirty: bool,
-    shutdown_notice_sent: bool,
+    shutdown_requested_notice_sent: bool,
+    shutdown_ready_notice_sent: bool,
+    shutdown_started_at: Option<tokio::time::Instant>,
+    shutdown_ready_acknowledged: bool,
     shutdown: CancellationToken,
+    exit_ready: CancellationToken,
 }
 
 impl BridgeActor {
     fn new(
         ports: UiPorts,
         requests: mpsc::Receiver<HostRequest>,
+        acknowledgements: mpsc::Receiver<FrameAcknowledgement>,
         shutdown: CancellationToken,
     ) -> Self {
         Self {
@@ -237,63 +330,104 @@ impl BridgeActor {
             settings: ports.settings,
             notices: ports.notices,
             requests,
+            acknowledgements,
             channel: None,
             last_snapshot: None,
             next_request_id: 1,
             next_revision: TransportRevision::INITIAL,
             pending_requests: BTreeSet::new(),
+            pending_notices: VecDeque::new(),
+            in_flight: None,
+            pending_resynchronization: None,
             catalog_generation: 1,
             projection_dirty: true,
-            shutdown_notice_sent: false,
+            shutdown_requested_notice_sent: false,
+            shutdown_ready_notice_sent: false,
+            shutdown_started_at: None,
+            shutdown_ready_acknowledged: false,
             shutdown,
+            exit_ready: CancellationToken::new(),
         }
+    }
+
+    fn with_exit_ready(mut self, exit_ready: CancellationToken) -> Self {
+        self.exit_ready = exit_ready;
+        self
     }
 
     async fn run(mut self) -> Result<(), AppError> {
         let mut frames = tokio::time::interval(PROJECTION_FRAME_INTERVAL);
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
+            if self.shutdown_ready_acknowledged {
+                self.exit_ready.cancel();
+                return Ok(());
+            }
             tokio::select! {
-                () = self.shutdown.cancelled() => {
-                    self.emit_shutdown_notice();
-                    return Ok(());
+                biased;
+                acknowledgement = self.acknowledgements.recv() => {
+                    let Some(acknowledgement) = acknowledgement else {
+                        if self.shutdown_started_at.is_some() {
+                            self.exit_ready.cancel();
+                            return Ok(());
+                        }
+                        return Err(AppError::WorkerStopped);
+                    };
+                    self.handle_acknowledgement(acknowledgement);
+                }
+                () = self.shutdown.cancelled(), if self.shutdown_started_at.is_none() => {
+                    self.drain_available_notices()?;
+                    self.begin_shutdown(None)
+                        .map_err(|_| AppError::WorkerStopped)?;
                 }
                 request = self.requests.recv() => {
-                    let request = request.ok_or(AppError::WorkerStopped)?;
+                    let Some(request) = request else {
+                        if self.shutdown_started_at.is_some() {
+                            self.exit_ready.cancel();
+                            return Ok(());
+                        }
+                        return Err(AppError::WorkerStopped);
+                    };
                     self.handle_request(request);
                 }
-                notice = self.notices.recv() => {
+                notice = self.notices.recv(), if self.shutdown_started_at.is_none() => {
                     let notice = notice.ok_or(AppError::WorkerStopped)?;
                     self.handle_notice(notice)?;
                 }
-                result = self.session.changed() => {
+                result = self.session.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.session.borrow_and_update();
                     self.projection_dirty = true;
                 }
-                result = self.session_list.changed() => {
+                result = self.session_list.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.session_list.borrow_and_update();
                     self.projection_dirty = true;
                 }
-                result = self.catalog.changed() => {
+                result = self.catalog.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.catalog.borrow_and_update();
                     self.catalog_generation = self.catalog_generation.saturating_add(1);
                     self.projection_dirty = true;
                 }
-                result = self.profiles.changed() => {
+                result = self.profiles.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.profiles.borrow_and_update();
                     self.projection_dirty = true;
                 }
-                result = self.settings.changed() => {
+                result = self.settings.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.settings.borrow_and_update();
                     self.projection_dirty = true;
                 }
-                _ = frames.tick(), if self.projection_dirty => {
-                    self.publish_projection();
+                _ = frames.tick() => {
+                    let _ = self.pump_outbound();
+                    if self.shutdown_started_at.is_some_and(|started| {
+                        started.elapsed() >= SHUTDOWN_ACK_TIMEOUT
+                    }) {
+                        self.exit_ready.cancel();
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -302,16 +436,7 @@ impl BridgeActor {
     fn handle_request(&mut self, request: HostRequest) {
         match request {
             HostRequest::Connect { channel, reply } => {
-                self.channel = Some(channel);
-                let result = self.snapshot().and_then(|snapshot| {
-                    self.emit_snapshot(SnapshotReason::Initial, snapshot.clone())?;
-                    self.last_snapshot = Some(snapshot.clone());
-                    self.projection_dirty = false;
-                    Ok(())
-                });
-                if result.is_err() {
-                    self.channel = None;
-                }
+                let result = self.connect(channel);
                 let _ = reply.send(result);
             }
             HostRequest::Dispatch { command, reply } => {
@@ -325,22 +450,59 @@ impl BridgeActor {
         }
     }
 
+    fn handle_acknowledgement(&mut self, acknowledgement: FrameAcknowledgement) {
+        let result = self.acknowledge_frame(acknowledgement.revision);
+        let _ = acknowledgement.reply.send(result);
+    }
+
+    fn connect(&mut self, channel: Channel<ServerFrame>) -> Result<(), GuiIpcError> {
+        if self.in_flight.is_some() {
+            return Err(GuiIpcError::renderer_restart_required());
+        }
+        self.channel = Some(channel);
+        let result = self.snapshot().and_then(|snapshot| {
+            self.send_snapshot(SnapshotReason::Initial, snapshot.clone())?;
+            self.last_snapshot = Some(snapshot);
+            self.projection_dirty = false;
+            Ok(())
+        });
+        if result.is_err() {
+            self.channel = None;
+            self.in_flight = None;
+        }
+        result
+    }
+
     fn dispatch(&mut self, command: ClientCommand) -> Result<CommandReceipt, GuiIpcError> {
+        self.require_channel()?;
+        if self.shutdown_started_at.is_some() {
+            return Err(GuiIpcError::invalid_command());
+        }
         let request_id = self.issue_request_id()?;
         let action = map_command(command, request_id, &self.session.borrow())?;
         match action {
             CommandAction::Intent(intent) => self.admit_intent(request_id, intent)?,
             CommandAction::Resynchronize => {
-                let snapshot = self.snapshot()?;
-                self.emit_snapshot(SnapshotReason::Resynchronization, snapshot.clone())?;
-                self.last_snapshot = Some(snapshot);
-                self.projection_dirty = false;
-                self.emit_notice(ClientNotice::CommandCommitted { request_id })?;
+                if self.pending_resynchronization.is_some()
+                    || self.pending_requests.len() >= MAX_PENDING_REQUESTS
+                {
+                    return Err(GuiIpcError::busy());
+                }
+                self.pending_requests.insert(request_id.get());
+                self.pending_resynchronization = Some(PendingResynchronization { request_id });
+                if let Err(error) = self.pump_outbound() {
+                    self.pending_resynchronization = None;
+                    self.pending_requests.remove(&request_id.get());
+                    return Err(error);
+                }
             }
             CommandAction::Shutdown => {
-                self.emit_notice(ClientNotice::CommandCommitted { request_id })?;
-                self.emit_shutdown_notice();
-                self.shutdown.cancel();
+                if self.pending_requests.len() >= MAX_PENDING_REQUESTS {
+                    return Err(GuiIpcError::busy());
+                }
+                self.drain_available_notices()
+                    .map_err(|_| GuiIpcError::disconnected())?;
+                self.begin_shutdown(Some(request_id))?;
             }
         }
         Ok(CommandReceipt::new(request_id))
@@ -350,6 +512,10 @@ impl BridgeActor {
         &mut self,
         ingress: SecretIngress,
     ) -> Result<CommandReceipt, GuiIpcError> {
+        self.require_channel()?;
+        if self.shutdown_started_at.is_some() {
+            return Err(GuiIpcError::invalid_command());
+        }
         let snapshot = self.snapshot()?;
         let targets_active_connection =
             credential_targets_active_connection(&snapshot.providers, ingress.connection_id());
@@ -392,16 +558,70 @@ impl BridgeActor {
             | ClientNotice::CommandRejected { request_id, .. } => Some(request_id.get()),
             ClientNotice::Authentication { .. } | ClientNotice::Shutdown { .. } => None,
         };
-        if terminal_request_id.is_some_and(|request_id| !self.pending_requests.remove(&request_id))
+        if let Some(request_id) = terminal_request_id {
+            if !self.pending_requests.contains(&request_id) {
+                return Ok(());
+            }
+            if self.terminal_notice_outstanding(request_id) {
+                return Ok(());
+            }
+        } else if notice
+            .request_id()
+            .is_some_and(|request_id| !self.pending_requests.contains(&request_id.get()))
         {
             return Ok(());
         }
         self.observe_pending_projections()?;
-        if self.projection_dirty {
-            self.publish_projection();
-        }
-        let _ = self.emit_notice(notice);
+        self.queue_notice(notice, terminal_request_id)
+            .map_err(|_| AppError::WorkerStopped)?;
+        let _ = self.pump_outbound();
         Ok(())
+    }
+
+    fn queue_notice(
+        &mut self,
+        notice: ClientNotice,
+        terminal_request_id: Option<u64>,
+    ) -> Result<(), GuiIpcError> {
+        if let ClientNotice::Authentication { request_id, .. } = &notice
+            && let Some(queued) = self.pending_notices.iter_mut().find(|queued| {
+                matches!(
+                    &queued.notice,
+                    ClientNotice::Authentication {
+                        request_id: queued_request_id,
+                        ..
+                    } if queued_request_id == request_id
+                )
+            })
+        {
+            queued.notice = notice;
+            return Ok(());
+        }
+        if self.pending_notices.len() >= MAX_PENDING_NOTICES {
+            return Err(GuiIpcError::busy());
+        }
+        self.pending_notices.push_back(QueuedNotice {
+            notice,
+            terminal_request_id,
+            wait_for_projection: terminal_request_id.is_some() && self.projection_dirty,
+        });
+        Ok(())
+    }
+
+    fn terminal_notice_outstanding(&self, request_id: u64) -> bool {
+        self.pending_notices
+            .iter()
+            .any(|notice| notice.terminal_request_id == Some(request_id))
+            || matches!(
+                self.in_flight.as_ref(),
+                Some(InFlightFrame {
+                    payload: InFlightPayload::Notice(QueuedNotice {
+                        terminal_request_id: Some(in_flight_request_id),
+                        ..
+                    }),
+                    ..
+                }) if *in_flight_request_id == request_id
+            )
     }
 
     fn observe_pending_projections(&mut self) -> Result<(), AppError> {
@@ -449,18 +669,126 @@ impl BridgeActor {
         Ok(())
     }
 
-    fn emit_shutdown_notice(&mut self) {
-        if self.shutdown_notice_sent {
-            return;
+    fn drain_available_notices(&mut self) -> Result<(), AppError> {
+        while let Ok(notice) = self.notices.try_recv() {
+            self.handle_notice(notice)?;
+        }
+        Ok(())
+    }
+
+    fn begin_shutdown(
+        &mut self,
+        command_request_id: Option<ClientRequestId>,
+    ) -> Result<(), GuiIpcError> {
+        if self.shutdown_started_at.is_some() {
+            return Ok(());
+        }
+        self.shutdown.cancel();
+        self.shutdown_started_at = Some(tokio::time::Instant::now());
+        self.projection_dirty = true;
+        self.pending_resynchronization = None;
+        if let Some(request_id) = command_request_id {
+            self.pending_requests.insert(request_id.get());
+            self.queue_notice(
+                ClientNotice::CommandCommitted { request_id },
+                Some(request_id.get()),
+            )?;
+        }
+        self.queue_shutdown_notice(ShutdownState::Requested)?;
+        self.queue_shutdown_notice(ShutdownState::Ready)?;
+        self.pump_outbound()
+    }
+
+    fn queue_shutdown_notice(&mut self, state: ShutdownState) -> Result<(), GuiIpcError> {
+        let already_sent = match state {
+            ShutdownState::Requested => self.shutdown_requested_notice_sent,
+            ShutdownState::Ready => self.shutdown_ready_notice_sent,
+        };
+        if already_sent {
+            return Ok(());
+        }
+        self.queue_notice(ClientNotice::Shutdown { state }, None)?;
+        match state {
+            ShutdownState::Requested => self.shutdown_requested_notice_sent = true,
+            ShutdownState::Ready => self.shutdown_ready_notice_sent = true,
+        }
+        Ok(())
+    }
+
+    fn acknowledge_frame(&mut self, revision: TransportRevision) -> Result<(), GuiIpcError> {
+        let Some(in_flight) = self.in_flight.take() else {
+            return Err(GuiIpcError::invalid_command());
+        };
+        if in_flight.revision != revision {
+            self.in_flight = Some(in_flight);
+            return Err(GuiIpcError::invalid_command());
+        }
+        if let InFlightPayload::Notice(queued) = in_flight.payload {
+            if let Some(request_id) = queued.terminal_request_id {
+                self.pending_requests.remove(&request_id);
+            }
+            if matches!(
+                queued.notice,
+                ClientNotice::Shutdown {
+                    state: ShutdownState::Ready
+                }
+            ) {
+                self.shutdown_ready_acknowledged = true;
+            }
+        }
+        self.pump_outbound()
+    }
+
+    fn pump_outbound(&mut self) -> Result<(), GuiIpcError> {
+        if self.in_flight.is_some() || self.channel.is_none() {
+            return Ok(());
+        }
+        if let Some(request_id) = self
+            .pending_resynchronization
+            .as_ref()
+            .map(|pending| pending.request_id)
+        {
+            let snapshot = self.snapshot()?;
+            self.send_snapshot(SnapshotReason::Resynchronization, snapshot.clone())?;
+            self.last_snapshot = Some(snapshot);
+            self.projection_dirty = false;
+            self.pending_resynchronization = None;
+            self.queue_notice(
+                ClientNotice::CommandCommitted { request_id },
+                Some(request_id.get()),
+            )?;
+            return Ok(());
         }
         if self
-            .emit_notice(ClientNotice::Shutdown {
-                state: ShutdownState::Requested,
-            })
-            .is_ok()
+            .pending_notices
+            .front()
+            .is_some_and(|queued| queued.wait_for_projection)
         {
-            self.shutdown_notice_sent = true;
+            if self.projection_dirty {
+                self.publish_projection();
+                if !self.projection_dirty
+                    && let Some(queued) = self.pending_notices.front_mut()
+                {
+                    queued.wait_for_projection = false;
+                }
+                if self.in_flight.is_some() || self.projection_dirty {
+                    return Ok(());
+                }
+            } else if let Some(queued) = self.pending_notices.front_mut() {
+                queued.wait_for_projection = false;
+            }
         }
+        let Some(queued) = self.pending_notices.pop_front() else {
+            if self.projection_dirty {
+                self.publish_projection();
+            }
+            return Ok(());
+        };
+        if let Err(error) = self.send_notice(queued.clone()) {
+            self.pending_notices.push_front(queued);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn send_intent(&self, intent: UiIntent) -> Result<(), GuiIpcError> {
@@ -471,6 +799,13 @@ impl BridgeActor {
         }
     }
 
+    fn require_channel(&self) -> Result<(), GuiIpcError> {
+        self.channel
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(GuiIpcError::disconnected)
+    }
+
     fn issue_request_id(&mut self) -> Result<ClientRequestId, GuiIpcError> {
         let value = self.next_request_id;
         self.next_request_id = value.checked_add(1).ok_or_else(GuiIpcError::disconnected)?;
@@ -478,22 +813,22 @@ impl BridgeActor {
     }
 
     fn publish_projection(&mut self) {
+        if self.in_flight.is_some() || self.channel.is_none() {
+            return;
+        }
         let Ok(snapshot) = self.snapshot() else {
             return;
         };
-        self.projection_dirty = false;
         if self.last_snapshot.as_ref() == Some(&snapshot) {
-            return;
-        }
-        if self.channel.is_none() {
-            self.last_snapshot = Some(snapshot);
+            self.projection_dirty = false;
             return;
         }
         if self
-            .emit_snapshot(SnapshotReason::Projection, snapshot.clone())
+            .send_snapshot(SnapshotReason::Projection, snapshot.clone())
             .is_ok()
         {
             self.last_snapshot = Some(snapshot);
+            self.projection_dirty = false;
         }
     }
 
@@ -504,23 +839,31 @@ impl BridgeActor {
             &self.catalog.borrow(),
             &self.profiles.borrow(),
             &self.settings.borrow(),
-            self.catalog_generation,
-            self.shutdown.is_cancelled(),
+            SnapshotRuntime {
+                catalog_generation: self.catalog_generation,
+                shutting_down: self.shutdown.is_cancelled(),
+            },
         )
     }
 
-    fn emit_snapshot(
+    fn send_snapshot(
         &mut self,
         reason: SnapshotReason,
         snapshot: ClientSnapshot,
     ) -> Result<(), GuiIpcError> {
         let revision = self.take_revision()?;
-        self.emit(ServerFrame::snapshot(revision, reason, snapshot))
+        self.send(
+            ServerFrame::snapshot(revision, reason, snapshot),
+            InFlightPayload::Snapshot,
+        )
     }
 
-    fn emit_notice(&mut self, notice: ClientNotice) -> Result<(), GuiIpcError> {
+    fn send_notice(&mut self, queued: QueuedNotice) -> Result<(), GuiIpcError> {
         let revision = self.take_revision()?;
-        self.emit(ServerFrame::notice(revision, notice))
+        self.send(
+            ServerFrame::notice(revision, queued.notice.clone()),
+            InFlightPayload::Notice(queued),
+        )
     }
 
     fn take_revision(&mut self) -> Result<TransportRevision, GuiIpcError> {
@@ -529,12 +872,17 @@ impl BridgeActor {
         Ok(revision)
     }
 
-    fn emit(&mut self, frame: ServerFrame) -> Result<(), GuiIpcError> {
+    fn send(&mut self, frame: ServerFrame, payload: InFlightPayload) -> Result<(), GuiIpcError> {
+        if self.in_flight.is_some() {
+            return Err(GuiIpcError::busy());
+        }
         let channel = self.channel.clone().ok_or_else(GuiIpcError::disconnected)?;
+        let revision = frame.revision;
         if channel.send(frame).is_err() {
             self.channel = None;
             return Err(GuiIpcError::disconnected());
         }
+        self.in_flight = Some(InFlightFrame { revision, payload });
         Ok(())
     }
 }
@@ -656,7 +1004,16 @@ fn map_notice(notice: UiNotice) -> Result<ClientNotice, GuiIpcError> {
             failure,
         } => Ok(ClientNotice::CommandRejected {
             request_id: client_request_id(request_id)?,
-            failure: map_failure(&failure)?,
+            failure: match map_failure(&failure) {
+                Ok(failure) => failure,
+                Err(_) => SafeFailure::new(
+                    FailureClass::Internal,
+                    "notice_projection_failed",
+                    "the command result could not be represented safely",
+                    RetryDirective::Never,
+                )
+                .map_err(|_| GuiIpcError::invalid_projection())?,
+            },
         }),
         UiNotice::CodexLoginBrowserOpened { request_id } => Ok(ClientNotice::Authentication {
             request_id: client_request_id(request_id)?,
@@ -673,14 +1030,19 @@ fn client_request_id(request_id: TuiRequestId) -> Result<ClientRequestId, GuiIpc
     ClientRequestId::new(request_id.get()).map_err(|_| GuiIpcError::invalid_projection())
 }
 
+#[derive(Clone, Copy)]
+struct SnapshotRuntime {
+    catalog_generation: u64,
+    shutting_down: bool,
+}
+
 fn map_snapshot(
     active: &TuiSessionProjection,
     session_list: &TuiSessionsProjection,
     catalog: &TuiCatalogProjection,
     profiles: &TuiProfilesProjection,
     settings: &TuiSettingsProjection,
-    catalog_generation: u64,
-    shutting_down: bool,
+    runtime: SnapshotRuntime,
 ) -> Result<ClientSnapshot, GuiIpcError> {
     let active_session = map_session(active)?;
     let active_id = active_session.session_id.clone();
@@ -700,7 +1062,7 @@ fn map_snapshot(
             SessionSummary::new(
                 active_id.clone(),
                 title,
-                SessionRevision::new(active.revision),
+                Some(active.revision),
                 active_session.selected_model.clone(),
                 None,
                 None,
@@ -708,9 +1070,15 @@ fn map_snapshot(
             ),
         );
     }
-    let catalog = map_catalog(catalog, catalog_generation)?;
-    let providers = map_providers(profiles, settings, &catalog)?;
-    let lifecycle = if shutting_down {
+    let catalog = map_catalog(catalog, runtime.catalog_generation)?;
+    let session_credential_connection = session_credential_connection(settings)?;
+    let providers = map_providers(
+        profiles,
+        settings,
+        &catalog,
+        session_credential_connection.as_ref(),
+    )?;
+    let lifecycle = if runtime.shutting_down {
         ClientLifecycle::ShuttingDown
     } else if providers
         .iter()
@@ -876,15 +1244,11 @@ fn map_session_summary(
         summary.title.clone()
     })
     .map_err(|_| GuiIpcError::invalid_projection())?;
-    let revision = if summary.session_id == active.session_id {
-        active.revision
-    } else {
-        0
-    };
+    let revision = (summary.session_id == active.session_id).then_some(active.revision);
     Ok(SessionSummary::new(
         session_id,
         title,
-        SessionRevision::new(revision),
+        revision,
         summary
             .selected_model
             .as_ref()
@@ -942,46 +1306,68 @@ fn map_providers(
     profiles: &TuiProfilesProjection,
     settings: &TuiSettingsProjection,
     catalog: &ClientCatalogProjection,
+    session_credential_connection: Option<&ClientConnectionId>,
 ) -> Result<Vec<ClientProviderProjection>, GuiIpcError> {
     if profiles.profiles.is_empty() {
-        return Ok(vec![fallback_provider(settings, catalog)?]);
+        return Ok(vec![fallback_provider(
+            settings,
+            catalog,
+            session_credential_connection,
+        )?]);
     }
     profiles
         .profiles
         .iter()
         .map(|profile| {
-            let connected = profile.active && settings.provider_status.credential_connected;
-            let credential_source = map_credential_source(profile.credential_source, connected);
-            let status = match &profile.connection {
-                ProfileConnectionState::Testing => ClientProviderStatus::Connecting,
-                ProfileConnectionState::Ready if connected => ClientProviderStatus::Ready,
-                ProfileConnectionState::Ready
-                    if profile.credential_state == ProfileCredentialStateLabel::Disconnected =>
-                {
-                    ClientProviderStatus::CredentialRequired
+            let connection_id = ClientConnectionId::new(profile.id.clone())
+                .map_err(|_| GuiIpcError::invalid_projection())?;
+            let session_connected =
+                profile.active && session_credential_connection == Some(&connection_id);
+            let persisted_connected =
+                profile.active && settings.provider_status.credential_connected;
+            let connected = session_connected || persisted_connected;
+            let credential_source = if session_connected {
+                ClientCredentialSource::SessionOnly
+            } else {
+                map_credential_source(profile.credential_source, persisted_connected)
+            };
+            let status = if session_connected
+                && matches!(catalog, ClientCatalogProjection::Ready { .. })
+            {
+                ClientProviderStatus::Ready
+            } else {
+                match &profile.connection {
+                    ProfileConnectionState::Testing => ClientProviderStatus::Connecting,
+                    ProfileConnectionState::Ready if connected => ClientProviderStatus::Ready,
+                    ProfileConnectionState::Ready
+                        if profile.credential_state
+                            == ProfileCredentialStateLabel::Disconnected =>
+                    {
+                        ClientProviderStatus::CredentialRequired
+                    }
+                    ProfileConnectionState::Ready => ClientProviderStatus::Offline,
+                    ProfileConnectionState::Failed(message) => ClientProviderStatus::Failed {
+                        failure: SafeFailure::new(
+                            FailureClass::Unavailable,
+                            "provider_connection_failed",
+                            message.clone(),
+                            RetryDirective::Immediate,
+                        )
+                        .map_err(|_| GuiIpcError::invalid_projection())?,
+                    },
+                    ProfileConnectionState::Untested if connected => ClientProviderStatus::Ready,
+                    ProfileConnectionState::Untested
+                        if profile.credential_state
+                            == ProfileCredentialStateLabel::Disconnected =>
+                    {
+                        ClientProviderStatus::CredentialRequired
+                    }
+                    ProfileConnectionState::Untested => ClientProviderStatus::Offline,
                 }
-                ProfileConnectionState::Ready => ClientProviderStatus::Offline,
-                ProfileConnectionState::Failed(message) => ClientProviderStatus::Failed {
-                    failure: SafeFailure::new(
-                        FailureClass::Unavailable,
-                        "provider_connection_failed",
-                        message.clone(),
-                        RetryDirective::Immediate,
-                    )
-                    .map_err(|_| GuiIpcError::invalid_projection())?,
-                },
-                ProfileConnectionState::Untested if connected => ClientProviderStatus::Ready,
-                ProfileConnectionState::Untested
-                    if profile.credential_state == ProfileCredentialStateLabel::Disconnected =>
-                {
-                    ClientProviderStatus::CredentialRequired
-                }
-                ProfileConnectionState::Untested => ClientProviderStatus::Offline,
             };
             let display_name = format!("{} - {}", profile.kind.as_str(), profile.id);
             ClientProviderProjection::new(
-                ClientConnectionId::new(profile.id.clone())
-                    .map_err(|_| GuiIpcError::invalid_projection())?,
+                connection_id,
                 profile_provider_id(profile, catalog)?,
                 display_name,
                 profile.active,
@@ -994,15 +1380,43 @@ fn map_providers(
         .collect()
 }
 
+fn session_credential_connection(
+    settings: &TuiSettingsProjection,
+) -> Result<Option<ClientConnectionId>, GuiIpcError> {
+    let status = &settings.provider_status;
+    if !status.credential_connected
+        || status.credential_source != CredentialSourceLabel::SessionOnly
+    {
+        return Ok(None);
+    }
+    let connection_id = status.active_profile.clone().unwrap_or_else(|| {
+        let kind = status.provider_kind.unwrap_or(ProviderKindLabel::Gemini);
+        format!("session:{}", provider_kind_id(kind))
+    });
+    ClientConnectionId::new(connection_id)
+        .map(Some)
+        .map_err(|_| GuiIpcError::invalid_projection())
+}
+
 fn fallback_provider(
     settings: &TuiSettingsProjection,
     catalog: &ClientCatalogProjection,
+    session_credential_connection: Option<&ClientConnectionId>,
 ) -> Result<ClientProviderProjection, GuiIpcError> {
     let kind = settings
         .provider_status
         .provider_kind
         .unwrap_or(ProviderKindLabel::Gemini);
-    let connected = settings.provider_status.credential_connected;
+    let persisted_connected = settings.provider_status.credential_connected;
+    let connection_id = settings
+        .provider_status
+        .active_profile
+        .clone()
+        .unwrap_or_else(|| format!("session:{}", provider_kind_id(kind)));
+    let connection_id =
+        ClientConnectionId::new(connection_id).map_err(|_| GuiIpcError::invalid_projection())?;
+    let session_connected = session_credential_connection == Some(&connection_id);
+    let connected = session_connected || persisted_connected;
     let status = match catalog {
         ClientCatalogProjection::CredentialRequired => ClientProviderStatus::CredentialRequired,
         ClientCatalogProjection::Loading if connected => ClientProviderStatus::Connecting,
@@ -1013,13 +1427,8 @@ fn fallback_provider(
             failure: failure.clone(),
         },
     };
-    let connection_id = settings
-        .provider_status
-        .active_profile
-        .clone()
-        .unwrap_or_else(|| format!("session:{}", provider_kind_id(kind)));
     ClientProviderProjection::new(
-        ClientConnectionId::new(connection_id).map_err(|_| GuiIpcError::invalid_projection())?,
+        connection_id,
         catalog_provider_id(catalog, kind).unwrap_or(
             ClientProviderId::new(provider_kind_id(kind))
                 .map_err(|_| GuiIpcError::invalid_projection())?,
@@ -1027,7 +1436,14 @@ fn fallback_provider(
         kind.as_str(),
         true,
         status,
-        map_credential_source(settings.provider_status.credential_source, connected),
+        if session_connected {
+            ClientCredentialSource::SessionOnly
+        } else {
+            map_credential_source(
+                settings.provider_status.credential_source,
+                persisted_connected,
+            )
+        },
         None,
     )
     .map_err(|_| GuiIpcError::invalid_projection())
@@ -1160,6 +1576,57 @@ mod tests {
         }
     }
 
+    fn test_bridge_actor(
+        ports: UiPorts,
+        requests: mpsc::Receiver<HostRequest>,
+        shutdown: CancellationToken,
+    ) -> BridgeActor {
+        let (_acknowledgement_tx, acknowledgement_rx) = mpsc::channel(FRAME_ACK_CAPACITY);
+        BridgeActor::new(ports, requests, acknowledgement_rx, shutdown)
+    }
+
+    fn acknowledge_current_frame(bridge: &mut BridgeActor) {
+        let revision = bridge
+            .in_flight
+            .as_ref()
+            .expect("one in-flight frame")
+            .revision;
+        bridge
+            .acknowledge_frame(revision)
+            .expect("frame acknowledgement");
+    }
+
+    async fn acknowledge_actor_frame(
+        acknowledgements: &mpsc::Sender<FrameAcknowledgement>,
+        received: &Arc<Mutex<Vec<ServerFrame>>>,
+        frame_count: usize,
+    ) {
+        let revision = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(revision) = received
+                    .lock()
+                    .expect("frame lock")
+                    .get(frame_count.saturating_sub(1))
+                    .map(|frame| frame.revision)
+                {
+                    break revision;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("frame delivery before acknowledgement");
+        let (reply, response) = oneshot::channel();
+        acknowledgements
+            .send(FrameAcknowledgement { revision, reply })
+            .await
+            .expect("acknowledgement request");
+        response
+            .await
+            .expect("acknowledgement response")
+            .expect("accepted acknowledgement");
+    }
+
     #[test]
     fn gui_is_opt_in_and_uses_string_safe_protocol_ids() {
         let request_id = ClientRequestId::new(u64::MAX).expect("positive request ID");
@@ -1198,6 +1665,155 @@ mod tests {
     }
 
     #[test]
+    fn saturated_host_queue_fails_admission_without_waiting() {
+        let (requests, mut queued) = mpsc::channel(1);
+        let (first_reply, _first_response) = oneshot::channel();
+        try_enqueue_host_request(
+            &requests,
+            HostRequest::Dispatch {
+                command: ClientCommand::RefreshCatalog,
+                reply: first_reply,
+            },
+        )
+        .expect("first request");
+        let (second_reply, _second_response) = oneshot::channel();
+
+        let error = try_enqueue_host_request(
+            &requests,
+            HostRequest::Dispatch {
+                command: ClientCommand::RefreshCatalog,
+                reply: second_reply,
+            },
+        )
+        .expect_err("full queue must fail immediately");
+
+        assert_eq!(error.code, "host_busy");
+        assert!(matches!(
+            queued.try_recv(),
+            Ok(HostRequest::Dispatch { .. })
+        ));
+        assert!(queued.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn saturated_command_mailbox_cannot_starve_the_exact_frame_ack() {
+        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (request_tx, request_rx) = mpsc::channel(HOST_REQUEST_CAPACITY);
+        let (acknowledgement_tx, acknowledgement_rx) = mpsc::channel(FRAME_ACK_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let mut bridge =
+            BridgeActor::new(ui_ports, request_rx, acknowledgement_rx, shutdown.clone());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        bridge.connect(channel).expect("initial baseline");
+        let initial_revision = bridge.in_flight.as_ref().expect("in-flight frame").revision;
+        let mut changed = active_session();
+        changed.revision = 2;
+        app_ports
+            .sessions
+            .send(Arc::new(changed))
+            .expect("changed session");
+        bridge
+            .observe_pending_projections()
+            .expect("observe projection");
+        for _ in 0..HOST_REQUEST_CAPACITY {
+            let (reply, _response) = oneshot::channel();
+            try_enqueue_host_request(
+                &request_tx,
+                HostRequest::Dispatch {
+                    command: ClientCommand::RefreshCatalog,
+                    reply,
+                },
+            )
+            .expect("fill command mailbox");
+        }
+        assert_eq!(request_tx.capacity(), 0);
+        let (ack_reply, ack_response) = oneshot::channel();
+        try_enqueue_frame_ack(
+            &acknowledgement_tx,
+            FrameAcknowledgement {
+                revision: initial_revision,
+                reply: ack_reply,
+            },
+        )
+        .expect("dedicated acknowledgement admission");
+
+        let actor_task = tokio::spawn(bridge.run());
+        ack_response
+            .await
+            .expect("acknowledgement response")
+            .expect("exact acknowledgement");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if received.lock().expect("frame lock").len() == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("coalesced projection after acknowledgement");
+
+        {
+            let frames = received.lock().expect("frame lock");
+            assert!(matches!(
+                frames[1].payload,
+                autoharness_client::FramePayload::Snapshot {
+                    reason: SnapshotReason::Projection,
+                    ..
+                }
+            ));
+        }
+        actor_task.abort();
+        let _ = actor_task.await;
+    }
+
+    #[test]
+    fn saturated_credential_ingress_is_redacted_and_dropped() {
+        const SENTINEL: &str = "saturated-secret-must-not-survive";
+        let (requests, mut queued) = mpsc::channel(1);
+        let (first_reply, _first_response) = oneshot::channel();
+        try_enqueue_host_request(
+            &requests,
+            HostRequest::Dispatch {
+                command: ClientCommand::RefreshCatalog,
+                reply: first_reply,
+            },
+        )
+        .expect("queue blocker");
+        let ingress = SecretIngress::new(
+            ClientConnectionId::new("session:gemini").expect("connection ID"),
+            SENTINEL,
+        )
+        .expect("secret ingress");
+        assert!(!format!("{ingress:?}").contains(SENTINEL));
+        let (reply, _response) = oneshot::channel();
+
+        let error = try_enqueue_host_request(&requests, HostRequest::Credential { ingress, reply })
+            .expect_err("full queue must drop credential request");
+
+        let safe_error = serde_json::to_string(&error).expect("safe IPC error");
+        assert_eq!(error.code, "host_busy");
+        assert!(!safe_error.contains(SENTINEL));
+        assert!(matches!(
+            queued.try_recv(),
+            Ok(HostRequest::Dispatch { .. })
+        ));
+        assert!(queued.try_recv().is_err());
+    }
+
+    #[test]
     fn cached_catalog_without_a_live_credential_is_an_offline_snapshot() {
         let snapshot = map_snapshot(
             &active_session(),
@@ -1208,8 +1824,10 @@ mod tests {
             },
             &TuiProfilesProjection::default(),
             &TuiSettingsProjection::default(),
-            7,
-            false,
+            SnapshotRuntime {
+                catalog_generation: 7,
+                shutting_down: false,
+            },
         )
         .expect("cached snapshot");
 
@@ -1224,6 +1842,25 @@ mod tests {
         );
         assert_eq!(snapshot.sessions[0].updated_at_ms, None);
         assert_eq!(snapshot.sessions[0].message_count, None);
+    }
+
+    #[test]
+    fn inactive_session_summary_does_not_invent_a_durable_revision() {
+        let summary = autoharness_tui::SessionBrowserEntry {
+            session_id: "inactive-session".to_owned(),
+            title: "Previous work".to_owned(),
+            archived: false,
+            selected_model: None,
+            message_count: 4,
+            updated_at_ms: 123,
+            active: false,
+        };
+
+        let mapped = map_session_summary(&summary, &active_session()).expect("session summary");
+
+        assert_eq!(mapped.revision, None);
+        assert!(mapped.updated_at_ms.is_some());
+        assert!(mapped.message_count.is_some());
     }
 
     #[test]
@@ -1248,6 +1885,7 @@ mod tests {
             },
             &TuiSettingsProjection::default(),
             &ClientCatalogProjection::Loading,
+            None,
         )
         .expect("provider projection");
 
@@ -1277,7 +1915,7 @@ mod tests {
         let catalog = ClientCatalogProjection::ready(1, vec![router_model], true)
             .expect("catalog projection");
 
-        let provider = fallback_provider(&TuiSettingsProjection::default(), &catalog)
+        let provider = fallback_provider(&TuiSettingsProjection::default(), &catalog, None)
             .expect("fallback provider");
 
         assert_eq!(provider.provider_id.as_str(), "gemini");
@@ -1291,7 +1929,7 @@ mod tests {
             Arc::new(TuiCatalogProjection::CredentialRequired),
         );
         let (_request_tx, request_rx) = mpsc::channel(1);
-        let mut bridge = BridgeActor::new(ui_ports, request_rx, CancellationToken::new());
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
         let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
         let channel_frames = Arc::clone(&received);
         let channel = Channel::new(move |body| {
@@ -1311,11 +1949,14 @@ mod tests {
             .blocking_recv()
             .expect("connect response")
             .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
         let receipt = bridge
             .dispatch(ClientCommand::RequestResynchronization {
                 last_applied_revision: Some(TransportRevision::INITIAL),
             })
             .expect("resynchronization request");
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
 
         let frames = received.lock().expect("frame lock");
         assert_eq!(frames.len(), 3);
@@ -1353,6 +1994,270 @@ mod tests {
     }
 
     #[test]
+    fn acknowledgement_requires_the_exact_in_flight_revision() {
+        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (reply, response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect { channel, reply });
+        response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+        let expected = bridge.in_flight.as_ref().expect("in-flight frame").revision;
+        let wrong = expected.next().expect("next revision");
+
+        let error = bridge
+            .acknowledge_frame(wrong)
+            .expect_err("wrong revision must be rejected");
+
+        assert_eq!(error.code, "invalid_command");
+        assert_eq!(
+            bridge.in_flight.as_ref().expect("retained frame").revision,
+            expected
+        );
+        assert_eq!(received.lock().expect("frame lock").len(), 1);
+        bridge
+            .acknowledge_frame(expected)
+            .expect("exact acknowledgement");
+        assert!(bridge.in_flight.is_none());
+    }
+
+    #[test]
+    fn repeated_connect_before_ack_preserves_one_carrier_send() {
+        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let first_frames = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let first_received = Arc::clone(&first_frames);
+        let first_channel = Channel::new(move |body| {
+            first_received
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (first_reply, first_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel: first_channel,
+            reply: first_reply,
+        });
+        first_response
+            .blocking_recv()
+            .expect("first connect response")
+            .expect("first baseline");
+        let first_revision = bridge.in_flight.as_ref().expect("in-flight frame").revision;
+        let rejected_frames = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let rejected_received = Arc::clone(&rejected_frames);
+        let rejected_channel = Channel::new(move |body| {
+            rejected_received
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (rejected_reply, rejected_response) = oneshot::channel();
+
+        bridge.handle_request(HostRequest::Connect {
+            channel: rejected_channel,
+            reply: rejected_reply,
+        });
+
+        let error = rejected_response
+            .blocking_recv()
+            .expect("repeated connect response")
+            .expect_err("unacknowledged baseline must block replacement");
+        assert_eq!(error.code, "renderer_restart_required");
+        assert_eq!(
+            error.message,
+            "restart AutoHarness to recover the native renderer"
+        );
+        assert_eq!(first_frames.lock().expect("frame lock").len(), 1);
+        assert!(rejected_frames.lock().expect("frame lock").is_empty());
+        assert_eq!(
+            bridge.in_flight.as_ref().expect("preserved frame").revision,
+            first_revision
+        );
+
+        bridge
+            .acknowledge_frame(first_revision)
+            .expect("first acknowledgement");
+        let replacement_frames = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let replacement_received = Arc::clone(&replacement_frames);
+        let replacement_channel = Channel::new(move |body| {
+            replacement_received
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (replacement_reply, replacement_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel: replacement_channel,
+            reply: replacement_reply,
+        });
+        replacement_response
+            .blocking_recv()
+            .expect("replacement response")
+            .expect("replacement after acknowledgement");
+
+        assert_eq!(replacement_frames.lock().expect("frame lock").len(), 1);
+        assert!(bridge.in_flight.is_some());
+    }
+
+    #[test]
+    fn blocked_renderer_keeps_one_frame_and_coalesces_the_latest_projection() {
+        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (reply, response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect { channel, reply });
+        response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+
+        for revision in [2, 3, 9] {
+            let mut changed = active_session();
+            changed.revision = revision;
+            app_ports
+                .sessions
+                .send(Arc::new(changed))
+                .expect("session projection");
+            bridge
+                .observe_pending_projections()
+                .expect("observe projection");
+            bridge.pump_outbound().expect("coalesce projection");
+        }
+
+        assert_eq!(received.lock().expect("frame lock").len(), 1);
+        assert!(bridge.projection_dirty);
+        acknowledge_current_frame(&mut bridge);
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 2);
+        let latest = match &frames[1].payload {
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Projection,
+                snapshot,
+            } => snapshot,
+            _ => panic!("expected coalesced projection"),
+        };
+        assert_eq!(
+            latest
+                .active_session
+                .as_ref()
+                .expect("active session")
+                .revision
+                .get(),
+            9
+        );
+        drop(frames);
+        acknowledge_current_frame(&mut bridge);
+        assert_eq!(received.lock().expect("frame lock").len(), 2);
+    }
+
+    #[test]
+    fn gap_resynchronization_queues_before_ack_and_commits_after_its_baseline() {
+        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (reply, response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect { channel, reply });
+        response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
+        app_ports
+            .catalogs
+            .send(Arc::new(TuiCatalogProjection::Loading))
+            .expect("gap projection");
+        bridge
+            .observe_pending_projections()
+            .expect("observe gap projection");
+        bridge.pump_outbound().expect("publish gap projection");
+
+        let receipt = bridge
+            .dispatch(ClientCommand::RequestResynchronization {
+                last_applied_revision: Some(TransportRevision::INITIAL),
+            })
+            .expect("queue resynchronization before gap acknowledgement");
+
+        assert_eq!(received.lock().expect("frame lock").len(), 2);
+        assert!(bridge.pending_resynchronization.is_some());
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 4);
+        assert!(matches!(
+            frames[1].payload,
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Projection,
+                ..
+            }
+        ));
+        assert!(matches!(
+            frames[2].payload,
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Resynchronization,
+                ..
+            }
+        ));
+        assert!(matches!(
+            frames[3].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::CommandCommitted {
+                request_id
+            }) if request_id == receipt.request_id
+        ));
+        assert!(!bridge.pending_requests.contains(&receipt.request_id.get()));
+    }
+
+    #[test]
     fn connect_reports_a_channel_that_cannot_accept_its_baseline() {
         let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
             Arc::new(active_session()),
@@ -1360,7 +2265,7 @@ mod tests {
             Arc::new(TuiCatalogProjection::CredentialRequired),
         );
         let (_request_tx, request_rx) = mpsc::channel(1);
-        let mut bridge = BridgeActor::new(ui_ports, request_rx, CancellationToken::new());
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
         let channel = Channel::new(|_| Err(std::io::Error::other("test channel is closed").into()));
         let (connect_reply, connect_response) = oneshot::channel();
 
@@ -1379,14 +2284,14 @@ mod tests {
     }
 
     #[test]
-    fn projection_precedes_one_correlated_terminal_notice() {
+    fn one_projection_precedes_terminal_notice_despite_continuous_churn() {
         let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
         );
         let (_request_tx, request_rx) = mpsc::channel(1);
-        let mut bridge = BridgeActor::new(ui_ports, request_rx, CancellationToken::new());
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
         let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
         let channel_frames = Arc::clone(&received);
         let channel = Channel::new(move |body| {
@@ -1405,6 +2310,7 @@ mod tests {
             .blocking_recv()
             .expect("connect response")
             .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
 
         let receipt = bridge
             .dispatch(ClientCommand::RefreshCatalog)
@@ -1422,6 +2328,190 @@ mod tests {
         bridge
             .handle_notice(notice)
             .expect("duplicate terminal notice is harmless");
+        app_ports
+            .catalogs
+            .send(Arc::new(TuiCatalogProjection::CredentialRequired))
+            .expect("continued projection churn");
+        bridge
+            .observe_pending_projections()
+            .expect("observe continued churn");
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 4);
+        assert!(matches!(
+            frames[1].payload,
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Projection,
+                ..
+            }
+        ));
+        assert!(matches!(
+            frames[2].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::CommandCommitted {
+                request_id
+            }) if request_id == receipt.request_id
+        ));
+        assert!(matches!(
+            frames[3].payload,
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Projection,
+                ..
+            }
+        ));
+        assert_eq!(frames[1].revision.get(), 2);
+        assert_eq!(frames[2].revision.get(), 3);
+        assert_eq!(frames[3].revision.get(), 4);
+    }
+
+    #[test]
+    fn failed_terminal_delivery_replays_after_a_fresh_baseline() {
+        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let first_channel = Channel::new(|_| Ok(()));
+        let (connect_reply, connect_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel: first_channel,
+            reply: connect_reply,
+        });
+        connect_response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
+        let receipt = bridge
+            .dispatch(ClientCommand::RefreshCatalog)
+            .expect("admitted command");
+        bridge.channel = Some(Channel::new(|_| {
+            Err(std::io::Error::other("renderer disconnected").into())
+        }));
+
+        bridge
+            .handle_notice(UiNotice::IntentCommitted {
+                request_id: TuiRequestId::new(receipt.request_id.get()),
+            })
+            .expect("terminal notice handling");
+
+        assert!(bridge.pending_requests.contains(&receipt.request_id.get()));
+        assert!(
+            bridge
+                .pending_notices
+                .iter()
+                .any(|notice| notice.terminal_request_id == Some(receipt.request_id.get()))
+        );
+        let disconnected = bridge
+            .dispatch(ClientCommand::RefreshCatalog)
+            .expect_err("lost channel must reject new work");
+        assert_eq!(disconnected.code, "host_disconnected");
+        let replayed = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let replay_frames = Arc::clone(&replayed);
+        let channel = Channel::new(move |body| {
+            replay_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (reconnect_reply, reconnect_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel,
+            reply: reconnect_reply,
+        });
+        reconnect_response
+            .blocking_recv()
+            .expect("reconnect response")
+            .expect("reconnect baseline and replay");
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+
+        let frames = replayed.lock().expect("frame lock");
+        assert_eq!(frames.len(), 2);
+        assert!(matches!(
+            frames[0].payload,
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Initial,
+                ..
+            }
+        ));
+        assert!(matches!(
+            frames[1].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::CommandCommitted {
+                request_id
+            }) if request_id == receipt.request_id
+        ));
+        assert!(!bridge.pending_requests.contains(&receipt.request_id.get()));
+        assert!(bridge.pending_notices.is_empty());
+    }
+
+    #[test]
+    fn invalid_projection_holds_terminal_notice_until_state_is_representable() {
+        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (connect_reply, connect_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel,
+            reply: connect_reply,
+        });
+        connect_response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
+        let receipt = bridge
+            .dispatch(ClientCommand::RefreshCatalog)
+            .expect("admitted command");
+        app_ports
+            .sessions
+            .send(Arc::new(TuiSessionProjection::empty()))
+            .expect("invalid transitional projection");
+
+        bridge
+            .handle_notice(UiNotice::IntentCommitted {
+                request_id: TuiRequestId::new(receipt.request_id.get()),
+            })
+            .expect("terminal notice handling");
+
+        assert!(bridge.projection_dirty);
+        assert_eq!(received.lock().expect("frame lock").len(), 1);
+        assert!(
+            bridge
+                .pending_notices
+                .iter()
+                .any(|notice| notice.terminal_request_id == Some(receipt.request_id.get()))
+        );
+        let mut repaired = active_session();
+        repaired.revision = 2;
+        app_ports
+            .sessions
+            .send(Arc::new(repaired))
+            .expect("repaired projection");
+        bridge
+            .observe_pending_projections()
+            .expect("observe repair");
+        bridge.pump_outbound().expect("repaired projection");
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
 
         let frames = received.lock().expect("frame lock");
         assert_eq!(frames.len(), 3);
@@ -1438,8 +2528,184 @@ mod tests {
                 request_id
             }) if request_id == receipt.request_id
         ));
-        assert_eq!(frames[1].revision.get(), 2);
-        assert_eq!(frames[2].revision.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn explicit_shutdown_publishes_lifecycle_and_ready_before_host_exit() {
+        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (request_tx, request_rx) = mpsc::channel(HOST_REQUEST_CAPACITY);
+        let (acknowledgement_tx, acknowledgement_rx) = mpsc::channel(FRAME_ACK_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let exit_ready = CancellationToken::new();
+        let actor = BridgeActor::new(ui_ports, request_rx, acknowledgement_rx, shutdown.clone())
+            .with_exit_ready(exit_ready.clone());
+        let actor_task = tokio::spawn(actor.run());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (connect_reply, connect_response) = oneshot::channel();
+        request_tx
+            .send(HostRequest::Connect {
+                channel,
+                reply: connect_reply,
+            })
+            .await
+            .expect("connect request");
+        connect_response
+            .await
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 1).await;
+        let (pending_reply, pending_response) = oneshot::channel();
+        request_tx
+            .send(HostRequest::Dispatch {
+                command: ClientCommand::RefreshCatalog,
+                reply: pending_reply,
+            })
+            .await
+            .expect("pending request");
+        let pending_receipt = pending_response
+            .await
+            .expect("pending response")
+            .expect("pending admission");
+        let (dispatch_reply, dispatch_response) = oneshot::channel();
+        request_tx
+            .send(HostRequest::Dispatch {
+                command: ClientCommand::RequestShutdown,
+                reply: dispatch_reply,
+            })
+            .await
+            .expect("shutdown request");
+        let receipt = dispatch_response
+            .await
+            .expect("shutdown response")
+            .expect("shutdown admission");
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 2).await;
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 3).await;
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 4).await;
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 5).await;
+        actor_task
+            .await
+            .expect("bridge task")
+            .expect("clean bridge shutdown");
+
+        assert!(shutdown.is_cancelled());
+        assert!(exit_ready.is_cancelled());
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 5);
+        let shutting_down = match &frames[1].payload {
+            autoharness_client::FramePayload::Snapshot { snapshot, .. } => snapshot,
+            autoharness_client::FramePayload::Notice(_) => {
+                panic!("expected shutdown projection")
+            }
+        };
+        assert!(matches!(
+            shutting_down.lifecycle,
+            ClientLifecycle::ShuttingDown
+        ));
+        assert!(matches!(
+            frames[2].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::CommandCommitted {
+                request_id
+            }) if request_id == receipt.request_id
+        ));
+        assert!(matches!(
+            frames[3].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::Shutdown {
+                state: ShutdownState::Requested
+            })
+        ));
+        assert!(matches!(
+            frames[4].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::Shutdown {
+                state: ShutdownState::Ready
+            })
+        ));
+        assert!(frames.iter().all(|frame| {
+            !matches!(
+                &frame.payload,
+                autoharness_client::FramePayload::Notice(notice)
+                    if notice.request_id() == Some(pending_receipt.request_id)
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn native_close_publishes_lifecycle_and_ready_before_host_exit() {
+        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (request_tx, request_rx) = mpsc::channel(HOST_REQUEST_CAPACITY);
+        let (acknowledgement_tx, acknowledgement_rx) = mpsc::channel(FRAME_ACK_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let exit_ready = CancellationToken::new();
+        let actor = BridgeActor::new(ui_ports, request_rx, acknowledgement_rx, shutdown.clone())
+            .with_exit_ready(exit_ready.clone());
+        let actor_task = tokio::spawn(actor.run());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            channel_frames
+                .lock()
+                .expect("frame lock")
+                .push(body.deserialize::<ServerFrame>().expect("server frame"));
+            Ok(())
+        });
+        let (connect_reply, connect_response) = oneshot::channel();
+        request_tx
+            .send(HostRequest::Connect {
+                channel,
+                reply: connect_reply,
+            })
+            .await
+            .expect("connect request");
+        connect_response
+            .await
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 1).await;
+
+        shutdown.cancel();
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 2).await;
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 3).await;
+        acknowledge_actor_frame(&acknowledgement_tx, &received, 4).await;
+        actor_task
+            .await
+            .expect("bridge task")
+            .expect("clean bridge shutdown");
+
+        assert!(exit_ready.is_cancelled());
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 4);
+        assert!(matches!(
+            &frames[1].payload,
+            autoharness_client::FramePayload::Snapshot { snapshot, .. }
+                if matches!(snapshot.lifecycle, ClientLifecycle::ShuttingDown)
+        ));
+        assert!(matches!(
+            frames[2].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::Shutdown {
+                state: ShutdownState::Requested
+            })
+        ));
+        assert!(matches!(
+            frames[3].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::Shutdown {
+                state: ShutdownState::Ready
+            })
+        ));
     }
 
     #[test]
@@ -1505,6 +2771,104 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_session_credential_projects_ready_on_the_exact_connection() {
+        const SENTINEL: &str = "gui-session-credential-sentinel";
+        let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        let received = Arc::new(Mutex::new(Vec::<ServerFrame>::new()));
+        let channel_frames = Arc::clone(&received);
+        let channel = Channel::new(move |body| {
+            let frame = body
+                .deserialize::<ServerFrame>()
+                .expect("serialized server frame");
+            channel_frames.lock().expect("frame lock").push(frame);
+            Ok(())
+        });
+        let (connect_reply, connect_response) = oneshot::channel();
+        bridge.handle_request(HostRequest::Connect {
+            channel,
+            reply: connect_reply,
+        });
+        connect_response
+            .blocking_recv()
+            .expect("connect response")
+            .expect("connect baseline");
+        acknowledge_current_frame(&mut bridge);
+
+        let connection_id = ClientConnectionId::new("session:gemini").expect("connection ID");
+        let receipt = bridge
+            .dispatch_credential(
+                SecretIngress::new(connection_id.clone(), SENTINEL).expect("secret ingress"),
+            )
+            .expect("credential admission");
+        assert!(matches!(
+            app_ports.intents.try_recv().expect("credential intent"),
+            UiIntent::ConfigureCredential { .. }
+        ));
+        app_ports
+            .catalogs
+            .send(Arc::new(TuiCatalogProjection::Ready {
+                models: Vec::new(),
+                stale: false,
+            }))
+            .expect("ready catalog");
+        let mut settings = TuiSettingsProjection::default();
+        settings.provider_status.provider_kind = Some(ProviderKindLabel::Gemini);
+        settings.provider_status.credential_source = CredentialSourceLabel::SessionOnly;
+        settings.provider_status.credential_connected = true;
+        app_ports
+            .settings
+            .send(Arc::new(settings))
+            .expect("session credential status");
+        bridge
+            .handle_notice(UiNotice::IntentCommitted {
+                request_id: TuiRequestId::new(receipt.request_id.get()),
+            })
+            .expect("credential commit");
+        acknowledge_current_frame(&mut bridge);
+        acknowledge_current_frame(&mut bridge);
+
+        let frames = received.lock().expect("frame lock");
+        assert_eq!(frames.len(), 3);
+        let snapshot = match &frames[1].payload {
+            autoharness_client::FramePayload::Snapshot {
+                reason: SnapshotReason::Projection,
+                snapshot,
+            } => snapshot,
+            autoharness_client::FramePayload::Snapshot { .. }
+            | autoharness_client::FramePayload::Notice(_) => {
+                panic!("expected credential projection")
+            }
+        };
+        assert!(matches!(snapshot.lifecycle, ClientLifecycle::Ready));
+        assert_eq!(snapshot.providers[0].connection_id, connection_id);
+        assert!(matches!(
+            snapshot.providers[0].status,
+            ClientProviderStatus::Ready
+        ));
+        assert_eq!(
+            snapshot.providers[0].credential_source,
+            ClientCredentialSource::SessionOnly
+        );
+        assert!(matches!(
+            frames[2].payload,
+            autoharness_client::FramePayload::Notice(ClientNotice::CommandCommitted {
+                request_id
+            }) if request_id == receipt.request_id
+        ));
+        assert!(
+            !serde_json::to_string(frames.as_slice())
+                .expect("serialized frames")
+                .contains(SENTINEL)
+        );
+    }
+
+    #[test]
     fn stalled_terminal_notices_bound_forwarded_intents() {
         let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
             Arc::new(active_session()),
@@ -1512,12 +2876,16 @@ mod tests {
             Arc::new(TuiCatalogProjection::CredentialRequired),
         );
         let (_request_tx, request_rx) = mpsc::channel(1);
-        let mut bridge = BridgeActor::new(ui_ports, request_rx, CancellationToken::new());
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        bridge.channel = Some(Channel::new(|_| Ok(())));
         bridge
             .pending_requests
             .extend(1..=u64::try_from(MAX_PENDING_REQUESTS).expect("pending bound"));
 
-        assert!(bridge.dispatch(ClientCommand::RefreshCatalog).is_err());
+        let busy = bridge
+            .dispatch(ClientCommand::RefreshCatalog)
+            .expect_err("pending bound must reject new work");
+        assert_eq!(busy.code, "host_busy");
         assert_eq!(bridge.pending_requests.len(), MAX_PENDING_REQUESTS);
         assert!(app_ports.intents.try_recv().is_err());
     }

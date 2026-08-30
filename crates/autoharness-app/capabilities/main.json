@@ -6,6 +6,7 @@
   "permissions": [
     "allow-gui-connect",
     "allow-gui-dispatch",
-    "allow-gui-submit-credential"
+    "allow-gui-submit-credential",
+    "allow-gui-acknowledge-frame"
   ]
 }
