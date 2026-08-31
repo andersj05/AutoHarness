@@ -11,7 +11,7 @@ By contributing, you agree that your contributions are licensed under the [MIT L
 
 1. [`AGENTS.md`](AGENTS.md): repository conventions, guardrails, engineering standards, and the memory protocol.
 2. [`docs/README.md`](docs/README.md): routes each task to its smallest authoritative document.
-3. [`README.md`](README.md): running the terminal application and configuration.
+3. [`README.md`](README.md): running the GUI preview or terminal reference client and configuring the runtime.
 
 ## Branching
 
@@ -23,7 +23,7 @@ By contributing, you agree that your contributions are licensed under the [MIT L
 
 ## Required validation
 
-Run these gates from the repository root before opening a pull request:
+Run the Rust gates from the repository root before opening a pull request:
 
 ```text
 cargo fmt --all -- --check
@@ -31,13 +31,35 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-Pull requests must keep all three green on Linux, Windows, and macOS in CI.
+Pull requests must keep all three Rust gates green on Linux, Windows, and macOS in CI.
+Install the pinned frontend workspace dependencies before GUI development:
+
+```text
+pnpm install
+```
+
+Changes to the GUI, its wire contract, or the desktop bridge must also pass:
+
+```text
+pnpm gui:typecheck
+pnpm gui:test
+pnpm gui:build
+```
+
+## GUI preview development
+
+Run `pnpm gui:dev` for browser-only development against deterministic fixture state.
+The fixture is suitable for interface and recovery-state work, but it is not evidence of native integration, durable persistence, credential handling, packaging, or terminal parity.
+Run `pnpm gui:desktop` to exercise the native Tauri development preview against the Rust host.
+The terminal application remains the compatibility and behavioral reference until the GUI satisfies its documented release gate.
 
 ## Engineering expectations
 
 - Add focused tests with implementation changes.
 - Provider tests must cover pagination, arbitrarily fragmented streams, cancellation, retries, and secret redaction.
-- Keep the headless engine independent of Ratatui, concrete providers, SQLite, and plugin runtimes.
+- Keep the headless engine independent of Ratatui, Tauri, React, concrete providers, SQLite, and plugin runtimes.
+- Put cross-client commands, projections, frames, recovery semantics, and safe failures in the versioned renderer-neutral client contract.
+- Keep durable runtime, provider, storage, and policy logic outside both terminal and GUI renderers.
 - Normalize provider streams into typed internal events inside adapters only.
 - Make cancellation, backpressure, retries, budgets, and permissions explicit.
 - Never commit secrets, credentials, tokens, or raw secret-bearing tool output.

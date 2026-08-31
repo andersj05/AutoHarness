@@ -1,6 +1,9 @@
 # Documentation map
 
-This index routes humans and agents to the smallest authoritative document for a task. Do not load every document by default.
+This index routes humans and agents to the smallest authoritative document for a task.
+Do not load every document by default.
+The desktop GUI is currently a development preview, not the default client, a packaged release, or a parity claim.
+Terminal documentation remains the compatibility and behavioral reference during the migration.
 
 ## Planning
 
@@ -50,6 +53,11 @@ This index routes humans and agents to the smallest authoritative document for a
 
 - [`scripts/check_docs_links.py`](../scripts/check_docs_links.py): verifies that every relative link in every Markdown file resolves and that every ADR is indexed; runs in CI and locally from the repository root.
 
+Install frontend dependencies once from the repository root with `pnpm install`.
+Use `pnpm gui:dev` for browser-only fixture development and `pnpm gui:desktop` for the native Tauri development preview.
+The verified GUI gates are `pnpm gui:typecheck`, `pnpm gui:test`, and `pnpm gui:build`.
+The fixture validates renderer behavior only and does not establish native integration, persistence, credential safety, packaging, or terminal parity.
+
 ## Source-of-truth rule
 
 Each fact should have one authoritative home:
@@ -61,6 +69,8 @@ Each fact should have one authoritative home:
 | Milestone status | `docs/memory/progress.md` |
 | Delivery sequence and exit criteria | `docs/PROJECT_PLAN.md` |
 | Current system contracts | `docs/architecture/` |
+| GUI client ownership, protocol, carrier, security, and recovery | `docs/architecture/GUI.md` |
+| GUI visual contract | `docs/design/GUI_DESIGN_SYSTEM.md` |
 | Terminal visual contract | `docs/design/TUI_DESIGN_SYSTEM.md` |
 | Why a significant choice was made | `docs/adr/` |
 | Historical code changes | Git history |

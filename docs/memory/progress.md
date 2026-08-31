@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-08-29
+**Last reviewed:** 2026-08-30
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -23,10 +23,20 @@
 | 3.9. Terminal product validation | Implemented locally; evidence pending | The current terminal includes a catalog-bound startup indicator capped at 400 ms, settings-owned credentials, one scrollable Chat flow whose composer follows the final message, a borderless viewport-bounded transcript, an accessible ASCII generation scanner, configurable safe prompt metadata, optional Nerd Font symbols, theme-aware gradients, cyclic arrow-key Settings navigation, ranked slash suggestions, durable provider defaults, and a live-verified GPT-5.6 Responses Lite adapter path; the full release-candidate evidence matrix remains open |
 | 3.10. Terminal visual overhaul | Validation in progress | Steps 0 through 10 establish the typed presentation layer, rebuild every surface, and pass the complete responsive, accessibility, source-authority, render-cost, and local Windows validation matrix; follow-up conversation-flow, transparent-surface, and session-management polish passes the same local workspace and render gates plus real PTY journeys, while same-candidate cross-platform CI, three human terminal reviews, release approval, and ADR-0016 acceptance remain open |
 | 4. Persistent context and memory | Implemented, locally validated, and merged into `dev`; release evidence pending | Typed auditable context, the separate revisioned memory ledger, provider-native preludes, explicit memory, no-authority model and verified-tool proposals, bounded document import, production compaction, all-profile exact raw credential protection, provenance-rich authoritative inspection, and the themed Memory route pass local repository, conformance, render, restart, and real-PTY gates; inherited Phase 3 release evidence remains open |
+| 4.1. Native GUI migration | Initial development preview implemented; release and parity gates open | ADR-0019, the schema-v1 renderer-neutral client, bounded same-process Tauri carrier, React-free client store, responsive terminal-inspired React shell, deterministic browser fixtures, Windows native smoke, complete locked Rust workspace gates, frontend tests, production build, documentation validation, and an independent audit with no actionable P0 through P2 findings pass locally; the temporary TUI projection adapter, feature parity, packaging, accessibility, performance, and cross-platform system-webview evidence remain open |
 | 5. Evaluation and self-improvement | Planned | Roadmap and guardrails are documented; runtime is not implemented |
 | 6. Extension and distributed runtime | Planned | Target boundaries are documented; runtime is not implemented |
 
 ## Verified repository capabilities
+
+- The initial native GUI development preview uses local Tauri assets, a narrow main-window capability, a strict content security policy, a renderer-neutral schema-v1 Rust contract, one bounded acknowledged frame, request-correlated notices, complete snapshot resynchronization, and dedicated zeroizing credential ingress.
+- The React workspace keeps transport and client-store logic independent from React, preserves drafts per durable session, fails closed after uncertain mutations or carrier gaps, and covers ready, streaming, offline, credential, permission, failed, empty, compact, standard, and wide presentation states with deterministic fixtures.
+- Security-critical permission text visibly and injectively encodes control, directional, default-ignorable, and literal backslash characters at the host boundary, and the contract represents the built-in planner's full 256-argument and long-URL bounds without truncating authority-critical fields.
+- The GUI bridge preserves durable prompt and retry outcomes across post-admission startup failures, publishes shutdown lifecycle before native-close settlement, rejects fragmented credential reconstruction, and keeps inactive saved profiles from hiding a connected default provider.
+- Provider-authored catalog labels, details, and excess rows are bounded at the GUI projection boundary so malformed remote presentation data cannot make the desktop baseline unrepresentable.
+- A real Windows Tauri development window rendered the native terminal-inspired workspace against the Rust host and exited without leaving the application or Vite listener running.
+- Rust formatting, strict workspace Clippy, the complete locked workspace suite, frontend lock verification, type checking, 49 GUI tests, the production Vite build, documentation links, and diff checks pass locally on `feat/gui-application-shell`.
+- The final independent review of the client contract, native bridge, provider projections, frontend transport and store, permission identity, and root package and CI wiring reports no actionable P0 through P2 findings.
 
 - Human-facing README routes to authoritative project documentation.
 - Cross-tool root `AGENTS.md` defines read order, architecture guardrails, and memory maintenance.
