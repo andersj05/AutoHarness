@@ -2,9 +2,9 @@
 
 **Last reviewed:** 2026-08-30
 
-**Phase:** Native GUI migration preview on `feat/gui-application-shell`
+**Phase:** Native GUI migration preview on `dev`
 
-**Status:** The first renderer-neutral client, Tauri carrier, and React desktop slice are implemented, complete local workspace validation passes, and the final independent audit has no actionable P0 through P2 findings; migration release gates remain open
+**Status:** The first renderer-neutral client, Tauri carrier, and React desktop slice are merged into `dev`, complete local workspace validation passes, and the final independent audit has no actionable P0 through P2 findings; migration release gates remain open
 
 ## Current objective
 
@@ -45,6 +45,5 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 
 ## Immediate next actions
 
-1. Open a pull request from `feat/gui-application-shell` into `dev` after review of this bounded preview slice.
-2. Continue Stage 1 by moving application projections and client ports out of the temporary TUI compatibility adapter.
-3. Implement Stage 2 native startup-to-restart journeys with real prompt, stream, cancellation, permission, credential, and crash-interruption coverage.
+1. Continue Stage 1 by moving application projections and client ports out of the temporary TUI compatibility adapter.
+2. Implement Stage 2 native startup-to-restart journeys with real prompt, stream, cancellation, permission, credential, and crash-interruption coverage.
