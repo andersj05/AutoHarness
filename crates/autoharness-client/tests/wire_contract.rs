@@ -442,6 +442,77 @@ fn constructors_and_deserializers_enforce_content_and_collection_bounds() {
 }
 
 #[test]
+fn permission_wire_rejects_deceptive_directional_controls() {
+    for unsafe_text in ["safe\u{202e}txt.exe", "report.p\u{200b}df"] {
+        assert!(PermissionDetail::new("Path", unsafe_text).is_err());
+        assert!(
+            PermissionRequest::new(
+                tool_call_id("tool-bidi"),
+                "workspace_read_v1",
+                "filesystem_read",
+                format!("workspace:{unsafe_text}"),
+                Vec::new(),
+            )
+            .is_err()
+        );
+
+        let wire = json!({
+            "tool_call_id": "tool-bidi",
+            "tool_name": "workspace_read_v1",
+            "capability": "filesystem_read",
+            "resource": format!("workspace:{unsafe_text}"),
+            "details": []
+        });
+        assert!(serde_json::from_value::<PermissionRequest>(wire).is_err());
+    }
+}
+
+#[test]
+fn permission_wire_covers_exact_built_in_tool_boundaries() {
+    let mut details = (0..256)
+        .map(|index| {
+            PermissionDetail::new("Argument", format!("{}: value", index + 1))
+                .expect("bounded argument detail")
+        })
+        .collect::<Vec<_>>();
+    details.push(PermissionDetail::new("Program", "cargo").expect("program detail"));
+    details.push(PermissionDetail::new("Working directory", ".").expect("directory detail"));
+    details[0] = PermissionDetail::new("Argument", "1: ".to_owned() + &"\\u{7f}".repeat(60 * 1024))
+        .expect("escaped exact argument can exceed the ordinary display-detail bound");
+
+    assert!(
+        PermissionRequest::new(
+            tool_call_id("tool-boundary"),
+            "process_run",
+            "process_execute",
+            "program:cargo@workspace:.",
+            details,
+        )
+        .is_ok()
+    );
+    assert!(
+        PermissionDetail::new("Argument", "x".repeat(MAX_PERMISSION_DETAIL_BYTES + 1)).is_err()
+    );
+
+    let aggregate_too_large = vec![
+        PermissionDetail::new("First", "x".repeat(MAX_PERMISSION_TOTAL_BYTES / 2))
+            .expect("individually bounded field"),
+        PermissionDetail::new("Second", "x".repeat(MAX_PERMISSION_TOTAL_BYTES / 2))
+            .expect("individually bounded field"),
+    ];
+    assert!(
+        PermissionRequest::new(
+            tool_call_id("tool-aggregate"),
+            "http_request",
+            "http_request",
+            "https://example.com",
+            aggregate_too_large,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn frames_detect_gaps_stale_data_and_authoritative_resynchronization() {
     let snapshot = sample_snapshot();
     let initial = ServerFrame::snapshot(

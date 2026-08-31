@@ -10,19 +10,20 @@ use autoharness_client::{
     CapabilitySupport, CatalogProjection as ClientCatalogProjection, ClientCommand,
     ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
     ConnectionId as ClientConnectionId, CredentialSource as ClientCredentialSource, DecimalU64,
-    FailureClass, InputId as ClientInputId, ModelId as ClientModelId, ModelRef as ClientModelRef,
-    ModelSummary as ClientModelSummary, PermissionDecision, PermissionDetail,
-    PermissionRequest as ClientPermissionRequest, ProviderId as ClientProviderId,
-    ProviderProjection as ClientProviderProjection, ProviderStatus as ClientProviderStatus,
-    RequestId as ClientRequestId, RetryDirective, SafeFailure, SecretIngress, ServerFrame,
-    SessionId as ClientSessionId, SessionProjection as ClientSessionProjection, SessionRevision,
-    SessionSummary, SessionTitle, ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
+    FailureClass, InputId as ClientInputId, MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES,
+    ModelId as ClientModelId, ModelRef as ClientModelRef, ModelSummary as ClientModelSummary,
+    PermissionDecision, PermissionDetail, PermissionRequest as ClientPermissionRequest,
+    ProviderId as ClientProviderId, ProviderProjection as ClientProviderProjection,
+    ProviderStatus as ClientProviderStatus, RequestId as ClientRequestId, RetryDirective,
+    SafeFailure, SecretIngress, ServerFrame, SessionId as ClientSessionId,
+    SessionProjection as ClientSessionProjection, SessionRevision, SessionSummary, SessionTitle,
+    ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
     ToolCallProjection as ClientToolCallProjection, ToolCallState, TranscriptContent,
     TranscriptItem as ClientTranscriptItem, TransportRevision, UsageProjection,
 };
 use autoharness_domain::{
     ErrorClass, ModelId as DomainModelId, ModelRef as DomainModelRef,
-    ProviderId as DomainProviderId,
+    ProviderId as DomainProviderId, security_display_safe,
 };
 use autoharness_tui::{
     ApiCredential, AttemptStatus as TuiAttemptStatus, CatalogProjection as TuiCatalogProjection,
@@ -145,18 +146,19 @@ async fn gui_connect(
 #[tauri::command]
 async fn gui_dispatch(
     state: tauri::State<'_, GuiState>,
-    command: CommandEnvelope,
+    command: serde_json::Value,
 ) -> Result<CommandReceipt, GuiIpcError> {
+    let command = decode_command(command)?;
     let requests = state.requests.clone();
     let (reply, response) = oneshot::channel();
-    try_enqueue_host_request(
-        &requests,
-        HostRequest::Dispatch {
-            command: command.command,
-            reply,
-        },
-    )?;
+    try_enqueue_host_request(&requests, HostRequest::Dispatch { command, reply })?;
     response.await.map_err(|_| GuiIpcError::disconnected())?
+}
+
+fn decode_command(command: serde_json::Value) -> Result<ClientCommand, GuiIpcError> {
+    serde_json::from_value::<CommandEnvelope>(command)
+        .map(|envelope| envelope.command)
+        .map_err(|_| GuiIpcError::invalid_command())
 }
 
 #[tauri::command]
@@ -600,10 +602,12 @@ impl BridgeActor {
         if self.pending_notices.len() >= MAX_PENDING_NOTICES {
             return Err(GuiIpcError::busy());
         }
+        let wait_for_projection = self.projection_dirty
+            && (terminal_request_id.is_some() || matches!(&notice, ClientNotice::Shutdown { .. }));
         self.pending_notices.push_back(QueuedNotice {
             notice,
             terminal_request_id,
-            wait_for_projection: terminal_request_id.is_some() && self.projection_dirty,
+            wait_for_projection,
         });
         Ok(())
     }
@@ -1071,13 +1075,7 @@ fn map_snapshot(
         );
     }
     let catalog = map_catalog(catalog, runtime.catalog_generation)?;
-    let session_credential_connection = session_credential_connection(settings)?;
-    let providers = map_providers(
-        profiles,
-        settings,
-        &catalog,
-        session_credential_connection.as_ref(),
-    )?;
+    let providers = map_providers(profiles, settings, &catalog)?;
     let lifecycle = if runtime.shutting_down {
         ClientLifecycle::ShuttingDown
     } else if providers
@@ -1125,16 +1123,19 @@ fn map_session(active: &TuiSessionProjection) -> Result<ClientSessionProjection,
                 .details
                 .iter()
                 .map(|detail| {
-                    PermissionDetail::new(detail.label.clone(), detail.value.clone())
-                        .map_err(|_| GuiIpcError::invalid_projection())
+                    PermissionDetail::new(
+                        security_display_safe(&detail.label),
+                        security_display_safe(&detail.value),
+                    )
+                    .map_err(|_| GuiIpcError::invalid_projection())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             ClientPermissionRequest::new(
                 ClientToolCallId::new(request.tool_call_id.as_str())
                     .map_err(|_| GuiIpcError::invalid_projection())?,
-                request.tool_name.clone(),
-                request.capability.clone(),
-                request.resource.clone(),
+                security_display_safe(&request.tool_name),
+                security_display_safe(&request.capability),
+                security_display_safe(&request.resource),
                 details,
             )
             .map_err(|_| GuiIpcError::invalid_projection())
@@ -1273,11 +1274,16 @@ fn map_catalog(
         TuiCatalogProjection::Ready { models, stale } => {
             let models = models
                 .iter()
+                .take(MAX_CATALOG_MODELS)
                 .map(|model| {
                     ClientModelSummary::new(
                         client_model_ref(&model.model)?,
-                        model.display_name.clone(),
-                        model.detail.clone(),
+                        bounded_catalog_text(
+                            &model.display_name,
+                            model.model.model_id().as_str(),
+                            MAX_LABEL_BYTES,
+                        ),
+                        bounded_catalog_text(&model.detail, "", MAX_DETAIL_BYTES),
                         model.context_window_tokens,
                         model.selectable,
                         if model.selectable {
@@ -1302,27 +1308,58 @@ fn map_catalog(
     }
 }
 
+fn bounded_catalog_text(value: &str, fallback: &str, max_bytes: usize) -> String {
+    let source = if value.trim().is_empty() {
+        fallback
+    } else {
+        value
+    };
+    let safe = security_display_safe(source);
+    if safe.len() <= max_bytes {
+        return safe;
+    }
+    let suffix = "...";
+    let mut end = max_bytes.saturating_sub(suffix.len()).min(safe.len());
+    while !safe.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let mut bounded = String::with_capacity(max_bytes);
+    bounded.push_str(&safe[..end]);
+    bounded.push_str(suffix);
+    bounded
+}
+
 fn map_providers(
     profiles: &TuiProfilesProjection,
     settings: &TuiSettingsProjection,
     catalog: &ClientCatalogProjection,
-    session_credential_connection: Option<&ClientConnectionId>,
 ) -> Result<Vec<ClientProviderProjection>, GuiIpcError> {
-    if profiles.profiles.is_empty() {
-        return Ok(vec![fallback_provider(
-            settings,
-            catalog,
-            session_credential_connection,
-        )?]);
-    }
-    profiles
+    let active_profile = profiles.profiles.iter().find(|profile| profile.active);
+    let fallback_connection = active_profile
+        .is_none()
+        .then(|| fallback_connection_id(profiles, settings))
+        .transpose()?;
+    let session_credential_connection = if settings.provider_status.credential_connected
+        && settings.provider_status.credential_source == CredentialSourceLabel::SessionOnly
+    {
+        match active_profile {
+            Some(profile) => Some(
+                ClientConnectionId::new(profile.id.clone())
+                    .map_err(|_| GuiIpcError::invalid_projection())?,
+            ),
+            None => fallback_connection.clone(),
+        }
+    } else {
+        None
+    };
+    let mut providers = profiles
         .profiles
         .iter()
         .map(|profile| {
             let connection_id = ClientConnectionId::new(profile.id.clone())
                 .map_err(|_| GuiIpcError::invalid_projection())?;
             let session_connected =
-                profile.active && session_credential_connection == Some(&connection_id);
+                profile.active && session_credential_connection.as_ref() == Some(&connection_id);
             let persisted_connected =
                 profile.active && settings.provider_status.credential_connected;
             let connected = session_connected || persisted_connected;
@@ -1331,8 +1368,11 @@ fn map_providers(
             } else {
                 map_credential_source(profile.credential_source, persisted_connected)
             };
-            let status = if session_connected
-                && matches!(catalog, ClientCatalogProjection::Ready { .. })
+            let status = if profile.active
+                && matches!(catalog, ClientCatalogProjection::CredentialRequired)
+            {
+                ClientProviderStatus::CredentialRequired
+            } else if session_connected && matches!(catalog, ClientCatalogProjection::Ready { .. })
             {
                 ClientProviderStatus::Ready
             } else {
@@ -1377,30 +1417,44 @@ fn map_providers(
             )
             .map_err(|_| GuiIpcError::invalid_projection())
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(connection_id) = fallback_connection {
+        providers.push(fallback_provider(
+            settings,
+            catalog,
+            connection_id,
+            session_credential_connection.as_ref(),
+        )?);
+    }
+    Ok(providers)
 }
 
-fn session_credential_connection(
+fn fallback_connection_id(
+    profiles: &TuiProfilesProjection,
     settings: &TuiSettingsProjection,
-) -> Result<Option<ClientConnectionId>, GuiIpcError> {
-    let status = &settings.provider_status;
-    if !status.credential_connected
-        || status.credential_source != CredentialSourceLabel::SessionOnly
+) -> Result<ClientConnectionId, GuiIpcError> {
+    let kind = settings
+        .provider_status
+        .provider_kind
+        .unwrap_or(ProviderKindLabel::Gemini);
+    let base = format!("session:{}", provider_kind_id(kind));
+    let mut candidate = base.clone();
+    let mut suffix = 1_u32;
+    while profiles
+        .profiles
+        .iter()
+        .any(|profile| profile.id == candidate)
     {
-        return Ok(None);
+        candidate = format!("{base}:default-{suffix}");
+        suffix = suffix.saturating_add(1);
     }
-    let connection_id = status.active_profile.clone().unwrap_or_else(|| {
-        let kind = status.provider_kind.unwrap_or(ProviderKindLabel::Gemini);
-        format!("session:{}", provider_kind_id(kind))
-    });
-    ClientConnectionId::new(connection_id)
-        .map(Some)
-        .map_err(|_| GuiIpcError::invalid_projection())
+    ClientConnectionId::new(candidate).map_err(|_| GuiIpcError::invalid_projection())
 }
 
 fn fallback_provider(
     settings: &TuiSettingsProjection,
     catalog: &ClientCatalogProjection,
+    connection_id: ClientConnectionId,
     session_credential_connection: Option<&ClientConnectionId>,
 ) -> Result<ClientProviderProjection, GuiIpcError> {
     let kind = settings
@@ -1408,13 +1462,6 @@ fn fallback_provider(
         .provider_kind
         .unwrap_or(ProviderKindLabel::Gemini);
     let persisted_connected = settings.provider_status.credential_connected;
-    let connection_id = settings
-        .provider_status
-        .active_profile
-        .clone()
-        .unwrap_or_else(|| format!("session:{}", provider_kind_id(kind)));
-    let connection_id =
-        ClientConnectionId::new(connection_id).map_err(|_| GuiIpcError::invalid_projection())?;
     let session_connected = session_credential_connection == Some(&connection_id);
     let connected = session_connected || persisted_connected;
     let status = match catalog {
@@ -1637,6 +1684,24 @@ mod tests {
     }
 
     #[test]
+    fn raw_command_decode_returns_typed_invalid_command_for_rust_blank_prompt() {
+        let command = serde_json::json!({
+            "schema_version": 1,
+            "command": {
+                "kind": "submit_prompt",
+                "payload": {
+                    "session_id": "session-one",
+                    "prompt": "\u{0085}"
+                }
+            }
+        });
+
+        let error = decode_command(command).expect_err("NEL-only prompt must be rejected");
+
+        assert_eq!(error.code, "invalid_command");
+    }
+
+    #[test]
     fn permission_mapping_requires_the_exact_pending_tool_call() {
         let session = active_session();
         let command = ClientCommand::AnswerPermission {
@@ -1653,6 +1718,72 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn permission_mapping_is_lossless_safe_and_answerable_at_tool_boundaries() {
+        let mut session = active_session();
+        let mut details = (0..256)
+            .map(|index| autoharness_tui::PermissionDetailView {
+                label: "Argument".to_owned(),
+                value: format!("{}: value", index + 1),
+            })
+            .collect::<Vec<_>>();
+        details.push(autoharness_tui::PermissionDetailView {
+            label: "Program".to_owned(),
+            value: "cargo".to_owned(),
+        });
+        details.push(autoharness_tui::PermissionDetailView {
+            label: "Working directory".to_owned(),
+            value: ".".to_owned(),
+        });
+        details[0].value = "1: ".to_owned() + &"\u{7f}".repeat(60 * 1024);
+        details[1].value = format!("2: https://example.com/{}", "%C3%A9".repeat(8 * 1024));
+        details[2].value = "3: safe\u{202e}txt.exe".to_owned();
+        session
+            .permission_requests
+            .push(autoharness_tui::PermissionRequestView {
+                tool_call_id: ToolCallKey::new("boundary-call").expect("tool call ID"),
+                tool_name: "process_run".to_owned(),
+                capability: "process_execute".to_owned(),
+                resource: "program:cargo@workspace:report.p\u{200b}df".to_owned(),
+                details,
+            });
+
+        let projected = map_session(&session).expect("bounded permission projection");
+        let permission = projected
+            .permission_requests
+            .first()
+            .expect("pending permission");
+
+        assert_eq!(permission.details.len(), 258);
+        assert!(permission.details[0].value.len() > 256 * 1024);
+        assert!(!permission.details[0].value.contains('\u{7f}'));
+        assert!(permission.details[1].value.len() > 4 * 1024);
+        assert_eq!(permission.details[2].value, "3: safe\\u{202e}txt.exe");
+        assert_eq!(
+            permission.resource,
+            "program:cargo@workspace:report.p\\u{200b}df"
+        );
+
+        let action = map_command(
+            ClientCommand::AnswerPermission {
+                session_id: ClientSessionId::new("session-one").expect("session ID"),
+                tool_call_id: ClientToolCallId::new("boundary-call").expect("tool call ID"),
+                decision: PermissionDecision::AllowOnce,
+            },
+            ClientRequestId::new(7).expect("request ID"),
+            &session,
+        )
+        .expect("exact permission answer mapping");
+        assert!(matches!(
+            action,
+            CommandAction::Intent(UiIntent::AnswerPermission {
+                allow: true,
+                tool_call_id,
+                ..
+            }) if tool_call_id.as_str() == "boundary-call"
+        ));
     }
 
     #[test]
@@ -1845,6 +1976,51 @@ mod tests {
     }
 
     #[test]
+    fn catalog_mapping_bounds_remote_labels_details_and_row_count() {
+        let provider_id = DomainProviderId::new("gemini").expect("provider ID");
+        let models = (0..=MAX_CATALOG_MODELS)
+            .map(|index| {
+                let model_id =
+                    DomainModelId::new(format!("models/catalog-{index}")).expect("model ID");
+                autoharness_tui::ModelSummary {
+                    model: DomainModelRef::new(provider_id.clone(), model_id),
+                    display_name: match index {
+                        0 => "   ".to_owned(),
+                        1 => "x".repeat(MAX_LABEL_BYTES + 1),
+                        _ => format!("Catalog model {index}"),
+                    },
+                    detail: if index == 1 {
+                        "d".repeat(MAX_DETAIL_BYTES + 1)
+                    } else {
+                        "Provider model".to_owned()
+                    },
+                    context_window_tokens: Some(1_048_576),
+                    selectable: true,
+                }
+            })
+            .collect();
+
+        let catalog = map_catalog(
+            &TuiCatalogProjection::Ready {
+                models,
+                stale: false,
+            },
+            4,
+        )
+        .expect("bounded catalog projection");
+        let ClientCatalogProjection::Ready { models, .. } = catalog else {
+            panic!("expected ready catalog");
+        };
+
+        assert_eq!(models.len(), MAX_CATALOG_MODELS);
+        assert_eq!(models[0].display_name, "models/catalog-0");
+        assert_eq!(models[1].display_name.len(), MAX_LABEL_BYTES);
+        assert_eq!(models[1].detail.len(), MAX_DETAIL_BYTES);
+        assert!(models[1].display_name.ends_with("..."));
+        assert!(models[1].detail.ends_with("..."));
+    }
+
+    #[test]
     fn inactive_session_summary_does_not_invent_a_durable_revision() {
         let summary = autoharness_tui::SessionBrowserEntry {
             session_id: "inactive-session".to_owned(),
@@ -1885,7 +2061,6 @@ mod tests {
             },
             &TuiSettingsProjection::default(),
             &ClientCatalogProjection::Loading,
-            None,
         )
         .expect("provider projection");
 
@@ -1893,6 +2068,91 @@ mod tests {
         assert_eq!(providers[0].credential_source, ClientCredentialSource::None);
         assert_eq!(providers[0].connection_id.as_str(), "backup");
         assert_eq!(providers[0].provider_id.as_str(), "gemini");
+        assert!(providers[1].active);
+        assert_eq!(providers[1].connection_id.as_str(), "session:gemini");
+    }
+
+    #[test]
+    fn inactive_saved_profiles_keep_the_connected_default_provider_active() {
+        let profile = autoharness_tui::ProviderProfileProjection {
+            id: "session:gemini".to_owned(),
+            kind: ProviderKindLabel::Gemini,
+            active: false,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+            credential_state: ProfileCredentialStateLabel::Stored,
+            credential_source: CredentialSourceLabel::CredentialVault,
+            connection: ProfileConnectionState::Ready,
+            default_model: None,
+            default_mode: "auto".to_owned(),
+        };
+        let settings = TuiSettingsProjection {
+            provider_status: autoharness_tui::ProviderStatusProjection {
+                active_profile: None,
+                provider_kind: Some(ProviderKindLabel::Gemini),
+                credential_source: CredentialSourceLabel::Environment,
+                credential_connected: true,
+            },
+            ..TuiSettingsProjection::default()
+        };
+        let providers = map_providers(
+            &TuiProfilesProjection {
+                profiles: vec![profile],
+                ..TuiProfilesProjection::default()
+            },
+            &settings,
+            &ClientCatalogProjection::ready(1, Vec::new(), false).expect("ready catalog"),
+        )
+        .expect("provider projection");
+
+        assert_eq!(
+            providers.iter().filter(|provider| provider.active).count(),
+            1
+        );
+        let fallback = providers
+            .iter()
+            .find(|provider| provider.active)
+            .expect("active fallback provider");
+        assert_eq!(fallback.connection_id.as_str(), "session:gemini:default-1");
+        assert!(matches!(fallback.status, ClientProviderStatus::Ready));
+        assert_eq!(
+            fallback.credential_source,
+            ClientCredentialSource::Environment
+        );
+    }
+
+    #[test]
+    fn credential_failure_keeps_an_active_profile_reconnectable() {
+        let profile = autoharness_tui::ProviderProfileProjection {
+            id: "active-gemini".to_owned(),
+            kind: ProviderKindLabel::Gemini,
+            active: true,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+            credential_state: ProfileCredentialStateLabel::Stored,
+            credential_source: CredentialSourceLabel::CredentialVault,
+            connection: ProfileConnectionState::Failed("credential rejected".to_owned()),
+            default_model: None,
+            default_mode: "auto".to_owned(),
+        };
+
+        let providers = map_providers(
+            &TuiProfilesProjection {
+                profiles: vec![profile],
+                ..TuiProfilesProjection::default()
+            },
+            &TuiSettingsProjection::default(),
+            &ClientCatalogProjection::CredentialRequired,
+        )
+        .expect("provider projection");
+
+        assert!(matches!(
+            providers[0].status,
+            ClientProviderStatus::CredentialRequired
+        ));
+        assert_eq!(providers[0].connection_id.as_str(), "active-gemini");
     }
 
     #[test]
@@ -1915,8 +2175,13 @@ mod tests {
         let catalog = ClientCatalogProjection::ready(1, vec![router_model], true)
             .expect("catalog projection");
 
-        let provider = fallback_provider(&TuiSettingsProjection::default(), &catalog, None)
-            .expect("fallback provider");
+        let provider = fallback_provider(
+            &TuiSettingsProjection::default(),
+            &catalog,
+            ClientConnectionId::new("session:gemini").expect("connection ID"),
+            None,
+        )
+        .expect("fallback provider");
 
         assert_eq!(provider.provider_id.as_str(), "gemini");
     }

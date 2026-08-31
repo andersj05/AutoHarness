@@ -195,6 +195,7 @@ dependencies = [
 name = "autoharness-client"
 version = "0.1.0"
 dependencies = [
+ "autoharness-domain",
  "serde",
  "serde_json",
  "zeroize",

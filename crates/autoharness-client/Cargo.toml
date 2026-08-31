@@ -9,6 +9,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+autoharness-domain.workspace = true
 serde.workspace = true
 zeroize.workspace = true
 

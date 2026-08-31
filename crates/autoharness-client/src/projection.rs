@@ -5,9 +5,10 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bounds::{
-    MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES, MAX_PERMISSION_DETAILS,
-    MAX_PERMISSION_REQUESTS, MAX_PROVIDERS, MAX_SESSIONS, MAX_TRANSCRIPT_ITEMS, validate_count,
-    validate_non_empty_text, validate_text,
+    MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES, MAX_PERMISSION_DETAIL_BYTES,
+    MAX_PERMISSION_DETAILS, MAX_PERMISSION_REQUESTS, MAX_PERMISSION_TOTAL_BYTES, MAX_PROVIDERS,
+    MAX_SESSIONS, MAX_TRANSCRIPT_ITEMS, validate_count, validate_non_empty_security_text,
+    validate_non_empty_text, validate_security_text, validate_text,
 };
 use crate::{
     AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, DecimalU64, InputId, ModelId, ProviderId,
@@ -211,8 +212,12 @@ impl PermissionDetail {
     }
 
     fn validate(&self) -> Result<(), ValidationError> {
-        validate_non_empty_text("permission_detail_label", &self.label, MAX_LABEL_BYTES)?;
-        validate_text("permission_detail_value", &self.value, MAX_DETAIL_BYTES)
+        validate_non_empty_security_text("permission_detail_label", &self.label, MAX_LABEL_BYTES)?;
+        validate_security_text(
+            "permission_detail_value",
+            &self.value,
+            MAX_PERMISSION_DETAIL_BYTES,
+        )
     }
 }
 
@@ -268,15 +273,44 @@ impl PermissionRequest {
     }
 
     fn validate(&self) -> Result<(), ValidationError> {
-        validate_non_empty_text("permission_tool_name", &self.tool_name, MAX_LABEL_BYTES)?;
-        validate_non_empty_text("permission_capability", &self.capability, MAX_LABEL_BYTES)?;
-        validate_non_empty_text("permission_resource", &self.resource, MAX_DETAIL_BYTES)?;
+        validate_non_empty_security_text("permission_tool_name", &self.tool_name, MAX_LABEL_BYTES)?;
+        validate_non_empty_security_text(
+            "permission_capability",
+            &self.capability,
+            MAX_LABEL_BYTES,
+        )?;
+        validate_non_empty_security_text(
+            "permission_resource",
+            &self.resource,
+            MAX_PERMISSION_DETAIL_BYTES,
+        )?;
         validate_count(
             "permission_details",
             self.details.len(),
             MAX_PERMISSION_DETAILS,
         )?;
-        self.details.iter().try_for_each(PermissionDetail::validate)
+        self.details
+            .iter()
+            .try_for_each(PermissionDetail::validate)?;
+        let total_bytes = self
+            .tool_name
+            .len()
+            .saturating_add(self.capability.len())
+            .saturating_add(self.resource.len())
+            .saturating_add(
+                self.details
+                    .iter()
+                    .map(|detail| detail.label.len().saturating_add(detail.value.len()))
+                    .sum::<usize>(),
+            );
+        if total_bytes > MAX_PERMISSION_TOTAL_BYTES {
+            return Err(ValidationError::TooLong {
+                field: "permission_request",
+                max_bytes: MAX_PERMISSION_TOTAL_BYTES,
+                actual_bytes: total_bytes,
+            });
+        }
+        Ok(())
     }
 }
 
