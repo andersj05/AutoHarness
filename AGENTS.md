@@ -3,7 +3,8 @@
 ## Purpose
 
 AutoHarness is an open-source, self-improving agent harness.
-The first product slice is a fast Rust terminal application that discovers Google AI Studio models, streams model responses, and persists replayable sessions.
+The implemented product reference is a fast Rust terminal application that discovers models, streams responses, and persists replayable sessions.
+An initial Tauri and React GUI is available as a development preview, while the terminal remains the compatibility and behavioral reference until the GUI passes its release gate.
 The long-term system improves prompts, policies, routing, tools, memory, and code only through measured experiments and gated promotion.
 
 ## Read before working
@@ -32,7 +33,9 @@ Review `docs/adr/README.md` before changing an architectural decision.
 ## Architecture guardrails
 
 - Use Rust 2024 and a modular-monolith workspace until a measured need justifies process separation.
-- Keep the headless engine independent of Ratatui, concrete providers, SQLite, and plugin runtimes.
+- Keep the headless engine independent of Ratatui, Tauri, React, concrete providers, SQLite, and plugin runtimes.
+- Keep shared client commands, projections, frames, recovery semantics, and safe failures in a versioned renderer-neutral contract.
+- Treat Tauri as a local carrier and React and Ratatui as renderers, not as owners of durable runtime behavior.
 - Provider adapters translate native protocols into one typed internal event stream.
 - Persist durable inputs and events before relying on in-memory coordination.
 - Make cancellation, backpressure, retries, budgets, and permissions explicit.
@@ -76,10 +79,15 @@ Review `docs/adr/README.md` before changing an architectural decision.
 
 - Run Rust workspace commands from the repository root.
 - The verified baseline gates are `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings`, and `cargo test --workspace --all-targets --all-features --locked --no-fail-fast`.
+- Run `pnpm install` from the repository root before GUI development.
+- The verified frontend gates are `pnpm gui:typecheck`, `pnpm gui:test`, and `pnpm gui:build`.
+- Use `pnpm gui:dev` for browser-only fixture development and `pnpm gui:desktop` for the native Tauri development preview.
+- Do not treat fixture validation as evidence of native integration, persistence, credential safety, packaging, or terminal parity.
 - Do not invent or document commands that have not been verified.
 - Add focused tests with implementation changes.
 - Provider tests must cover pagination, arbitrarily fragmented streams, cancellation, retries, and secret redaction.
 - Keep the terminal render loop free of network, storage, and model logic.
+- Keep the React renderer free of durable runtime, provider, storage, and policy logic.
 - Preserve unrelated user changes and keep patches scoped.
 - Use conventional commit subjects when commits are requested: `type(scope): summary`.
 

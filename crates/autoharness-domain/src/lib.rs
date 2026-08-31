@@ -6,6 +6,7 @@ mod error;
 mod event;
 mod id;
 mod memory;
+mod text;
 mod tool;
 mod value;
 
@@ -36,6 +37,7 @@ pub use memory::{
     MemorySequence, MemoryValidationIssue, MemoryValidationResult, MemoryValidationStatus,
     MemoryValidity, MemoryValidityWindow, Sensitivity, Sha256Digest, TrustClass,
 };
+pub use text::{contains_unsafe_display_control, is_unsafe_display_control, security_display_safe};
 pub use tool::{
     ArtifactRef, CapabilityKind, CapabilityRequest, MAX_INLINE_TOOL_OUTPUT_BYTES, PermissionAnswer,
     PermissionOutcome, ResourceRef, RunLimits, TOOL_SCHEMA_V1, ToolArguments, ToolCallSpec,

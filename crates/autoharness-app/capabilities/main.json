@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Local AutoHarness desktop window with no plugin, shell, filesystem, network, or process authority.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-gui-connect",
+    "allow-gui-dispatch",
+    "allow-gui-submit-credential",
+    "allow-gui-acknowledge-frame"
+  ]
+}

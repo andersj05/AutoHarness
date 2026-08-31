@@ -963,6 +963,87 @@ mod tests {
     }
 
     #[test]
+    fn permission_details_remain_exact_for_security_safe_projection() {
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":["safe\u{202e}txt.exe\u{200b}"]}),
+        ))
+        .expect("process plan");
+
+        let details = permission_details(planned.spec()).expect("permission details");
+        let argument = details
+            .iter()
+            .find(|detail| detail.label == "Argument")
+            .expect("argument detail");
+
+        assert_eq!(argument.value, "1: safe\u{202e}txt.exe\u{200b}");
+        assert_eq!(
+            autoharness_domain::security_display_safe(&argument.value),
+            "1: safe\\u{202e}txt.exe\\u{200b}"
+        );
+    }
+
+    #[test]
+    fn permission_details_cover_every_admitted_process_and_url_boundary() {
+        let thirty_one = (0..31)
+            .map(|index| format!("argument-{index}"))
+            .collect::<Vec<_>>();
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":thirty_one}),
+        ))
+        .expect("31-argument process plan");
+        assert_eq!(
+            permission_details(planned.spec())
+                .expect("31-argument details")
+                .len(),
+            33
+        );
+
+        let maximum = (0..MAX_PROCESS_ARGUMENTS)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":maximum}),
+        ))
+        .expect("maximum-argument process plan");
+        assert_eq!(
+            permission_details(planned.spec())
+                .expect("maximum-argument details")
+                .len(),
+            MAX_PROCESS_ARGUMENTS + 2
+        );
+
+        let long_argument = "x".repeat(5 * 1024);
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":[long_argument]}),
+        ))
+        .expect("long-argument process plan");
+        let details = permission_details(planned.spec()).expect("long-argument details");
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.value == format!("1: {}", "x".repeat(5 * 1024)))
+        );
+
+        let long_url = format!("https://example.com/{}", "é".repeat(8 * 1024));
+        let planned = plan(incoming(
+            "http_request",
+            json!({"method":"GET","url":long_url}),
+        ))
+        .expect("long URL plan");
+        let details = permission_details(planned.spec()).expect("long URL details");
+        let projected_url = details
+            .iter()
+            .find(|detail| detail.label == "URL")
+            .expect("URL detail");
+        assert!(projected_url.value.len() > 4 * 1024);
+        assert!(projected_url.value.starts_with("https://example.com/"));
+    }
+
+    #[test]
     fn windows_batch_programs_are_rejected_on_every_platform() {
         for program in ["build.bat", "build.cmd"] {
             let planned = plan(incoming("process_run", json!({"program":program})))

@@ -1,0 +1,257 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ClientCommand, ClientFrame, ClientSnapshot, ClientTransport, CommandReceipt, EphemeralCredential } from "../protocol";
+import { createFixtureSnapshot } from "../transport/fixtureTransport";
+import { ClientStore } from "./clientStore";
+
+class TestTransport implements ClientTransport {
+  listener?: (frame: ClientFrame) => void;
+  errorListener?: (error: unknown) => void;
+  snapshotCalls = 0;
+  readonly commands: ClientCommand[] = [];
+  readonly credentials: EphemeralCredential[] = [];
+  baseline = createFixtureSnapshot("ready");
+  resyncSnapshot: ClientSnapshot = { ...createFixtureSnapshot("ready"), transportRevision: "9" };
+
+  async connect(listener: (frame: ClientFrame) => void, onError: (error: unknown) => void) {
+    this.listener = listener;
+    this.errorListener = onError;
+    return structuredClone(this.baseline);
+  }
+
+  async command(command: ClientCommand): Promise<CommandReceipt> {
+    this.commands.push(command);
+    return { requestId: "1" };
+  }
+
+  async snapshot() {
+    this.snapshotCalls += 1;
+    return structuredClone(this.resyncSnapshot);
+  }
+
+  async submitCredential(secret: EphemeralCredential) {
+    this.credentials.push({ ...secret });
+    return { requestId: "2" };
+  }
+
+  async close() {}
+}
+
+class DeferredSnapshotTransport extends TestTransport {
+  resolveSnapshot?: (snapshot: ClientSnapshot) => void;
+
+  override async snapshot(): Promise<ClientSnapshot> {
+    this.snapshotCalls += 1;
+    return new Promise((resolve) => { this.resolveSnapshot = resolve; });
+  }
+}
+
+class FailingConnectTransport extends TestTransport {
+  override async connect(
+    listener: (frame: ClientFrame) => void,
+    onError: (error: unknown) => void,
+  ): Promise<ClientSnapshot> {
+    this.listener = listener;
+    this.errorListener = onError;
+    onError(new Error("Initial frame acknowledgement failed"));
+    return structuredClone(this.baseline);
+  }
+}
+
+describe("ClientStore", () => {
+  it("does not overwrite a fatal connect callback with the returned baseline", async () => {
+    const transport = new FailingConnectTransport();
+    const store = new ClientStore(transport);
+
+    await store.start();
+
+    expect(store.getSnapshot()).toMatchObject({
+      lifecycle: "failed",
+      commandError: "Initial frame acknowledgement failed",
+    });
+    transport.listener?.({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "2",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "2" },
+    });
+    expect(store.getSnapshot().lifecycle).toBe("failed");
+  });
+
+  it("requests one authoritative resynchronization when an incremental revision is missing", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "3",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "3" },
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().transportRevision).toBe("9"));
+
+    expect(transport.snapshotCalls).toBe(1);
+    expect(store.getSnapshot().lifecycle).toBe("ready");
+    expect(store.getSnapshot().notice?.code).toBe("projection_resynchronized");
+  });
+
+  it("accepts a newer resynchronization baseline across a revision gap", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "resynchronization",
+      revision: "12",
+      snapshot: { ...createFixtureSnapshot("offline"), transportRevision: "12" },
+    });
+
+    expect(transport.snapshotCalls).toBe(0);
+    expect(store.getSnapshot().transportRevision).toBe("12");
+    expect(store.getSnapshot().projection?.connection.kind).toBe("offline");
+  });
+
+  it("ignores stale frames after a baseline", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    store.applyFrame({
+      kind: "notice",
+      revision: "1",
+      level: "error",
+      code: "stale",
+      message: "stale",
+    });
+    expect(store.getSnapshot().notice).toBeUndefined();
+  });
+
+  it("does not roll back a newer increment when the resync dispatch receipt arrives later", async () => {
+    const transport = new DeferredSnapshotTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "3",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "3" },
+    });
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "resynchronization",
+      revision: "9",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "9" },
+    });
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "10",
+      snapshot: { ...createFixtureSnapshot("streaming"), transportRevision: "10" },
+    });
+    transport.resolveSnapshot?.({ ...createFixtureSnapshot("ready"), transportRevision: "9" });
+    await vi.waitFor(() => expect(store.getSnapshot().lifecycle).toBe("ready"));
+    expect(store.getSnapshot().transportRevision).toBe("10");
+    expect(store.getSnapshot().projection?.activeSession?.attempt.kind).toBe("streaming");
+  });
+
+  it("does not let a later initial frame skip a missing revision", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "initial",
+      revision: "4",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "4" },
+    });
+    await vi.waitFor(() => expect(transport.snapshotCalls).toBe(1));
+  });
+
+  it("correlates a terminal command notice across a revision gap before resynchronizing", async () => {
+    const transport = new DeferredSnapshotTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const committed = store.dispatchAndWait({ type: "create_session" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "3",
+      requestId: "1",
+      level: "success",
+      code: "command_committed",
+      message: "committed beyond the gap",
+    });
+
+    await expect(committed).resolves.toBe("committed");
+    expect(transport.snapshotCalls).toBe(1);
+    transport.resolveSnapshot?.({ ...createFixtureSnapshot("ready"), transportRevision: "9" });
+    await vi.waitFor(() => expect(store.getSnapshot().transportRevision).toBe("9"));
+  });
+
+  it("fails closed when the transport reports an asynchronous frame decode error", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    transport.errorListener?.(new Error("Invalid server frame"));
+    expect(store.getSnapshot()).toMatchObject({ lifecycle: "failed", commandError: "Invalid server frame" });
+
+    await expect(store.dispatch({ type: "create_session" })).resolves.toBeUndefined();
+    await expect(store.submitCredential({ connectionId: "connection-gemini", credential: "secret" })).resolves.toBeUndefined();
+    expect(transport.commands).toHaveLength(0);
+    expect(transport.credentials).toHaveLength(0);
+
+    await store.requestResync();
+    expect(store.getSnapshot().lifecycle).toBe("ready");
+    await expect(store.dispatch({ type: "create_session" })).resolves.toEqual({ requestId: "1" });
+    expect(transport.commands).toHaveLength(1);
+  });
+
+  it("fails closed for a noncanonical transport revision", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    store.applyFrame({ kind: "notice", revision: "01", level: "info", code: "bad", message: "bad" });
+    expect(store.getSnapshot().lifecycle).toBe("failed");
+  });
+
+  it("keeps commands blocked while dependent frames arrive during recovery", async () => {
+    const transport = new DeferredSnapshotTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+
+    const recovery = store.requestResync();
+    expect(store.getSnapshot().lifecycle).toBe("resyncing");
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "2",
+      snapshot: { ...createFixtureSnapshot("ready"), transportRevision: "2" },
+    });
+    expect(store.getSnapshot().lifecycle).toBe("resyncing");
+    store.applyFrame({
+      kind: "notice",
+      revision: "3",
+      level: "info",
+      code: "late_notice",
+      message: "A dependent notice arrived before recovery completed",
+    });
+    expect(store.getSnapshot().lifecycle).toBe("resyncing");
+    await expect(store.dispatch({ type: "create_session" })).resolves.toBeUndefined();
+
+    transport.resolveSnapshot?.({ ...createFixtureSnapshot("ready"), transportRevision: "9" });
+    await recovery;
+    expect(store.getSnapshot().lifecycle).toBe("ready");
+  });
+
+  it("treats a missing terminal command result as unknown and resynchronizes", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport, 1);
+    await store.start();
+
+    await expect(store.dispatchAndWait({ type: "create_session" })).resolves.toBe("unknown");
+    await vi.waitFor(() => expect(transport.snapshotCalls).toBe(1));
+    expect(store.getSnapshot().commandError).toBe("The host did not confirm whether the command committed.");
+  });
+});

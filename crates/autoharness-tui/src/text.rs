@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+use autoharness_domain::is_unsafe_display_control;
+
 /// Escapes terminal and directional control characters before rendering text.
 #[must_use]
 pub fn display_safe(text: &str) -> String {
@@ -8,7 +10,7 @@ pub fn display_safe(text: &str) -> String {
         match character {
             '\n' => safe.push('\n'),
             '\t' => safe.push_str("    "),
-            character if is_unsafe_control(character) => {
+            character if is_unsafe_display_control(character) => {
                 let _ = write!(safe, "\\u{{{:x}}}", u32::from(character));
             }
             character => safe.push(character),
@@ -19,17 +21,4 @@ pub fn display_safe(text: &str) -> String {
 
 pub(crate) fn editable_safe(text: &str) -> String {
     display_safe(&text.replace("\r\n", "\n"))
-}
-
-fn is_unsafe_control(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{061c}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-                | '\u{fff9}'..='\u{fffb}'
-        )
 }

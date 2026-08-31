@@ -2,19 +2,19 @@
 
 **Status:** Active
 
-**Last updated:** 2026-08-29
+**Last updated:** 2026-08-30
 
 **Planning horizon:** Foundation through distributed self-improvement
 
 ## Outcome
 
-Build an open-source, provider-neutral agent harness that feels instantaneous in a terminal, preserves enough execution state to recover and replay work, and improves its behavior through evidence rather than unchecked self-modification.
+Build an open-source, provider-neutral agent harness with a beautiful, instantaneous native desktop interface, durable replayable execution, and evidence-gated self-improvement.
 
 The first end-to-end slice connects to Google AI Studio, discovers available models dynamically, lets the user select one, streams a response, and restores the session after restart. The next provider slice connects to a configurable model router.
 
 ## Product principles
 
-1. **The engine is the product.** The terminal is the first client, not the owner of orchestration logic.
+1. **The engine is the product.** The desktop GUI is the primary client, not the owner of orchestration logic.
 2. **Durability precedes autonomy.** Inputs, tool state, model attempts, and behavior-changing decisions must be recoverable.
 3. **Protocols are normalized at the edge.** Provider-specific request and stream formats stop at provider adapters.
 4. **Context is admitted, not concatenated ad hoc.** Every model-visible memory item has provenance and a deterministic admission boundary.
@@ -27,12 +27,12 @@ The first end-to-end slice connects to Google AI Studio, discovers available mod
 
 ### Initial scope
 
-- Native terminal chat with a selectable model catalog.
+- Native desktop chat with a selectable model catalog.
 - Google AI Studio authentication and model discovery.
 - Google streaming responses with cancellation and usage reporting.
 - Configurable model-router adapter, initially supporting an OpenAI-compatible dialect.
 - Durable, replayable sessions in local SQLite.
-- In-terminal session, provider-profile, settings, and credential management sufficient for ordinary daily use without shell setup.
+- In-application session, provider-profile, settings, memory, and credential management sufficient for ordinary daily use without shell setup.
 - Typed provider, event, storage, and context contracts.
 - Repository-native project memory and ADRs.
 - Tests, benchmarks, tracing, and secret-redaction guarantees.
@@ -51,7 +51,7 @@ The first end-to-end slice connects to Google AI Studio, discovers available mod
 ### Non-goals for the first release
 
 - Training or fine-tuning foundation-model weights.
-- A web or desktop UI.
+- A hosted multi-tenant web or mobile UI.
 - Unrestricted shell or filesystem tools.
 - Multi-tenant cloud hosting.
 - Autonomous promotion of model-authored changes.
@@ -536,6 +536,33 @@ Exit criteria:
 Implementation proceeded on the isolated `feat/persistent-context-memory` branch and was merged into `dev` after local validation.
 Release status remains blocked by the already documented Phase 3.9 and Phase 3.10 evidence and independent candidate review until those gates are genuinely satisfied.
 
+### Phase 4.1: Native desktop GUI migration
+
+**Status:** In progress
+
+**Goal:** Replace the terminal as the primary product interface with a beautiful, accessible, expandable native desktop GUI while preserving every Rust runtime and recovery invariant.
+
+Authoritative documents: [GUI architecture](architecture/GUI.md), [GUI design system](design/GUI_DESIGN_SYSTEM.md), [GUI implementation plan](design/GUI_IMPLEMENTATION_PLAN.md), and [ADR-0019](adr/0019-use-tauri-web-rendered-desktop-client.md).
+
+Deliverables:
+
+- A renderer-neutral `autoharness-client` contract with versioned commands, snapshots, ordered frames, request correlation, bounds, gap detection, and resynchronization.
+- A reusable application runtime lifecycle shared by the desktop GUI and transitional TUI.
+- A Tauri 2 shell with local assets, strict capabilities, a content security policy, and no broad platform plugins.
+- A React, TypeScript, and Vite client with React-free state models, typed feature slots, fixture-mode development, and semantic accessibility.
+- A real startup, active-session, credential, catalog, model, prompt, committed stream, cancel, retry, permission, clean-shutdown, and restart vertical slice.
+- GUI parity for sessions, providers, profiles, models, settings, memory, help, commands, search, export, and recovery.
+- Desktop release gates for security, accessibility, system webviews, long-session performance, screenshots, packaging, signing, updates, migration, rollback, and human review.
+
+Exit criteria:
+
+- Application orchestration no longer depends on Ratatui or terminal-owned contracts.
+- The desktop GUI completes every ordinary and security-critical user journey without shell or database access.
+- Rust remains the only authority for durable state, providers, credentials, permissions, capabilities, memory, and recovery.
+- Long-session rendering and stream delivery stay bounded by visible or changed data rather than total transcript length.
+- One committed release candidate passes Windows, macOS, and Linux packaged-app, accessibility, provider, vault, migration, rollback, recovery, performance, and security gates.
+- The GUI becomes the default only after its release checklist is approved, and Ratatui is removed only after the rollback window closes.
+
 ### Phase 5: Evaluation and self-improvement
 
 **Goal:** Improve harness behavior through controlled, reproducible experiments.
@@ -578,13 +605,14 @@ Exit criteria:
 ## Next implementation order
 
 Phases 1 through 3 established the engine, provider, storage, replay, and safe tool-execution substrates.
-Phases 3.2 through 3.7 now provide durable sessions, multiple secure provider profiles, and one stable responsive terminal shell with typed route, focus, overlay, and recovery boundaries.
+Phases 3.2 through 4 provide durable sessions, secure provider profiles, a validated terminal reference, and persistent context and memory over stable Rust application boundaries.
 Proceed in this order:
 
-1. Close the remaining Phase 3.9 and Phase 3.10 cross-platform, human-terminal, migration, benchmark, vault, provider, rollback, checklist, and approval evidence on one candidate.
-2. Preserve the locally validated Phase 4 implementation and review its context, memory, privacy, terminal, migration, and export evidence on the exact candidate.
-3. Obtain the independent decision and release-checklist approvals required for the proposed Phase 4 ADRs while the earlier release evidence proceeds in parallel.
-4. Declare Phase 4 released only after its local gates and the inherited Phase 3 promotion gates are complete.
+1. Preserve the locally validated Phase 4 runtime, provider, memory, privacy, migration, and export behavior while extracting the renderer-neutral client boundary.
+2. Complete the Phase 4.1 real desktop chat vertical slice through startup, permission, clean shutdown, and durable restart.
+3. Port session, provider, profile, model, settings, accessibility, and memory parity in independently testable GUI slices.
+4. Carry applicable provider, vault, migration, rollback, recovery, performance, and security evidence into the GUI release gate without claiming unfinished terminal-only evidence complete.
+5. Make the GUI the default only after one release candidate passes its cross-platform packaged-app checklist and approval.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 
@@ -592,7 +620,7 @@ Each step must leave a runnable or testable vertical slice; avoid creating unuse
 
 ### Correctness
 
-- Domain transitions are testable without a terminal, network, or real database.
+- Domain transitions are testable without a GUI, terminal, network, or real database.
 - Durable writes and externally visible events have explicit transaction boundaries.
 - Retries use stable request identifiers where the provider supports them.
 - Parsing handles arbitrary byte and event fragmentation.
@@ -601,7 +629,7 @@ Each step must leave a runnable or testable vertical slice; avoid creating unuse
 
 Establish a checked-in benchmark environment before setting release thresholds. Measure at minimum:
 
-- Cold process start to first terminal draw.
+- Cold process start to first desktop draw.
 - Idle resident memory.
 - Input-to-request dispatch overhead.
 - Provider-chunk receipt to rendered-delta latency.
@@ -626,7 +654,7 @@ LLM network latency must be reported separately from harness overhead.
 
 ### Product usability
 
-- Basic chat, session management, profile management, settings, credentials, and failure recovery are available inside the terminal without requiring database or shell manipulation.
+- Basic chat, session management, profile management, settings, credentials, memory, and failure recovery are available inside the desktop application without requiring database or shell manipulation.
 - A local user profile summary and the active provider connection are visible without exposing secret metadata or implying a hosted identity.
 - Network or credential failure does not block offline access to durable sessions and non-secret settings.
 - Keyboard, command, and visible-control paths converge on the same typed application intents.
@@ -640,7 +668,7 @@ LLM network latency must be reported separately from harness overhead.
 | Provider APIs change rapidly | Contract tests, recorded fixtures, capability discovery, and isolated adapters |
 | Fixture-backed protocol tests miss live behavior | Opt-in redacted live compatibility runs and release-candidate smoke gates for every supported provider dialect |
 | A failed tool call traps later conversation | Durable rejection and bounded repair, explicit failed-turn context, actionable recovery, and an always-available fresh session |
-| TUI feature debt makes durable capabilities inaccessible | Complete the profile center, route-based shell, personalization, accessibility, and integrated Phase 3.9 validation before Phase 4 |
+| Presentation debt makes durable capabilities inaccessible | Keep one renderer-neutral client contract and deliver GUI parity in complete vertical slices before retiring the terminal reference |
 | Credential convenience weakens secret handling | Store raw secrets only in one operating-system vault entry per named provider profile, keep opaque references in profiles, and retain session-only and environment fallbacks |
 | The abstraction collapses to the least common denominator | Keep normalized lifecycle events while allowing namespaced provider options at the edge |
 | Memory becomes prompt-injection persistence | Provenance, trust classes, proposal validation, inspection, and retraction |

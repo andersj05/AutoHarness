@@ -1,3 +1,4 @@
+use autoharness_domain::security_display_safe;
 use autoharness_settings::{Source, TerminalTimestampStyle, ThemePreset};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -3186,24 +3187,24 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         Line::from(""),
         Line::from(vec![
             Span::styled("Tool: ", visual_style(model, VisualRole::Muted)),
-            Span::raw(display_safe(&request.tool_name)),
+            Span::raw(security_display_safe(&request.tool_name)),
         ]),
         Line::from(vec![
             Span::styled("Capability: ", visual_style(model, VisualRole::Muted)),
-            Span::raw(display_safe(&request.capability)),
+            Span::raw(security_display_safe(&request.capability)),
         ]),
         Line::from(vec![
             Span::styled("Resource: ", visual_style(model, VisualRole::Muted)),
-            Span::raw(display_safe(&request.resource)),
+            Span::raw(security_display_safe(&request.resource)),
         ]),
     ];
     lines.extend(request.details.iter().map(|detail| {
         Line::from(vec![
             Span::styled(
-                format!("{}: ", display_safe(&detail.label)),
+                format!("{}: ", security_display_safe(&detail.label)),
                 visual_style(model, VisualRole::Muted),
             ),
-            Span::raw(display_safe(&detail.value)),
+            Span::raw(security_display_safe(&detail.value)),
         ])
     }));
     lines.push(Line::from(""));
