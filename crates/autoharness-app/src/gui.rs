@@ -11,13 +11,13 @@ use autoharness_client::{
     ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
     ConnectionId as ClientConnectionId, CredentialSource as ClientCredentialSource, DecimalU64,
     FailureClass, InputId as ClientInputId, MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES,
-    ModelId as ClientModelId, ModelRef as ClientModelRef, ModelSummary as ClientModelSummary,
-    PermissionDecision, PermissionDetail, PermissionRequest as ClientPermissionRequest,
-    ProviderId as ClientProviderId, ProviderProjection as ClientProviderProjection,
-    ProviderStatus as ClientProviderStatus, RequestId as ClientRequestId, RetryDirective,
-    SafeFailure, SecretIngress, ServerFrame, SessionId as ClientSessionId,
-    SessionProjection as ClientSessionProjection, SessionRevision, SessionSummary, SessionTitle,
-    ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
+    MAX_PROVIDERS, ModelId as ClientModelId, ModelRef as ClientModelRef,
+    ModelSummary as ClientModelSummary, PermissionDecision, PermissionDetail,
+    PermissionRequest as ClientPermissionRequest, ProviderId as ClientProviderId,
+    ProviderProjection as ClientProviderProjection, ProviderStatus as ClientProviderStatus,
+    RequestId as ClientRequestId, RetryDirective, SafeFailure, SecretIngress, ServerFrame,
+    SessionId as ClientSessionId, SessionProjection as ClientSessionProjection, SessionRevision,
+    SessionSummary, SessionTitle, ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
     ToolCallProjection as ClientToolCallProjection, ToolCallState, TranscriptContent,
     TranscriptItem as ClientTranscriptItem, TransportRevision, UsageProjection,
 };
@@ -1352,9 +1352,23 @@ fn map_providers(
     } else {
         None
     };
-    let mut providers = profiles
+    let named_provider_limit =
+        MAX_PROVIDERS.saturating_sub(usize::from(fallback_connection.is_some()));
+    let mut retained_profiles = profiles
         .profiles
         .iter()
+        .take(named_provider_limit)
+        .collect::<Vec<_>>();
+    if let Some(active_profile) = active_profile
+        && !retained_profiles.iter().any(|profile| profile.active)
+    {
+        if retained_profiles.len() == named_provider_limit {
+            retained_profiles.pop();
+        }
+        retained_profiles.push(active_profile);
+    }
+    let mut providers = retained_profiles
+        .into_iter()
         .map(|profile| {
             let connection_id = ClientConnectionId::new(profile.id.clone())
                 .map_err(|_| GuiIpcError::invalid_projection())?;
@@ -1620,6 +1634,25 @@ mod tests {
             selected_model: None,
             transcript: Vec::new(),
             permission_requests: Vec::new(),
+        }
+    }
+
+    fn provider_profile(
+        id: impl Into<String>,
+        active: bool,
+    ) -> autoharness_tui::ProviderProfileProjection {
+        autoharness_tui::ProviderProfileProjection {
+            id: id.into(),
+            kind: ProviderKindLabel::Gemini,
+            active,
+            base_url: String::new(),
+            project: String::new(),
+            auth_header: String::new(),
+            credential_state: ProfileCredentialStateLabel::Disconnected,
+            credential_source: CredentialSourceLabel::SessionOnly,
+            connection: ProfileConnectionState::Untested,
+            default_model: None,
+            default_mode: "auto".to_owned(),
         }
     }
 
@@ -2037,6 +2070,96 @@ mod tests {
         assert_eq!(mapped.revision, None);
         assert!(mapped.updated_at_ms.is_some());
         assert!(mapped.message_count.is_some());
+    }
+
+    #[test]
+    fn sixty_three_inactive_profiles_leave_room_for_the_active_fallback() {
+        let profiles = (0..MAX_PROVIDERS - 1)
+            .map(|index| provider_profile(format!("inactive-{index}"), false))
+            .collect::<Vec<_>>();
+
+        let providers = map_providers(
+            &TuiProfilesProjection {
+                profiles,
+                ..TuiProfilesProjection::default()
+            },
+            &TuiSettingsProjection::default(),
+            &ClientCatalogProjection::Loading,
+        )
+        .expect("bounded provider projection");
+
+        assert_eq!(providers.len(), MAX_PROVIDERS);
+        assert_eq!(
+            providers.iter().filter(|provider| provider.active).count(),
+            1
+        );
+        assert_eq!(
+            providers
+                .last()
+                .expect("fallback provider")
+                .connection_id
+                .as_str(),
+            "session:gemini"
+        );
+    }
+
+    #[test]
+    fn sixty_four_inactive_profiles_are_capped_before_the_active_fallback() {
+        let profiles = (0..MAX_PROVIDERS)
+            .map(|index| provider_profile(format!("inactive-{index}"), false))
+            .collect::<Vec<_>>();
+
+        let providers = map_providers(
+            &TuiProfilesProjection {
+                profiles,
+                ..TuiProfilesProjection::default()
+            },
+            &TuiSettingsProjection::default(),
+            &ClientCatalogProjection::Loading,
+        )
+        .expect("bounded provider projection");
+
+        assert_eq!(providers.len(), MAX_PROVIDERS);
+        assert!(providers.iter().any(|provider| {
+            provider.active && provider.connection_id.as_str() == "session:gemini"
+        }));
+        assert!(
+            !providers
+                .iter()
+                .any(|provider| provider.connection_id.as_str() == "inactive-63")
+        );
+    }
+
+    #[test]
+    fn active_named_profile_beyond_the_cap_is_always_retained() {
+        let mut profiles = (0..MAX_PROVIDERS)
+            .map(|index| provider_profile(format!("inactive-{index}"), false))
+            .collect::<Vec<_>>();
+        profiles.push(provider_profile("active-late", true));
+
+        let providers = map_providers(
+            &TuiProfilesProjection {
+                profiles,
+                ..TuiProfilesProjection::default()
+            },
+            &TuiSettingsProjection::default(),
+            &ClientCatalogProjection::Loading,
+        )
+        .expect("bounded provider projection");
+
+        assert_eq!(providers.len(), MAX_PROVIDERS);
+        assert_eq!(
+            providers.iter().filter(|provider| provider.active).count(),
+            1
+        );
+        assert!(providers.iter().any(|provider| {
+            provider.active && provider.connection_id.as_str() == "active-late"
+        }));
+        assert!(
+            !providers
+                .iter()
+                .any(|provider| provider.connection_id.as_str() == "inactive-63")
+        );
     }
 
     #[test]
