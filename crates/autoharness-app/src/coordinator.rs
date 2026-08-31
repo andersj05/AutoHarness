@@ -330,7 +330,7 @@ pub struct Coordinator {
     session: SessionAggregate,
     engine: EngineHandle,
     provider: Option<Arc<dyn Provider>>,
-    session_credential_connected: bool,
+    session_credential_sentinel: Option<Zeroizing<String>>,
     provider_factory: ProviderFactory,
     profiles: Option<ProfileRuntime>,
     tool_runtime: Arc<ToolRuntime>,
@@ -419,7 +419,7 @@ impl Coordinator {
             session,
             engine,
             provider: runtime.provider.initial,
-            session_credential_connected: false,
+            session_credential_sentinel: None,
             provider_factory: runtime.provider.factory,
             profiles: runtime.profiles,
             tool_runtime: runtime.tool_runtime,
@@ -1411,15 +1411,16 @@ impl Coordinator {
             .iter()
             .map(|managed| {
                 let kind = provider_kind_label(managed.profile.kind());
-                let credential_source = if managed.active && self.session_credential_connected {
-                    CredentialSourceLabel::SessionOnly
-                } else if runtime.environment.has(managed.profile.kind()) {
-                    CredentialSourceLabel::Environment
-                } else if managed.credential_state == StoredCredentialState::Stored {
-                    CredentialSourceLabel::CredentialVault
-                } else {
-                    CredentialSourceLabel::SessionOnly
-                };
+                let credential_source =
+                    if managed.active && self.session_credential_sentinel.is_some() {
+                        CredentialSourceLabel::SessionOnly
+                    } else if runtime.environment.has(managed.profile.kind()) {
+                        CredentialSourceLabel::Environment
+                    } else if managed.credential_state == StoredCredentialState::Stored {
+                        CredentialSourceLabel::CredentialVault
+                    } else {
+                        CredentialSourceLabel::SessionOnly
+                    };
                 ProviderProfileProjection {
                     id: managed.id.as_str().to_owned(),
                     kind,
@@ -1471,7 +1472,7 @@ impl Coordinator {
                 pending_recovery: snapshot.pending_recovery,
             }));
         let active_kind = active_profile.map(|profile| profile.profile.kind());
-        let credential_source = if self.session_credential_connected {
+        let credential_source = if self.session_credential_sentinel.is_some() {
             CredentialSourceLabel::SessionOnly
         } else {
             active_profile.map_or(CredentialSourceLabel::SessionOnly, |profile| {
@@ -1484,7 +1485,7 @@ impl Coordinator {
                 }
             })
         };
-        let credential_connected = self.session_credential_connected
+        let credential_connected = self.session_credential_sentinel.is_some()
             || active_profile.is_some_and(|profile| {
                 runtime.environment.has(profile.profile.kind())
                     || profile.credential_state == StoredCredentialState::Stored
@@ -1999,7 +2000,7 @@ impl Coordinator {
                 }
                 if was_active {
                     self.provider = None;
-                    self.session_credential_connected = false;
+                    self.session_credential_sentinel = None;
                     self.catalog_models.clear();
                     self.ports
                         .catalogs
@@ -2017,7 +2018,7 @@ impl Coordinator {
     }
 
     fn configure_active_profile(&mut self, id: &ProfileId) {
-        self.session_credential_connected = false;
+        self.session_credential_sentinel = None;
         match self.provider_for_profile(id) {
             Ok(Some(provider)) => {
                 self.provider = Some(provider);
@@ -2544,11 +2545,15 @@ impl Coordinator {
         }
 
         telemetry::credential_submitted();
-        match (self.provider_factory)(credential) {
+        let session_credential_sentinel = Zeroizing::new(credential.into_string());
+        let provider_credential =
+            ApiCredential::new(session_credential_sentinel.as_str().to_owned())
+                .expect("validated credential remains valid when copied into provider composition");
+        match (self.provider_factory)(provider_credential) {
             Ok(provider) => {
                 telemetry::provider_ready();
                 self.provider = Some(provider);
-                self.session_credential_connected = true;
+                self.session_credential_sentinel = Some(session_credential_sentinel);
                 self.catalog_models.clear();
                 self.publish_profiles();
                 self.ports
@@ -2792,9 +2797,10 @@ impl Coordinator {
         }
         telemetry::attempt_prepared();
         if let Err(error) = self.start_attempt(attempt_id, Some(request_id)).await {
-            self.reject(request_id, start_attempt_failure(&error))
-                .await?;
-            return Ok(());
+            tracing::warn!(
+                error = ?start_attempt_failure(&error),
+                "prompt was admitted durably but its provider attempt did not start"
+            );
         }
         self.commit(request_id).await
     }
@@ -2882,9 +2888,10 @@ impl Coordinator {
         }
         telemetry::attempt_prepared();
         if let Err(error) = self.start_attempt(retry, None).await {
-            self.reject(request_id, start_attempt_failure(&error))
-                .await?;
-            return Ok(());
+            tracing::warn!(
+                error = ?start_attempt_failure(&error),
+                "retry was prepared durably but its provider attempt did not start"
+            );
         }
         self.commit(request_id).await
     }
@@ -3840,16 +3847,22 @@ impl Coordinator {
     fn configured_credential_sentinels(
         &self,
     ) -> Result<Vec<Zeroizing<String>>, ProfileManagementError> {
+        let mut credentials = self
+            .session_credential_sentinel
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         let Some(profiles) = &self.profiles else {
-            return Ok(Vec::new());
+            return Ok(credentials);
         };
-        let mut credentials = [
-            profiles.environment.gemini.clone(),
-            profiles.environment.router.clone(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        credentials.extend(
+            [
+                profiles.environment.gemini.clone(),
+                profiles.environment.router.clone(),
+            ]
+            .into_iter()
+            .flatten(),
+        );
         credentials.extend(profiles.manager.configured_credentials_for_redaction()?);
         Ok(credentials)
     }
@@ -4198,14 +4211,16 @@ impl Coordinator {
             }
             Err(error) => {
                 telemetry::catalog_failed(&error);
-                if matches!(
+                let requires_credential = matches!(
                     error.kind(),
                     ProviderErrorKind::MissingCredential
                         | ProviderErrorKind::Authentication
                         | ProviderErrorKind::PermissionDenied
-                ) {
+                );
+                if requires_credential {
                     self.provider = None;
-                    self.session_credential_connected = false;
+                    self.session_credential_sentinel = None;
+                    self.catalog_models.clear();
                 }
                 let failure = provider_failure(&error);
                 self.set_active_profile_connection(ProfileConnectionState::Failed(
@@ -4213,7 +4228,11 @@ impl Coordinator {
                 ));
                 self.ports
                     .catalogs
-                    .send_replace(Arc::new(CatalogProjection::Failed(failure.clone())));
+                    .send_replace(Arc::new(if requires_credential {
+                        CatalogProjection::CredentialRequired
+                    } else {
+                        CatalogProjection::Failed(failure.clone())
+                    }));
                 self.publish_profiles();
                 if let Some(request_id) = request_id {
                     self.reject(request_id, failure).await?;
@@ -8150,15 +8169,31 @@ mod tests {
             })
             .await
             .expect("submit prompt");
-        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
-            .await
-            .expect("context notice timeout")
-            .expect("notice sender remains open");
-        assert!(matches!(
-            notice,
-            UiNotice::IntentRejected { request_id, failure }
-                if request_id == submit_request && failure.code == "context_not_committed"
-        ));
+        expect_commit(&mut ui, submit_request).await;
+        let failed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if code == "context_not_committed"
+                )
+            })
+        })
+        .await;
+        assert_eq!(
+            failed
+                .transcript
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    TranscriptItem::User { text, .. } if text == "read the workspace instructions"
+                ))
+                .count(),
+            1,
+            "an admitted prompt must appear exactly once when attempt startup fails"
+        );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.requests.lock().expect("request lock").len(), 1);
         let events = handle
@@ -8194,6 +8229,176 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn retry_startup_failure_commits_once_after_durable_prepare() {
+        const SENTINEL: &str = "retry-context-credential";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace directory");
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            format!("Never expose {SENTINEL} from workspace context."),
+        )
+        .expect("secret-bearing workspace source");
+        let database = directory.path().join("retry-startup-failure.sqlite3");
+        let profile_path = directory.path().join("profiles.json");
+        let (profiles, _manager, _vault, _reference) =
+            inactive_profile_runtime(&profile_path, &workspace, SENTINEL);
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(RecordingProvider::default());
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::Loading),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_runtime(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            RuntimeComposition {
+                provider: ProviderComposition {
+                    initial: Some(provider.clone()),
+                    factory: Arc::new(|_| {
+                        Err(ProviderError::new(
+                            ProviderErrorKind::MissingCredential,
+                            RetryAdvice::Never,
+                        ))
+                    }),
+                },
+                profiles: Some(profiles),
+                tool_runtime: test_tool_runtime_at(&workspace),
+                artifact_root: Some(workspace.join("artifacts")),
+            },
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        wait_for_catalog(&mut ui).await;
+        let select_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+
+        let submit_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "read protected workspace context".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        let failed = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        retry_of: None,
+                        ..
+                    } if code == "context_not_committed"
+                )
+            })
+        })
+        .await;
+        let first_attempt = failed
+            .transcript
+            .iter()
+            .find_map(|item| match item {
+                TranscriptItem::Assistant {
+                    attempt_id,
+                    status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                    retry_of: None,
+                    ..
+                } if code == "context_not_committed" => Some(attempt_id.clone()),
+                TranscriptItem::Assistant { .. }
+                | TranscriptItem::Tool(_)
+                | TranscriptItem::User { .. } => None,
+            })
+            .expect("failed initial attempt");
+
+        let retry_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::RetryAttempt {
+                request_id: retry_request,
+                attempt_id: first_attempt.clone(),
+            })
+            .await
+            .expect("retry intent");
+        expect_commit(&mut ui, retry_request).await;
+        let retried = wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        retry_of: Some(prior),
+                        ..
+                    } if code == "context_not_committed" && prior == &first_attempt
+                )
+            })
+        })
+        .await;
+        assert_eq!(
+            retried
+                .transcript
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        retry_of: Some(prior),
+                        ..
+                    } if prior == &first_attempt
+                ))
+                .count(),
+            1,
+            "one retry intent must prepare exactly one retry attempt"
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload(), EventPayload::AttemptPrepared { .. }))
+                .count(),
+            2,
+            "the initial attempt and one retry must be prepared durably"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.payload(),
+                    EventPayload::AttemptPrepared {
+                        retry_of: Some(_),
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "exactly one durable attempt may point to its retry predecessor"
+        );
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
     }
 
     #[tokio::test]
@@ -8289,6 +8494,115 @@ mod tests {
         task.await.expect("coordinator join").expect("shutdown");
         drop(handle);
         actor.shutdown().await.expect("actor shutdown");
+    }
+
+    #[tokio::test]
+    async fn session_credential_split_across_provider_deltas_never_completes_durably() {
+        const SENTINEL: &str = "session-only-provider-output-secret";
+        const PREFIX: &str = "session-only-provider-output-";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory
+            .path()
+            .join("session-provider-output-secret.sqlite3");
+        let (actor, session_id, session) =
+            crate::engine_actor::EngineActor::start(database).expect("engine actor");
+        let handle = actor.handle();
+        let provider = Arc::new(ProposalProvider::new(vec![
+            ProposalProviderTurn::TextFragments(vec![PREFIX.to_owned(), "secret".to_owned()]),
+        ]));
+        let provider_for_factory = Arc::clone(&provider);
+        let factory: ProviderFactory =
+            Arc::new(move |_credential| Ok(Arc::clone(&provider_for_factory) as Arc<dyn Provider>));
+        let (mut ui, app) = bounded_ports(
+            Arc::new(projection::session(&session)),
+            Arc::new(SessionsProjection::default()),
+            Arc::new(CatalogProjection::CredentialRequired),
+        );
+        let shutdown = CancellationToken::new();
+        let coordinator = Coordinator::with_provider_factory(
+            session_id.clone(),
+            session,
+            handle.clone(),
+            ProviderComposition {
+                initial: None,
+                factory,
+            },
+            test_tool_runtime(),
+            app,
+            shutdown.clone(),
+        );
+        let task = tokio::spawn(coordinator.run());
+
+        let credential_request = RequestId::new(1);
+        ui.intents
+            .send(UiIntent::ConfigureCredential {
+                request_id: credential_request,
+                credential: ApiCredential::new(SENTINEL.to_owned()).expect("session credential"),
+            })
+            .await
+            .expect("credential intent");
+        wait_for_catalog(&mut ui).await;
+        expect_commit(&mut ui, credential_request).await;
+
+        let select_request = RequestId::new(2);
+        ui.intents
+            .send(UiIntent::SelectModel {
+                request_id: select_request,
+                model: fixture_model(),
+            })
+            .await
+            .expect("select model");
+        expect_commit(&mut ui, select_request).await;
+        let submit_request = RequestId::new(3);
+        ui.intents
+            .send(UiIntent::SubmitPrompt {
+                request_id: submit_request,
+                prompt: "emit protected session output".to_owned(),
+            })
+            .await
+            .expect("submit prompt");
+        expect_commit(&mut ui, submit_request).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.transcript.iter().any(|item| {
+                matches!(
+                    item,
+                    TranscriptItem::Assistant {
+                        text,
+                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        ..
+                    } if text == PREFIX && code == "credential_in_provider_data"
+                )
+            })
+        })
+        .await;
+        let events = handle
+            .load_events(session_id)
+            .await
+            .expect("session events");
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("serialize events")
+                .contains(SENTINEL)
+        );
+        assert_eq!(provider.requests.lock().expect("request lock").len(), 1);
+
+        shutdown.cancel();
+        task.await.expect("coordinator join").expect("shutdown");
+        drop(handle);
+        actor.shutdown().await.expect("actor shutdown");
+        for entry in std::fs::read_dir(directory.path()).expect("state directory") {
+            let entry = entry.expect("state entry");
+            if entry.file_type().expect("file type").is_file() {
+                let bytes = std::fs::read(entry.path()).expect("durable state file");
+                assert!(
+                    !bytes
+                        .windows(SENTINEL.len())
+                        .any(|window| window == SENTINEL.as_bytes()),
+                    "session credential must not reach durable application state"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -9177,15 +9491,7 @@ mod tests {
             })
             .await
             .expect("submit prompt");
-        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
-            .await
-            .expect("context notice timeout")
-            .expect("notice sender remains open");
-        assert!(matches!(
-            notice,
-            UiNotice::IntentRejected { request_id, failure }
-                if request_id == submit_request && failure.code == "context_not_committed"
-        ));
+        expect_commit(&mut ui, submit_request).await;
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(
             !handle
@@ -10570,6 +10876,10 @@ mod tests {
                 },
             } if request_id == rejected_request
         ));
+        assert!(matches!(
+            ui.catalogs.borrow().as_ref(),
+            CatalogProjection::CredentialRequired
+        ));
 
         let accepted_request = RequestId::new(2);
         ui.intents
@@ -11447,15 +11757,7 @@ mod tests {
             })
             .await
             .expect("submit compaction prompt");
-        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
-            .await
-            .expect("notice timeout")
-            .expect("notice sender remains open");
-        assert!(matches!(
-            notice,
-            UiNotice::IntentRejected { request_id, failure }
-                if request_id == compact_request && failure.code == "context_not_committed"
-        ));
+        expect_commit(&mut ui, compact_request).await;
 
         assert!(
             handle
@@ -11544,21 +11846,7 @@ mod tests {
             })
             .await
             .expect("submit prompt");
-        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
-            .await
-            .expect("notice timeout")
-            .expect("notice sender remains open");
-        match notice {
-            UiNotice::IntentRejected {
-                request_id,
-                failure,
-            } => {
-                assert_eq!(request_id, submit_request);
-                assert_eq!(failure.code, "context_not_committed");
-                assert!(!format!("{failure:?}").contains(SENTINEL));
-            }
-            other => panic!("expected safe context rejection, got {other:?}"),
-        }
+        expect_commit(&mut ui, submit_request).await;
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         assert!(provider.requests.lock().expect("request lock").is_empty());
         let events = handle
