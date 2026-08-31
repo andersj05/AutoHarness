@@ -252,12 +252,22 @@ describe("AutoHarness GUI", () => {
     expect(transport.commands.filter((command) => command.type === "answer_permission")).toHaveLength(1);
   });
 
-  it("makes a queued permission actionable when it directly replaces an answered request", async () => {
+  it("resets consecutive permission focus and activation to deny", async () => {
     const initial = createFixtureSnapshot("permission");
     const transport = new ManualProjectionTransport(initial);
     const { store, user } = renderTransport(transport);
-    await user.click(await screen.findByRole("button", { name: "Allow once" }));
+    const firstDeny = await screen.findByRole("button", { name: "Deny operation" });
+    expect(firstDeny).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Allow once" }));
     expect(screen.getByRole("button", { name: "Recording answer" })).toBeDisabled();
+    expect(transport.commands.filter((command) => command.type === "answer_permission")).toEqual([
+      {
+        type: "answer_permission",
+        sessionId: initial.pendingPermission!.sessionId,
+        toolCallId: initial.pendingPermission!.id,
+        decision: "allow_once",
+      },
+    ]);
 
     store.applyFrame({
       kind: "snapshot",
@@ -278,8 +288,27 @@ describe("AutoHarness GUI", () => {
     const nextDialog = await screen.findByRole("dialog", { name: "Read one workspace file" });
     expect(nextDialog).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow once" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Deny operation" }));
-    expect(transport.commands.filter((command) => command.type === "answer_permission")).toHaveLength(2);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Deny operation" })).toHaveFocus();
+    });
+    expect(transport.commands.filter((command) => command.type === "answer_permission")).toHaveLength(1);
+
+    await user.keyboard("{Enter}");
+
+    expect(transport.commands.filter((command) => command.type === "answer_permission")).toEqual([
+      {
+        type: "answer_permission",
+        sessionId: initial.pendingPermission!.sessionId,
+        toolCallId: initial.pendingPermission!.id,
+        decision: "allow_once",
+      },
+      {
+        type: "answer_permission",
+        sessionId: initial.pendingPermission!.sessionId,
+        toolCallId: "tool-call-queued",
+        decision: "deny",
+      },
+    ]);
   });
 
   it("keeps dialog input focus stable and suppresses repeated or modal-owned shortcuts", async () => {

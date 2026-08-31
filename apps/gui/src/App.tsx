@@ -41,7 +41,7 @@ export function App({ store }: AppProps) {
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [highContrast, setHighContrast] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-  const [permissionAnswering, setPermissionAnswering] = useState(false);
+  const [answeringPermissionIdentity, setAnsweringPermissionIdentity] = useState<string>();
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({});
   const mobileViewport = useMediaQuery("(max-width: 680px)");
   const shellRef = useRef<HTMLDivElement>(null);
@@ -75,8 +75,13 @@ export function App({ store }: AppProps) {
   const activeSession = projection?.activeSession;
   const activeSessionId = activeSession?.id;
   const pendingPermissionIdentity = projection?.pendingPermission
-    ? `${projection.pendingPermission.sessionId}:${projection.pendingPermission.id}`
+    ? JSON.stringify([
+        projection.pendingPermission.sessionId,
+        projection.pendingPermission.id,
+      ])
     : undefined;
+  const permissionAnswering = pendingPermissionIdentity !== undefined
+    && answeringPermissionIdentity === pendingPermissionIdentity;
   const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen;
   const activeDraft = activeSessionId ? sessionDrafts[activeSessionId] ?? "" : "";
   const setActiveDraft = (next: SetStateAction<string>) => {
@@ -99,7 +104,9 @@ export function App({ store }: AppProps) {
       setCredentialOpen(false);
       setMobileRailOpen(false);
     }
-    setPermissionAnswering(false);
+    setAnsweringPermissionIdentity((current) => (
+      current === pendingPermissionIdentity ? current : undefined
+    ));
   }, [pendingPermissionIdentity]);
 
   useEffect(() => {
@@ -268,25 +275,42 @@ export function App({ store }: AppProps) {
       {projection.pendingPermission ? (
         <PermissionDialog
           busy={permissionAnswering}
+          key={pendingPermissionIdentity}
           onAllow={() => {
-            if (permissionAnswering) return;
-            setPermissionAnswering(true);
+            const identity = pendingPermissionIdentity;
+            const permission = projection.pendingPermission;
+            if (permissionAnswering || !identity || !permission) return;
+            setAnsweringPermissionIdentity(identity);
             void store.dispatchAndWait({
               type: "answer_permission",
-              sessionId: projection.pendingPermission!.sessionId,
-              toolCallId: projection.pendingPermission!.id,
+              sessionId: permission.sessionId,
+              toolCallId: permission.id,
               decision: "allow_once",
-            }).then((outcome) => { if (outcome !== "committed") setPermissionAnswering(false); });
+            }).then((outcome) => {
+              if (outcome !== "committed") {
+                setAnsweringPermissionIdentity((current) => (
+                  current === identity ? undefined : current
+                ));
+              }
+            });
           }}
           onDeny={() => {
-            if (permissionAnswering) return;
-            setPermissionAnswering(true);
+            const identity = pendingPermissionIdentity;
+            const permission = projection.pendingPermission;
+            if (permissionAnswering || !identity || !permission) return;
+            setAnsweringPermissionIdentity(identity);
             void store.dispatchAndWait({
               type: "answer_permission",
-              sessionId: projection.pendingPermission!.sessionId,
-              toolCallId: projection.pendingPermission!.id,
+              sessionId: permission.sessionId,
+              toolCallId: permission.id,
               decision: "deny",
-            }).then((outcome) => { if (outcome !== "committed") setPermissionAnswering(false); });
+            }).then((outcome) => {
+              if (outcome !== "committed") {
+                setAnsweringPermissionIdentity((current) => (
+                  current === identity ? undefined : current
+                ));
+              }
+            });
           }}
           permission={projection.pendingPermission}
         />
