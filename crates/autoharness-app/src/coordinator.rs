@@ -45,8 +45,9 @@ use autoharness_tui::{
     LocalPreferenceChange, LocalUserProfileProjection, MEMORY_VIEW_PAGE_SIZE, MemoryPageDirection,
     MemoryProjection, MemoryScopeFilter, MemoryStatusFilter, MemoryViewCursor, MemoryViewQuery,
     ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
-    ProviderProfileDraft, ProviderProfileProjection, RequestId, RetryPolicy, SessionBrowserEntry,
-    SessionsProjection, SettingsProjection, ToolCallKey, UiFailure, UiIntent, UiNotice,
+    ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
+    RetryPolicy, SessionBrowserEntry, SessionsProjection, SettingsProjection, ToolCallKey,
+    UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -332,6 +333,7 @@ pub struct Coordinator {
     provider: Option<Arc<dyn Provider>>,
     session_credential_sentinel: Option<Zeroizing<String>>,
     provider_factory: ProviderFactory,
+    baseline_provider_status: ProviderStatusProjection,
     profiles: Option<ProfileRuntime>,
     tool_runtime: Arc<ToolRuntime>,
     artifact_root: Option<std::path::PathBuf>,
@@ -410,6 +412,7 @@ impl Coordinator {
     ) -> Self {
         let (messages, message_rx) = mpsc::channel(PROVIDER_MESSAGE_CAPACITY);
         let active = recover_active_attempt(&session, &shutdown);
+        let baseline_provider_status = ports.settings.borrow().provider_status.clone();
         let workspace = runtime.profiles.as_ref().map_or_else(
             || std::path::PathBuf::from("."),
             |profiles| std::path::PathBuf::from(&profiles.workspace),
@@ -421,6 +424,7 @@ impl Coordinator {
             provider: runtime.provider.initial,
             session_credential_sentinel: None,
             provider_factory: runtime.provider.factory,
+            baseline_provider_status,
             profiles: runtime.profiles,
             tool_runtime: runtime.tool_runtime,
             artifact_root: runtime.artifact_root,
@@ -1471,11 +1475,13 @@ impl Coordinator {
                 profiles,
                 pending_recovery: snapshot.pending_recovery,
             }));
-        let active_kind = active_profile.map(|profile| profile.profile.kind());
+        let provider_kind = active_profile
+            .map(|profile| provider_kind_label(profile.profile.kind()))
+            .or(self.baseline_provider_status.provider_kind);
         let credential_source = if self.session_credential_sentinel.is_some() {
             CredentialSourceLabel::SessionOnly
         } else {
-            active_profile.map_or(CredentialSourceLabel::SessionOnly, |profile| {
+            active_profile.map_or(self.baseline_provider_status.credential_source, |profile| {
                 if runtime.environment.has(profile.profile.kind()) {
                     CredentialSourceLabel::Environment
                 } else if profile.credential_state == StoredCredentialState::Stored {
@@ -1486,16 +1492,19 @@ impl Coordinator {
             })
         };
         let credential_connected = self.session_credential_sentinel.is_some()
-            || active_profile.is_some_and(|profile| {
-                runtime.environment.has(profile.profile.kind())
-                    || profile.credential_state == StoredCredentialState::Stored
-            });
+            || active_profile.map_or_else(
+                || self.provider.is_some() && self.baseline_provider_status.credential_connected,
+                |profile| {
+                    runtime.environment.has(profile.profile.kind())
+                        || profile.credential_state == StoredCredentialState::Stored
+                },
+            );
         self.ports
             .settings
             .send_replace(Arc::new(SettingsProjection {
                 provider_status: autoharness_tui::ProviderStatusProjection {
                     active_profile: active_id,
-                    provider_kind: active_kind.map(provider_kind_label),
+                    provider_kind,
                     credential_source,
                     credential_connected,
                 },
@@ -9770,6 +9779,99 @@ mod tests {
                 .await
                 .expect("profiles timeout")
                 .expect("profiles sender remains open");
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_refresh_preserves_unprofiled_provider_authority() {
+        let cases = [
+            (
+                ProviderKindLabel::Router,
+                CredentialSourceLabel::Environment,
+                true,
+            ),
+            (
+                ProviderKindLabel::CodexCli,
+                CredentialSourceLabel::SessionOnly,
+                false,
+            ),
+        ];
+
+        for (index, (provider_kind, credential_source, credential_connected)) in
+            cases.into_iter().enumerate()
+        {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let database = directory.path().join(format!("provider-{index}.sqlite3"));
+            let profile_path = directory
+                .path()
+                .join(format!("provider-{index}.profiles.json"));
+            let (actor, session_id, session) =
+                crate::engine_actor::EngineActor::start(database).expect("engine actor");
+            let store = ProfileStore::open(&profile_path).expect("profile store");
+            let manager = Arc::new(ProfileManager::new(store, Arc::new(FakeVault::new())));
+            let profile_factory: ProfileProviderFactory = Arc::new(|_, _, _| {
+                Err(ProviderError::new(
+                    ProviderErrorKind::MissingCredential,
+                    RetryAdvice::Never,
+                ))
+            });
+            let (mut ui, app) = bounded_ports(
+                Arc::new(projection::session(&session)),
+                Arc::new(SessionsProjection::default()),
+                Arc::new(CatalogProjection::CredentialRequired),
+            );
+            app.settings.send_replace(Arc::new(SettingsProjection {
+                provider_status: ProviderStatusProjection {
+                    active_profile: None,
+                    provider_kind: Some(provider_kind),
+                    credential_source,
+                    credential_connected,
+                },
+                ..SettingsProjection::default()
+            }));
+            let initial_provider = credential_connected
+                .then(|| Arc::new(FakeProvider::default()) as Arc<dyn Provider>);
+            let coordinator = Coordinator::with_runtime(
+                session_id,
+                session,
+                actor.handle(),
+                RuntimeComposition {
+                    provider: ProviderComposition {
+                        initial: initial_provider,
+                        factory: Arc::new(|_| {
+                            Err(ProviderError::new(
+                                ProviderErrorKind::MissingCredential,
+                                RetryAdvice::Never,
+                            ))
+                        }),
+                    },
+                    profiles: Some(ProfileRuntime::new(
+                        manager,
+                        profile_factory,
+                        EnvironmentCredentials {
+                            gemini: None,
+                            router: None,
+                        },
+                        directory.path().to_string_lossy().into_owned(),
+                    )),
+                    tool_runtime: test_tool_runtime(),
+                    artifact_root: None,
+                },
+                app,
+                CancellationToken::new(),
+            );
+
+            coordinator.publish_profiles();
+
+            let status = ui.settings.borrow_and_update().provider_status.clone();
+            assert_eq!(status.active_profile, None);
+            assert_eq!(status.provider_kind, Some(provider_kind));
+            assert_eq!(status.credential_source, credential_source);
+            assert_eq!(status.credential_connected, credential_connected);
+            assert!(ui.profiles.borrow_and_update().profiles.is_empty());
+
+            drop(coordinator);
+            actor.shutdown().await.expect("engine shutdown");
         }
     }
 
