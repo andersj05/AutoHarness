@@ -38,7 +38,7 @@
 - The GUI bridge preserves durable prompt and retry outcomes across post-admission startup failures, publishes shutdown lifecycle before native-close settlement, rejects fragmented credential reconstruction, and keeps inactive saved profiles from hiding a connected default provider.
 - Provider-authored catalog labels, details, and excess rows are bounded at the GUI projection boundary so malformed remote presentation data cannot make the desktop baseline unrepresentable.
 - A real Windows Tauri development window rendered the native desktop workspace and settled keyboard command palette against the Rust host and exited without leaving the application or Vite listener running.
-- Focused Stage 3 presentation tests, generated-theme freshness, frontend type checking, 63 GUI tests, and the production Vite build pass locally; the final complete branch gate remains pending.
+- Rust formatting, strict workspace Clippy, the complete locked Rust suite, frozen frontend lock verification, generated-theme freshness, frontend type checking, 63 GUI tests, the production Vite build, documentation links, and diff checks pass locally for Stage 3.
 - The final independent review of the client contract, native bridge, provider projections, frontend transport and store, permission identity, and root package and CI wiring reports no actionable P0 through P2 findings.
 
 - Human-facing README routes to authoritative project documentation.

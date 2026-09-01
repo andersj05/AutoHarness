@@ -32,8 +32,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - The desktop icon and platform icon set derive from [`icon-source.png`](../../crates/autoharness-app/icons/icon-source.png).
 - Browser fixture review covers ready, streaming, offline, credential, permission, failure, empty, compact, standard, wide, resilience, no-color, and high-contrast states.
 - A real Windows Tauri development window launched against the Rust host, rendered the shared desktop shell and keyboard command palette in WebView2, and exited cleanly.
-- Focused presentation tests, generated-theme freshness, frontend type checking, 63 GUI tests, and the production Vite build pass locally for Stage 3.
-- The previous complete Rust workspace, frontend lock, documentation-link, and diff-check evidence remains current pending the final branch gate.
+- Rust formatting, strict workspace Clippy, the complete locked Rust suite, frozen frontend lock verification, generated-theme freshness, frontend type checking, 63 GUI tests, the production Vite build, documentation links, and diff checks pass locally for Stage 3.
 - The final independent client, bridge, coordinator, frontend, Tauri, package, and CI audit reports no remaining actionable P0 through P2 findings.
 
 ## Open migration work
