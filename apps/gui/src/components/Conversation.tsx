@@ -6,10 +6,10 @@ import type {
   ConnectionState,
   ModelDescriptor,
   TextMessage,
-  ToolMessage,
 } from "../protocol";
 import { Composer } from "./Composer";
 import { Icon } from "./Icon";
+import { Button, Callout, ToolCard } from "./primitives";
 
 interface ConversationProps {
   catalog: CatalogProjection;
@@ -59,53 +59,6 @@ function MessageTurn({ message }: { message: TextMessage }) {
         ) : null}
       </div>
     </article>
-  );
-}
-
-function ToolCard({ tool }: { tool: ToolMessage }) {
-  return (
-    <details className="toolCard">
-      <summary>
-        <span className="toolIcon"><Icon name="terminal" size={15} /></span>
-        <span className="toolSummary">
-          <strong>{tool.name}</strong>
-          <span>{tool.summary}</span>
-        </span>
-        <span className="toolStatus" data-status={tool.status}>
-          {tool.status === "succeeded" ? <Icon name="check" size={12} /> : null}
-          {tool.status}
-        </span>
-        <Icon className="disclosureChevron" name="chevron" size={15} />
-      </summary>
-      <div className="toolDetails">
-        <div><span>Resource</span><code>{tool.resource}</code></div>
-        {tool.failure ? (
-          <>
-            <div><span>Failure</span><p>{tool.failure.message}</p></div>
-            <div><span>Code</span><code>{tool.failure.code}</code></div>
-          </>
-        ) : tool.detail ? <div><span>Result</span><p>{tool.detail}</p></div> : null}
-      </div>
-    </details>
-  );
-}
-
-interface CalloutProps {
-  action: string;
-  detail: string;
-  icon: "warning" | "model" | "refresh";
-  intent?: "warning" | "danger";
-  onAction: () => void;
-  title: string;
-}
-
-function Callout({ action, detail, icon, intent = "warning", onAction, title }: CalloutProps) {
-  return (
-    <section className="callout" data-intent={intent} role="status">
-      <span className="calloutIcon"><Icon name={icon} /></span>
-      <div><strong>{title}</strong><p>{detail}</p></div>
-      <button className="button secondary" onClick={onAction} type="button">{action}</button>
-    </section>
   );
 }
 
@@ -205,38 +158,37 @@ export function Conversation({
         <div className="conversationColumn">
           {offline && !credentialRequired ? (
             <Callout
-              action="Try reconnecting"
+              action={<Button onClick={onRefresh}>Try reconnecting</Button>}
               detail={connection.reason}
               icon="warning"
-              onAction={onRefresh}
+              intent="warning"
               title={runtimeMode === "fixture" ? "Fixture provider offline" : "Working offline from durable replay"}
             />
           ) : null}
           {credentialRequired ? (
             <Callout
-              action="Enter credential"
+              action={<Button onClick={onOpenCredential}>Enter credential</Button>}
               detail={connection.kind === "credential_required" ? connection.reason : "The active provider needs a credential. It will cross a dedicated one-way secret boundary."}
               icon="warning"
-              onAction={onOpenCredential}
+              intent="warning"
               title="Connect the active provider"
             />
           ) : null}
           {catalog.status === "empty" && !credentialRequired ? (
             <Callout
-              action="Refresh models"
+              action={<Button onClick={onRefresh}>Refresh models</Button>}
               detail="The provider returned no compatible chat models. Existing sessions remain available."
               icon="model"
-              onAction={onRefresh}
+              intent="warning"
               title="No compatible models"
             />
           ) : null}
           {catalog.status === "failed" ? (
             <Callout
-              action="Retry catalog"
+              action={<Button onClick={onRefresh}>Retry catalog</Button>}
               detail={catalog.safeError ?? "Model discovery did not complete."}
               icon="refresh"
               intent="danger"
-              onAction={onRefresh}
               title="Catalog refresh failed"
             />
           ) : null}
@@ -244,7 +196,16 @@ export function Conversation({
           <section aria-label="Conversation transcript" className="transcript" tabIndex={-1}>
             {session?.transcript.length ? (
               session.transcript.map((item) =>
-                item.kind === "message" ? <MessageTurn key={item.id} message={item} /> : <ToolCard key={item.id} tool={item} />,
+                item.kind === "message" ? <MessageTurn key={item.id} message={item} /> : (
+                  <ToolCard key={item.id} name={item.name} resource={item.resource} status={item.status} summary={item.summary}>
+                    {item.failure ? (
+                      <>
+                        <div><span>Failure</span><p>{item.failure.message}</p></div>
+                        <div><span>Code</span><code>{item.failure.code}</code></div>
+                      </>
+                    ) : item.detail ? <div><span>Result</span><p>{item.detail}</p></div> : null}
+                  </ToolCard>
+                ),
               )
             ) : (
               <div className="emptyConversation">
@@ -260,13 +221,13 @@ export function Conversation({
             <section className="attemptFailure" role="alert">
               <span className="calloutIcon"><Icon name="warning" /></span>
               <div><strong>Response interrupted</strong><p>{attempt.message}</p><code>{attempt.code}</code></div>
-              {attempt.retryable ? <button className="button secondary" onClick={() => onRetry(attempt.id)} type="button"><Icon name="refresh" size={14} /> Retry</button> : null}
+              {attempt.retryable ? <Button icon="refresh" onClick={() => onRetry(attempt.id)}>Retry</Button> : null}
             </section>
           ) : null}
           {attempt.kind === "cancelled" ? (
             <section className="cancelledState" role="status">
               <span>Generation stopped. The partial response remains in this session.</span>
-              <button className="textButton" onClick={() => onRetry(attempt.id)} type="button"><Icon name="refresh" size={14} /> Retry turn</button>
+              <Button icon="refresh" onClick={() => onRetry(attempt.id)} size="small" variant="quiet">Retry turn</Button>
             </section>
           ) : null}
 

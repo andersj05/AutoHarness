@@ -569,19 +569,64 @@ fn chroma_scaled(mut ramp: Ramp, scale: f32) -> Ramp {
 }
 
 fn no_color_ramp(ramp: Ramp) -> Ramp {
-    let mut monochrome = ramp;
-    let inverse = contrast_ink(ramp.surface_base);
-    monochrome.accent = inverse;
-    monochrome.accent_alt = inverse;
-    monochrome.accent_on_surface = inverse;
-    monochrome.success = inverse;
-    monochrome.warning = inverse;
-    monochrome.danger = inverse;
-    monochrome.info = inverse;
-    monochrome.role_user = inverse;
-    monochrome.role_assistant = inverse;
-    monochrome.role_tool = inverse;
-    monochrome
+    let light = ramp.surface_base.relative_luminance() > 0.5;
+    let gray = |dark: u8, light_value: u8| {
+        let value = if light { light_value } else { dark };
+        Rgb::from_srgb8(value, value, value)
+    };
+    let base = gray(0x08, 0xfa);
+    let sunken = gray(0x02, 0xf2);
+    let raised = gray(0x17, 0xe8);
+    let overlay = gray(0x22, 0xdd);
+    let selected_muted = gray(0x33, 0xd0);
+    let inverse = gray(0xfa, 0x0a);
+    let secondary = gray(0xb8, 0x42);
+    let muted = gray(0x8a, 0x66);
+    let disabled = gray(0x60, 0x90);
+    let border_subtle = gray(0x55, 0xaa);
+    let border_strong = gray(0xaa, 0x55);
+    Ramp {
+        surface_base: base,
+        surface_sunken: sunken,
+        surface_raised: raised,
+        surface_overlay: overlay,
+        surface_scrim: sunken,
+        surface_selected: inverse,
+        surface_selected_muted: selected_muted,
+        surface_danger: raised,
+        surface_warning: raised,
+        surface_success: raised,
+        text_primary: inverse,
+        text_secondary: secondary,
+        text_muted: muted,
+        text_disabled: disabled,
+        text_on_accent: base,
+        text_on_danger: inverse,
+        text_link: inverse,
+        accent: inverse,
+        accent_alt: inverse,
+        accent_soft: raised,
+        accent_on_surface: inverse,
+        success: inverse,
+        warning: inverse,
+        danger: inverse,
+        info: inverse,
+        success_soft: raised,
+        warning_soft: raised,
+        danger_soft: raised,
+        info_soft: raised,
+        border_subtle,
+        border_strong,
+        border_focus: inverse,
+        divider: border_subtle,
+        scrollbar_track: sunken,
+        scrollbar_thumb: border_strong,
+        focus_ring: inverse,
+        role_user: inverse,
+        role_assistant: inverse,
+        role_tool: inverse,
+        role_system: secondary,
+    }
 }
 
 fn high_contrast_ramp(ramp: Ramp) -> Ramp {
@@ -733,5 +778,17 @@ mod tests {
             Seed::for_preset(ThemePreset::System).base,
             Seed::for_preset(ThemePreset::Dark).base
         );
+    }
+
+    #[test]
+    fn no_color_matrix_is_strictly_monochrome() {
+        for preset in THEME_PRESETS {
+            let ramp = resolve_ramp(Ramp::derive(Seed::for_preset(preset)), ColorMode::NoColor);
+            for token in super::Token::ALL {
+                let (red, green, blue) = ramp.color(token).to_srgb8();
+                assert_eq!(red, green, "{preset:?} {token:?} red/green");
+                assert_eq!(green, blue, "{preset:?} {token:?} green/blue");
+            }
+        }
     }
 }

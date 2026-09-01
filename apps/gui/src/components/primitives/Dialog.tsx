@@ -1,4 +1,5 @@
 import { useEffect, useRef, type PropsWithChildren, type ReactNode } from "react";
+import { Icon } from "../Icon";
 import { Button } from "./Button";
 
 export interface DialogProps extends PropsWithChildren {
@@ -81,7 +82,7 @@ export function Dialog({
             <h2 id={labelledBy}>{title}</h2>
             {description ? <p id={`${labelledBy}-description`}>{description}</p> : null}
           </div>
-          {dismissible && onClose ? <Button aria-label="Close dialog" className="iconButton" onClick={onClose} variant="quiet">×</Button> : null}
+          {dismissible && onClose ? <Button aria-label="Close dialog" className="iconButton" onClick={onClose} variant="quiet"><Icon name="close" /></Button> : null}
         </header>
         <div className="dialogBody">{children}</div>
         {footer ? <footer className="dialogFooter">{footer}</footer> : null}

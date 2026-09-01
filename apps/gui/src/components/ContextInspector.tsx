@@ -1,5 +1,6 @@
 import type { ActivityItem, ActiveSessionProjection, ConnectionState, ModelDescriptor } from "../protocol";
 import { Icon } from "./Icon";
+import { Chip, Meter } from "./primitives";
 
 interface ContextInspectorProps {
   activity: readonly ActivityItem[];
@@ -42,17 +43,15 @@ export function ContextInspector({ activity, connection, mobileOpen, model, runt
       </header>
 
       <section className="contextMeterSection" aria-labelledby="context-meter-heading">
-        <div className="contextRing" style={{ "--meter": `${contextPercent * 3.6}deg` } as React.CSSProperties}>
-          <div><strong>{validUsage && contextWindow ? `${contextPercent}%` : "n/a"}</strong><span>turn / max</span></div>
-        </div>
-        <div>
-          <h3 id="context-meter-heading">Latest turn usage</h3>
-          <p>{validUsage && latestUsage !== undefined ? `${formatTokens(latestUsage)} reported tokens` : "Usage not reported for this turn"}</p>
-          <span className="statusChip quiet">
-            {validUsage ? <Icon name="check" size={12} /> : <Icon name="warning" size={12} />}
-            {validUsage ? "provider reported" : "unavailable"}
-          </span>
-        </div>
+        <h3 className="srOnly" id="context-meter-heading">Latest turn usage</h3>
+        <Meter
+          detail={validUsage && latestUsage !== undefined ? `${formatTokens(latestUsage)} reported tokens` : "Usage not reported for this turn"}
+          label="Latest turn context usage"
+          value={validUsage && contextWindow ? contextPercent : undefined}
+        />
+        <Chip icon={validUsage ? "check" : "warning"} intent={validUsage ? "success" : "warning"}>
+          {validUsage ? "provider reported" : "unavailable"}
+        </Chip>
       </section>
 
       <section className="inspectorSection" aria-labelledby="runtime-heading">

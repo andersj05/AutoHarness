@@ -1,6 +1,7 @@
 import type { PermissionRequest } from "../protocol";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
+import { Button } from "./primitives";
 
 interface PermissionDialogProps {
   busy?: boolean;
@@ -12,17 +13,14 @@ interface PermissionDialogProps {
 export function PermissionDialog({ busy = false, permission, onAllow, onDeny }: PermissionDialogProps) {
   return (
     <Dialog
+      authority="permission"
       description="Review the exact frozen operation. Your answer applies to this call only."
       dismissible={false}
       eyebrow="Permission required"
       footer={
         <>
-          <button className="button secondary dangerText" data-initial-focus disabled={busy} onClick={onDeny} type="button">
-            Deny operation
-          </button>
-          <button className="button primary" disabled={busy} onClick={onAllow} type="button">
-            <Icon name="shield" size={16} /> {busy ? "Recording answer" : "Allow once"}
-          </button>
+          <Button data-initial-focus disabled={busy} onClick={onDeny} variant="danger">Deny operation</Button>
+          <Button disabled={busy} icon="shield" onClick={onAllow} variant="primary">{busy ? "Recording answer" : "Allow once"}</Button>
         </>
       }
       labelledBy="permission-dialog-title"

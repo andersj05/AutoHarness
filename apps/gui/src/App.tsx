@@ -7,6 +7,8 @@ import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { SessionsWorkspace, SimpleWorkspace } from "./components/RouteWorkspaces";
+import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
+import type { ColorMode, ThemePreset } from "./design-system/appearance";
 import { useClientStore } from "./store/react";
 import type { ClientStore } from "./store/clientStore";
 
@@ -39,8 +41,11 @@ export function App({ store }: AppProps) {
   const [inspectorOpen, setInspectorOpen] = useState(() => !mediaMatches("(max-width: 1180px)"));
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
-  const [highContrast, setHighContrast] = useState(false);
-  const [reduceMotion, setReduceMotion] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [theme, setTheme] = useState<ThemePreset>("system");
+  const [colorMode, setColorMode] = useState<ColorMode>("color");
+  const [reduceMotion, setReduceMotion] = useState(() => mediaMatches("(prefers-reduced-motion: reduce)"));
+  const [inspectorPercent, setInspectorPercent] = useState(72);
   const [answeringPermissionIdentity, setAnsweringPermissionIdentity] = useState<string>();
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({});
   const mobileViewport = useMediaQuery("(max-width: 680px)");
@@ -54,22 +59,20 @@ export function App({ store }: AppProps) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const newSessionShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "n";
-      if (!newSessionShortcut) return;
+      const paletteShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k";
+      if (!newSessionShortcut && !paletteShortcut) return;
       event.preventDefault();
-      if (
-        client.lifecycle !== "ready" ||
-        event.repeat ||
-        client.projection?.pendingPermission ||
-        modelPickerOpen ||
-        credentialOpen ||
-        mobileRailOpen
-      ) return;
-      void store.dispatch({ type: "create_session" });
-      setRoute("chat");
+      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen) return;
+      if (paletteShortcut) {
+        setCommandPaletteOpen(true);
+      } else if (!commandPaletteOpen) {
+        void store.dispatch({ type: "create_session" });
+        setRoute("chat");
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [client.lifecycle, client.projection?.pendingPermission, credentialOpen, mobileRailOpen, modelPickerOpen, store]);
+  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, store]);
 
   const projection = client.projection;
   const activeSession = projection?.activeSession;
@@ -82,7 +85,7 @@ export function App({ store }: AppProps) {
     : undefined;
   const permissionAnswering = pendingPermissionIdentity !== undefined
     && answeringPermissionIdentity === pendingPermissionIdentity;
-  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen;
+  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen;
   const activeDraft = activeSessionId ? sessionDrafts[activeSessionId] ?? "" : "";
   const setActiveDraft = (next: SetStateAction<string>) => {
     if (!activeSessionId) return;
@@ -102,6 +105,7 @@ export function App({ store }: AppProps) {
     if (pendingPermissionIdentity) {
       setModelPickerOpen(false);
       setCredentialOpen(false);
+      setCommandPaletteOpen(false);
       setMobileRailOpen(false);
     }
     setAnsweringPermissionIdentity((current) => (
@@ -136,7 +140,7 @@ export function App({ store }: AppProps) {
         <p className="eyebrow">Desktop client unavailable</p>
         <h1>AutoHarness could not open the local runtime</h1>
         <p>{client.commandError ?? "The renderer did not receive an authoritative startup snapshot."}</p>
-        <button className="button primary" onClick={() => void store.requestResync()} type="button"><Icon name="refresh" size={16} /> Try again</button>
+        <Button icon="refresh" onClick={() => void store.requestResync()} variant="primary">Try again</Button>
       </main>
     );
   }
@@ -170,6 +174,30 @@ export function App({ store }: AppProps) {
     setRoute("chat");
   };
 
+  const commandItems: readonly CommandItem[] = [
+    { id: "new-session", label: "New session", description: "Create a durable conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
+    { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat" },
+    { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions" },
+    { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory" },
+    { id: "settings", label: "Open settings", description: "Preview themes, contrast, and motion", icon: "settings" },
+    { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
+    { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
+  ];
+
+  const runCommand = (command: string) => {
+    if (command === "new-session") {
+      void store.dispatch({ type: "create_session" });
+      setRoute("chat");
+    } else if (command === "choose-model") {
+      setModelPickerOpen(true);
+    } else if (command === "toggle-inspector") {
+      setRoute("chat");
+      setInspectorOpen((open) => !open);
+    } else if (command === "chat" || command === "sessions" || command === "memory" || command === "settings") {
+      setRoute(command);
+    }
+  };
+
   const routeWorkspace =
     route === "chat" ? (
       <Conversation
@@ -200,17 +228,19 @@ export function App({ store }: AppProps) {
       <SessionsWorkspace onOpen={openSession} onOpenNavigation={() => setMobileRailOpen(true)} snapshot={projection} />
     ) : (
       <SimpleWorkspace
-        highContrast={highContrast}
-        onHighContrast={setHighContrast}
+        colorMode={colorMode}
+        onColorMode={setColorMode}
         onOpenNavigation={() => setMobileRailOpen(true)}
         onReduceMotion={setReduceMotion}
+        onTheme={setTheme}
         reduceMotion={reduceMotion}
         route={route}
+        theme={theme}
       />
     );
 
   return (
-    <div className="app" data-high-contrast={highContrast} data-reduce-motion={reduceMotion}>
+    <div className="app" data-color-mode={colorMode} data-high-contrast={colorMode === "high-contrast"} data-reduce-motion={reduceMotion} data-theme={theme}>
       <a aria-hidden={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? true : undefined} className="skipLink" href="#main-content" tabIndex={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? -1 : undefined}>Skip to main content</a>
       <div className="appShell" ref={shellRef}>
         <div className="ambient ambientOne" />
@@ -234,20 +264,32 @@ export function App({ store }: AppProps) {
         sessions={projection.sessions}
         />
         <div className="workspaceSurface" ref={workspaceRef}>
-          {routeWorkspace}
           {route === "chat" && inspectorOpen ? (
-            <ContextInspector
-            activity={projection.activity}
-            connection={projection.connection}
-            mobileOpen={inspectorOpen}
-            model={activeModel}
-            onClose={() => setInspectorOpen(false)}
-            runtimeMode={projection.runtimeMode}
-            session={activeSession}
-            />
-          ) : null}
+            <SplitPane
+              label="Resize context inspector"
+              onValueChange={setInspectorPercent}
+              secondary={
+                <ContextInspector
+                  activity={projection.activity}
+                  connection={projection.connection}
+                  mobileOpen={inspectorOpen}
+                  model={activeModel}
+                  onClose={() => setInspectorOpen(false)}
+                  runtimeMode={projection.runtimeMode}
+                  session={activeSession}
+                />
+              }
+              value={inspectorPercent}
+            >
+              {routeWorkspace}
+            </SplitPane>
+          ) : routeWorkspace}
         </div>
       </div>
+
+      {commandPaletteOpen && !projection.pendingPermission ? (
+        <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} onSelect={runCommand} />
+      ) : null}
 
       {modelPickerOpen && !projection.pendingPermission ? (
         <ModelPicker

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Icon } from "../Icon";
 import { Chip } from "./Chip";
 
-export type ToolCardStatus = "queued" | "running" | "succeeded" | "denied" | "failed" | "cancelled";
+export type ToolCardStatus = "queued" | "waiting" | "running" | "denying" | "succeeded" | "denied" | "failed" | "cancelled";
 
 export interface ToolCardProps {
   children?: ReactNode;
@@ -16,7 +16,7 @@ function statusIntent(status: ToolCardStatus): "neutral" | "info" | "success" | 
   if (status === "succeeded") return "success";
   if (status === "failed" || status === "denied") return "danger";
   if (status === "running") return "info";
-  if (status === "cancelled") return "warning";
+  if (status === "cancelled" || status === "denying") return "warning";
   return "neutral";
 }
 

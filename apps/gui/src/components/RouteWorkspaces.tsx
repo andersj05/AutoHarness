@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ClientSnapshot } from "../protocol";
+import { COLOR_MODES, THEME_PRESETS, type ColorMode, type ThemePreset } from "../design-system/appearance";
 import { Icon } from "./Icon";
+import { Chip, VirtualList } from "./primitives";
 
 interface SessionsWorkspaceProps {
   snapshot: ClientSnapshot;
@@ -10,6 +12,12 @@ interface SessionsWorkspaceProps {
 
 export function SessionsWorkspace({ snapshot, onOpen, onOpenNavigation }: SessionsWorkspaceProps) {
   const [query, setQuery] = useState("");
+  const [listHeight, setListHeight] = useState(() => Math.max(180, Math.min(620, window.innerHeight - 190)));
+  useEffect(() => {
+    const resize = () => setListHeight(Math.max(180, Math.min(620, window.innerHeight - 190)));
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   const visibleSessions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return needle ? snapshot.sessions.filter((session) => session.title.toLocaleLowerCase().includes(needle)) : snapshot.sessions;
@@ -21,32 +29,40 @@ export function SessionsWorkspace({ snapshot, onOpen, onOpenNavigation }: Sessio
         <div><p className="eyebrow">Durable history</p><h1>Sessions</h1><p>Search, resume, and inspect every replayable conversation.</p></div>
         <label className="routeSearch"><Icon name="search" size={16} /><span className="srOnly">Search sessions</span><input onChange={(event) => setQuery(event.target.value.slice(0, 128))} placeholder="Search sessions" type="search" value={query} /></label>
       </header>
-      <section className="sessionWorkspaceList" aria-label="All sessions">
-        {visibleSessions.map((session) => (
+      {visibleSessions.length > 0 ? (
+        <VirtualList
+          ariaLabel="All sessions"
+          height={listHeight}
+          itemKey={(session) => session.id}
+          items={visibleSessions}
+          renderItem={(session) => (
           <button className="sessionWorkspaceRow" data-active={session.id === snapshot.activeSessionId} key={session.id} onClick={() => onOpen(session.id)} type="button">
             <span className="sessionWorkspaceIcon"><Icon name="chat" /></span>
             <span className="sessionWorkspaceCopy"><strong>{session.title}</strong><small>{session.messageCount === undefined ? "Message count unavailable" : `${session.messageCount} messages`}</small></span>
-            {session.id === snapshot.activeSessionId ? <span className="statusChip"><Icon name="bolt" size={12} /> active</span> : null}
+            {session.id === snapshot.activeSessionId ? <Chip icon="bolt" intent="info">active</Chip> : null}
             {session.updatedAt ? <time dateTime={session.updatedAt}>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(session.updatedAt))}</time> : <span />}
             <Icon name="chevron" />
           </button>
-        ))}
-        {visibleSessions.length === 0 ? <p className="emptySessionSearch">No sessions match “{query}”.</p> : null}
-      </section>
+          )}
+          rowHeight={68}
+        />
+      ) : <p className="emptySessionSearch">No sessions match “{query}”.</p>}
     </main>
   );
 }
 
 interface SimpleWorkspaceProps {
   route: "memory" | "settings";
-  highContrast: boolean;
+  colorMode: ColorMode;
   reduceMotion: boolean;
-  onHighContrast: (value: boolean) => void;
+  theme: ThemePreset;
+  onColorMode: (value: ColorMode) => void;
   onOpenNavigation: () => void;
   onReduceMotion: (value: boolean) => void;
+  onTheme: (value: ThemePreset) => void;
 }
 
-export function SimpleWorkspace({ route, highContrast, reduceMotion, onHighContrast, onOpenNavigation, onReduceMotion }: SimpleWorkspaceProps) {
+export function SimpleWorkspace({ route, colorMode, reduceMotion, theme, onColorMode, onOpenNavigation, onReduceMotion, onTheme }: SimpleWorkspaceProps) {
   const memory = route === "memory";
   return (
     <main className="routeWorkspace" id="main-content">
@@ -63,9 +79,10 @@ export function SimpleWorkspace({ route, highContrast, reduceMotion, onHighContr
       ) : (
         <section className="settingsWorkspace" aria-labelledby="appearance-heading">
           <div><p className="eyebrow">Interface</p><h2 id="appearance-heading">Appearance and motion</h2><p>System preferences remain the default. These preview controls are presentation-only.</p></div>
-          <label className="settingRow"><span><strong>High contrast</strong><small>Increase outlines and remove translucent surfaces.</small></span><input checked={highContrast} onChange={(event) => onHighContrast(event.target.checked)} type="checkbox" /></label>
+          <label className="settingRow"><span><strong>Theme identity</strong><small>Preview all nine renderer-neutral appearance seeds.</small></span><select aria-label="Theme identity" onChange={(event) => onTheme(event.target.value as ThemePreset)} value={theme}>{THEME_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="settingRow"><span><strong>Color treatment</strong><small>Preserve state through labels, icons, outlines, and patterns.</small></span><select aria-label="Color treatment" onChange={(event) => onColorMode(event.target.value as ColorMode)} value={colorMode}>{COLOR_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="settingRow"><span><strong>Reduce motion</strong><small>Freeze looping activity and remove spatial transitions.</small></span><input checked={reduceMotion} onChange={(event) => onReduceMotion(event.target.checked)} type="checkbox" /></label>
-          <div className="themePreview"><span /><span /><span /><strong>System dark</strong><small>#080c18 · cyan · violet</small></div>
+          <div className="themePreview"><span /><span /><span /><strong>{THEME_PRESETS.find(([value]) => value === theme)?.[1]}</strong><small>{COLOR_MODES.find(([value]) => value === colorMode)?.[1]} treatment</small></div>
         </section>
       )}
     </main>

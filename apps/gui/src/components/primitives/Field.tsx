@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from "react";
 
 export interface FieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "size"> {
   error?: string;
@@ -8,7 +8,7 @@ export interface FieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   trailing?: ReactNode;
 }
 
-export function Field({
+export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({
   className = "",
   error,
   hint,
@@ -17,7 +17,7 @@ export function Field({
   leading,
   trailing,
   ...inputProps
-}: FieldProps) {
+}: FieldProps, ref) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const hintId = hint ? `${inputId}-hint` : undefined;
@@ -28,11 +28,11 @@ export function Field({
       <label className="dsFieldLabel" htmlFor={inputId}>{label}</label>
       <span className="dsFieldControl">
         {leading ? <span aria-hidden="true" className="dsFieldAdornment">{leading}</span> : null}
-        <input {...inputProps} aria-describedby={describedBy} aria-invalid={Boolean(error) || undefined} id={inputId} />
+        <input {...inputProps} aria-describedby={describedBy} aria-invalid={Boolean(error) || undefined} id={inputId} ref={ref} />
         {trailing ? <span className="dsFieldAdornment">{trailing}</span> : null}
       </span>
       {hint ? <span className="dsFieldHint" id={hintId}>{hint}</span> : null}
       {error ? <span className="dsFieldError" id={errorId} role="alert">{error}</span> : null}
     </div>
   );
-}
+});

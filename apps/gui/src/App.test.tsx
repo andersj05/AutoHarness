@@ -226,6 +226,33 @@ describe("AutoHarness GUI", () => {
     expect(screen.queryByText("Rust-owned authority")).not.toBeInTheDocument();
   });
 
+  it("opens the keyboard command palette and applies presentation-only appearance treatments", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.getByRole("dialog", { name: "Go anywhere" })).toBeInTheDocument();
+    expect(document.querySelector(".appShell")).toHaveAttribute("inert");
+    await user.click(screen.getByRole("menuitem", { name: /Open settings/ }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Theme identity" }), "rose");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Color treatment" }), "no-color");
+    await user.click(screen.getByRole("checkbox", { name: /Reduce motion/ }));
+
+    const app = document.querySelector(".app");
+    expect(app).toHaveAttribute("data-theme", "rose");
+    expect(app).toHaveAttribute("data-color-mode", "no-color");
+    expect(app).toHaveAttribute("data-reduce-motion", "true");
+  });
+
+  it("exposes a keyboard-resizable context split pane on wide workspaces", async () => {
+    renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    const separator = screen.getByRole("separator", { name: "Resize context inspector" });
+    expect(separator).toHaveAttribute("aria-valuenow", "72");
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator).toHaveAttribute("aria-valuenow", "70");
+  });
+
   it("preserves exact prompt whitespace and clears only after mailbox acceptance", async () => {
     const { transport, user } = renderScenario("ready");
     const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });
@@ -247,6 +274,8 @@ describe("AutoHarness GUI", () => {
     expect(screen.queryByRole("dialog", { name: "Choose a model" })).not.toBeInTheDocument();
     await user.keyboard("{Control>}n{/Control}");
     expect(transport.commands.some((command) => command.type === "create_session")).toBe(false);
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog", { name: "Go anywhere" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deny operation" })).toHaveFocus();
     await user.dblClick(screen.getByRole("button", { name: "Allow once" }));
     expect(transport.commands.filter((command) => command.type === "answer_permission")).toHaveLength(1);

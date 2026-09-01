@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ModelDescriptor } from "../protocol";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
+import { Button, Chip } from "./primitives";
 
 interface ModelPickerProps {
   models: readonly ModelDescriptor[];
@@ -74,7 +75,7 @@ export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSel
               <span className="modelOptionCopy">
                 <span className="modelOptionTitle">
                   <strong>{model.displayName}</strong>
-                  {selected ? <span className="selectedLabel"><Icon name="check" size={13} /> Active</span> : null}
+                  {selected ? <Chip className="selectedLabel" icon="check" intent="success">Active</Chip> : null}
                 </span>
                 <span>{model.description}</span>
                 <span className="modelMeta">
@@ -98,9 +99,7 @@ export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSel
       </div>
       <div className="modelPickerFooter">
         <span>{models.filter((model) => model.selectable).length} available of {models.length} catalog models</span>
-        <button className="textButton" onClick={onRefresh} type="button">
-          <Icon name="refresh" size={15} /> Refresh catalog
-        </button>
+        <Button icon="refresh" onClick={onRefresh} size="small" variant="quiet">Refresh catalog</Button>
       </div>
     </Dialog>
   );
