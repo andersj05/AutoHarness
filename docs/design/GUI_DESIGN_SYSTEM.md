@@ -2,7 +2,7 @@
 
 **Status:** Active migration contract
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-01
 
 ## Direction
 
@@ -132,6 +132,19 @@ Zoom to 200 percent must preserve every primary action and security-critical det
 Components receive typed props and callbacks.
 They do not receive the transport, Rust application handle, or global coordinator context.
 
+## Implemented Stage 3 contract
+
+The renderer-neutral `autoharness-presentation` crate is the source of truth for the nine theme seeds, five color treatments, semantic color ramps, and contrast floors.
+Its checked generator produces the complete GUI custom-property matrix, while the TUI consumes the same resolved ramps through its renderer adapter.
+
+The GUI token layer adds semantic typography, spacing, elevation, radii, focus, motion, responsive dimensions, control sizes, and stacking levels.
+The shared primitive catalog includes `Button`, `Field`, `Chip`, `Menu`, `Dialog`, `CommandPalette`, `SplitPane`, `VirtualList`, `Callout`, `ToolCard`, `Meter`, and `StatusSurface`.
+These primitives remain transport-free and expose native roles, accessible names, focus behavior, keyboard interaction, and text or shape redundancy for semantic states.
+
+The live shell consumes the shared appearance matrix, command palette, split pane, virtual session list, status surfaces, meters, tool cards, fields, chips, and buttons.
+Permission review remains the highest-authority dialog and preempts the command palette and ordinary shortcuts.
+Reduced-motion preference is accepted from the operating system and can also be enabled through presentation settings.
+
 ## Visual validation
 
 Review at these initial viewport classes:
@@ -144,3 +157,6 @@ Review at these initial viewport classes:
 Each critical state receives semantic DOM assertions and screenshots.
 The matrix includes dark and light bases, high contrast, reduced motion, 200 percent zoom, long content, permission, failure, offline, empty catalog, and active streaming.
 
+Automated checks enforce all 45 theme and treatment combinations, generated-file freshness, documented contrast floors, two-layer focus visibility, reduced-motion overrides, and semantic-state redundancy.
+Local browser review covers the compact, standard, wide, and resilience viewport classes.
+Native system-webview review is recorded per operating system and remains a release-gate requirement where the target host is unavailable locally.
