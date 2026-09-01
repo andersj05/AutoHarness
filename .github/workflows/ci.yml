@@ -51,6 +51,8 @@ jobs:
           pkg-config
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check generated desktop themes
+        run: cargo run -p autoharness-presentation --bin generate_gui_themes --locked -- --check
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
       - name: Build documentation

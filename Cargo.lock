@@ -228,6 +228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoharness-presentation"
+version = "0.1.0"
+dependencies = [
+ "autoharness-settings",
+]
+
+[[package]]
 name = "autoharness-provider"
 version = "0.1.0"
 dependencies = [
@@ -352,6 +359,7 @@ version = "0.1.0"
 dependencies = [
  "allocation-counter",
  "autoharness-domain",
+ "autoharness-presentation",
  "autoharness-settings",
  "crossterm",
  "futures-util",
