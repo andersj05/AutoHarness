@@ -1,5 +1,6 @@
   @import "./design-system/themes.generated.css";
   @import "./design-system/tokens.css";
+  @import "./design-system/components.css";
 
   *, *::before, *::after { box-sizing: border-box; }
   html, body, #root { width: 100%; min-width: 320px; height: 100%; margin: 0; }

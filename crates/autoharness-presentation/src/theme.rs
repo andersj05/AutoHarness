@@ -506,6 +506,7 @@ pub fn generate_css() -> String {
             css.push_str("}\n\n");
         }
     }
+    css.pop();
     css
 }
 
