@@ -373,6 +373,58 @@ fn complete_snapshot_round_trips_and_rejects_inconsistent_active_state() {
 }
 
 #[test]
+fn active_session_delta_scales_with_changed_rows_and_rebuilds_snapshot() {
+    let mut previous = sample_snapshot();
+    let active = previous.active_session.as_mut().expect("active session");
+    active.transcript = (0..1_000)
+        .map(|index| TranscriptItem::User {
+            input_id: InputId::new(format!("history-{index}")).expect("valid input identity"),
+            content: TranscriptContent::new(format!("unchanged history row {index}"))
+                .expect("valid transcript content"),
+        })
+        .chain([TranscriptItem::Assistant {
+            attempt_id: attempt_id("attempt-streaming"),
+            content: TranscriptContent::new("partial").expect("valid transcript content"),
+            state: AttemptState::Streaming,
+            usage: None,
+            retry_of: None,
+        }])
+        .collect();
+
+    let mut next = previous.clone();
+    let next_active = next.active_session.as_mut().expect("active session");
+    next_active.revision = SessionRevision::new(8);
+    next_active.transcript[1_000] = TranscriptItem::Assistant {
+        attempt_id: attempt_id("attempt-streaming"),
+        content: TranscriptContent::new("partial response extended")
+            .expect("valid transcript content"),
+        state: AttemptState::Streaming,
+        usage: None,
+        retry_of: None,
+    };
+    next.sessions[0] = SessionSummary::new(
+        session_id("session-1"),
+        SessionTitle::new("New conversation").expect("valid title"),
+        Some(8),
+        Some(model_ref()),
+        Some(1_788_100_000_001),
+        Some(1_001),
+        false,
+    );
+
+    let delta = ActiveSessionDelta::between(&previous, &next).expect("localized delta");
+    assert_eq!(delta.transcript.start, 1_000);
+    assert_eq!(delta.transcript.delete_count, 1);
+    assert_eq!(delta.transcript.items.len(), 1);
+    assert_eq!(delta.apply_to(&previous).expect("apply delta"), next);
+
+    let encoded = serde_json::to_string(&delta).expect("serialize delta");
+    assert!(!encoded.contains("unchanged history row 999"));
+    let decoded = serde_json::from_str::<ActiveSessionDelta>(&encoded).expect("deserialize delta");
+    assert_eq!(decoded, delta);
+}
+
+#[test]
 fn connection_identity_is_distinct_from_adapter_identity() {
     let base = sample_snapshot();
     let second = ProviderProjection::new(

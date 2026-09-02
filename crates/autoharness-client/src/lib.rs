@@ -8,6 +8,7 @@
 mod bounds;
 mod command;
 mod content;
+mod delta;
 mod error;
 mod failure;
 mod frame;
@@ -17,6 +18,7 @@ mod projection;
 pub use bounds::*;
 pub use command::*;
 pub use content::*;
+pub use delta::*;
 pub use error::*;
 pub use failure::*;
 pub use frame::*;
