@@ -1,5 +1,6 @@
 export const CLIENT_SCHEMA_VERSION = 1 as const;
 export const MAX_PROMPT_UTF8_BYTES = 128 * 1024;
+export const MAX_SESSION_TITLE_UTF8_BYTES = 128;
 
 export type SessionId = string;
 export type AttemptId = string;

@@ -1,55 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ClientSnapshot } from "../protocol";
 import { COLOR_MODES, THEME_PRESETS, type ColorMode, type ThemePreset } from "../design-system/appearance";
 import { Icon } from "./Icon";
-import { Chip, VirtualList } from "./primitives";
-
-interface SessionsWorkspaceProps {
-  snapshot: ClientSnapshot;
-  onOpen: (id: string) => void;
-  onOpenNavigation: () => void;
-}
-
-export function SessionsWorkspace({ snapshot, onOpen, onOpenNavigation }: SessionsWorkspaceProps) {
-  const [query, setQuery] = useState("");
-  const [listHeight, setListHeight] = useState(() => Math.max(180, Math.min(620, window.innerHeight - 190)));
-  useEffect(() => {
-    const resize = () => setListHeight(Math.max(180, Math.min(620, window.innerHeight - 190)));
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
-  const visibleSessions = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    return needle ? snapshot.sessions.filter((session) => session.title.toLocaleLowerCase().includes(needle)) : snapshot.sessions;
-  }, [query, snapshot.sessions]);
-  return (
-    <main className="routeWorkspace" id="main-content">
-      <header className="routeWorkspaceHeader">
-        <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
-        <div><p className="eyebrow">Durable history</p><h1>Sessions</h1><p>Search, resume, and inspect every replayable conversation.</p></div>
-        <label className="routeSearch"><Icon name="search" size={16} /><span className="srOnly">Search sessions</span><input onChange={(event) => setQuery(event.target.value.slice(0, 128))} placeholder="Search sessions" type="search" value={query} /></label>
-      </header>
-      {visibleSessions.length > 0 ? (
-        <VirtualList
-          ariaLabel="All sessions"
-          height={listHeight}
-          itemKey={(session) => session.id}
-          items={visibleSessions}
-          renderItem={(session) => (
-          <button className="sessionWorkspaceRow" data-active={session.id === snapshot.activeSessionId} key={session.id} onClick={() => onOpen(session.id)} type="button">
-            <span className="sessionWorkspaceIcon"><Icon name="chat" /></span>
-            <span className="sessionWorkspaceCopy"><strong>{session.title}</strong><small>{session.messageCount === undefined ? "Message count unavailable" : `${session.messageCount} messages`}</small></span>
-            {session.id === snapshot.activeSessionId ? <Chip icon="bolt" intent="info">active</Chip> : null}
-            {session.updatedAt ? <time dateTime={session.updatedAt}>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(session.updatedAt))}</time> : <span />}
-            <Icon name="chevron" />
-          </button>
-          )}
-          rowHeight={68}
-        />
-      ) : <p className="emptySessionSearch">No sessions match “{query}”.</p>}
-    </main>
-  );
-}
 
 interface SimpleWorkspaceProps {
   route: "memory" | "settings";

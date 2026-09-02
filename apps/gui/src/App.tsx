@@ -6,7 +6,8 @@ import { CredentialDialog } from "./components/CredentialDialog";
 import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
-import { SessionsWorkspace, SimpleWorkspace } from "./components/RouteWorkspaces";
+import { SimpleWorkspace } from "./components/RouteWorkspaces";
+import { SessionsWorkspace } from "./components/SessionsWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
 import type { ColorMode, ThemePreset } from "./design-system/appearance";
 import { useClientStore } from "./store/react";
@@ -225,7 +226,12 @@ export function App({ store }: AppProps) {
         session={activeSession}
       />
     ) : route === "sessions" ? (
-      <SessionsWorkspace onOpen={openSession} onOpenNavigation={() => setMobileRailOpen(true)} snapshot={projection} />
+      <SessionsWorkspace
+        onCommand={(command) => store.dispatchAndWait(command)}
+        onOpen={openSession}
+        onOpenNavigation={() => setMobileRailOpen(true)}
+        snapshot={projection}
+      />
     ) : (
       <SimpleWorkspace
         colorMode={colorMode}

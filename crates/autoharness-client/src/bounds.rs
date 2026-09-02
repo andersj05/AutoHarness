@@ -9,7 +9,7 @@ pub const MAX_PROMPT_BYTES: usize = 128 * 1024;
 /// Maximum UTF-8 bytes retained in one transcript content value.
 pub const MAX_TRANSCRIPT_CONTENT_BYTES: usize = 1024 * 1024;
 /// Maximum UTF-8 bytes in one session title.
-pub const MAX_SESSION_TITLE_BYTES: usize = 256;
+pub const MAX_SESSION_TITLE_BYTES: usize = 128;
 /// Maximum UTF-8 bytes in a short public label.
 pub const MAX_LABEL_BYTES: usize = 512;
 /// Maximum UTF-8 bytes in one safe detail or summary.
