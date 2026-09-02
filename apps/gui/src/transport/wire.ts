@@ -147,6 +147,7 @@ export interface WireProviderProjection {
     project: string | null;
     auth_header: string | null;
   };
+  scope: "named" | "session_default";
   active: boolean;
   status: WireProviderStatus;
   credential_source: "none" | "environment" | "vault" | "session_only";

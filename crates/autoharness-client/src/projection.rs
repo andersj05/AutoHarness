@@ -12,9 +12,9 @@ use crate::bounds::{
 };
 use crate::{
     AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, DecimalU64, InputId, ModelId,
-    ProviderConfiguration, ProviderCredentialState, ProviderId, ReasoningEffort, SafeFailure,
-    SessionId, SessionRevision, SessionTitle, ToolCallId, TranscriptContent, UnixMillis,
-    ValidationError,
+    ProviderConfiguration, ProviderCredentialState, ProviderId, ProviderProfileScope,
+    ReasoningEffort, SafeFailure, SessionId, SessionRevision, SessionTitle, ToolCallId,
+    TranscriptContent, UnixMillis, ValidationError,
 };
 
 /// Stable provider and provider-owned model identity.
@@ -687,6 +687,7 @@ pub struct ProviderProjection {
     pub provider_id: ProviderId,
     pub display_name: String,
     pub configuration: ProviderConfiguration,
+    pub scope: ProviderProfileScope,
     pub active: bool,
     pub status: ProviderStatus,
     pub credential_source: CredentialSource,
@@ -703,6 +704,7 @@ impl ProviderProjection {
         provider_id: ProviderId,
         display_name: impl Into<String>,
         configuration: ProviderConfiguration,
+        scope: ProviderProfileScope,
         active: bool,
         status: ProviderStatus,
         credential_source: CredentialSource,
@@ -715,6 +717,7 @@ impl ProviderProjection {
             provider_id,
             display_name: display_name.into(),
             configuration,
+            scope,
             active,
             status,
             credential_source,
@@ -773,6 +776,7 @@ impl<'de> Deserialize<'de> for ProviderProjection {
             provider_id: ProviderId,
             display_name: String,
             configuration: ProviderConfiguration,
+            scope: ProviderProfileScope,
             active: bool,
             status: ProviderStatus,
             credential_source: CredentialSource,
@@ -786,6 +790,7 @@ impl<'de> Deserialize<'de> for ProviderProjection {
             wire.provider_id,
             wire.display_name,
             wire.configuration,
+            wire.scope,
             wire.active,
             wire.status,
             wire.credential_source,

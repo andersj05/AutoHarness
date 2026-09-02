@@ -1554,6 +1554,7 @@ fn map_providers(
                 provider_id,
                 profile.id.clone(),
                 client_provider_configuration(profile)?,
+                autoharness_client::ProviderProfileScope::Named,
                 profile.active,
                 status,
                 credential_source,
@@ -1743,6 +1744,7 @@ fn fallback_provider(
         kind.as_str(),
         ClientProviderConfiguration::new(client_provider_kind(kind), None, None, None)
             .map_err(|_| GuiIpcError::invalid_projection())?,
+        autoharness_client::ProviderProfileScope::SessionDefault,
         true,
         status,
         if session_connected {
@@ -2444,8 +2446,16 @@ mod tests {
         );
         assert_eq!(providers[0].connection_id.as_str(), "backup");
         assert_eq!(providers[0].provider_id.as_str(), "gemini");
+        assert_eq!(
+            providers[0].scope,
+            autoharness_client::ProviderProfileScope::Named
+        );
         assert!(providers[1].active);
         assert_eq!(providers[1].connection_id.as_str(), "session:gemini");
+        assert_eq!(
+            providers[1].scope,
+            autoharness_client::ProviderProfileScope::SessionDefault
+        );
     }
 
     #[test]
@@ -2491,6 +2501,10 @@ mod tests {
             .find(|provider| provider.active)
             .expect("active fallback provider");
         assert_eq!(fallback.connection_id.as_str(), "session:gemini:default-1");
+        assert_eq!(
+            fallback.scope,
+            autoharness_client::ProviderProfileScope::SessionDefault
+        );
         assert!(matches!(fallback.status, ClientProviderStatus::Ready));
         assert_eq!(
             fallback.credential_source,
@@ -3499,6 +3513,7 @@ mod tests {
                 provider_id.clone(),
                 "Work",
                 configuration.clone(),
+                autoharness_client::ProviderProfileScope::Named,
                 true,
                 ClientProviderStatus::CredentialRequired,
                 ClientCredentialSource::None,
@@ -3512,6 +3527,7 @@ mod tests {
                 provider_id,
                 "Backup",
                 configuration,
+                autoharness_client::ProviderProfileScope::Named,
                 false,
                 ClientProviderStatus::CredentialRequired,
                 ClientCredentialSource::None,

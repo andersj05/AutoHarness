@@ -69,6 +69,7 @@ function wireSnapshot(): WireClientSnapshot {
         provider_id: "gemini",
         display_name: "Primary Gemini",
         configuration: { kind: "gemini", base_url: null, project: null, auth_header: null },
+        scope: "named",
         active: true,
         status: { kind: "ready" },
         credential_source: "vault",
@@ -182,6 +183,7 @@ describe("wire adapter", () => {
     expect(snapshot.providers[0]).toMatchObject({
       id: "profile-primary",
       configuration: { kind: "gemini" },
+      scope: "named",
       credentialSource: "vault",
       credentialState: "stored",
       defaultReasoningEffort: "high",
@@ -205,6 +207,7 @@ describe("wire adapter", () => {
         provider_id: "router",
         display_name: "Active Router",
         configuration: { kind: "router", base_url: "https://router.example/v1", project: null, auth_header: null },
+        scope: "named",
         active: true,
         status: { kind: "ready" },
         credential_source: "vault",

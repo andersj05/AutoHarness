@@ -262,6 +262,7 @@ function providerFromWire(provider: WireProviderProjection): ProviderProfile {
       project: provider.configuration.project ?? undefined,
       authHeader: provider.configuration.auth_header ?? undefined,
     },
+    scope: provider.scope,
     active: provider.active,
     status: provider.status.kind,
     safeError: provider.status.kind === "failed" ? provider.status.payload.failure.message : undefined,

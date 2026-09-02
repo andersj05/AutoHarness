@@ -39,6 +39,14 @@ pub enum ProviderCredentialState {
     RecoveryPending,
 }
 
+/// Whether a provider row is a durable named profile or the temporary session default.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProfileScope {
+    Named,
+    SessionDefault,
+}
+
 impl ReasoningEffort {
     /// Returns the validated provider-native value expected by settings.
     #[must_use]

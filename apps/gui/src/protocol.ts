@@ -12,6 +12,7 @@ export type ProviderKind = "gemini" | "router" | "codex_subscription";
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CredentialSource = "none" | "environment" | "vault" | "session_only";
 export type ProviderCredentialState = "disconnected" | "stored" | "recovery_pending";
+export type ProviderProfileScope = "named" | "session_default";
 export type ProviderStatus = "disconnected" | "credential_required" | "untested" | "connecting" | "ready" | "offline" | "failed";
 
 export type ConnectionState =
@@ -117,6 +118,7 @@ export interface ProviderProfile {
   providerId: string;
   displayName: string;
   configuration: ProviderConfiguration;
+  scope: ProviderProfileScope;
   active: boolean;
   status: ProviderStatus;
   safeError?: string;
