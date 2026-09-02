@@ -174,9 +174,8 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
                 ) : (
                   <Button icon="chat" onClick={() => onOpen(selected.id)} variant="primary">{selected.id === snapshot.activeSessionId ? "Return to chat" : "Open session"}</Button>
                 )}
-                <Button icon="copy" onClick={() => void run("export", { type: "export_transcript", sessionId: selected.id }, `Exported “${selected.title}”.`, false)} disabled={selected.id !== snapshot.activeSessionId} loading={busyAction === "export"} loadingLabel="Exporting">Export Markdown</Button>
+                <Button icon="copy" onClick={() => void run("export", { type: "export_transcript", sessionId: selected.id }, `Exported “${selected.title}”.`, false)} loading={busyAction === "export"} loadingLabel="Exporting">Export Markdown</Button>
               </div>
-              {selected.id !== snapshot.activeSessionId ? <p className="sessionActionHint">Open this session before exporting its transcript.</p> : null}
               <div className="sessionSecondaryActions">
                 <Button onClick={() => openDialog({ kind: "rename", session: selected })} size="small" variant="quiet">Rename</Button>
                 {!selected.archived ? <Button onClick={() => openDialog({ kind: "archive", session: selected })} size="small" variant="quiet">Archive</Button> : null}

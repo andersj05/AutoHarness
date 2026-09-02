@@ -26,6 +26,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - The Sessions workspace searches titles and identities, filters open and archived rows, switches, renames, archives, restores, exports, and deletes exact sessions through the Rust-owned lifecycle commands.
 - Permanent deletion names the exact session, explains export-before-delete behavior, and stays disabled until the user types the complete session title.
 - Chat mounts at most 36 transcript rows, searches messages and rich tool evidence, copies plain text, requests host-owned Markdown export, and expands a matching tool disclosure.
+- Any selected open or archived session can be exported directly without changing the active conversation.
 - Navigation and inspector panes are keyboard and pointer resizable and retain their values across route changes.
 - Optimistic prompts are keyed by Rust-issued request identifiers and retire only after the matching durable user row is observed or the request is rejected.
 - Active-session streaming crosses the native carrier as a bounded transcript splice, preserving unchanged client rows instead of serializing total transcript history for every update.

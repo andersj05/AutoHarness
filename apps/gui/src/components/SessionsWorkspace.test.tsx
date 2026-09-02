@@ -88,14 +88,15 @@ describe("SessionsWorkspace", () => {
     expect(commands).toContainEqual({ type: "delete_session", sessionId: "session-context" });
   });
 
-  it("exports only the active session and restores an archive", async () => {
+  it("exports an exact inactive or archived session and restores an archive", async () => {
     const { commands, user } = renderWorkspace();
     await user.click(screen.getByRole("button", { name: "Export Markdown" }));
     expect(commands).toContainEqual({ type: "export_transcript", sessionId: "session-gui-migration" });
 
     await user.click(screen.getByRole("button", { name: "Archived 1" }));
     await user.click(screen.getByRole("button", { name: /Provider recovery probes/ }));
-    expect(screen.getByRole("button", { name: "Export Markdown" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Export Markdown" }));
+    expect(commands).toContainEqual({ type: "export_transcript", sessionId: "session-provider" });
     await user.click(screen.getByRole("button", { name: "Restore session" }));
     expect(commands).toContainEqual({ type: "unarchive_session", sessionId: "session-provider" });
   });
