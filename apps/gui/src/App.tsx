@@ -205,6 +205,7 @@ export function App({ store }: AppProps) {
         catalog={projection.catalog}
         connection={projection.connection}
         draft={activeDraft}
+        interactionBlocked={blockingDialogOpen}
         model={activeModel}
         onCancel={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "cancel_attempt", sessionId: activeSession.id, attemptId });
@@ -215,6 +216,7 @@ export function App({ store }: AppProps) {
         onOpenModelPicker={() => setModelPickerOpen(true)}
         onOpenNavigation={() => setMobileRailOpen(true)}
         onRefresh={() => void store.dispatch({ type: "refresh_catalog" })}
+        onExport={() => activeSession ? store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id }) : Promise.resolve("rejected")}
         onRetry={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "retry_attempt", sessionId: activeSession.id, attemptId });
         }}

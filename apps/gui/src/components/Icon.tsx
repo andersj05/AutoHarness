@@ -11,6 +11,7 @@ export type IconName =
   | "command"
   | "copy"
   | "database"
+  | "download"
   | "inspect"
   | "memory"
   | "menu"
@@ -40,6 +41,7 @@ const paths: Record<IconName, JSX.Element> = {
   command: <path d="M9 6a3 3 0 1 1-3-3v15a3 3 0 1 1 3-3H6h12a3 3 0 1 1-3 3V6a3 3 0 1 1 3 3H6" />,
   copy: <path d="M8 8h11v11H8zM5 16H3V3h13v2" />,
   database: <path d="M20 6c0 1.7-3.6 3-8 3S4 7.7 4 6s3.6-3 8-3 8 1.3 8 3Zm0 0v6c0 1.7-3.6 3-8 3s-8-1.3-8-3V6m16 6v6c0 1.7-3.6 3-8 3s-8-1.3-8-3v-6" />,
+  download: <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14" />,
   inspect: <path d="M4 4h16v16H4zM14 4v16M7 8h4M7 12h4" />,
   memory: <path d="M9 4V2m6 2V2M9 22v-2m6 2v-2M4 9H2m2 6H2m20-6h-2m2 6h-2M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm3 5h6v6H9z" />,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,

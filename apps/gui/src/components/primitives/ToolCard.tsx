@@ -10,6 +10,7 @@ export interface ToolCardProps {
   resource: string;
   status: ToolCardStatus;
   summary: string;
+  forceOpen?: boolean;
 }
 
 function statusIntent(status: ToolCardStatus): "neutral" | "info" | "success" | "warning" | "danger" {
@@ -20,9 +21,9 @@ function statusIntent(status: ToolCardStatus): "neutral" | "info" | "success" | 
   return "neutral";
 }
 
-export function ToolCard({ children, name, resource, status, summary }: ToolCardProps) {
+export function ToolCard({ children, forceOpen = false, name, resource, status, summary }: ToolCardProps) {
   return (
-    <details className="dsToolCard toolCard" data-status={status}>
+    <details className="dsToolCard toolCard" data-status={status} open={forceOpen || undefined}>
       <summary>
         <span className="toolIcon"><Icon name="terminal" size={15} /></span>
         <span className="toolSummary"><strong>{name}</strong><span>{summary}</span></span>
