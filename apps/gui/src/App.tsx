@@ -207,6 +207,7 @@ export function App({ store }: AppProps) {
         draft={activeDraft}
         interactionBlocked={blockingDialogOpen}
         model={activeModel}
+        optimisticPrompts={client.optimisticPrompts}
         onCancel={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "cancel_attempt", sessionId: activeSession.id, attemptId });
         }}

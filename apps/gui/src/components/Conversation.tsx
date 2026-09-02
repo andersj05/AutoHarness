@@ -8,6 +8,7 @@ import type {
   TextMessage,
   TranscriptItem,
 } from "../protocol";
+import type { OptimisticPrompt } from "../store/clientStore";
 import { Composer } from "./Composer";
 import { Icon } from "./Icon";
 import { Button, Callout, ToolCard } from "./primitives";
@@ -21,6 +22,7 @@ interface ConversationProps {
   runtimeMode: "native" | "fixture";
   session?: ActiveSessionProjection;
   interactionBlocked?: boolean;
+  optimisticPrompts?: readonly OptimisticPrompt[];
   onCancel: (attemptId: string) => void;
   onDraftChange: Dispatch<SetStateAction<string>>;
   onOpenCredential: () => void;
@@ -64,7 +66,7 @@ function transcriptPlainText(items: readonly TranscriptItem[]): string {
   }).join("\n\n");
 }
 
-function MessageTurn({ highlight, message }: { highlight?: string; message: TextMessage }) {
+function MessageTurn({ highlight, message, optimistic = false }: { highlight?: string; message: TextMessage; optimistic?: boolean }) {
   const timestamp = message.createdAt ? new Date(message.createdAt) : undefined;
   const hasValidTimestamp = timestamp && Number.isFinite(timestamp.getTime());
   return (
@@ -81,7 +83,7 @@ function MessageTurn({ highlight, message }: { highlight?: string; message: Text
             </time>
           ) : null}
         </div>
-        {message.role === "agent" ? <span className="agentLabel">agent</span> : null}
+        {message.role === "agent" ? <span className="agentLabel">agent</span> : optimistic ? <span className="optimisticLabel">sending</span> : null}
       </header>
       <div className="messageContent">
         {message.content.split("\n").map((line, index) =>
@@ -102,6 +104,7 @@ export function Conversation({
   connection,
   draft,
   interactionBlocked = false,
+  optimisticPrompts = [],
   model,
   session,
   onCancel,
@@ -128,7 +131,19 @@ export function Conversation({
   const offline = connection.kind === "offline";
   const credentialRequired = catalog.status === "credential_required" || connection.kind === "credential_required";
   const attempt = session?.attempt ?? { kind: "idle" as const };
-  const lastItem = session?.transcript[session.transcript.length - 1];
+  const transcript = useMemo<readonly TranscriptItem[]>(() => {
+    if (!session) return [];
+    const pending = optimisticPrompts
+      .filter((prompt) => prompt.sessionId === session.id)
+      .map((prompt): TextMessage => ({
+        kind: "message",
+        id: `optimistic:${prompt.requestId}`,
+        role: "user",
+        content: prompt.content,
+      }));
+    return pending.length > 0 ? [...session.transcript, ...pending] : session.transcript;
+  }, [optimisticPrompts, session]);
+  const lastItem = transcript[transcript.length - 1];
   const tailVersion = lastItem?.kind === "message"
     ? `${lastItem.id}:${lastItem.content.length}:${String(lastItem.streaming)}`
     : lastItem
@@ -136,13 +151,13 @@ export function Conversation({
       : "empty";
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
   const matches = useMemo(() => {
-    if (!normalizedSearch || !session) return [];
+    if (!normalizedSearch) return [];
     const result: number[] = [];
-    session.transcript.forEach((item, index) => {
+    transcript.forEach((item, index) => {
       if (transcriptSearchText(item).toLocaleLowerCase().includes(normalizedSearch)) result.push(index);
     });
     return result;
-  }, [normalizedSearch, session]);
+  }, [normalizedSearch, transcript]);
   const activeMatch = matches.length > 0 ? matches[Math.min(matchCursor, matches.length - 1)] : undefined;
 
   useEffect(() => {
@@ -322,12 +337,12 @@ export function Conversation({
             />
           ) : null}
 
-          {session?.transcript.length ? (
+          {transcript.length ? (
             <VirtualTranscript
               activeIndex={activeMatch}
-              items={session.transcript}
+              items={transcript}
               renderItem={(item, index) =>
-                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} /> : (
+                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} optimistic={item.id.startsWith("optimistic:")} /> : (
                   <ToolCard forceOpen={index === activeMatch} name={item.name} resource={item.resource} status={item.status} summary={item.summary}>
                     {item.failure ? (
                       <>
@@ -338,7 +353,7 @@ export function Conversation({
                   </ToolCard>
                 )}
               scrollRef={scrollRef}
-              sessionId={session.id}
+              sessionId={session?.id}
             />
           ) : (
             <section aria-label="Conversation transcript" className="transcript" tabIndex={-1}>

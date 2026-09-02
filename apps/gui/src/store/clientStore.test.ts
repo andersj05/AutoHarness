@@ -254,4 +254,73 @@ describe("ClientStore", () => {
     await vi.waitFor(() => expect(transport.snapshotCalls).toBe(1));
     expect(store.getSnapshot().commandError).toBe("The host did not confirm whether the command committed.");
   });
+
+  it("keeps a request-correlated optimistic prompt until authoritative observation", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const baseline = store.getSnapshot().projection!;
+
+    const settlement = store.dispatchAndWait({
+      type: "submit_prompt",
+      sessionId: baseline.activeSessionId!,
+      prompt: "Optimistic exact prompt",
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().optimisticPrompts).toEqual([{
+      requestId: "1",
+      sessionId: baseline.activeSessionId,
+      content: "Optimistic exact prompt",
+    }]));
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "success",
+      code: "command_committed",
+      message: "committed",
+    });
+    await expect(settlement).resolves.toBe("committed");
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(1);
+
+    const activeSession = baseline.activeSession!;
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "3",
+      snapshot: {
+        ...baseline,
+        transportRevision: "3",
+        activeSession: {
+          ...activeSession,
+          transcript: [
+            ...activeSession.transcript,
+            { kind: "message", id: "durable-input-new", role: "user", content: "Optimistic exact prompt" },
+          ],
+        },
+      },
+    });
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(0);
+  });
+
+  it("retires an optimistic prompt on correlated rejection", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const sessionId = store.getSnapshot().projection!.activeSessionId!;
+    const settlement = store.dispatchAndWait({ type: "submit_prompt", sessionId, prompt: "Rejected prompt" });
+    await vi.waitFor(() => expect(store.getSnapshot().optimisticPrompts).toHaveLength(1));
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "error",
+      code: "prompt_rejected",
+      message: "rejected",
+    });
+
+    await expect(settlement).resolves.toBe("rejected");
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(0);
+  });
 });
