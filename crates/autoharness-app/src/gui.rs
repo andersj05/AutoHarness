@@ -1841,7 +1841,8 @@ fn credential_operation_allowed(
     match operation {
         CredentialOperation::SessionOnly => provider.active,
         CredentialOperation::Save | CredentialOperation::Replace => {
-            provider.configuration.kind != ClientProviderKind::CodexSubscription
+            provider.scope == autoharness_client::ProviderProfileScope::Named
+                && provider.configuration.kind != ClientProviderKind::CodexSubscription
         }
     }
 }
@@ -3549,6 +3550,34 @@ mod tests {
         assert!(credential_operation_allowed(
             &providers[1],
             CredentialOperation::Save,
+        ));
+
+        let session_fallback = ClientProviderProjection::new(
+            ClientConnectionId::new("session:gemini").expect("connection ID"),
+            ClientProviderId::new("gemini").expect("provider ID"),
+            "Gemini",
+            ClientProviderConfiguration::new(ClientProviderKind::Gemini, None, None, None)
+                .expect("provider configuration"),
+            autoharness_client::ProviderProfileScope::SessionDefault,
+            true,
+            ClientProviderStatus::CredentialRequired,
+            ClientCredentialSource::None,
+            ClientProviderCredentialState::Disconnected,
+            None,
+            None,
+        )
+        .expect("session fallback");
+        assert!(credential_operation_allowed(
+            &session_fallback,
+            CredentialOperation::SessionOnly,
+        ));
+        assert!(!credential_operation_allowed(
+            &session_fallback,
+            CredentialOperation::Save,
+        ));
+        assert!(!credential_operation_allowed(
+            &session_fallback,
+            CredentialOperation::Replace,
         ));
     }
 

@@ -139,6 +139,32 @@ describe("ProvidersWorkspace", () => {
     expect(input).toHaveValue("");
   });
 
+  it("keeps an environment credential authoritative while managing its saved fallback", async () => {
+    const base = createFixtureSnapshot("ready");
+    const profile: ProviderProfile = {
+      ...base.providers[0]!,
+      credentialSource: "environment",
+      credentialState: "stored",
+    };
+    const { credentials, user } = renderWorkspace({
+      snapshot: { ...base, providers: [profile], connectionId: profile.id },
+    });
+
+    expect(screen.getByText("Environment override active")).toBeInTheDocument();
+    expect(screen.getByText("The environment credential currently wins.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove saved fallback" })).toBeInTheDocument();
+
+    const input = screen.getByLabelText("New provider credential");
+    await user.type(input, "fallback-sentinel");
+    await user.click(screen.getByRole("button", { name: "Replace saved fallback" }));
+    expect(credentials).toEqual([{
+      connectionId: profile.id,
+      operation: "replace",
+      credential: "fallback-sentinel",
+    }]);
+    expect(input).toHaveValue("");
+  });
+
   it("erases an unsubmitted credential when a permission request preempts the workspace", async () => {
     const { rerender, snapshot, user } = renderWorkspace();
     const input = screen.getByLabelText("New provider credential");
