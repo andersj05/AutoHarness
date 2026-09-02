@@ -12,6 +12,7 @@ import type {
 import { CLIENT_SCHEMA_VERSION } from "../protocol";
 
 export interface ClientNotice {
+  requestId?: string;
   level: NoticeLevel;
   code: string;
   message: string;
@@ -319,7 +320,7 @@ export class ClientStore {
           ? "resyncing"
           : this.state.projection ? "ready" : this.state.lifecycle,
         transportRevision: frame.revision,
-        notice: { level: frame.level, code: frame.code, message: frame.message },
+        notice: { requestId: frame.requestId, level: frame.level, code: frame.code, message: frame.message },
         commandError: frame.level === "error" ? frame.message : this.state.commandError,
       });
       this.settleCommandNotice(frame);
@@ -377,7 +378,7 @@ export class ClientStore {
   private observeGapNotice(frame: Extract<ClientFrame, { kind: "notice" }>): void {
     this.publish({
       ...this.state,
-      notice: { level: frame.level, code: frame.code, message: frame.message },
+      notice: { requestId: frame.requestId, level: frame.level, code: frame.code, message: frame.message },
       commandError: frame.level === "error" ? frame.message : this.state.commandError,
     });
     this.settleCommandNotice(frame);

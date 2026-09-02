@@ -266,6 +266,7 @@ describe("ClientStore", () => {
       message: "Finish signing in in the browser.",
     });
     expect(store.getSnapshot().notice?.code).toBe("authentication_browser_opened");
+    expect(store.getSnapshot().notice?.requestId).toBe("1");
 
     store.applyFrame({
       kind: "notice",

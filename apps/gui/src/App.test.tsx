@@ -268,6 +268,16 @@ describe("AutoHarness GUI", () => {
     expect(screen.getByRole("separator", { name: "Resize context inspector" })).toHaveAttribute("aria-valuenow", "72");
   });
 
+  it("opens provider management from the primary application rail", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.click(screen.getByRole("button", { name: "Providers" }));
+    expect(await screen.findByRole("heading", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Personal Gemini/ })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("heading", { name: "Credential" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Model and reasoning" })).toBeInTheDocument();
+  });
+
   it("preserves exact prompt whitespace and clears only after mailbox acceptance", async () => {
     const { transport, user } = renderScenario("ready");
     const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });

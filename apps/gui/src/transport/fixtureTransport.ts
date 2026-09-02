@@ -69,7 +69,7 @@ const PROVIDER_PROFILES: readonly ProviderProfile[] = [
     displayName: "Local router",
     configuration: {
       kind: "router",
-      baseUrl: "http://127.0.0.1:11434/v1",
+      baseUrl: "http://127.0.0.1:11434/v1/",
       project: "local",
       authHeader: "authorization",
     },

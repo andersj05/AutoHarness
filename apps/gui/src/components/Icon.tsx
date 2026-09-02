@@ -19,6 +19,7 @@ export type IconName =
   | "new"
   | "panel-left"
   | "panel-right"
+  | "providers"
   | "refresh"
   | "search"
   | "sessions"
@@ -49,6 +50,7 @@ const paths: Record<IconName, JSX.Element> = {
   new: <path d="M12 5v14M5 12h14" />,
   "panel-left": <path d="M4 4h16v16H4zM9 4v16" />,
   "panel-right": <path d="M4 4h16v16H4zM15 4v16" />,
+  providers: <path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-6 6v4m-3-9h6" />,
   refresh: <path d="M20 7v5h-5M4 17v-5h5m9.5-3A7 7 0 0 0 6.8 6.2L4 9m16 6-2.8 2.8A7 7 0 0 1 5.5 15" />,
   search: <path d="m21 21-4.4-4.4M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />,
   sessions: <path d="M6 7h12M6 12h12M6 17h8M3 4h18v16H3z" />,

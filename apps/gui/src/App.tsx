@@ -6,6 +6,7 @@ import { CredentialDialog } from "./components/CredentialDialog";
 import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
+import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
 import { SimpleWorkspace } from "./components/RouteWorkspaces";
 import { SessionsWorkspace } from "./components/SessionsWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
@@ -181,6 +182,7 @@ export function App({ store }: AppProps) {
     { id: "new-session", label: "New session", description: "Create a durable conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
     { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat" },
     { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions" },
+    { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers" },
     { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory" },
     { id: "settings", label: "Open settings", description: "Preview themes, contrast, and motion", icon: "settings" },
     { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
@@ -203,7 +205,7 @@ export function App({ store }: AppProps) {
       setTranscriptSearchRequest((value) => value + 1);
     } else if (command === "export-transcript") {
       if (activeSession) void store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id });
-    } else if (command === "chat" || command === "sessions" || command === "memory" || command === "settings") {
+    } else if (command === "chat" || command === "sessions" || command === "providers" || command === "memory" || command === "settings") {
       setRoute(command);
     }
   };
@@ -243,6 +245,16 @@ export function App({ store }: AppProps) {
         onCommand={(command) => store.dispatchAndWait(command)}
         onOpen={openSession}
         onOpenNavigation={() => setMobileRailOpen(true)}
+        snapshot={projection}
+      />
+    ) : route === "providers" ? (
+      <ProvidersWorkspace
+        interactionBlocked={Boolean(projection.pendingPermission)}
+        notice={client.notice}
+        onCommand={(command) => store.dispatchAndWait(command)}
+        onCredential={async (submission) => Boolean(await store.submitCredential(submission))}
+        onOpenNavigation={() => setMobileRailOpen(true)}
+        onStartAuthentication={async () => (await store.dispatch({ type: "start_codex_authentication" }))?.requestId}
         snapshot={projection}
       />
     ) : (
