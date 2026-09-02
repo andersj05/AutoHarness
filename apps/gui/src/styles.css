@@ -509,7 +509,8 @@
   .providerFacts dt { color: var(--text-dim); font-size: 9px; }
   .providerFacts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text-muted); font-size: 9px; text-align: right; }
   .providerFacts code { color: var(--text); direction: ltr; font-family: var(--font-mono); font-size: 8px; unicode-bidi: isolate; }
-  .providerPrimaryActions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 15px 0 4px; }
+  .providerPrimaryActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px; padding: 15px 0 4px; }
+  .providerConnectionActions, .providerConfigurationActions { display: flex; align-items: center; gap: 5px; }
   .providerActionHint { margin-top: 6px; color: var(--amber); font-size: 8px; }
   .providerSection { display: grid; gap: 14px; margin-top: 17px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--base-deep); }
   .providerSectionHeading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
@@ -689,6 +690,11 @@
     .providerDetailPane { min-height: 0; padding: 16px; }
     .providerFieldPair, .providerDefaultsForm { grid-template-columns: 1fr; }
     .providerDefaultsForm .dsButton { grid-column: auto; justify-self: stretch; }
+    .providerPrimaryActions { align-items: stretch; flex-direction: column; }
+    .providerConnectionActions, .providerConfigurationActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .providerConnectionActions[data-single="true"] { grid-template-columns: 1fr; }
+    .providerCredentialActions { display: grid; grid-template-columns: 1fr; }
+    .providerCredentialActions .dsButton { width: 100%; }
     .providerDisconnectRow, .codexCredentialPanel { align-items: stretch; flex-direction: column; }
     .providerFacts > div { grid-template-columns: 1fr; gap: 3px; }
     .providerFacts dd { text-align: left; }

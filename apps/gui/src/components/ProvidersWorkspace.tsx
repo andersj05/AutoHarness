@@ -405,7 +405,7 @@ export function ProvidersWorkspace({
                   autoCorrect="off"
                   data-initial-focus
                   disabled={editor.mode === "edit"}
-                  error={editorErrors.id}
+                  error={editor.draft.id ? editorErrors.id : undefined}
                   hint={editor.mode === "edit" ? "Stable profile identity cannot be renamed." : "Up to 64 visible ASCII characters without spaces or quotation marks."}
                   label="Profile name"
                   onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, id: event.target.value } })}
@@ -428,7 +428,7 @@ export function ProvidersWorkspace({
                 ) : null}
                 {editor.mode !== "duplicate" && editor.draft.kind === "router" ? (
                   <>
-                    <Field error={editorErrors.baseUrl} hint="HTTPS is required except for loopback development endpoints. Include a trailing slash." label="Base URL" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, baseUrl: event.target.value } })} placeholder="https://router.example/v1/" spellCheck={false} type="url" value={editor.draft.baseUrl} />
+                    <Field error={editor.draft.baseUrl ? editorErrors.baseUrl : undefined} hint="HTTPS is required except for loopback development endpoints. Include a trailing slash." label="Base URL" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, baseUrl: event.target.value } })} placeholder="https://router.example/v1/" spellCheck={false} type="url" value={editor.draft.baseUrl} />
                     <div className="providerFieldPair">
                       <Field error={editorErrors.project} hint="Optional stable cache and policy identity." label="Project identity" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, project: event.target.value } })} placeholder="team-a" spellCheck={false} value={editor.draft.project} />
                       <Field error={editorErrors.authHeader} hint="Optional. Defaults to Authorization." label="Authentication header" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, authHeader: event.target.value } })} placeholder="authorization" spellCheck={false} value={editor.draft.authHeader} />
@@ -465,10 +465,16 @@ export function ProvidersWorkspace({
 
               {selected.scope === "named" ? (
                 <div className="providerPrimaryActions">
-                  {!selected.active ? <Button disabled={responseActive || interactionBlocked} icon="bolt" loading={busyAction === "activate"} loadingLabel="Activating" onClick={() => void run("activate", { type: "activate_provider_profile", connectionId: selected.id }, `Activated “${selected.displayName}”.`)} variant="primary">Make active</Button> : null}
-                  <Button disabled={selected.status === "connecting" || interactionBlocked} icon="refresh" loading={busyAction === "test"} loadingLabel="Testing" onClick={() => void run("test", { type: "test_provider_profile", connectionId: selected.id }, `Content-free connection test passed for “${selected.displayName}”.`)}>Test connection</Button>
-                  {selected.configuration.kind !== "codex_subscription" ? <Button onClick={() => setEditor({ mode: "edit", sourceId: selected.id, draft: profileDraft(selected) })} variant="quiet">Edit</Button> : null}
-                  {selected.configuration.kind !== "codex_subscription" ? <Button onClick={() => setEditor({ mode: "duplicate", sourceId: selected.id, draft: { ...profileDraft(selected), id: `${selected.id}-copy` } })} variant="quiet">Duplicate</Button> : null}
+                  <div className="providerConnectionActions" data-single={selected.active}>
+                    {!selected.active ? <Button disabled={responseActive || interactionBlocked} icon="bolt" loading={busyAction === "activate"} loadingLabel="Activating" onClick={() => void run("activate", { type: "activate_provider_profile", connectionId: selected.id }, `Activated “${selected.displayName}”.`)} size="small" variant="primary">Make active</Button> : null}
+                    <Button disabled={selected.status === "connecting" || interactionBlocked} icon="refresh" loading={busyAction === "test"} loadingLabel="Testing" onClick={() => void run("test", { type: "test_provider_profile", connectionId: selected.id }, `Content-free connection test passed for “${selected.displayName}”.`)} size="small">Test connection</Button>
+                  </div>
+                  {selected.configuration.kind !== "codex_subscription" ? (
+                    <div className="providerConfigurationActions">
+                      <Button onClick={() => setEditor({ mode: "edit", sourceId: selected.id, draft: profileDraft(selected) })} size="small" variant="quiet">Edit</Button>
+                      <Button onClick={() => setEditor({ mode: "duplicate", sourceId: selected.id, draft: { ...profileDraft(selected), id: `${selected.id}-copy` } })} size="small" variant="quiet">Duplicate</Button>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {responseActive && !selected.active ? <p className="providerActionHint">Finish or cancel the active response before switching profiles.</p> : null}
