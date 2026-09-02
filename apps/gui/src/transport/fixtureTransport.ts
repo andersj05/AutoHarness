@@ -248,6 +248,20 @@ export class FixtureTransport implements ClientTransport {
       case "open_session":
         this.openSession(command.sessionId);
         break;
+      case "rename_session":
+        this.renameSession(command.sessionId, command.title);
+        break;
+      case "archive_session":
+        this.setArchived(command.sessionId, true);
+        break;
+      case "unarchive_session":
+        this.setArchived(command.sessionId, false);
+        break;
+      case "export_transcript":
+        break;
+      case "delete_session":
+        this.deleteSession(command.sessionId);
+        break;
       case "refresh_catalog":
         this.refreshCatalog();
         break;
@@ -342,6 +356,43 @@ export class FixtureTransport implements ClientTransport {
         ],
       },
     };
+    this.emit();
+  }
+
+  private renameSession(sessionId: string, title: string): void {
+    const exactTitle = title.trim();
+    if (!exactTitle) return;
+    this.current = {
+      ...this.current,
+      sessions: this.current.sessions.map((session) => (
+        session.id === sessionId ? { ...session, title: exactTitle } : session
+      )),
+      activeSession: this.current.activeSession?.id === sessionId
+        ? { ...this.current.activeSession, title: exactTitle }
+        : this.current.activeSession,
+    };
+    this.emit();
+  }
+
+  private setArchived(sessionId: string, archived: boolean): void {
+    this.current = {
+      ...this.current,
+      sessions: this.current.sessions.map((session) => (
+        session.id === sessionId ? { ...session, archived } : session
+      )),
+    };
+    this.emit();
+  }
+
+  private deleteSession(sessionId: string): void {
+    const sessions = this.current.sessions.filter((session) => session.id !== sessionId);
+    if (sessions.length === this.current.sessions.length || sessions.length === 0) return;
+    this.current = { ...this.current, sessions };
+    if (this.current.activeSessionId === sessionId) {
+      const replacement = sessions.find((session) => !session.archived) ?? sessions[0];
+      if (replacement) this.openSession(replacement.id);
+      return;
+    }
     this.emit();
   }
 
