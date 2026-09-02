@@ -23,6 +23,7 @@ interface ConversationProps {
   session?: ActiveSessionProjection;
   interactionBlocked?: boolean;
   optimisticPrompts?: readonly OptimisticPrompt[];
+  searchRequest?: number;
   onCancel: (attemptId: string) => void;
   onDraftChange: Dispatch<SetStateAction<string>>;
   onOpenCredential: () => void;
@@ -105,6 +106,7 @@ export function Conversation({
   draft,
   interactionBlocked = false,
   optimisticPrompts = [],
+  searchRequest = 0,
   model,
   session,
   onCancel,
@@ -181,6 +183,12 @@ export function Conversation({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [interactionBlocked]);
+
+  useEffect(() => {
+    if (searchRequest <= 0 || interactionBlocked) return;
+    setSearchOpen(true);
+    queueMicrotask(() => searchInputRef.current?.focus());
+  }, [interactionBlocked, searchRequest]);
 
   const moveMatch = (direction: 1 | -1) => {
     if (matches.length === 0) return;

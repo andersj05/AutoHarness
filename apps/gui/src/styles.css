@@ -97,7 +97,7 @@
     z-index: 12;
     display: flex;
     flex-direction: column;
-    width: 248px;
+    width: var(--rail-size, var(--rail-width));
     min-width: 0;
     height: 100%;
     overflow: hidden;
@@ -109,6 +109,9 @@
     backdrop-filter: blur(18px);
   }
   .appRail[data-collapsed="true"] { width: 72px; }
+  .railResizeHandle { position: absolute; z-index: 3; top: 0; right: -4px; bottom: 0; width: 8px; cursor: ew-resize; background: transparent; }
+  .railResizeHandle span { display: block; width: 1px; height: 100%; margin: 0 auto; background: transparent; transition: background var(--motion-fast); }
+  .railResizeHandle:hover span, .railResizeHandle:focus-visible span, .railResizeHandle:active span { background: var(--cyan); }
 
   .conversationWorkspace, .routeWorkspace { position: relative; z-index: 1; display: flex; min-width: 0; height: 100%; flex-direction: column; overflow: hidden; }
   .conversationScroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
@@ -548,6 +551,7 @@
 
   @media (max-width: 900px) {
     .appRail { width: 72px; }
+    .railResizeHandle { display: none; }
     .appRail .brandCopy, .appRail .railCollapse, .appRail .newSessionButton span, .appRail .newSessionButton kbd, .appRail .routeButton span, .appRail .recentSessions, .appRail .profileCopy, .appRail .onlineDot { display: none; }
     .appRail .railBrand, .appRail .profileSummary { justify-content: center; padding-inline: 10px; }
     .appRail .newSessionButton { justify-content: center; margin-inline: 10px; padding-inline: 8px; }

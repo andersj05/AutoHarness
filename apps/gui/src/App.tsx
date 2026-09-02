@@ -38,11 +38,13 @@ export function App({ store }: AppProps) {
   const client = useClientStore(store);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [railWidth, setRailWidth] = useState(248);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(() => !mediaMatches("(max-width: 1180px)"));
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [transcriptSearchRequest, setTranscriptSearchRequest] = useState(0);
   const [theme, setTheme] = useState<ThemePreset>("system");
   const [colorMode, setColorMode] = useState<ColorMode>("color");
   const [reduceMotion, setReduceMotion] = useState(() => mediaMatches("(prefers-reduced-motion: reduce)"));
@@ -182,6 +184,8 @@ export function App({ store }: AppProps) {
     { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory" },
     { id: "settings", label: "Open settings", description: "Preview themes, contrast, and motion", icon: "settings" },
     { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
+    { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
+    { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
   ];
 
@@ -194,6 +198,11 @@ export function App({ store }: AppProps) {
     } else if (command === "toggle-inspector") {
       setRoute("chat");
       setInspectorOpen((open) => !open);
+    } else if (command === "find-transcript") {
+      setRoute("chat");
+      setTranscriptSearchRequest((value) => value + 1);
+    } else if (command === "export-transcript") {
+      if (activeSession) void store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id });
     } else if (command === "chat" || command === "sessions" || command === "memory" || command === "settings") {
       setRoute(command);
     }
@@ -208,6 +217,7 @@ export function App({ store }: AppProps) {
         interactionBlocked={blockingDialogOpen}
         model={activeModel}
         optimisticPrompts={client.optimisticPrompts}
+        searchRequest={transcriptSearchRequest}
         onCancel={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "cancel_attempt", sessionId: activeSession.id, attemptId });
         }}
@@ -269,8 +279,10 @@ export function App({ store }: AppProps) {
         onOpenSession={openSession}
         onRoute={setRoute}
         onToggleCollapsed={() => setRailCollapsed((value) => !value)}
+        onWidthChange={setRailWidth}
         runtimeMode={projection.runtimeMode}
         sessions={projection.sessions}
+        width={railWidth}
         />
         <div className="workspaceSurface" ref={workspaceRef}>
           {route === "chat" && inspectorOpen ? (

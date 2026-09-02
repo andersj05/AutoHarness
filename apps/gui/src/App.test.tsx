@@ -253,6 +253,21 @@ describe("AutoHarness GUI", () => {
     expect(separator).toHaveAttribute("aria-valuenow", "70");
   });
 
+  it("retains independently resizable navigation and inspector panes", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    const navigation = screen.getByRole("separator", { name: "Resize navigation" });
+    expect(navigation).toHaveAttribute("aria-valuenow", "248");
+    fireEvent.keyDown(navigation, { key: "ArrowRight", shiftKey: true });
+    expect(navigation).toHaveAttribute("aria-valuenow", "272");
+
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    expect(await screen.findByRole("heading", { name: "Sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize navigation" })).toHaveAttribute("aria-valuenow", "272");
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(screen.getByRole("separator", { name: "Resize context inspector" })).toHaveAttribute("aria-valuenow", "72");
+  });
+
   it("preserves exact prompt whitespace and clears only after mailbox acceptance", async () => {
     const { transport, user } = renderScenario("ready");
     const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });
