@@ -1,4 +1,4 @@
-export const CLIENT_SCHEMA_VERSION = 1 as const;
+export const CLIENT_SCHEMA_VERSION = 2 as const;
 export const MAX_PROMPT_UTF8_BYTES = 128 * 1024;
 export const MAX_SESSION_TITLE_UTF8_BYTES = 128;
 
@@ -8,6 +8,11 @@ export type ModelId = string;
 export type RequestId = string;
 export type Revision = string;
 export type CommandOutcome = "committed" | "rejected" | "unknown";
+export type ProviderKind = "gemini" | "router" | "codex_subscription";
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type CredentialSource = "none" | "environment" | "vault" | "session_only";
+export type ProviderCredentialState = "disconnected" | "stored" | "recovery_pending";
+export type ProviderStatus = "disconnected" | "credential_required" | "untested" | "connecting" | "ready" | "offline" | "failed";
 
 export type ConnectionState =
   | { kind: "online"; providerLabel: string; credentialSource: string }
@@ -100,6 +105,32 @@ export interface ActivityItem {
   status: "complete" | "active" | "waiting" | "warning";
 }
 
+export interface ProviderConfiguration {
+  kind: ProviderKind;
+  baseUrl?: string;
+  project?: string;
+  authHeader?: string;
+}
+
+export interface ProviderProfile {
+  id: string;
+  providerId: string;
+  displayName: string;
+  configuration: ProviderConfiguration;
+  active: boolean;
+  status: ProviderStatus;
+  safeError?: string;
+  credentialSource: CredentialSource;
+  credentialState: ProviderCredentialState;
+  defaultModelId?: ModelId;
+  defaultReasoningEffort?: ReasoningEffort;
+}
+
+export interface ProviderProfileInput {
+  id: string;
+  configuration: ProviderConfiguration;
+}
+
 export interface ClientSnapshot {
   schemaVersion: typeof CLIENT_SCHEMA_VERSION;
   transportRevision: Revision;
@@ -109,6 +140,8 @@ export interface ClientSnapshot {
   activeSessionId?: SessionId;
   sessions: readonly SessionSummary[];
   catalog: CatalogProjection;
+  providers: readonly ProviderProfile[];
+  providerRecoveryPending: string;
   activeSession?: ActiveSessionProjection;
   pendingPermission?: PermissionRequest;
   activity: readonly ActivityItem[];
@@ -122,6 +155,20 @@ export type ClientCommand =
   | { type: "unarchive_session"; sessionId: SessionId }
   | { type: "export_transcript"; sessionId: SessionId }
   | { type: "delete_session"; sessionId: SessionId }
+  | { type: "upsert_provider_profile"; profile: ProviderProfileInput }
+  | { type: "duplicate_provider_profile"; sourceId: string; destinationId: string }
+  | { type: "activate_provider_profile"; connectionId: string }
+  | { type: "test_provider_profile"; connectionId: string }
+  | {
+      type: "set_provider_defaults";
+      connectionId: string;
+      modelId: ModelId;
+      reasoningEffort?: ReasoningEffort;
+    }
+  | { type: "disconnect_provider_profile"; connectionId: string }
+  | { type: "delete_provider_profile"; connectionId: string }
+  | { type: "start_codex_authentication" }
+  | { type: "cancel_codex_authentication"; authenticationRequestId: RequestId }
   | { type: "refresh_catalog" }
   | { type: "select_model"; sessionId: SessionId; modelId: ModelId }
   | { type: "submit_prompt"; sessionId: SessionId; prompt: string }
@@ -171,8 +218,9 @@ export type ClientFrame =
       message: string;
     };
 
-export interface EphemeralCredential {
+export interface CredentialSubmission {
   connectionId: string;
+  operation: "session_only" | "save" | "replace";
   credential: string;
 }
 
@@ -180,6 +228,6 @@ export interface ClientTransport {
   connect(onFrame: (frame: ClientFrame) => void, onError: (error: unknown) => void): Promise<ClientSnapshot>;
   command(command: ClientCommand): Promise<CommandReceipt>;
   snapshot(lastAppliedRevision?: Revision): Promise<ClientSnapshot>;
-  submitCredential(secret: EphemeralCredential): Promise<CommandReceipt>;
+  submitCredential(secret: CredentialSubmission): Promise<CommandReceipt>;
   close(): Promise<void>;
 }

@@ -6,7 +6,9 @@ import {
   type ClientSnapshot,
   type ClientTransport,
   type CommandReceipt,
-  type EphemeralCredential,
+  type CredentialSubmission,
+  type ProviderProfile,
+  type ProviderProfileInput,
   type SessionSummary,
   type TranscriptItem,
 } from "../protocol";
@@ -46,6 +48,37 @@ const MODEL_CATALOG = [
     supportsReasoning: false,
   },
 ] as const;
+
+const PROVIDER_PROFILES: readonly ProviderProfile[] = [
+  {
+    id: "connection-gemini",
+    providerId: "gemini",
+    displayName: "Personal Gemini",
+    configuration: { kind: "gemini" },
+    active: true,
+    status: "ready",
+    credentialSource: "vault",
+    credentialState: "stored",
+    defaultModelId: "gemini/gemini-2.5-pro",
+    defaultReasoningEffort: "high",
+  },
+  {
+    id: "local-router",
+    providerId: "router:local",
+    displayName: "Local router",
+    configuration: {
+      kind: "router",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      project: "local",
+      authHeader: "authorization",
+    },
+    active: false,
+    status: "untested",
+    credentialSource: "vault",
+    credentialState: "stored",
+    defaultModelId: "router/deepseek-v3.2",
+  },
+];
 
 const sessions: readonly SessionSummary[] = [
   {
@@ -147,6 +180,16 @@ function activeSessionFor(scenario: FixtureScenario): ActiveSessionProjection {
 
 export function createFixtureSnapshot(scenario: FixtureScenario = "ready"): ClientSnapshot {
   const activeSession = activeSessionFor(scenario);
+  const providers = PROVIDER_PROFILES.map((provider) => (
+    provider.active
+      ? {
+          ...provider,
+          status: scenario === "credential" ? "credential_required" as const : scenario === "offline" ? "offline" as const : provider.status,
+          credentialSource: scenario === "credential" || scenario === "offline" ? "none" as const : provider.credentialSource,
+          credentialState: scenario === "credential" || scenario === "offline" ? "disconnected" as const : provider.credentialState,
+        }
+      : { ...provider }
+  ));
   const snapshot: ClientSnapshot = {
     schemaVersion: CLIENT_SCHEMA_VERSION,
     transportRevision: "1",
@@ -178,6 +221,8 @@ export function createFixtureSnapshot(scenario: FixtureScenario = "ready"): Clie
       models: scenario === "empty" || scenario === "credential" ? [] : MODEL_CATALOG,
       refreshedAt: "2026-08-30T13:40:00.000Z",
     },
+    providers,
+    providerRecoveryPending: "0",
     activeSession,
     activity: [
       { id: "activity-1", label: "Fixture session", detail: "Simulated revision 14", status: "complete" },
@@ -220,6 +265,7 @@ export class FixtureTransport implements ClientTransport {
   private revision = 1n;
   private requestSequence = 0;
   private timers = new Set<ReturnType<typeof setTimeout>>();
+  private codexAuthentication?: { requestId: string; timer: ReturnType<typeof setTimeout> };
   private closed = false;
 
   constructor(scenario: FixtureScenario = "ready") {
@@ -239,7 +285,11 @@ export class FixtureTransport implements ClientTransport {
     if (this.closed) {
       throw new Error("Fixture transport is closed");
     }
-    const receipt = { requestId: `fixture-request-${++this.requestSequence}` };
+    const receipt = {
+      requestId: command.type === "cancel_codex_authentication"
+        ? command.authenticationRequestId
+        : `fixture-request-${++this.requestSequence}`,
+    };
 
     switch (command.type) {
       case "create_session":
@@ -262,6 +312,33 @@ export class FixtureTransport implements ClientTransport {
       case "delete_session":
         this.deleteSession(command.sessionId);
         break;
+      case "upsert_provider_profile":
+        this.upsertProviderProfile(command.profile);
+        break;
+      case "duplicate_provider_profile":
+        this.duplicateProviderProfile(command.sourceId, command.destinationId);
+        break;
+      case "activate_provider_profile":
+        this.activateProviderProfile(command.connectionId);
+        break;
+      case "test_provider_profile":
+        this.testProviderProfile(command.connectionId, receipt.requestId);
+        return receipt;
+      case "set_provider_defaults":
+        this.setProviderDefaults(command.connectionId, command.modelId, command.reasoningEffort);
+        break;
+      case "disconnect_provider_profile":
+        this.disconnectProviderProfile(command.connectionId);
+        break;
+      case "delete_provider_profile":
+        this.deleteProviderProfile(command.connectionId);
+        break;
+      case "start_codex_authentication":
+        this.startCodexAuthentication(receipt.requestId);
+        return receipt;
+      case "cancel_codex_authentication":
+        this.cancelCodexAuthentication(command.authenticationRequestId);
+        return receipt;
       case "refresh_catalog":
         this.refreshCatalog();
         break;
@@ -286,12 +363,23 @@ export class FixtureTransport implements ClientTransport {
     return receipt;
   }
 
-  async submitCredential(secret: EphemeralCredential): Promise<CommandReceipt> {
+  async submitCredential(secret: CredentialSubmission): Promise<CommandReceipt> {
     const receipt = { requestId: `fixture-secret-${++this.requestSequence}` };
-    if (secret.credential.length > 0) {
+    const target = this.current.providers.find((provider) => provider.id === secret.connectionId);
+    if (secret.credential.length > 0 && target) {
+      const credentialSource = secret.operation === "session_only" ? "session_only" as const : "vault" as const;
+      const credentialState = secret.operation === "session_only" ? target.credentialState : "stored" as const;
       this.current = {
         ...this.current,
-        connection: { kind: "online", providerLabel: "Google AI Studio", credentialSource: "Session only" },
+        connection: target.active
+          ? { kind: "online", providerLabel: target.displayName, credentialSource: credentialSource.replaceAll("_", " ") }
+          : this.current.connection,
+        connectionId: target.active ? target.id : this.current.connectionId,
+        providers: this.current.providers.map((provider) => (
+          provider.id === target.id
+            ? { ...provider, credentialSource, credentialState, status: "ready" }
+            : provider
+        )),
       };
       this.emit();
     }
@@ -303,6 +391,200 @@ export class FixtureTransport implements ClientTransport {
     this.closed = true;
     this.listener = undefined;
     this.clearTimers();
+  }
+
+  private upsertProviderProfile(input: ProviderProfileInput): void {
+    const existing = this.current.providers.find((provider) => provider.id === input.id);
+    const providerId = input.configuration.kind === "router"
+      ? `router:${input.configuration.project ?? input.id}`
+      : input.configuration.kind === "codex_subscription" ? "codex-cli" : "gemini";
+    const profile: ProviderProfile = {
+      id: input.id,
+      providerId,
+      displayName: input.id,
+      configuration: input.configuration,
+      active: existing?.active ?? false,
+      status: existing?.status ?? "credential_required",
+      safeError: existing?.safeError,
+      credentialSource: existing?.credentialSource ?? "none",
+      credentialState: existing?.credentialState ?? "disconnected",
+      defaultModelId: existing?.defaultModelId,
+      defaultReasoningEffort: existing?.defaultReasoningEffort,
+    };
+    this.current = {
+      ...this.current,
+      providers: existing
+        ? this.current.providers.map((provider) => provider.id === input.id ? profile : provider)
+        : [...this.current.providers, profile],
+    };
+    this.emit();
+  }
+
+  private duplicateProviderProfile(sourceId: string, destinationId: string): void {
+    const source = this.current.providers.find((provider) => provider.id === sourceId);
+    if (!source || this.current.providers.some((provider) => provider.id === destinationId)) return;
+    this.current = {
+      ...this.current,
+      providers: [
+        ...this.current.providers,
+        {
+          ...source,
+          id: destinationId,
+          displayName: destinationId,
+          active: false,
+          status: "credential_required",
+          credentialSource: "none",
+          credentialState: "disconnected",
+          safeError: undefined,
+        },
+      ],
+    };
+    this.emit();
+  }
+
+  private activateProviderProfile(connectionId: string): void {
+    const target = this.current.providers.find((provider) => provider.id === connectionId);
+    if (!target) return;
+    const ready = target.credentialSource !== "none";
+    const providers = this.current.providers.map((provider) => ({
+      ...provider,
+      active: provider.id === connectionId,
+      status: provider.id === connectionId ? ready ? "ready" as const : "credential_required" as const : provider.status,
+    }));
+    this.current = {
+      ...this.current,
+      providers,
+      connectionId,
+      connection: ready
+        ? { kind: "online", providerLabel: target.displayName, credentialSource: target.credentialSource.replaceAll("_", " ") }
+        : { kind: "credential_required", providerLabel: target.displayName, reason: "Add a credential to connect this profile." },
+    };
+    this.emit();
+  }
+
+  private testProviderProfile(connectionId: string, requestId: string): void {
+    const target = this.current.providers.find((provider) => provider.id === connectionId);
+    if (!target) {
+      this.emitNotice(requestId, "error", "profile_not_found", "That provider profile no longer exists.");
+      return;
+    }
+    this.current = {
+      ...this.current,
+      providers: this.current.providers.map((provider) => (
+        provider.id === connectionId ? { ...provider, status: "connecting", safeError: undefined } : provider
+      )),
+    };
+    this.emit();
+    this.schedule(() => {
+      const available = target.credentialSource !== "none";
+      this.current = {
+        ...this.current,
+        providers: this.current.providers.map((provider) => (
+          provider.id === connectionId
+            ? {
+                ...provider,
+                status: available ? "ready" : "credential_required",
+                safeError: available ? undefined : "No effective credential is available for this profile.",
+              }
+            : provider
+        )),
+      };
+      this.emit();
+      this.emitNotice(
+        requestId,
+        available ? "success" : "error",
+        available ? "command_committed" : "missing_credential",
+        available ? "The content-free connection test succeeded." : "No effective credential is available for this profile.",
+      );
+    }, 420);
+  }
+
+  private setProviderDefaults(connectionId: string, modelId: string, reasoningEffort?: ProviderProfile["defaultReasoningEffort"]): void {
+    this.current = {
+      ...this.current,
+      providers: this.current.providers.map((provider) => (
+        provider.id === connectionId
+          ? { ...provider, defaultModelId: modelId, defaultReasoningEffort: reasoningEffort }
+          : provider
+      )),
+    };
+    this.emit();
+  }
+
+  private disconnectProviderProfile(connectionId: string): void {
+    const target = this.current.providers.find((provider) => provider.id === connectionId);
+    if (!target) return;
+    this.current = {
+      ...this.current,
+      providers: this.current.providers.map((provider) => (
+        provider.id === connectionId
+          ? { ...provider, credentialSource: "none", credentialState: "disconnected", status: "credential_required", safeError: undefined }
+          : provider
+      )),
+      connection: target.active
+        ? { kind: "credential_required", providerLabel: target.displayName, reason: "Add a credential to reconnect this profile." }
+        : this.current.connection,
+    };
+    this.emit();
+  }
+
+  private deleteProviderProfile(connectionId: string): void {
+    const target = this.current.providers.find((provider) => provider.id === connectionId);
+    if (!target) return;
+    const providers = this.current.providers.filter((provider) => provider.id !== connectionId);
+    const replacement = target.active ? providers[0] : providers.find((provider) => provider.active);
+    this.current = {
+      ...this.current,
+      providers: replacement && target.active
+        ? providers.map((provider) => ({ ...provider, active: provider.id === replacement.id }))
+        : providers,
+      connectionId: replacement?.id,
+      connection: replacement
+        ? { kind: "online", providerLabel: replacement.displayName, credentialSource: replacement.credentialSource.replaceAll("_", " ") }
+        : { kind: "offline", reason: "No provider profile is active.", recoverable: true },
+    };
+    this.emit();
+  }
+
+  private startCodexAuthentication(requestId: string): void {
+    this.emitNotice(requestId, "info", "authentication_browser_opened", "Finish signing in through the browser window opened by AutoHarness.");
+    const timer = this.schedule(() => {
+      if (this.codexAuthentication?.requestId !== requestId) return;
+      const codex: ProviderProfile = {
+        id: "codex",
+        providerId: "codex-cli",
+        displayName: "Codex subscription",
+        configuration: { kind: "codex_subscription" },
+        active: true,
+        status: "ready",
+        credentialSource: "vault",
+        credentialState: "stored",
+        defaultModelId: "codex/gpt-5.6-luna",
+        defaultReasoningEffort: "high",
+      };
+      this.current = {
+        ...this.current,
+        providers: [
+          ...this.current.providers.filter((provider) => provider.configuration.kind !== "codex_subscription")
+            .map((provider) => ({ ...provider, active: false })),
+          codex,
+        ],
+        connectionId: codex.id,
+        connection: { kind: "online", providerLabel: codex.displayName, credentialSource: "vault" },
+      };
+      this.codexAuthentication = undefined;
+      this.emit();
+      this.emitNotice(requestId, "success", "authentication_completed", "Codex subscription connected and ready.");
+    }, 1_100);
+    this.codexAuthentication = { requestId, timer };
+  }
+
+  private cancelCodexAuthentication(requestId: string): void {
+    if (this.codexAuthentication?.requestId !== requestId) return;
+    clearTimeout(this.codexAuthentication.timer);
+    this.timers.delete(this.codexAuthentication.timer);
+    this.codexAuthentication = undefined;
+    this.emitNotice(requestId, "success", "command_committed", "Codex sign-in cancelled.");
   }
 
   private createSession(): void {
@@ -530,7 +812,7 @@ export class FixtureTransport implements ClientTransport {
 
   private emitNotice(
     requestId: string,
-    level: "success" | "error",
+    level: "info" | "success" | "error",
     code: string,
     message: string,
   ): void {
@@ -541,16 +823,18 @@ export class FixtureTransport implements ClientTransport {
     this.listener({ kind: "notice", revision, requestId, level, code, message });
   }
 
-  private schedule(callback: () => void, delay: number): void {
+  private schedule(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
       this.timers.delete(timer);
       callback();
     }, delay);
     this.timers.add(timer);
+    return timer;
   }
 
   private clearTimers(): void {
     this.timers.forEach((timer) => clearTimeout(timer));
     this.timers.clear();
+    this.codexAuthentication = undefined;
   }
 }

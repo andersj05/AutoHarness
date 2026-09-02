@@ -1,6 +1,6 @@
-/* Exact schema-v1 JSON surface from crates/autoharness-client. */
+/* Exact schema-v2 JSON surface from crates/autoharness-client. */
 
-export const WIRE_SCHEMA_VERSION = 1 as const;
+export const WIRE_SCHEMA_VERSION = 2 as const;
 
 export interface WireModelRef {
   provider_id: string;
@@ -131,6 +131,7 @@ export type WireCatalogProjection =
 export type WireProviderStatus =
   | { kind: "disconnected" }
   | { kind: "credential_required" }
+  | { kind: "untested" }
   | { kind: "connecting" }
   | { kind: "ready" }
   | { kind: "offline" }
@@ -140,10 +141,18 @@ export interface WireProviderProjection {
   connection_id: string;
   provider_id: string;
   display_name: string;
+  configuration: {
+    kind: "gemini" | "router" | "codex_subscription";
+    base_url: string | null;
+    project: string | null;
+    auth_header: string | null;
+  };
   active: boolean;
   status: WireProviderStatus;
   credential_source: "none" | "environment" | "vault" | "session_only";
+  credential_state: "disconnected" | "stored" | "recovery_pending";
   default_model: WireModelRef | null;
+  default_reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
 }
 
 export type WireClientLifecycle =
@@ -161,6 +170,7 @@ export interface WireClientSnapshot {
   active_session: WireSessionProjection | null;
   catalog: WireCatalogProjection;
   providers: readonly WireProviderProjection[];
+  provider_recovery_pending: string;
 }
 
 export interface WireActiveSessionDelta {
@@ -184,6 +194,41 @@ export type WireClientCommand =
   | { kind: "unarchive_session"; payload: { session_id: string } }
   | { kind: "export_transcript"; payload: { session_id: string } }
   | { kind: "delete_session"; payload: { session_id: string } }
+  | {
+      kind: "upsert_provider_profile";
+      payload: {
+        profile: {
+          connection_id: string;
+          configuration: {
+            kind: "gemini" | "router" | "codex_subscription";
+            base_url: string | null;
+            project: string | null;
+            auth_header: string | null;
+          };
+        };
+      };
+    }
+  | {
+      kind: "duplicate_provider_profile";
+      payload: { source_connection_id: string; destination_connection_id: string };
+    }
+  | { kind: "activate_provider_profile"; payload: { connection_id: string } }
+  | { kind: "test_provider_profile"; payload: { connection_id: string } }
+  | {
+      kind: "set_provider_defaults";
+      payload: {
+        connection_id: string;
+        model: WireModelRef;
+        reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+      };
+    }
+  | { kind: "disconnect_provider_profile"; payload: { connection_id: string } }
+  | { kind: "delete_provider_profile"; payload: { connection_id: string } }
+  | { kind: "start_codex_authentication" }
+  | {
+      kind: "cancel_codex_authentication";
+      payload: { authentication_request_id: string };
+    }
   | { kind: "refresh_catalog" }
   | { kind: "select_model"; payload: { session_id: string; model: WireModelRef } }
   | { kind: "submit_prompt"; payload: { session_id: string; prompt: string } }

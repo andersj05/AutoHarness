@@ -328,7 +328,11 @@ export function App({ store }: AppProps) {
           connectionId={projection.connectionId}
           onClose={() => setCredentialOpen(false)}
           onSubmit={async (connectionId, credential) => {
-            const receipt = await store.submitCredential({ connectionId, credential });
+            const receipt = await store.submitCredential({
+              connectionId,
+              operation: "session_only",
+              credential,
+            });
             return Boolean(receipt);
           }}
           providerLabel={projection.connection.kind === "offline" ? "provider" : projection.connection.providerLabel}

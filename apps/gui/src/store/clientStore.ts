@@ -5,7 +5,7 @@ import type {
   ClientTransport,
   CommandOutcome,
   CommandReceipt,
-  EphemeralCredential,
+  CredentialSubmission,
   NoticeLevel,
   TranscriptItem,
 } from "../protocol";
@@ -175,7 +175,7 @@ export class ClientStore {
     });
   }
 
-  async submitCredential(secret: EphemeralCredential): Promise<CommandReceipt | undefined> {
+  async submitCredential(secret: CredentialSubmission): Promise<CommandReceipt | undefined> {
     if (this.closed || this.state.lifecycle !== "ready") return undefined;
     this.publish({ ...this.state, commandError: undefined });
     try {
@@ -384,8 +384,9 @@ export class ClientStore {
   }
 
   private settleCommandNotice(frame: Extract<ClientFrame, { kind: "notice" }>): void {
-    if (!frame.requestId || (frame.code !== "command_committed" && frame.level !== "error")) return;
-    const committed = frame.code === "command_committed";
+    const committed = frame.code === "command_committed" || frame.code === "authentication_completed";
+    const rejected = frame.level === "error" || frame.code === "authentication_cancelled";
+    if (!frame.requestId || (!committed && !rejected)) return;
     if (!committed && this.optimisticPrompts.delete(frame.requestId)) {
       this.publish({ ...this.state, optimisticPrompts: this.optimisticPromptList() });
     }

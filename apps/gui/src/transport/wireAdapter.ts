@@ -8,6 +8,7 @@ import type {
   ConnectionState,
   ModelDescriptor,
   PermissionRequest,
+  ProviderProfile,
   SessionSummary,
   ToolMessage,
   TranscriptItem,
@@ -250,6 +251,27 @@ function connectionFromWire(snapshot: WireClientSnapshot): ConnectionState {
   return { kind: "offline", reason: failure ?? "The provider is unavailable. Durable replay remains available.", recoverable: true };
 }
 
+function providerFromWire(provider: WireProviderProjection): ProviderProfile {
+  return {
+    id: provider.connection_id,
+    providerId: provider.provider_id,
+    displayName: provider.display_name,
+    configuration: {
+      kind: provider.configuration.kind,
+      baseUrl: provider.configuration.base_url ?? undefined,
+      project: provider.configuration.project ?? undefined,
+      authHeader: provider.configuration.auth_header ?? undefined,
+    },
+    active: provider.active,
+    status: provider.status.kind,
+    safeError: provider.status.kind === "failed" ? provider.status.payload.failure.message : undefined,
+    credentialSource: provider.credential_source,
+    credentialState: provider.credential_state,
+    defaultModelId: provider.default_model ? modelRefKey(provider.default_model) : undefined,
+    defaultReasoningEffort: provider.default_reasoning_effort ?? undefined,
+  };
+}
+
 function permissionFromWire(snapshot: WireClientSnapshot): PermissionRequest | undefined {
   const permission = snapshot.active_session?.permission_requests[0];
   if (!permission || !snapshot.active_session) return undefined;
@@ -270,6 +292,7 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     });
   }
   if (snapshot.catalog.kind === "ready") decimalU64(snapshot.catalog.payload.generation);
+  decimalU64(snapshot.provider_recovery_pending);
   const catalog = catalogFromWire(snapshot.catalog, snapshot.providers);
   const activeSession = activeSessionFromWire(snapshot, catalog.models);
   return {
@@ -281,6 +304,8 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     activeSessionId: snapshot.active_session_id ?? undefined,
     sessions: snapshot.sessions.map(sessionSummaryFromWire),
     catalog,
+    providers: snapshot.providers.map(providerFromWire),
+    providerRecoveryPending: snapshot.provider_recovery_pending,
     activeSession,
     pendingPermission: permissionFromWire(snapshot),
     activity: activeSession
@@ -357,6 +382,44 @@ export function commandToWire(command: ClientCommand): WireCommandEnvelope {
     case "unarchive_session": wire = { kind: "unarchive_session", payload: { session_id: command.sessionId } }; break;
     case "export_transcript": wire = { kind: "export_transcript", payload: { session_id: command.sessionId } }; break;
     case "delete_session": wire = { kind: "delete_session", payload: { session_id: command.sessionId } }; break;
+    case "upsert_provider_profile": wire = {
+      kind: "upsert_provider_profile",
+      payload: {
+        profile: {
+          connection_id: command.profile.id,
+          configuration: {
+            kind: command.profile.configuration.kind,
+            base_url: command.profile.configuration.baseUrl ?? null,
+            project: command.profile.configuration.project ?? null,
+            auth_header: command.profile.configuration.authHeader ?? null,
+          },
+        },
+      },
+    }; break;
+    case "duplicate_provider_profile": wire = {
+      kind: "duplicate_provider_profile",
+      payload: {
+        source_connection_id: command.sourceId,
+        destination_connection_id: command.destinationId,
+      },
+    }; break;
+    case "activate_provider_profile": wire = { kind: "activate_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "test_provider_profile": wire = { kind: "test_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "set_provider_defaults": wire = {
+      kind: "set_provider_defaults",
+      payload: {
+        connection_id: command.connectionId,
+        model: modelRefFromKey(command.modelId),
+        reasoning_effort: command.reasoningEffort ?? null,
+      },
+    }; break;
+    case "disconnect_provider_profile": wire = { kind: "disconnect_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "delete_provider_profile": wire = { kind: "delete_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "start_codex_authentication": wire = { kind: "start_codex_authentication" }; break;
+    case "cancel_codex_authentication": wire = {
+      kind: "cancel_codex_authentication",
+      payload: { authentication_request_id: command.authenticationRequestId },
+    }; break;
     case "refresh_catalog": wire = { kind: "refresh_catalog" }; break;
     case "select_model": wire = { kind: "select_model", payload: { session_id: command.sessionId, model: modelRefFromKey(command.modelId) } }; break;
     case "submit_prompt": wire = { kind: "submit_prompt", payload: { session_id: command.sessionId, prompt: command.prompt } }; break;

@@ -4,7 +4,7 @@ import type { WireClientSnapshot, WireServerFrame } from "./wire";
 
 function wireSnapshot(): WireClientSnapshot {
   return {
-    schema_version: 1,
+    schema_version: 2,
     lifecycle: { kind: "ready" },
     active_session_id: "session-1",
     sessions: [
@@ -68,12 +68,16 @@ function wireSnapshot(): WireClientSnapshot {
         connection_id: "profile-primary",
         provider_id: "gemini",
         display_name: "Primary Gemini",
+        configuration: { kind: "gemini", base_url: null, project: null, auth_header: null },
         active: true,
         status: { kind: "ready" },
         credential_source: "vault",
+        credential_state: "stored",
         default_model: { provider_id: "gemini", model_id: "gemini-2.5-pro" },
+        default_reasoning_effort: "high",
       },
     ],
+    provider_recovery_pending: "0",
   };
 }
 
@@ -81,7 +85,7 @@ describe("wire adapter", () => {
   it("emits the exact Rust command envelope and model identity", () => {
     const modelId = modelRefKey({ provider_id: "gemini", model_id: "gemini-2.5-pro" });
     expect(commandToWire({ type: "select_model", sessionId: "session-1", modelId })).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       command: {
         kind: "select_model",
         payload: {
@@ -94,7 +98,7 @@ describe("wire adapter", () => {
 
   it("maps the complete session lifecycle without losing exact scope", () => {
     expect(commandToWire({ type: "rename_session", sessionId: "session-1", title: "Exact title" })).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       command: {
         kind: "rename_session",
         payload: { session_id: "session-1", title: "Exact title" },
@@ -118,6 +122,56 @@ describe("wire adapter", () => {
     });
   });
 
+  it("maps provider profiles, defaults, and authentication without a secret command variant", () => {
+    expect(commandToWire({
+      type: "upsert_provider_profile",
+      profile: {
+        id: "work-router",
+        configuration: {
+          kind: "router",
+          baseUrl: "https://router.example.test/v1",
+          project: "workspace-a",
+        },
+      },
+    }).command).toEqual({
+      kind: "upsert_provider_profile",
+      payload: {
+        profile: {
+          connection_id: "work-router",
+          configuration: {
+            kind: "router",
+            base_url: "https://router.example.test/v1",
+            project: "workspace-a",
+            auth_header: null,
+          },
+        },
+      },
+    });
+    expect(commandToWire({
+      type: "set_provider_defaults",
+      connectionId: "work-router",
+      modelId: modelRefKey({ provider_id: "router:workspace-a", model_id: "agent-model" }),
+      reasoningEffort: "xhigh",
+    }).command).toEqual({
+      kind: "set_provider_defaults",
+      payload: {
+        connection_id: "work-router",
+        model: { provider_id: "router:workspace-a", model_id: "agent-model" },
+        reasoning_effort: "xhigh",
+      },
+    });
+    expect(commandToWire({ type: "start_codex_authentication" }).command).toEqual({
+      kind: "start_codex_authentication",
+    });
+    expect(commandToWire({
+      type: "cancel_codex_authentication",
+      authenticationRequestId: "29",
+    }).command).toEqual({
+      kind: "cancel_codex_authentication",
+      payload: { authentication_request_id: "29" },
+    });
+  });
+
   it("preserves exact decimal strings in the presentation projection", () => {
     const snapshot = snapshotFromWire(wireSnapshot(), "4");
     expect(snapshot.sessions[0]?.messageCount).toBe("9007199254740993");
@@ -125,12 +179,19 @@ describe("wire adapter", () => {
     expect(snapshot.connectionId).toBe("profile-primary");
     expect(snapshot.runtimeMode).toBe("native");
     expect(snapshot.catalog.models[0]?.provider).toBe("Primary Gemini");
+    expect(snapshot.providers[0]).toMatchObject({
+      id: "profile-primary",
+      configuration: { kind: "gemini" },
+      credentialSource: "vault",
+      credentialState: "stored",
+      defaultReasoningEffort: "high",
+    });
   });
 
   it("rejects noncanonical, zero, and out-of-range wire identities", () => {
-    expect(() => receiptFromWire({ schema_version: 1, request_id: "01" })).toThrow(/request|decimal/i);
-    expect(() => receiptFromWire({ schema_version: 1, request_id: "0" })).toThrow(/zero/i);
-    expect(() => receiptFromWire({ schema_version: 1, request_id: "18446744073709551616" })).toThrow(/u64/i);
+    expect(() => receiptFromWire({ schema_version: 2, request_id: "01" })).toThrow(/request|decimal/i);
+    expect(() => receiptFromWire({ schema_version: 2, request_id: "0" })).toThrow(/zero/i);
+    expect(() => receiptFromWire({ schema_version: 2, request_id: "18446744073709551616" })).toThrow(/u64/i);
   });
 
   it("prefers an exact provider identity label before an unrelated active connection", () => {
@@ -143,10 +204,13 @@ describe("wire adapter", () => {
         connection_id: "profile-router",
         provider_id: "router",
         display_name: "Active Router",
+        configuration: { kind: "router", base_url: "https://router.example/v1", project: null, auth_header: null },
         active: true,
         status: { kind: "ready" },
         credential_source: "vault",
+        credential_state: "stored",
         default_model: null,
+        default_reasoning_effort: null,
         },
       ],
     };
@@ -228,7 +292,7 @@ describe("wire adapter", () => {
 
   it("preserves resynchronization reason on a server frame", () => {
     const frame: WireServerFrame = {
-      schema_version: 1,
+      schema_version: 2,
       revision: "22",
       payload: {
         kind: "snapshot",
@@ -241,7 +305,7 @@ describe("wire adapter", () => {
   it("maps only the changed active-session transcript rows", () => {
     const snapshot = wireSnapshot();
     const frame: WireServerFrame = {
-      schema_version: 1,
+      schema_version: 2,
       revision: "5",
       payload: {
         kind: "active_session_delta",

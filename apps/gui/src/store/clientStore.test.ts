@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ClientCommand, ClientFrame, ClientSnapshot, ClientTransport, CommandReceipt, EphemeralCredential } from "../protocol";
+import type { ClientCommand, ClientFrame, ClientSnapshot, ClientTransport, CommandReceipt, CredentialSubmission } from "../protocol";
 import { createFixtureSnapshot } from "../transport/fixtureTransport";
 import { ClientStore } from "./clientStore";
 
@@ -8,7 +8,7 @@ class TestTransport implements ClientTransport {
   errorListener?: (error: unknown) => void;
   snapshotCalls = 0;
   readonly commands: ClientCommand[] = [];
-  readonly credentials: EphemeralCredential[] = [];
+  readonly credentials: CredentialSubmission[] = [];
   baseline = createFixtureSnapshot("ready");
   resyncSnapshot: ClientSnapshot = { ...createFixtureSnapshot("ready"), transportRevision: "9" };
 
@@ -28,7 +28,7 @@ class TestTransport implements ClientTransport {
     return structuredClone(this.resyncSnapshot);
   }
 
-  async submitCredential(secret: EphemeralCredential) {
+  async submitCredential(secret: CredentialSubmission) {
     this.credentials.push({ ...secret });
     return { requestId: "2" };
   }
@@ -250,6 +250,34 @@ describe("ClientStore", () => {
     await vi.waitFor(() => expect(store.getSnapshot().transportRevision).toBe("9"));
   });
 
+  it("settles native authentication only when the terminal lifecycle notice arrives", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const settlement = store.dispatchAndWait({ type: "start_codex_authentication" });
+    await Promise.resolve();
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "info",
+      code: "authentication_browser_opened",
+      message: "Finish signing in in the browser.",
+    });
+    expect(store.getSnapshot().notice?.code).toBe("authentication_browser_opened");
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "3",
+      requestId: "1",
+      level: "success",
+      code: "authentication_completed",
+      message: "Codex connected.",
+    });
+    await expect(settlement).resolves.toBe("committed");
+  });
+
   it("fails closed when the transport reports an asynchronous frame decode error", async () => {
     const transport = new TestTransport();
     const store = new ClientStore(transport);
@@ -258,7 +286,7 @@ describe("ClientStore", () => {
     expect(store.getSnapshot()).toMatchObject({ lifecycle: "failed", commandError: "Invalid server frame" });
 
     await expect(store.dispatch({ type: "create_session" })).resolves.toBeUndefined();
-    await expect(store.submitCredential({ connectionId: "connection-gemini", credential: "secret" })).resolves.toBeUndefined();
+    await expect(store.submitCredential({ connectionId: "connection-gemini", operation: "session_only", credential: "secret" })).resolves.toBeUndefined();
     expect(transport.commands).toHaveLength(0);
     expect(transport.credentials).toHaveLength(0);
 
