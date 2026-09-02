@@ -27,7 +27,7 @@ pub enum FramePayload {
         reason: SnapshotReason,
         snapshot: Box<ClientSnapshot>,
     },
-    ActiveSessionDelta(ActiveSessionDelta),
+    ActiveSessionDelta(Box<ActiveSessionDelta>),
     Notice(ClientNotice),
 }
 
@@ -69,14 +69,11 @@ impl ServerFrame {
 
     /// Constructs an incremental active-session frame.
     #[must_use]
-    pub const fn active_session_delta(
-        revision: TransportRevision,
-        delta: ActiveSessionDelta,
-    ) -> Self {
+    pub fn active_session_delta(revision: TransportRevision, delta: ActiveSessionDelta) -> Self {
         Self {
             schema_version: CLIENT_SCHEMA_VERSION,
             revision,
-            payload: FramePayload::ActiveSessionDelta(delta),
+            payload: FramePayload::ActiveSessionDelta(Box::new(delta)),
         }
     }
 
