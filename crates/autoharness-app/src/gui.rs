@@ -9,12 +9,15 @@ use autoharness_client::{
     ActiveSessionDelta, AttemptId as ClientAttemptId, AttemptState as ClientAttemptState,
     AuthenticationState, CapabilitySupport, CatalogProjection as ClientCatalogProjection,
     ClientCommand, ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
-    ConnectionId as ClientConnectionId, CredentialSource as ClientCredentialSource, DecimalU64,
-    FailureClass, InputId as ClientInputId, MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES,
-    MAX_PROVIDERS, ModelId as ClientModelId, ModelRef as ClientModelRef,
-    ModelSummary as ClientModelSummary, PermissionDecision, PermissionDetail,
-    PermissionRequest as ClientPermissionRequest, ProviderId as ClientProviderId,
-    ProviderProjection as ClientProviderProjection, ProviderStatus as ClientProviderStatus,
+    ConnectionId as ClientConnectionId, CredentialOperation,
+    CredentialSource as ClientCredentialSource, DecimalU64, FailureClass, InputId as ClientInputId,
+    MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES, MAX_PROVIDERS, ModelId as ClientModelId,
+    ModelRef as ClientModelRef, ModelSummary as ClientModelSummary, PermissionDecision,
+    PermissionDetail, PermissionRequest as ClientPermissionRequest,
+    ProviderConfiguration as ClientProviderConfiguration,
+    ProviderCredentialState as ClientProviderCredentialState, ProviderId as ClientProviderId,
+    ProviderKind as ClientProviderKind, ProviderProjection as ClientProviderProjection,
+    ProviderStatus as ClientProviderStatus, ReasoningEffort as ClientReasoningEffort,
     RequestId as ClientRequestId, RetryDirective, SafeFailure, SecretIngress, ServerFrame,
     SessionId as ClientSessionId, SessionProjection as ClientSessionProjection, SessionRevision,
     SessionSummary, SessionTitle, ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
@@ -28,10 +31,11 @@ use autoharness_domain::{
 use autoharness_tui::{
     ApiCredential, AttemptStatus as TuiAttemptStatus, CatalogProjection as TuiCatalogProjection,
     CredentialSourceLabel, ProfileConnectionState, ProfileCredentialStateLabel,
-    ProfilesProjection as TuiProfilesProjection, ProviderKindLabel, RequestId as TuiRequestId,
-    RetryPolicy as TuiRetryPolicy, SessionProjection as TuiSessionProjection,
-    SessionsProjection as TuiSessionsProjection, SettingsProjection as TuiSettingsProjection,
-    ToolCallKey, TranscriptItem as TuiTranscriptItem, UiFailure, UiIntent, UiNotice, UiPorts,
+    ProfilesProjection as TuiProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
+    RequestId as TuiRequestId, RetryPolicy as TuiRetryPolicy,
+    SessionProjection as TuiSessionProjection, SessionsProjection as TuiSessionsProjection,
+    SettingsProjection as TuiSettingsProjection, ToolCallKey, TranscriptItem as TuiTranscriptItem,
+    UiFailure, UiIntent, UiNotice, UiPorts,
 };
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -101,7 +105,7 @@ impl GuiIpcError {
     const fn invalid_credential() -> Self {
         Self {
             code: "invalid_credential",
-            message: "the credential is empty, too large, or targets an inactive provider",
+            message: "the credential is empty, too large, or invalid for this provider operation",
         }
     }
 }
@@ -165,9 +169,10 @@ fn decode_command(command: serde_json::Value) -> Result<ClientCommand, GuiIpcErr
 async fn gui_submit_credential(
     state: tauri::State<'_, GuiState>,
     connection_id: ClientConnectionId,
+    operation: CredentialOperation,
     credential: String,
 ) -> Result<CommandReceipt, GuiIpcError> {
-    let ingress = SecretIngress::new(connection_id, credential)
+    let ingress = SecretIngress::with_operation(connection_id, operation, credential)
         .map_err(|_| GuiIpcError::invalid_credential())?;
     let requests = state.requests.clone();
     let (reply, response) = oneshot::channel();
@@ -482,8 +487,23 @@ impl BridgeActor {
         }
         let request_id = self.issue_request_id()?;
         let action = map_command(command, request_id, &self.session.borrow())?;
-        match action {
-            CommandAction::Intent(intent) => self.admit_intent(request_id, intent)?,
+        let receipt_id = match action {
+            CommandAction::Intent(intent) => {
+                self.admit_intent(request_id, intent)?;
+                request_id
+            }
+            CommandAction::CancelAuthentication(authentication_request_id) => {
+                if !self
+                    .pending_requests
+                    .contains(&authentication_request_id.get())
+                {
+                    return Err(GuiIpcError::invalid_command());
+                }
+                self.send_intent(UiIntent::CancelCodexLogin {
+                    request_id: TuiRequestId::new(authentication_request_id.get()),
+                })?;
+                authentication_request_id
+            }
             CommandAction::Resynchronize => {
                 if self.pending_resynchronization.is_some()
                     || self.pending_requests.len() >= MAX_PENDING_REQUESTS
@@ -497,6 +517,7 @@ impl BridgeActor {
                     self.pending_requests.remove(&request_id.get());
                     return Err(error);
                 }
+                request_id
             }
             CommandAction::Shutdown => {
                 if self.pending_requests.len() >= MAX_PENDING_REQUESTS {
@@ -505,9 +526,10 @@ impl BridgeActor {
                 self.drain_available_notices()
                     .map_err(|_| GuiIpcError::disconnected())?;
                 self.begin_shutdown(Some(request_id))?;
+                request_id
             }
-        }
-        Ok(CommandReceipt::new(request_id))
+        };
+        Ok(CommandReceipt::new(receipt_id))
     }
 
     fn dispatch_credential(
@@ -519,22 +541,36 @@ impl BridgeActor {
             return Err(GuiIpcError::invalid_command());
         }
         let snapshot = self.snapshot()?;
-        let targets_active_connection =
-            credential_targets_active_connection(&snapshot.providers, ingress.connection_id());
-        if !targets_active_connection {
+        let target = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.connection_id == *ingress.connection_id())
+            .ok_or_else(GuiIpcError::invalid_credential)?;
+        if !credential_operation_allowed(target, ingress.operation()) {
             return Err(GuiIpcError::invalid_credential());
         }
         let request_id = self.issue_request_id()?;
-        let mut credential = ingress.into_credential();
+        let (connection_id, operation, mut credential) = ingress.into_parts();
         let credential = ApiCredential::new(mem::take(&mut *credential))
             .map_err(|_| GuiIpcError::invalid_credential())?;
-        self.admit_intent(
-            request_id,
-            UiIntent::ConfigureCredential {
-                request_id: TuiRequestId::new(request_id.get()),
+        let tui_request_id = TuiRequestId::new(request_id.get());
+        let intent = match operation {
+            CredentialOperation::SessionOnly => UiIntent::ConfigureCredential {
+                request_id: tui_request_id,
                 credential,
             },
-        )?;
+            CredentialOperation::Save => UiIntent::SaveProfileCredential {
+                request_id: tui_request_id,
+                profile_id: connection_id.into_inner(),
+                credential,
+            },
+            CredentialOperation::Replace => UiIntent::ReplaceProfileCredential {
+                request_id: tui_request_id,
+                profile_id: connection_id.into_inner(),
+                credential,
+            },
+        };
+        self.admit_intent(request_id, intent)?;
         Ok(CommandReceipt::new(request_id))
     }
 
@@ -558,7 +594,15 @@ impl BridgeActor {
         let terminal_request_id = match &notice {
             ClientNotice::CommandCommitted { request_id }
             | ClientNotice::CommandRejected { request_id, .. } => Some(request_id.get()),
-            ClientNotice::Authentication { .. } | ClientNotice::Shutdown { .. } => None,
+            ClientNotice::Authentication {
+                request_id,
+                state: AuthenticationState::Completed | AuthenticationState::Cancelled,
+            } => Some(request_id.get()),
+            ClientNotice::Authentication {
+                state: AuthenticationState::BrowserOpened,
+                ..
+            }
+            | ClientNotice::Shutdown { .. } => None,
         };
         if let Some(request_id) = terminal_request_id {
             if !self.pending_requests.contains(&request_id) {
@@ -906,6 +950,7 @@ impl BridgeActor {
 
 enum CommandAction {
     Intent(UiIntent),
+    CancelAuthentication(ClientRequestId),
     Resynchronize,
     Shutdown,
 }
@@ -955,6 +1000,67 @@ fn map_command(
                 session_id: session_id.into_inner(),
             })
         }
+        ClientCommand::UpsertProviderProfile { profile } => {
+            let configuration = profile.configuration;
+            CommandAction::Intent(UiIntent::UpsertProfile {
+                request_id,
+                profile: ProviderProfileDraft {
+                    id: profile.connection_id.into_inner(),
+                    kind: tui_provider_kind(configuration.kind),
+                    base_url: configuration.base_url.unwrap_or_default(),
+                    project: configuration.project.unwrap_or_default(),
+                    auth_header: configuration.auth_header.unwrap_or_default(),
+                },
+            })
+        }
+        ClientCommand::DuplicateProviderProfile {
+            source_connection_id,
+            destination_connection_id,
+        } => CommandAction::Intent(UiIntent::DuplicateProfile {
+            request_id,
+            source: source_connection_id.into_inner(),
+            destination: destination_connection_id.into_inner(),
+        }),
+        ClientCommand::ActivateProviderProfile { connection_id } => {
+            CommandAction::Intent(UiIntent::ActivateProfile {
+                request_id,
+                profile_id: connection_id.into_inner(),
+            })
+        }
+        ClientCommand::TestProviderProfile { connection_id } => {
+            CommandAction::Intent(UiIntent::TestProfile {
+                request_id,
+                profile_id: connection_id.into_inner(),
+            })
+        }
+        ClientCommand::SetProviderDefaults {
+            connection_id,
+            model,
+            reasoning_effort,
+        } => CommandAction::Intent(UiIntent::SetProfileDefault {
+            request_id,
+            profile_id: connection_id.into_inner(),
+            model: domain_model_ref(model)?,
+            reasoning_effort: reasoning_effort.map(|effort| effort.as_str().to_owned()),
+        }),
+        ClientCommand::DisconnectProviderProfile { connection_id } => {
+            CommandAction::Intent(UiIntent::DisconnectProfile {
+                request_id,
+                profile_id: connection_id.into_inner(),
+            })
+        }
+        ClientCommand::DeleteProviderProfile { connection_id } => {
+            CommandAction::Intent(UiIntent::DeleteProfile {
+                request_id,
+                profile_id: connection_id.into_inner(),
+            })
+        }
+        ClientCommand::StartCodexAuthentication => {
+            CommandAction::Intent(UiIntent::StartCodexLogin { request_id })
+        }
+        ClientCommand::CancelCodexAuthentication {
+            authentication_request_id,
+        } => CommandAction::CancelAuthentication(authentication_request_id),
         ClientCommand::RefreshCatalog => {
             CommandAction::Intent(UiIntent::RefreshCatalog { request_id })
         }
@@ -1040,6 +1146,14 @@ fn domain_model_ref(model: ClientModelRef) -> Result<DomainModelRef, GuiIpcError
     let model = DomainModelId::new(model.model_id.into_inner())
         .map_err(|_| GuiIpcError::invalid_command())?;
     Ok(DomainModelRef::new(provider, model))
+}
+
+const fn tui_provider_kind(kind: ClientProviderKind) -> ProviderKindLabel {
+    match kind {
+        ClientProviderKind::Gemini => ProviderKindLabel::Gemini,
+        ClientProviderKind::Router => ProviderKindLabel::Router,
+        ClientProviderKind::CodexSubscription => ProviderKindLabel::CodexCli,
+    }
 }
 
 fn map_notice(notice: UiNotice) -> Result<ClientNotice, GuiIpcError> {
@@ -1142,6 +1256,7 @@ fn map_snapshot(
         Some(active_session),
         catalog,
         providers,
+        u64::try_from(profiles.pending_recovery).map_err(|_| GuiIpcError::invalid_projection())?,
     )
     .map_err(|_| GuiIpcError::invalid_projection())
 }
@@ -1418,60 +1533,33 @@ fn map_providers(
                 .map_err(|_| GuiIpcError::invalid_projection())?;
             let session_connected =
                 profile.active && session_credential_connection.as_ref() == Some(&connection_id);
-            let persisted_connected =
-                profile.active && settings.provider_status.credential_connected;
-            let connected = session_connected || persisted_connected;
-            let credential_source = if session_connected {
-                ClientCredentialSource::SessionOnly
-            } else {
-                map_credential_source(profile.credential_source, persisted_connected)
-            };
-            let status = if profile.active
-                && matches!(catalog, ClientCatalogProjection::CredentialRequired)
-            {
-                ClientProviderStatus::CredentialRequired
-            } else if session_connected && matches!(catalog, ClientCatalogProjection::Ready { .. })
-            {
-                ClientProviderStatus::Ready
-            } else {
-                match &profile.connection {
-                    ProfileConnectionState::Testing => ClientProviderStatus::Connecting,
-                    ProfileConnectionState::Ready if connected => ClientProviderStatus::Ready,
-                    ProfileConnectionState::Ready
-                        if profile.credential_state
-                            == ProfileCredentialStateLabel::Disconnected =>
-                    {
-                        ClientProviderStatus::CredentialRequired
-                    }
-                    ProfileConnectionState::Ready => ClientProviderStatus::Offline,
-                    ProfileConnectionState::Failed(message) => ClientProviderStatus::Failed {
-                        failure: SafeFailure::new(
-                            FailureClass::Unavailable,
-                            "provider_connection_failed",
-                            message.clone(),
-                            RetryDirective::Immediate,
-                        )
-                        .map_err(|_| GuiIpcError::invalid_projection())?,
-                    },
-                    ProfileConnectionState::Untested if connected => ClientProviderStatus::Ready,
-                    ProfileConnectionState::Untested
-                        if profile.credential_state
-                            == ProfileCredentialStateLabel::Disconnected =>
-                    {
-                        ClientProviderStatus::CredentialRequired
-                    }
-                    ProfileConnectionState::Untested => ClientProviderStatus::Offline,
-                }
-            };
-            let display_name = format!("{} - {}", profile.kind.as_str(), profile.id);
+            let credential_state = client_credential_state(profile.credential_state);
+            let credential_source = named_credential_source(profile, session_connected);
+            let credential_available = credential_source != ClientCredentialSource::None;
+            let status = provider_status(profile, catalog, credential_available)?;
+            let provider_id = profile_provider_id(profile, catalog)?;
+            let default_model = profile
+                .default_model
+                .as_deref()
+                .map(|model_id| {
+                    Ok(ClientModelRef::new(
+                        provider_id.clone(),
+                        ClientModelId::new(model_id)
+                            .map_err(|_| GuiIpcError::invalid_projection())?,
+                    ))
+                })
+                .transpose()?;
             ClientProviderProjection::new(
                 connection_id,
-                profile_provider_id(profile, catalog)?,
-                display_name,
+                provider_id,
+                profile.id.clone(),
+                client_provider_configuration(profile)?,
                 profile.active,
                 status,
                 credential_source,
-                None,
+                credential_state,
+                default_model,
+                client_reasoning_effort(&profile.default_mode)?,
             )
             .map_err(|_| GuiIpcError::invalid_projection())
         })
@@ -1485,6 +1573,120 @@ fn map_providers(
         )?);
     }
     Ok(providers)
+}
+
+fn provider_status(
+    profile: &autoharness_tui::ProviderProfileProjection,
+    catalog: &ClientCatalogProjection,
+    credential_available: bool,
+) -> Result<ClientProviderStatus, GuiIpcError> {
+    if profile.active {
+        return match catalog {
+            ClientCatalogProjection::CredentialRequired => {
+                Ok(ClientProviderStatus::CredentialRequired)
+            }
+            ClientCatalogProjection::Loading if credential_available => {
+                Ok(ClientProviderStatus::Connecting)
+            }
+            ClientCatalogProjection::Loading => Ok(ClientProviderStatus::CredentialRequired),
+            ClientCatalogProjection::Ready { .. } if credential_available => {
+                Ok(ClientProviderStatus::Ready)
+            }
+            ClientCatalogProjection::Ready { .. } => Ok(ClientProviderStatus::CredentialRequired),
+            ClientCatalogProjection::Failed { failure } => Ok(ClientProviderStatus::Failed {
+                failure: failure.clone(),
+            }),
+        };
+    }
+    match &profile.connection {
+        ProfileConnectionState::Testing => Ok(ClientProviderStatus::Connecting),
+        ProfileConnectionState::Ready if credential_available => Ok(ClientProviderStatus::Ready),
+        ProfileConnectionState::Ready => Ok(ClientProviderStatus::CredentialRequired),
+        ProfileConnectionState::Failed(message) => Ok(ClientProviderStatus::Failed {
+            failure: SafeFailure::new(
+                FailureClass::Unavailable,
+                "provider_connection_failed",
+                message.clone(),
+                RetryDirective::Immediate,
+            )
+            .map_err(|_| GuiIpcError::invalid_projection())?,
+        }),
+        ProfileConnectionState::Untested if credential_available => {
+            Ok(ClientProviderStatus::Untested)
+        }
+        ProfileConnectionState::Untested => Ok(ClientProviderStatus::CredentialRequired),
+    }
+}
+
+fn client_provider_configuration(
+    profile: &autoharness_tui::ProviderProfileProjection,
+) -> Result<ClientProviderConfiguration, GuiIpcError> {
+    ClientProviderConfiguration::new(
+        client_provider_kind(profile.kind),
+        nonempty_profile_field(&profile.base_url),
+        nonempty_profile_field(&profile.project),
+        nonempty_profile_field(&profile.auth_header),
+    )
+    .map_err(|_| GuiIpcError::invalid_projection())
+}
+
+fn nonempty_profile_field(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+const fn client_provider_kind(kind: ProviderKindLabel) -> ClientProviderKind {
+    match kind {
+        ProviderKindLabel::Gemini => ClientProviderKind::Gemini,
+        ProviderKindLabel::Router => ClientProviderKind::Router,
+        ProviderKindLabel::CodexCli => ClientProviderKind::CodexSubscription,
+    }
+}
+
+const fn client_credential_state(
+    state: ProfileCredentialStateLabel,
+) -> ClientProviderCredentialState {
+    match state {
+        ProfileCredentialStateLabel::Disconnected => ClientProviderCredentialState::Disconnected,
+        ProfileCredentialStateLabel::Stored => ClientProviderCredentialState::Stored,
+        ProfileCredentialStateLabel::RecoveryPending => {
+            ClientProviderCredentialState::RecoveryPending
+        }
+    }
+}
+
+fn named_credential_source(
+    profile: &autoharness_tui::ProviderProfileProjection,
+    session_connected: bool,
+) -> ClientCredentialSource {
+    if session_connected {
+        return ClientCredentialSource::SessionOnly;
+    }
+    match profile.credential_source {
+        CredentialSourceLabel::Environment => ClientCredentialSource::Environment,
+        CredentialSourceLabel::CredentialVault
+            if profile.credential_state == ProfileCredentialStateLabel::Stored =>
+        {
+            ClientCredentialSource::Vault
+        }
+        CredentialSourceLabel::CredentialVault | CredentialSourceLabel::SessionOnly => {
+            ClientCredentialSource::None
+        }
+    }
+}
+
+fn client_reasoning_effort(value: &str) -> Result<Option<ClientReasoningEffort>, GuiIpcError> {
+    let effort = match value {
+        "" | "auto" | "provider default" => None,
+        "none" => Some(ClientReasoningEffort::None),
+        "minimal" => Some(ClientReasoningEffort::Minimal),
+        "low" => Some(ClientReasoningEffort::Low),
+        "medium" => Some(ClientReasoningEffort::Medium),
+        "high" => Some(ClientReasoningEffort::High),
+        "xhigh" => Some(ClientReasoningEffort::Xhigh),
+        "max" => Some(ClientReasoningEffort::Max),
+        _ => return Err(GuiIpcError::invalid_projection()),
+    };
+    Ok(effort)
 }
 
 fn fallback_connection_id(
@@ -1539,6 +1741,8 @@ fn fallback_provider(
                 .map_err(|_| GuiIpcError::invalid_projection())?,
         ),
         kind.as_str(),
+        ClientProviderConfiguration::new(client_provider_kind(kind), None, None, None)
+            .map_err(|_| GuiIpcError::invalid_projection())?,
         true,
         status,
         if session_connected {
@@ -1549,6 +1753,8 @@ fn fallback_provider(
                 persisted_connected,
             )
         },
+        ClientProviderCredentialState::Disconnected,
+        None,
         None,
     )
     .map_err(|_| GuiIpcError::invalid_projection())
@@ -1626,13 +1832,16 @@ fn client_model_ref(model: &DomainModelRef) -> Result<ClientModelRef, GuiIpcErro
     ))
 }
 
-fn credential_targets_active_connection(
-    providers: &[ClientProviderProjection],
-    connection_id: &ClientConnectionId,
+fn credential_operation_allowed(
+    provider: &ClientProviderProjection,
+    operation: CredentialOperation,
 ) -> bool {
-    providers
-        .iter()
-        .any(|provider| provider.active && provider.connection_id == *connection_id)
+    match operation {
+        CredentialOperation::SessionOnly => provider.active,
+        CredentialOperation::Save | CredentialOperation::Replace => {
+            provider.configuration.kind != ClientProviderKind::CodexSubscription
+        }
+    }
 }
 
 fn map_failure(failure: &UiFailure) -> Result<SafeFailure, GuiIpcError> {
@@ -1763,7 +1972,7 @@ mod tests {
     #[test]
     fn raw_command_decode_returns_typed_invalid_command_for_rust_blank_prompt() {
         let command = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": autoharness_client::CLIENT_SCHEMA_VERSION,
             "command": {
                 "kind": "submit_prompt",
                 "payload": {
@@ -2204,7 +2413,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_ready_profile_never_claims_a_live_connection() {
+    fn inactive_ready_profile_preserves_its_content_free_test_result() {
         let profile = autoharness_tui::ProviderProfileProjection {
             id: "backup".to_owned(),
             kind: ProviderKindLabel::Gemini,
@@ -2228,8 +2437,11 @@ mod tests {
         )
         .expect("provider projection");
 
-        assert!(matches!(providers[0].status, ClientProviderStatus::Offline));
-        assert_eq!(providers[0].credential_source, ClientCredentialSource::None);
+        assert!(matches!(providers[0].status, ClientProviderStatus::Ready));
+        assert_eq!(
+            providers[0].credential_source,
+            ClientCredentialSource::Vault
+        );
         assert_eq!(providers[0].connection_id.as_str(), "backup");
         assert_eq!(providers[0].provider_id.as_str(), "gemini");
         assert!(providers[1].active);
@@ -3142,7 +3354,10 @@ mod tests {
             CommandAction::Intent(UiIntent::SubmitPrompt { prompt, .. }) => {
                 assert_eq!(prompt, exact);
             }
-            CommandAction::Intent(_) | CommandAction::Resynchronize | CommandAction::Shutdown => {
+            CommandAction::Intent(_)
+            | CommandAction::CancelAuthentication(_)
+            | CommandAction::Resynchronize
+            | CommandAction::Shutdown => {
                 panic!("unexpected command mapping")
             }
         }
@@ -3180,6 +3395,7 @@ mod tests {
                     assert_eq!(session_id, "session-two");
                 }
                 CommandAction::Intent(_)
+                | CommandAction::CancelAuthentication(_)
                 | CommandAction::Resynchronize
                 | CommandAction::Shutdown => {
                     panic!("unexpected command mapping")
@@ -3204,18 +3420,90 @@ mod tests {
     }
 
     #[test]
-    fn credential_targeting_uses_connection_identity_and_requires_active() {
+    fn provider_management_mapping_preserves_typed_scope_and_defaults() {
+        let profile = autoharness_client::ProviderProfileInput::new(
+            ClientConnectionId::new("work-router").expect("profile identity"),
+            ClientProviderConfiguration::new(
+                ClientProviderKind::Router,
+                Some("https://router.example.test/v1".to_owned()),
+                Some("workspace-a".to_owned()),
+                Some("x-api-key".to_owned()),
+            )
+            .expect("router configuration"),
+        )
+        .expect("profile input");
+        let action = map_command(
+            ClientCommand::UpsertProviderProfile { profile },
+            ClientRequestId::new(18).expect("request identity"),
+            &active_session(),
+        )
+        .expect("profile mapping");
+        assert!(matches!(
+            action,
+            CommandAction::Intent(UiIntent::UpsertProfile { profile, .. })
+                if profile.id == "work-router"
+                    && profile.kind == ProviderKindLabel::Router
+                    && profile.base_url == "https://router.example.test/v1"
+                    && profile.project == "workspace-a"
+                    && profile.auth_header == "x-api-key"
+        ));
+
+        let model = ClientModelRef::new(
+            ClientProviderId::new("router:workspace-a").expect("provider identity"),
+            ClientModelId::new("agent-model").expect("model identity"),
+        );
+        let action = map_command(
+            ClientCommand::SetProviderDefaults {
+                connection_id: ClientConnectionId::new("work-router").expect("profile identity"),
+                model,
+                reasoning_effort: Some(ClientReasoningEffort::High),
+            },
+            ClientRequestId::new(19).expect("request identity"),
+            &active_session(),
+        )
+        .expect("defaults mapping");
+        assert!(matches!(
+            action,
+            CommandAction::Intent(UiIntent::SetProfileDefault {
+                profile_id,
+                reasoning_effort: Some(effort),
+                ..
+            }) if profile_id == "work-router" && effort == "high"
+        ));
+
+        let authentication_request_id = ClientRequestId::new(7).expect("request identity");
+        assert!(matches!(
+            map_command(
+                ClientCommand::CancelCodexAuthentication {
+                    authentication_request_id,
+                },
+                ClientRequestId::new(20).expect("request identity"),
+                &active_session(),
+            )
+            .expect("authentication cancellation"),
+            CommandAction::CancelAuthentication(request_id) if request_id == authentication_request_id
+        ));
+    }
+
+    #[test]
+    fn credential_targeting_separates_session_and_vault_operations() {
         let provider_id = ClientProviderId::new("gemini").expect("provider ID");
         let active_connection = ClientConnectionId::new("work").expect("connection ID");
         let inactive_connection = ClientConnectionId::new("backup").expect("connection ID");
-        let providers = vec![
+        let configuration =
+            ClientProviderConfiguration::new(ClientProviderKind::Gemini, None, None, None)
+                .expect("provider configuration");
+        let providers = [
             ClientProviderProjection::new(
                 active_connection.clone(),
                 provider_id.clone(),
                 "Work",
+                configuration.clone(),
                 true,
-                ClientProviderStatus::Offline,
+                ClientProviderStatus::CredentialRequired,
                 ClientCredentialSource::None,
+                ClientProviderCredentialState::Disconnected,
+                None,
                 None,
             )
             .expect("active provider"),
@@ -3223,21 +3511,28 @@ mod tests {
                 inactive_connection.clone(),
                 provider_id,
                 "Backup",
+                configuration,
                 false,
-                ClientProviderStatus::Offline,
+                ClientProviderStatus::CredentialRequired,
                 ClientCredentialSource::None,
+                ClientProviderCredentialState::Disconnected,
+                None,
                 None,
             )
             .expect("inactive provider"),
         ];
 
-        assert!(credential_targets_active_connection(
-            &providers,
-            &active_connection
+        assert!(credential_operation_allowed(
+            &providers[0],
+            CredentialOperation::SessionOnly,
         ));
-        assert!(!credential_targets_active_connection(
-            &providers,
-            &inactive_connection
+        assert!(!credential_operation_allowed(
+            &providers[1],
+            CredentialOperation::SessionOnly,
+        ));
+        assert!(credential_operation_allowed(
+            &providers[1],
+            CredentialOperation::Save,
         ));
     }
 
@@ -3338,6 +3633,47 @@ mod tests {
                 .expect("serialized frames")
                 .contains(SENTINEL)
         );
+    }
+
+    #[test]
+    fn inactive_named_profile_accepts_saved_secret_ingress_without_serializing_it() {
+        const SENTINEL: &str = "gui-vault-credential-sentinel";
+        let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
+            Arc::new(active_session()),
+            Arc::new(TuiSessionsProjection::default()),
+            Arc::new(TuiCatalogProjection::CredentialRequired),
+        );
+        app_ports
+            .profiles
+            .send(Arc::new(TuiProfilesProjection {
+                profiles: vec![provider_profile("saved-gemini", false)],
+                ..TuiProfilesProjection::default()
+            }))
+            .expect("profile projection");
+        let (_request_tx, request_rx) = mpsc::channel(1);
+        let mut bridge = test_bridge_actor(ui_ports, request_rx, CancellationToken::new());
+        bridge.channel = Some(Channel::new(|_| Ok(())));
+
+        let receipt = bridge
+            .dispatch_credential(
+                SecretIngress::with_operation(
+                    ClientConnectionId::new("saved-gemini").expect("profile identity"),
+                    CredentialOperation::Save,
+                    SENTINEL,
+                )
+                .expect("saved secret ingress"),
+            )
+            .expect("credential admission");
+        let intent = app_ports.intents.try_recv().expect("credential intent");
+        assert!(!format!("{intent:?}").contains(SENTINEL));
+        assert!(matches!(
+            &intent,
+            UiIntent::SaveProfileCredential {
+                request_id,
+                profile_id,
+                ..
+            } if request_id.get() == receipt.request_id.get() && profile_id == "saved-gemini"
+        ));
     }
 
     #[test]

@@ -30,6 +30,15 @@ pub enum ReasoningEffort {
     Max,
 }
 
+/// Durable operating-system vault linkage state for one named profile.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCredentialState {
+    Disconnected,
+    Stored,
+    RecoveryPending,
+}
+
 impl ReasoningEffort {
     /// Returns the validated provider-native value expected by settings.
     #[must_use]
@@ -76,16 +85,13 @@ impl ProviderConfiguration {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         match self.kind {
             ProviderKind::Router => {
-                let Some(base_url) = &self.base_url else {
-                    return Err(ValidationError::Empty {
-                        field: "provider_base_url",
-                    });
-                };
-                validate_non_empty_text("provider_base_url", base_url, MAX_ROUTER_URL_BYTES)?;
-                if base_url.chars().any(char::is_control) {
-                    return Err(ValidationError::Invalid {
-                        field: "provider_base_url",
-                    });
+                if let Some(base_url) = &self.base_url {
+                    validate_non_empty_text("provider_base_url", base_url, MAX_ROUTER_URL_BYTES)?;
+                    if base_url.chars().any(char::is_control) {
+                        return Err(ValidationError::Invalid {
+                            field: "provider_base_url",
+                        });
+                    }
                 }
                 for (field, value) in [
                     ("provider_project", &self.project),
@@ -150,12 +156,19 @@ pub struct ProviderProfileInput {
 }
 
 impl ProviderProfileInput {
-    #[must_use]
-    pub const fn new(connection_id: ConnectionId, configuration: ProviderConfiguration) -> Self {
-        Self {
+    pub fn new(
+        connection_id: ConnectionId,
+        configuration: ProviderConfiguration,
+    ) -> Result<Self, ValidationError> {
+        if configuration.kind == ProviderKind::Router && configuration.base_url.is_none() {
+            return Err(ValidationError::Empty {
+                field: "provider_base_url",
+            });
+        }
+        Ok(Self {
             connection_id,
             configuration,
-        }
+        })
     }
 }
 
@@ -181,6 +194,6 @@ impl<'de> Deserialize<'de> for ProviderProfileInput {
             configuration: ProviderConfiguration,
         }
         let wire = WireProfileInput::deserialize(deserializer)?;
-        Ok(Self::new(wire.connection_id, wire.configuration))
+        Self::new(wire.connection_id, wire.configuration).map_err(D::Error::custom)
     }
 }

@@ -11,9 +11,10 @@ use crate::bounds::{
     validate_non_empty_text, validate_security_text, validate_text,
 };
 use crate::{
-    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, DecimalU64, InputId, ModelId, ProviderId,
-    SafeFailure, SessionId, SessionRevision, SessionTitle, ToolCallId, TranscriptContent,
-    UnixMillis, ValidationError,
+    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, DecimalU64, InputId, ModelId,
+    ProviderConfiguration, ProviderCredentialState, ProviderId, ReasoningEffort, SafeFailure,
+    SessionId, SessionRevision, SessionTitle, ToolCallId, TranscriptContent, UnixMillis,
+    ValidationError,
 };
 
 /// Stable provider and provider-owned model identity.
@@ -672,6 +673,7 @@ pub enum CredentialSource {
 pub enum ProviderStatus {
     Disconnected,
     CredentialRequired,
+    Untested,
     Connecting,
     Ready,
     Offline,
@@ -684,31 +686,41 @@ pub struct ProviderProjection {
     pub connection_id: ConnectionId,
     pub provider_id: ProviderId,
     pub display_name: String,
+    pub configuration: ProviderConfiguration,
     pub active: bool,
     pub status: ProviderStatus,
     pub credential_source: CredentialSource,
+    pub credential_state: ProviderCredentialState,
     pub default_model: Option<ModelRef>,
+    pub default_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ProviderProjection {
     /// Constructs one bounded non-secret provider connection projection.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_id: ConnectionId,
         provider_id: ProviderId,
         display_name: impl Into<String>,
+        configuration: ProviderConfiguration,
         active: bool,
         status: ProviderStatus,
         credential_source: CredentialSource,
+        credential_state: ProviderCredentialState,
         default_model: Option<ModelRef>,
+        default_reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Self, ValidationError> {
         let value = Self {
             connection_id,
             provider_id,
             display_name: display_name.into(),
+            configuration,
             active,
             status,
             credential_source,
+            credential_state,
             default_model,
+            default_reasoning_effort,
         };
         value.validate()?;
         Ok(value)
@@ -716,6 +728,7 @@ impl ProviderProjection {
 
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_non_empty_text("provider_display_name", &self.display_name, MAX_LABEL_BYTES)?;
+        self.configuration.validate()?;
         if self.credential_source == CredentialSource::None
             && matches!(self.status, ProviderStatus::Ready)
         {
@@ -730,6 +743,18 @@ impl ProviderProjection {
         {
             return Err(ValidationError::Inconsistent {
                 field: "provider_default_model",
+            });
+        }
+        if self.default_reasoning_effort.is_some() && self.default_model.is_none() {
+            return Err(ValidationError::Inconsistent {
+                field: "provider_default_reasoning_effort",
+            });
+        }
+        if self.credential_source == CredentialSource::Vault
+            && self.credential_state != ProviderCredentialState::Stored
+        {
+            return Err(ValidationError::Inconsistent {
+                field: "provider_credential_state",
             });
         }
         Ok(())
@@ -747,20 +772,26 @@ impl<'de> Deserialize<'de> for ProviderProjection {
             connection_id: ConnectionId,
             provider_id: ProviderId,
             display_name: String,
+            configuration: ProviderConfiguration,
             active: bool,
             status: ProviderStatus,
             credential_source: CredentialSource,
+            credential_state: ProviderCredentialState,
             default_model: Option<ModelRef>,
+            default_reasoning_effort: Option<ReasoningEffort>,
         }
         let wire = WireProvider::deserialize(deserializer)?;
         Self::new(
             wire.connection_id,
             wire.provider_id,
             wire.display_name,
+            wire.configuration,
             wire.active,
             wire.status,
             wire.credential_source,
+            wire.credential_state,
             wire.default_model,
+            wire.default_reasoning_effort,
         )
         .map_err(D::Error::custom)
     }
@@ -782,7 +813,7 @@ pub enum ClientLifecycle {
     Failed { failure: SafeFailure },
 }
 
-/// Complete authoritative GUI baseline at protocol schema v1.
+/// Complete authoritative GUI baseline at the current protocol schema.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ClientSnapshot {
     pub schema_version: u16,
@@ -792,6 +823,7 @@ pub struct ClientSnapshot {
     pub active_session: Option<SessionProjection>,
     pub catalog: CatalogProjection,
     pub providers: Vec<ProviderProjection>,
+    pub provider_recovery_pending: DecimalU64,
 }
 
 impl ClientSnapshot {
@@ -802,6 +834,7 @@ impl ClientSnapshot {
         active_session: Option<SessionProjection>,
         catalog: CatalogProjection,
         providers: Vec<ProviderProjection>,
+        provider_recovery_pending: u64,
     ) -> Result<Self, ValidationError> {
         validate_count("sessions", sessions.len(), MAX_SESSIONS)?;
         validate_count("providers", providers.len(), MAX_PROVIDERS)?;
@@ -846,6 +879,7 @@ impl ClientSnapshot {
             active_session,
             catalog,
             providers,
+            provider_recovery_pending: DecimalU64::new(provider_recovery_pending),
         })
     }
 }
@@ -865,6 +899,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
             active_session: Option<SessionProjection>,
             catalog: CatalogProjection,
             providers: Vec<ProviderProjection>,
+            provider_recovery_pending: DecimalU64,
         }
         let wire = WireSnapshot::deserialize(deserializer)?;
         if wire.schema_version != CLIENT_SCHEMA_VERSION {
@@ -879,6 +914,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
             wire.active_session,
             wire.catalog,
             wire.providers,
+            wire.provider_recovery_pending.get(),
         )
         .map_err(D::Error::custom)
     }

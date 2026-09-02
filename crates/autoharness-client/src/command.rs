@@ -6,8 +6,9 @@ use zeroize::Zeroizing;
 
 use crate::bounds::validate_credential;
 use crate::{
-    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, RequestId,
-    SafeFailure, SessionId, SessionTitle, ToolCallId, TransportRevision, ValidationError,
+    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, ProviderProfileInput,
+    ReasoningEffort, RequestId, SafeFailure, SessionId, SessionTitle, ToolCallId,
+    TransportRevision, ValidationError,
 };
 
 /// Purpose of one dedicated secret-ingress submission.
@@ -58,6 +59,34 @@ pub enum ClientCommand {
     },
     DeleteSession {
         session_id: SessionId,
+    },
+    UpsertProviderProfile {
+        profile: ProviderProfileInput,
+    },
+    DuplicateProviderProfile {
+        source_connection_id: ConnectionId,
+        destination_connection_id: ConnectionId,
+    },
+    ActivateProviderProfile {
+        connection_id: ConnectionId,
+    },
+    TestProviderProfile {
+        connection_id: ConnectionId,
+    },
+    SetProviderDefaults {
+        connection_id: ConnectionId,
+        model: ModelRef,
+        reasoning_effort: Option<ReasoningEffort>,
+    },
+    DisconnectProviderProfile {
+        connection_id: ConnectionId,
+    },
+    DeleteProviderProfile {
+        connection_id: ConnectionId,
+    },
+    StartCodexAuthentication,
+    CancelCodexAuthentication {
+        authentication_request_id: RequestId,
     },
     RefreshCatalog,
     SelectModel {

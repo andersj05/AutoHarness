@@ -27,5 +27,5 @@ pub use id::*;
 pub use profile::*;
 pub use projection::*;
 
-/// Exact schema version implemented by this initial client contract.
-pub const CLIENT_SCHEMA_VERSION: u16 = 1;
+/// Exact schema version implemented by this client contract.
+pub const CLIENT_SCHEMA_VERSION: u16 = 2;

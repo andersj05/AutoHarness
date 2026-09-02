@@ -235,6 +235,7 @@ impl ActiveSessionDelta {
             Some(active_session),
             snapshot.catalog.clone(),
             snapshot.providers.clone(),
+            snapshot.provider_recovery_pending.get(),
         )
     }
 }

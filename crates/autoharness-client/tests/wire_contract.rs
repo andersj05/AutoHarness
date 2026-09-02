@@ -39,6 +39,11 @@ fn model_summary() -> ModelSummary {
     .expect("valid model summary")
 }
 
+fn gemini_configuration() -> ProviderConfiguration {
+    ProviderConfiguration::new(ProviderKind::Gemini, None, None, None)
+        .expect("valid Gemini configuration")
+}
+
 fn sample_snapshot() -> ClientSnapshot {
     let identity = session_id("session-1");
     let permission = PermissionRequest::new(
@@ -95,13 +100,17 @@ fn sample_snapshot() -> ClientSnapshot {
                 ConnectionId::new("connection-gemini-primary").expect("valid connection identity"),
                 ProviderId::new("gemini").expect("valid provider identity"),
                 "Google AI Studio",
+                gemini_configuration(),
                 true,
                 ProviderStatus::Ready,
                 CredentialSource::Environment,
+                ProviderCredentialState::Disconnected,
                 Some(model_ref()),
+                Some(ReasoningEffort::High),
             )
             .expect("valid provider projection"),
         ],
+        0,
     )
     .expect("valid client snapshot")
 }
@@ -142,6 +151,7 @@ fn every_unbounded_numeric_wire_value_is_an_exact_decimal_string() {
     );
     assert_eq!(value["sessions"][0]["message_count"], json!("2"));
     assert_eq!(value["catalog"]["payload"]["generation"], json!("3"));
+    assert_eq!(value["provider_recovery_pending"], json!("0"));
     assert_eq!(
         value["catalog"]["payload"]["models"][0]["context_window_tokens"],
         json!("1048576")
@@ -211,13 +221,13 @@ fn commands_are_versioned_and_have_no_secret_variant_or_client_request_id() {
     assert!(!format!("{:?}", envelope.command).contains("public prompt"));
 
     let unsupported = json!({
-        "schema_version": 2,
+        "schema_version": CLIENT_SCHEMA_VERSION + 1,
         "command": { "kind": "create_session" }
     });
     assert!(serde_json::from_value::<CommandEnvelope>(unsupported).is_err());
 
     let smuggled_secret = json!({
-        "schema_version": 1,
+        "schema_version": CLIENT_SCHEMA_VERSION,
         "command": {
             "kind": "submit_prompt",
             "payload": {
@@ -230,7 +240,7 @@ fn commands_are_versioned_and_have_no_secret_variant_or_client_request_id() {
     assert!(serde_json::from_value::<CommandEnvelope>(smuggled_secret).is_err());
 
     let unknown_envelope_field = json!({
-        "schema_version": 1,
+        "schema_version": CLIENT_SCHEMA_VERSION,
         "command": { "kind": "create_session" },
         "future_field": true
     });
@@ -287,6 +297,74 @@ fn session_lifecycle_commands_are_bounded_and_exactly_scoped() {
 }
 
 #[test]
+fn provider_management_commands_are_bounded_typed_and_secret_free() {
+    let profile = ProviderProfileInput::new(
+        ConnectionId::new("work-router").expect("profile identity"),
+        ProviderConfiguration::new(
+            ProviderKind::Router,
+            Some("https://router.example.test/v1".to_owned()),
+            Some("workspace-a".to_owned()),
+            Some("x-api-key".to_owned()),
+        )
+        .expect("router configuration"),
+    )
+    .expect("complete profile input");
+    let upsert = CommandEnvelope::new(ClientCommand::UpsertProviderProfile { profile });
+    let encoded = serde_json::to_value(upsert).expect("serialize profile command");
+    assert_eq!(
+        encoded["command"]["payload"]["profile"]["configuration"]["kind"],
+        json!("router")
+    );
+    assert_eq!(
+        encoded["command"]["payload"]["profile"]["connection_id"],
+        json!("work-router")
+    );
+    assert!(!encoded.to_string().contains("credential"));
+
+    let defaults = CommandEnvelope::new(ClientCommand::SetProviderDefaults {
+        connection_id: ConnectionId::new("work-router").expect("profile identity"),
+        model: ModelRef::new(
+            ProviderId::new("router:workspace-a").expect("provider identity"),
+            ModelId::new("agent-model").expect("model identity"),
+        ),
+        reasoning_effort: Some(ReasoningEffort::Xhigh),
+    });
+    let encoded = serde_json::to_value(defaults).expect("serialize defaults command");
+    assert_eq!(
+        encoded["command"]["payload"]["reasoning_effort"],
+        json!("xhigh")
+    );
+
+    let cancel = CommandEnvelope::new(ClientCommand::CancelCodexAuthentication {
+        authentication_request_id: request_id(41),
+    });
+    let encoded = serde_json::to_value(cancel).expect("serialize cancellation");
+    assert_eq!(
+        encoded["command"]["payload"]["authentication_request_id"],
+        json!("41")
+    );
+
+    let incomplete_router = json!({
+        "schema_version": CLIENT_SCHEMA_VERSION,
+        "command": {
+            "kind": "upsert_provider_profile",
+            "payload": {
+                "profile": {
+                    "connection_id": "work-router",
+                    "configuration": {
+                        "kind": "router",
+                        "base_url": null,
+                        "project": null,
+                        "auth_header": null
+                    }
+                }
+            }
+        }
+    });
+    assert!(serde_json::from_value::<CommandEnvelope>(incomplete_router).is_err());
+}
+
+#[test]
 fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
     let sentinel = "credential-sentinel-value";
     let ingress = SecretIngress::new(
@@ -338,7 +416,15 @@ fn provider_configuration_is_kind_scoped_and_debug_redacted() {
         )
         .is_err()
     );
-    assert!(ProviderConfiguration::new(ProviderKind::Router, None, None, None).is_err());
+    let incomplete = ProviderConfiguration::new(ProviderKind::Router, None, None, None)
+        .expect("projection may omit externally configured router details");
+    assert!(
+        ProviderProfileInput::new(
+            ConnectionId::new("router-profile").expect("profile identity"),
+            incomplete,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -473,10 +559,13 @@ fn connection_identity_is_distinct_from_adapter_identity() {
         ConnectionId::new("connection-gemini-secondary").expect("valid connection identity"),
         ProviderId::new("gemini").expect("valid provider identity"),
         "Gemini secondary",
+        gemini_configuration(),
         false,
-        ProviderStatus::Offline,
+        ProviderStatus::Untested,
         CredentialSource::Vault,
+        ProviderCredentialState::Stored,
         Some(model_ref()),
+        None,
     )
     .expect("same adapter may own another connection");
     assert!(
@@ -487,6 +576,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session.clone(),
             base.catalog.clone(),
             vec![base.providers[0].clone(), second],
+            0,
         )
         .is_ok()
     );
@@ -495,10 +585,13 @@ fn connection_identity_is_distinct_from_adapter_identity() {
         base.providers[0].connection_id.clone(),
         ProviderId::new("gemini").expect("valid provider identity"),
         "Duplicate connection identity",
+        gemini_configuration(),
         false,
-        ProviderStatus::Offline,
+        ProviderStatus::Untested,
         CredentialSource::Vault,
+        ProviderCredentialState::Stored,
         Some(model_ref()),
+        None,
     )
     .expect("projection is locally valid before snapshot uniqueness validation");
     assert!(
@@ -509,6 +602,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session,
             base.catalog,
             vec![base.providers[0].clone(), duplicate_connection],
+            0,
         )
         .is_err()
     );
