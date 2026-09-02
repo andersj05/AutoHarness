@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use autoharness_client::{
-    AttemptId as ClientAttemptId, AttemptState as ClientAttemptState, AuthenticationState,
-    CapabilitySupport, CatalogProjection as ClientCatalogProjection, ClientCommand,
-    ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
+    ActiveSessionDelta, AttemptId as ClientAttemptId, AttemptState as ClientAttemptState,
+    AuthenticationState, CapabilitySupport, CatalogProjection as ClientCatalogProjection,
+    ClientCommand, ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
     ConnectionId as ClientConnectionId, CredentialSource as ClientCredentialSource, DecimalU64,
     FailureClass, InputId as ClientInputId, MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES,
     MAX_PROVIDERS, ModelId as ClientModelId, ModelRef as ClientModelRef,
@@ -827,10 +827,15 @@ impl BridgeActor {
             self.projection_dirty = false;
             return;
         }
-        if self
-            .send_snapshot(SnapshotReason::Projection, snapshot.clone())
-            .is_ok()
-        {
+        let delta = self
+            .last_snapshot
+            .as_ref()
+            .and_then(|previous| ActiveSessionDelta::between(previous, &snapshot));
+        let result = match delta {
+            Some(delta) => self.send_active_session_delta(delta),
+            None => self.send_snapshot(SnapshotReason::Projection, snapshot.clone()),
+        };
+        if result.is_ok() {
             self.last_snapshot = Some(snapshot);
             self.projection_dirty = false;
         }
@@ -867,6 +872,14 @@ impl BridgeActor {
         self.send(
             ServerFrame::notice(revision, queued.notice.clone()),
             InFlightPayload::Notice(queued),
+        )
+    }
+
+    fn send_active_session_delta(&mut self, delta: ActiveSessionDelta) -> Result<(), GuiIpcError> {
+        let revision = self.take_revision()?;
+        self.send(
+            ServerFrame::active_session_delta(revision, delta),
+            InFlightPayload::Snapshot,
         )
     }
 
@@ -1964,10 +1977,7 @@ mod tests {
             let frames = received.lock().expect("frame lock");
             assert!(matches!(
                 frames[1].payload,
-                autoharness_client::FramePayload::Snapshot {
-                    reason: SnapshotReason::Projection,
-                    ..
-                }
+                autoharness_client::FramePayload::ActiveSessionDelta(_)
             ));
         }
         actor_task.abort();
@@ -2585,21 +2595,10 @@ mod tests {
         let frames = received.lock().expect("frame lock");
         assert_eq!(frames.len(), 2);
         let latest = match &frames[1].payload {
-            autoharness_client::FramePayload::Snapshot {
-                reason: SnapshotReason::Projection,
-                snapshot,
-            } => snapshot,
-            _ => panic!("expected coalesced projection"),
+            autoharness_client::FramePayload::ActiveSessionDelta(delta) => delta,
+            _ => panic!("expected coalesced active-session delta"),
         };
-        assert_eq!(
-            latest
-                .active_session
-                .as_ref()
-                .expect("active session")
-                .revision
-                .get(),
-            9
-        );
+        assert_eq!(latest.revision.get(), 9);
         drop(frames);
         acknowledge_current_frame(&mut bridge);
         assert_eq!(received.lock().expect("frame lock").len(), 2);
@@ -2936,10 +2935,7 @@ mod tests {
         assert_eq!(frames.len(), 3);
         assert!(matches!(
             frames[1].payload,
-            autoharness_client::FramePayload::Snapshot {
-                reason: SnapshotReason::Projection,
-                ..
-            }
+            autoharness_client::FramePayload::ActiveSessionDelta(_)
         ));
         assert!(matches!(
             frames[2].payload,
@@ -3024,7 +3020,8 @@ mod tests {
         assert_eq!(frames.len(), 5);
         let shutting_down = match &frames[1].payload {
             autoharness_client::FramePayload::Snapshot { snapshot, .. } => snapshot,
-            autoharness_client::FramePayload::Notice(_) => {
+            autoharness_client::FramePayload::ActiveSessionDelta(_)
+            | autoharness_client::FramePayload::Notice(_) => {
                 panic!("expected shutdown projection")
             }
         };
@@ -3315,6 +3312,7 @@ mod tests {
                 snapshot,
             } => snapshot,
             autoharness_client::FramePayload::Snapshot { .. }
+            | autoharness_client::FramePayload::ActiveSessionDelta(_)
             | autoharness_client::FramePayload::Notice(_) => {
                 panic!("expected credential projection")
             }
