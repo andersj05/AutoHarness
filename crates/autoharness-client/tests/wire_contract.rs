@@ -296,7 +296,49 @@ fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
     .expect("valid ingress");
 
     assert_eq!(ingress.credential(), sentinel);
+    assert_eq!(ingress.operation(), CredentialOperation::SessionOnly);
     assert!(!format!("{ingress:?}").contains(sentinel));
+}
+
+#[test]
+fn saved_secret_ingress_carries_only_a_non_secret_operation_label() {
+    let sentinel = "saved-credential-sentinel";
+    let ingress = SecretIngress::with_operation(
+        ConnectionId::new("profile-work").expect("valid connection identity"),
+        CredentialOperation::Replace,
+        sentinel,
+    )
+    .expect("valid ingress");
+
+    assert_eq!(ingress.operation(), CredentialOperation::Replace);
+    let debug = format!("{ingress:?}");
+    assert!(debug.contains("Replace"));
+    assert!(!debug.contains(sentinel));
+}
+
+#[test]
+fn provider_configuration_is_kind_scoped_and_debug_redacted() {
+    let router = ProviderConfiguration::new(
+        ProviderKind::Router,
+        Some("https://private-router.example.test/v1".to_owned()),
+        Some("workspace-a".to_owned()),
+        Some("x-api-key".to_owned()),
+    )
+    .expect("valid router configuration");
+    let debug = format!("{router:?}");
+    assert!(debug.contains("has_base_url: true"));
+    assert!(!debug.contains("private-router"));
+
+    assert!(
+        ProviderConfiguration::new(
+            ProviderKind::Gemini,
+            Some("https://must-not-apply.example".to_owned()),
+            None,
+            None,
+        )
+        .is_err()
+    );
+    assert!(ProviderConfiguration::new(ProviderKind::Router, None, None, None).is_err());
 }
 
 #[test]

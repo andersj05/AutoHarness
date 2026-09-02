@@ -13,6 +13,7 @@ mod error;
 mod failure;
 mod frame;
 mod id;
+mod profile;
 mod projection;
 
 pub use bounds::*;
@@ -23,6 +24,7 @@ pub use error::*;
 pub use failure::*;
 pub use frame::*;
 pub use id::*;
+pub use profile::*;
 pub use projection::*;
 
 /// Exact schema version implemented by this initial client contract.

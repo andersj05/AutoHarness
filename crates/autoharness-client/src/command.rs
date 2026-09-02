@@ -10,6 +10,15 @@ use crate::{
     SafeFailure, SessionId, SessionTitle, ToolCallId, TransportRevision, ValidationError,
 };
 
+/// Purpose of one dedicated secret-ingress submission.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialOperation {
+    SessionOnly,
+    Save,
+    Replace,
+}
+
 /// Exact user decision for one frozen durable permission request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -161,6 +170,7 @@ impl<'de> Deserialize<'de> for CommandReceipt {
 /// This type deliberately implements neither `Serialize` nor `Deserialize`.
 pub struct SecretIngress {
     connection_id: ConnectionId,
+    operation: CredentialOperation,
     credential: Zeroizing<String>,
 }
 
@@ -170,10 +180,20 @@ impl SecretIngress {
         connection_id: ConnectionId,
         credential: impl Into<String>,
     ) -> Result<Self, ValidationError> {
+        Self::with_operation(connection_id, CredentialOperation::SessionOnly, credential)
+    }
+
+    /// Takes ownership of one purpose-scoped secret without serializing it.
+    pub fn with_operation(
+        connection_id: ConnectionId,
+        operation: CredentialOperation,
+        credential: impl Into<String>,
+    ) -> Result<Self, ValidationError> {
         let credential = Zeroizing::new(credential.into());
         validate_credential(credential.as_str())?;
         Ok(Self {
             connection_id,
+            operation,
             credential,
         })
     }
@@ -182,6 +202,12 @@ impl SecretIngress {
     #[must_use]
     pub const fn connection_id(&self) -> &ConnectionId {
         &self.connection_id
+    }
+
+    /// Returns the non-secret operation applied to this submission.
+    #[must_use]
+    pub const fn operation(&self) -> CredentialOperation {
+        self.operation
     }
 
     /// Borrows credential text for immediate transfer into the Rust runtime.
@@ -195,6 +221,12 @@ impl SecretIngress {
     pub fn into_credential(self) -> Zeroizing<String> {
         self.credential
     }
+
+    /// Consumes ingress into its non-secret target, operation, and zeroizing value.
+    #[must_use]
+    pub fn into_parts(self) -> (ConnectionId, CredentialOperation, Zeroizing<String>) {
+        (self.connection_id, self.operation, self.credential)
+    }
 }
 
 impl Debug for SecretIngress {
@@ -202,6 +234,7 @@ impl Debug for SecretIngress {
         formatter
             .debug_struct("SecretIngress")
             .field("connection_id", &self.connection_id)
+            .field("operation", &self.operation)
             .field("credential", &"[REDACTED]")
             .finish()
     }
