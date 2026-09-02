@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 use crate::bounds::validate_credential;
 use crate::{
     AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, RequestId,
-    SafeFailure, SessionId, ToolCallId, TransportRevision, ValidationError,
+    SafeFailure, SessionId, SessionTitle, ToolCallId, TransportRevision, ValidationError,
 };
 
 /// Exact user decision for one frozen durable permission request.
@@ -32,6 +32,22 @@ pub enum PermissionDecision {
 pub enum ClientCommand {
     CreateSession,
     OpenSession {
+        session_id: SessionId,
+    },
+    RenameSession {
+        session_id: SessionId,
+        title: SessionTitle,
+    },
+    ArchiveSession {
+        session_id: SessionId,
+    },
+    UnarchiveSession {
+        session_id: SessionId,
+    },
+    ExportTranscript {
+        session_id: SessionId,
+    },
+    DeleteSession {
         session_id: SessionId,
     },
     RefreshCatalog,

@@ -166,6 +166,11 @@ export interface WireClientSnapshot {
 export type WireClientCommand =
   | { kind: "create_session" }
   | { kind: "open_session"; payload: { session_id: string } }
+  | { kind: "rename_session"; payload: { session_id: string; title: string } }
+  | { kind: "archive_session"; payload: { session_id: string } }
+  | { kind: "unarchive_session"; payload: { session_id: string } }
+  | { kind: "export_transcript"; payload: { session_id: string } }
+  | { kind: "delete_session"; payload: { session_id: string } }
   | { kind: "refresh_catalog" }
   | { kind: "select_model"; payload: { session_id: string; model: WireModelRef } }
   | { kind: "submit_prompt"; payload: { session_id: string; prompt: string } }

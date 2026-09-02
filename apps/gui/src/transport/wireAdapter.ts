@@ -278,6 +278,11 @@ export function commandToWire(command: ClientCommand): WireCommandEnvelope {
   switch (command.type) {
     case "create_session": wire = { kind: "create_session" }; break;
     case "open_session": wire = { kind: "open_session", payload: { session_id: command.sessionId } }; break;
+    case "rename_session": wire = { kind: "rename_session", payload: { session_id: command.sessionId, title: command.title } }; break;
+    case "archive_session": wire = { kind: "archive_session", payload: { session_id: command.sessionId } }; break;
+    case "unarchive_session": wire = { kind: "unarchive_session", payload: { session_id: command.sessionId } }; break;
+    case "export_transcript": wire = { kind: "export_transcript", payload: { session_id: command.sessionId } }; break;
+    case "delete_session": wire = { kind: "delete_session", payload: { session_id: command.sessionId } }; break;
     case "refresh_catalog": wire = { kind: "refresh_catalog" }; break;
     case "select_model": wire = { kind: "select_model", payload: { session_id: command.sessionId, model: modelRefFromKey(command.modelId) } }; break;
     case "submit_prompt": wire = { kind: "submit_prompt", payload: { session_id: command.sessionId, prompt: command.prompt } }; break;

@@ -116,6 +116,11 @@ export interface ClientSnapshot {
 export type ClientCommand =
   | { type: "create_session" }
   | { type: "open_session"; sessionId: SessionId }
+  | { type: "rename_session"; sessionId: SessionId; title: string }
+  | { type: "archive_session"; sessionId: SessionId }
+  | { type: "unarchive_session"; sessionId: SessionId }
+  | { type: "export_transcript"; sessionId: SessionId }
+  | { type: "delete_session"; sessionId: SessionId }
   | { type: "refresh_catalog" }
   | { type: "select_model"; sessionId: SessionId; modelId: ModelId }
   | { type: "submit_prompt"; sessionId: SessionId; prompt: string }

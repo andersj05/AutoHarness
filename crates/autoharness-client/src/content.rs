@@ -113,6 +113,12 @@ impl SessionTitle {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Consumes the wrapper and returns exact title text.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
 impl<'de> Deserialize<'de> for SessionTitle {

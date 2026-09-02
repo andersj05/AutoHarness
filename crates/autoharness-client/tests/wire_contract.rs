@@ -238,6 +238,55 @@ fn commands_are_versioned_and_have_no_secret_variant_or_client_request_id() {
 }
 
 #[test]
+fn session_lifecycle_commands_are_bounded_and_exactly_scoped() {
+    let rename = CommandEnvelope::new(ClientCommand::RenameSession {
+        session_id: session_id("session-1"),
+        title: SessionTitle::new("Exact title").expect("valid title"),
+    });
+    assert_eq!(
+        serde_json::to_value(rename).expect("serialize rename"),
+        json!({
+            "schema_version": CLIENT_SCHEMA_VERSION,
+            "command": {
+                "kind": "rename_session",
+                "payload": { "session_id": "session-1", "title": "Exact title" }
+            }
+        })
+    );
+
+    let empty_title = json!({
+        "schema_version": CLIENT_SCHEMA_VERSION,
+        "command": {
+            "kind": "rename_session",
+            "payload": { "session_id": "session-1", "title": " " }
+        }
+    });
+    assert!(serde_json::from_value::<CommandEnvelope>(empty_title).is_err());
+
+    for command in [
+        ClientCommand::ArchiveSession {
+            session_id: session_id("session-1"),
+        },
+        ClientCommand::UnarchiveSession {
+            session_id: session_id("session-1"),
+        },
+        ClientCommand::ExportTranscript {
+            session_id: session_id("session-1"),
+        },
+        ClientCommand::DeleteSession {
+            session_id: session_id("session-1"),
+        },
+    ] {
+        let encoded = serde_json::to_value(CommandEnvelope::new(command))
+            .expect("serialize lifecycle command");
+        assert_eq!(
+            encoded["command"]["payload"]["session_id"],
+            json!("session-1")
+        );
+    }
+}
+
+#[test]
 fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
     let sentinel = "credential-sentinel-value";
     let ingress = SecretIngress::new(

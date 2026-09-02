@@ -92,6 +92,32 @@ describe("wire adapter", () => {
     });
   });
 
+  it("maps the complete session lifecycle without losing exact scope", () => {
+    expect(commandToWire({ type: "rename_session", sessionId: "session-1", title: "Exact title" })).toEqual({
+      schema_version: 1,
+      command: {
+        kind: "rename_session",
+        payload: { session_id: "session-1", title: "Exact title" },
+      },
+    });
+    expect(commandToWire({ type: "archive_session", sessionId: "session-2" }).command).toEqual({
+      kind: "archive_session",
+      payload: { session_id: "session-2" },
+    });
+    expect(commandToWire({ type: "unarchive_session", sessionId: "session-3" }).command).toEqual({
+      kind: "unarchive_session",
+      payload: { session_id: "session-3" },
+    });
+    expect(commandToWire({ type: "export_transcript", sessionId: "session-4" }).command).toEqual({
+      kind: "export_transcript",
+      payload: { session_id: "session-4" },
+    });
+    expect(commandToWire({ type: "delete_session", sessionId: "session-5" }).command).toEqual({
+      kind: "delete_session",
+      payload: { session_id: "session-5" },
+    });
+  });
+
   it("preserves exact decimal strings in the presentation projection", () => {
     const snapshot = snapshotFromWire(wireSnapshot(), "4");
     expect(snapshot.sessions[0]?.messageCount).toBe("9007199254740993");

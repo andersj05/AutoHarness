@@ -911,6 +911,37 @@ fn map_command(
             request_id,
             session_id: session_id.into_inner(),
         }),
+        ClientCommand::RenameSession { session_id, title } => {
+            CommandAction::Intent(UiIntent::RenameSession {
+                request_id,
+                session_id: session_id.into_inner(),
+                title: title.into_inner(),
+            })
+        }
+        ClientCommand::ArchiveSession { session_id } => {
+            CommandAction::Intent(UiIntent::ArchiveSession {
+                request_id,
+                session_id: session_id.into_inner(),
+            })
+        }
+        ClientCommand::UnarchiveSession { session_id } => {
+            CommandAction::Intent(UiIntent::UnarchiveSession {
+                request_id,
+                session_id: session_id.into_inner(),
+            })
+        }
+        ClientCommand::ExportTranscript { session_id } => {
+            CommandAction::Intent(UiIntent::ExportTranscript {
+                request_id,
+                session_id: session_id.into_inner(),
+            })
+        }
+        ClientCommand::DeleteSession { session_id } => {
+            CommandAction::Intent(UiIntent::DeleteSession {
+                request_id,
+                session_id: session_id.into_inner(),
+            })
+        }
         ClientCommand::RefreshCatalog => {
             CommandAction::Intent(UiIntent::RefreshCatalog { request_id })
         }
@@ -3118,6 +3149,61 @@ mod tests {
                 panic!("unexpected command mapping")
             }
         }
+    }
+
+    #[test]
+    fn session_lifecycle_mapping_preserves_exact_host_scope() {
+        let commands = [
+            ClientCommand::ArchiveSession {
+                session_id: ClientSessionId::new("session-two").expect("session ID"),
+            },
+            ClientCommand::UnarchiveSession {
+                session_id: ClientSessionId::new("session-two").expect("session ID"),
+            },
+            ClientCommand::ExportTranscript {
+                session_id: ClientSessionId::new("session-two").expect("session ID"),
+            },
+            ClientCommand::DeleteSession {
+                session_id: ClientSessionId::new("session-two").expect("session ID"),
+            },
+        ];
+
+        for command in commands {
+            let action = map_command(
+                command,
+                ClientRequestId::new(9).expect("request ID"),
+                &active_session(),
+            )
+            .expect("mapped lifecycle command");
+            match action {
+                CommandAction::Intent(UiIntent::ArchiveSession { session_id, .. })
+                | CommandAction::Intent(UiIntent::UnarchiveSession { session_id, .. })
+                | CommandAction::Intent(UiIntent::ExportTranscript { session_id, .. })
+                | CommandAction::Intent(UiIntent::DeleteSession { session_id, .. }) => {
+                    assert_eq!(session_id, "session-two");
+                }
+                CommandAction::Intent(_)
+                | CommandAction::Resynchronize
+                | CommandAction::Shutdown => {
+                    panic!("unexpected command mapping")
+                }
+            }
+        }
+
+        let rename = map_command(
+            ClientCommand::RenameSession {
+                session_id: ClientSessionId::new("session-two").expect("session ID"),
+                title: SessionTitle::new("Exact title").expect("session title"),
+            },
+            ClientRequestId::new(10).expect("request ID"),
+            &active_session(),
+        )
+        .expect("mapped rename");
+        assert!(matches!(
+            rename,
+            CommandAction::Intent(UiIntent::RenameSession { session_id, title, .. })
+                if session_id == "session-two" && title == "Exact title"
+        ));
     }
 
     #[test]
