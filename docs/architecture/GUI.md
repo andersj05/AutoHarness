@@ -2,7 +2,7 @@
 
 **Status:** Accepted migration target
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-02
 
 ## Purpose
 
@@ -87,7 +87,7 @@ Commit or rejection arrives separately through a correlated notice or durable pr
 
 The first command set covers:
 
-- Create or open a session.
+- Create, open, rename, archive, unarchive, export, or delete an exact session.
 - Refresh the model catalog.
 - Select a model.
 - Submit a prompt.
@@ -100,15 +100,18 @@ The first command set covers:
 The first carrier sends:
 
 - A complete startup snapshot.
-- Coalesced projection snapshots during the first vertical slice.
+- Bounded active-session deltas for changes confined to the current session.
+- Coalesced projection snapshots when state outside the active session changes.
 - Correlated commit, rejection, and authentication notices.
 - An explicit resynchronization snapshot when the client detects a gap.
 
 Each frame carries a monotonic transport revision.
 Durable session revisions remain visible inside session data and are not replaced by the transport revision.
 
-Whole-snapshot streaming is transitional.
-Before long-session performance parity is claimed, transcript updates must use keyed patches or bounded committed deltas so serialization cost does not grow with total history for every provider chunk.
+An active-session delta carries the exact session identity, updated session summary and revision, selected model, permission requests, and one transcript splice.
+The splice retains the unchanged prefix and suffix and serializes only inserted or replaced transcript rows.
+The client rejects a delta whose identity or splice range does not match its authoritative baseline.
+Ordinary streaming therefore scales with the changed transcript item, while a complete snapshot remains the recovery and cross-session baseline.
 
 ### Ordering and recovery
 
@@ -177,9 +180,9 @@ The GUI adds these gates without weakening the Rust gates:
 - Browser-mode component, reducer, keyboard, and accessibility tests.
 - Screenshot and geometry review at compact, standard, and wide desktop sizes.
 - Long-transcript virtualization and stream-to-paint performance tests.
+- Complete session lifecycle tests across shutdown and restart.
 - Tauri packaged-app tests on Windows, macOS, and Linux system webviews.
 - Credential sentinel, permission preemption, window-close recovery, and crash-interruption tests.
 - Keyboard-only and screen-reader smoke reviews.
 
 The TUI and its PTY tests remain until the GUI release checklist explicitly retires them.
-
