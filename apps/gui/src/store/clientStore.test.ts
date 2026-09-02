@@ -114,10 +114,25 @@ describe("ClientStore", () => {
 
   it("applies a bounded active-session splice without rebuilding unchanged rows", async () => {
     const transport = new TestTransport();
+    const fixture = createFixtureSnapshot("ready");
+    const history = Array.from({ length: 65_000 }, (_, index) => ({
+      kind: "message" as const,
+      id: `history-${String(index)}`,
+      role: index % 2 === 0 ? "user" as const : "agent" as const,
+      content: `Durable history row ${String(index)}`,
+    }));
+    transport.baseline = {
+      ...fixture,
+      sessions: fixture.sessions.map((session) => (
+        session.id === fixture.activeSessionId ? { ...session, messageCount: "65000" } : session
+      )),
+      activeSession: { ...fixture.activeSession!, transcript: history },
+    };
     const store = new ClientStore(transport);
     await store.start();
     const baseline = store.getSnapshot().projection!;
     const active = baseline.activeSession!;
+    const transcriptReference = active.transcript;
     const firstRow = active.transcript[0];
 
     store.applyFrame({
@@ -128,8 +143,8 @@ describe("ClientStore", () => {
       summary: { ...baseline.sessions[0]!, title: "Renamed while streaming", messageCount: "8" },
       selectedModelId: active.selectedModelId,
       transcript: {
-        start: active.transcript.length,
-        deleteCount: 0,
+        start: active.transcript.length - 1,
+        deleteCount: 1,
         items: [{
           kind: "message",
           id: "attempt-delta",
@@ -148,8 +163,13 @@ describe("ClientStore", () => {
       title: "Renamed while streaming",
       attempt: { kind: "streaming", id: "attempt-delta" },
     });
-    expect(updated.activeSession?.transcript).toHaveLength(active.transcript.length + 1);
+    expect(updated.activeSession?.transcript).toHaveLength(65_000);
+    expect(updated.activeSession?.transcript).toBe(transcriptReference);
     expect(updated.activeSession?.transcript[0]).toBe(firstRow);
+    expect(updated.activeSession?.transcript.at(-1)).toMatchObject({
+      id: "attempt-delta",
+      content: "Only this changed row crossed the carrier.",
+    });
   });
 
   it("ignores stale frames after a baseline", async () => {

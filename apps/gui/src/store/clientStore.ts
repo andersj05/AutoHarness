@@ -7,6 +7,7 @@ import type {
   CommandReceipt,
   EphemeralCredential,
   NoticeLevel,
+  TranscriptItem,
 } from "../protocol";
 import { CLIENT_SCHEMA_VERSION } from "../protocol";
 
@@ -248,11 +249,15 @@ export class ClientStore {
         ) {
           throw new Error("Active-session delta exceeds the authoritative transcript");
         }
-        const transcript = [
-          ...active.transcript.slice(0, start),
-          ...items,
-          ...active.transcript.slice(start + deleteCount),
-        ];
+        const tailUpdate = start + deleteCount === active.transcript.length;
+        const transcript = tailUpdate
+          ? active.transcript as TranscriptItem[]
+          : [
+              ...active.transcript.slice(0, start),
+              ...items,
+              ...active.transcript.slice(start + deleteCount),
+            ];
+        if (tailUpdate) transcript.splice(start, deleteCount, ...items);
         if (transcript.length > 65_536) {
           throw new Error("Active-session delta exceeds the transcript row limit");
         }

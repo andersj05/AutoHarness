@@ -159,7 +159,7 @@ export function Conversation({
       if (transcriptSearchText(item).toLocaleLowerCase().includes(normalizedSearch)) result.push(index);
     });
     return result;
-  }, [normalizedSearch, transcript]);
+  }, [normalizedSearch, session?.revision, transcript]);
   const activeMatch = matches.length > 0 ? matches[Math.min(matchCursor, matches.length - 1)] : undefined;
 
   useEffect(() => {
