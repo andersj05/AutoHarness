@@ -163,6 +163,19 @@ export interface WireClientSnapshot {
   providers: readonly WireProviderProjection[];
 }
 
+export interface WireActiveSessionDelta {
+  session_id: string;
+  revision: string;
+  summary: WireSessionSummary;
+  selected_model: WireModelRef | null;
+  transcript: {
+    start: number;
+    delete_count: number;
+    items: readonly WireTranscriptItem[];
+  };
+  permission_requests: readonly WirePermissionRequest[];
+}
+
 export type WireClientCommand =
   | { kind: "create_session" }
   | { kind: "open_session"; payload: { session_id: string } }
@@ -210,6 +223,7 @@ export type WireFramePayload =
         snapshot: WireClientSnapshot;
       };
     }
+  | { kind: "active_session_delta"; payload: WireActiveSessionDelta }
   | { kind: "notice"; payload: WireClientNotice };
 
 export interface WireServerFrame {

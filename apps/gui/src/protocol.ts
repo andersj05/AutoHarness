@@ -148,6 +148,21 @@ export type ClientFrame =
       snapshot: ClientSnapshot;
     }
   | {
+      kind: "active_session_delta";
+      revision: Revision;
+      sessionId: SessionId;
+      sessionRevision: Revision;
+      summary: SessionSummary;
+      selectedModelId?: ModelId;
+      transcript: {
+        start: number;
+        deleteCount: number;
+        items: readonly TranscriptItem[];
+      };
+      attempt?: AttemptProjection;
+      pendingPermission?: PermissionRequest;
+    }
+  | {
       kind: "notice";
       revision: Revision;
       requestId?: RequestId;

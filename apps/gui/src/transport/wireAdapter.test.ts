@@ -237,4 +237,49 @@ describe("wire adapter", () => {
     };
     expect(frameFromWire(frame)).toMatchObject({ kind: "snapshot", reason: "resynchronization", revision: "22" });
   });
+
+  it("maps only the changed active-session transcript rows", () => {
+    const snapshot = wireSnapshot();
+    const frame: WireServerFrame = {
+      schema_version: 1,
+      revision: "5",
+      payload: {
+        kind: "active_session_delta",
+        payload: {
+          session_id: "session-1",
+          revision: "5",
+          summary: { ...snapshot.sessions[0]!, revision: "5", message_count: "2" },
+          selected_model: { provider_id: "gemini", model_id: "gemini-2.5-pro" },
+          transcript: {
+            start: 1,
+            delete_count: 0,
+            items: [{
+              kind: "assistant",
+              payload: {
+                attempt_id: "attempt-2",
+                content: "streamed suffix",
+                state: { kind: "streaming" },
+                usage: null,
+                retry_of: null,
+              },
+            }],
+          },
+          permission_requests: [],
+        },
+      },
+    };
+
+    expect(frameFromWire(frame)).toMatchObject({
+      kind: "active_session_delta",
+      revision: "5",
+      sessionId: "session-1",
+      sessionRevision: "5",
+      transcript: {
+        start: 1,
+        deleteCount: 0,
+        items: [{ kind: "message", id: "attempt-2", content: "streamed suffix", streaming: true }],
+      },
+      attempt: { kind: "streaming", id: "attempt-2" },
+    });
+  });
 });

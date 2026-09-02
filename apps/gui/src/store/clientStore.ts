@@ -226,6 +226,88 @@ export class ClientStore {
         return;
       }
 
+      if (frame.kind === "active_session_delta") {
+        const projection = this.state.projection;
+        const active = projection?.activeSession;
+        if (
+          !projection
+          || !active
+          || projection.activeSessionId !== frame.sessionId
+          || active.id !== frame.sessionId
+          || frame.summary.id !== frame.sessionId
+        ) {
+          throw new Error("Active-session delta does not match the authoritative baseline");
+        }
+        const { start, deleteCount, items } = frame.transcript;
+        if (
+          !Number.isSafeInteger(start)
+          || !Number.isSafeInteger(deleteCount)
+          || start < 0
+          || deleteCount < 0
+          || start + deleteCount > active.transcript.length
+        ) {
+          throw new Error("Active-session delta exceeds the authoritative transcript");
+        }
+        const transcript = [
+          ...active.transcript.slice(0, start),
+          ...items,
+          ...active.transcript.slice(start + deleteCount),
+        ];
+        if (transcript.length > 65_536) {
+          throw new Error("Active-session delta exceeds the transcript row limit");
+        }
+        const summaryIndex = projection.sessions.findIndex((session) => session.id === frame.sessionId);
+        if (summaryIndex < 0) {
+          throw new Error("Active-session delta has no matching session summary");
+        }
+        const sessions = [...projection.sessions];
+        sessions[summaryIndex] = frame.summary;
+        const attempt = frame.attempt ?? active.attempt;
+        const nextProjection: ClientSnapshot = {
+          ...projection,
+          transportRevision: frame.revision,
+          sessions,
+          activeSession: {
+            ...active,
+            revision: frame.sessionRevision,
+            title: frame.summary.title,
+            selectedModelId: frame.selectedModelId,
+            transcript,
+            attempt,
+          },
+          pendingPermission: frame.pendingPermission,
+          activity: [
+            {
+              id: "replay",
+              label: "Session projection",
+              detail: `revision ${frame.sessionRevision}`,
+              status: "complete",
+            },
+            {
+              id: "attempt",
+              label: "Provider turn",
+              detail: attempt.kind.replaceAll("_", " "),
+              status:
+                attempt.kind === "streaming" || attempt.kind === "cancelling"
+                  ? "active"
+                  : attempt.kind === "failed"
+                    ? "warning"
+                    : "complete",
+            },
+          ],
+        };
+        this.reconcileOptimisticPrompts(nextProjection);
+        this.publish({
+          ...this.state,
+          lifecycle: this.state.lifecycle === "resyncing" ? "resyncing" : "ready",
+          projection: nextProjection,
+          transportRevision: frame.revision,
+          commandError: undefined,
+          optimisticPrompts: this.optimisticPromptList(),
+        });
+        return;
+      }
+
       this.publish({
         ...this.state,
         lifecycle: this.state.lifecycle === "resyncing"

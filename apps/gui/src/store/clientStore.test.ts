@@ -112,6 +112,46 @@ describe("ClientStore", () => {
     expect(store.getSnapshot().projection?.connection.kind).toBe("offline");
   });
 
+  it("applies a bounded active-session splice without rebuilding unchanged rows", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const baseline = store.getSnapshot().projection!;
+    const active = baseline.activeSession!;
+    const firstRow = active.transcript[0];
+
+    store.applyFrame({
+      kind: "active_session_delta",
+      revision: "2",
+      sessionId: active.id,
+      sessionRevision: "15",
+      summary: { ...baseline.sessions[0]!, title: "Renamed while streaming", messageCount: "8" },
+      selectedModelId: active.selectedModelId,
+      transcript: {
+        start: active.transcript.length,
+        deleteCount: 0,
+        items: [{
+          kind: "message",
+          id: "attempt-delta",
+          role: "agent",
+          content: "Only this changed row crossed the carrier.",
+          streaming: true,
+        }],
+      },
+      attempt: { kind: "streaming", id: "attempt-delta", startedAt: "" },
+    });
+
+    const updated = store.getSnapshot().projection!;
+    expect(updated.transportRevision).toBe("2");
+    expect(updated.activeSession).toMatchObject({
+      revision: "15",
+      title: "Renamed while streaming",
+      attempt: { kind: "streaming", id: "attempt-delta" },
+    });
+    expect(updated.activeSession?.transcript).toHaveLength(active.transcript.length + 1);
+    expect(updated.activeSession?.transcript[0]).toBe(firstRow);
+  });
+
   it("ignores stale frames after a baseline", async () => {
     const transport = new TestTransport();
     const store = new ClientStore(transport);
