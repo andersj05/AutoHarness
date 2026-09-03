@@ -191,6 +191,9 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
+This comprehensive local baseline still includes the frozen terminal reference.
+Default pull-request automation uses the narrower renderer-neutral and desktop-host lanes in the [CI workflow](.github/workflows/ci.yml), excluding `autoharness-tui` tests and ignored PTY acceptance scenarios.
+
 Run the verified frontend gates when changing the GUI, its transport contract, or the desktop bridge:
 
 ```text

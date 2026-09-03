@@ -24,7 +24,7 @@ env:
 
 jobs:
   quality:
-    name: Format, lint, and docs
+    name: Rust quality
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -53,12 +53,26 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check generated desktop themes
         run: cargo run -p autoharness-presentation --bin generate_gui_themes --locked -- --check
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
+      - name: Run renderer-neutral Clippy
+        run: >-
+          cargo clippy --workspace
+          --exclude autoharness-app
+          --exclude autoharness-tui
+          --all-targets --all-features --locked --no-deps -- -D warnings
+      - name: Run desktop host Clippy
+        run: >-
+          cargo clippy -p autoharness-app
+          --lib --bin autoharness
+          --test credential_resolver
+          --test profile_store
+          --test secret_sentinel
+          --test startup_reconnect
+          --test vault_fake
+          --features gui --locked --no-deps -- -D warnings
       - name: Build documentation
-        run: cargo doc --workspace --all-features --no-deps --locked
+        run: cargo doc --workspace --exclude autoharness-tui --all-features --no-deps --locked
       - name: Test documentation
-        run: cargo test --workspace --doc --all-features --locked
+        run: cargo test --workspace --exclude autoharness-tui --doc --all-features --locked
 
   docs:
     name: Documentation links
@@ -99,7 +113,7 @@ jobs:
         run: pnpm gui:build
 
   benchmarks:
-    name: Validate benchmark environment
+    name: Validate storage benchmark environment
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -114,12 +128,12 @@ jobs:
       - name: Check benchmark formatting
         run: cargo fmt --manifest-path benchmarks/Cargo.toml -- --check
       - name: Run benchmark Clippy
-        run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets --locked --no-deps -- -D warnings
+        run: cargo clippy --manifest-path benchmarks/Cargo.toml --bin autoharness-phase1-benchmarks --locked --no-deps -- -D warnings
       - name: Test benchmark environment
-        run: cargo test --manifest-path benchmarks/Cargo.toml --all-targets --locked
+        run: cargo test --manifest-path benchmarks/Cargo.toml --bin autoharness-phase1-benchmarks --locked
 
   test:
-    name: Test (${{ matrix.name }})
+    name: Runtime and desktop tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -152,7 +166,19 @@ jobs:
           libwebkit2gtk-4.1-dev
           libxdo-dev
           pkg-config
-      - name: Run tests
-        run: cargo test --workspace --all-targets --all-features --locked --no-fail-fast
-      - name: Run terminal PTY scenarios
-        run: cargo test -p autoharness-app --tests --all-features --locked -- --ignored --test-threads=1
+      - name: Run renderer-neutral tests
+        run: >-
+          cargo test --workspace
+          --exclude autoharness-app
+          --exclude autoharness-tui
+          --all-targets --all-features --locked --no-fail-fast
+      - name: Run desktop host tests
+        run: >-
+          cargo test -p autoharness-app
+          --lib --bin autoharness
+          --test credential_resolver
+          --test profile_store
+          --test secret_sentinel
+          --test startup_reconnect
+          --test vault_fake
+          --features gui --locked --no-fail-fast

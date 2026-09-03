@@ -18,7 +18,7 @@ const PAGE_DOWN: [u8; 4] = [0x1b, b'[', b'6', b'~'];
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
     let environment = ScenarioEnvironment::prepare();
     let response = (0..48)
@@ -72,7 +72,7 @@ fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     let environment = ScenarioEnvironment::prepare();
     environment.seed_completed_session("seeded navigation prompt", "seeded navigation response");

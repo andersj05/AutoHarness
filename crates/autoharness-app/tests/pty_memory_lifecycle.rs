@@ -24,7 +24,7 @@ const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     let environment = ScenarioEnvironment::prepare();
     environment.seed_completed_session("memory journey seed", "memory journey ready");

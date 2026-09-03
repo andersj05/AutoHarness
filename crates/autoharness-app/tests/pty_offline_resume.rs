@@ -7,7 +7,7 @@ use autoharness_settings::{ProfileId, ProviderProfile};
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn returning_profile_replays_offline_and_survives_resize_and_restart() {
     let environment = ScenarioEnvironment::prepare();
     environment.seed_completed_session("durable offline prompt", "durable offline response");

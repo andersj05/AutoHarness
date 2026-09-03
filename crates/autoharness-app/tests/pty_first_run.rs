@@ -11,7 +11,7 @@ use std::fs;
 use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn first_run_renders_the_interface_and_restores_the_terminal_on_quit() {
     let environment = ScenarioEnvironment::prepare();
     // No provider environment at all: the launch must degrade to session-only

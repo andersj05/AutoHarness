@@ -31,7 +31,9 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-Pull requests must keep all three Rust gates green on Linux, Windows, and macOS in CI.
+These commands remain the comprehensive local baseline while the terminal reference is present.
+The [CI workflow](.github/workflows/ci.yml) runs targeted renderer-neutral and desktop-host Rust lanes on Linux, Windows, and macOS without the frozen `autoharness-tui` tests or ignored PTY acceptance scenarios.
+Pull requests must keep those targeted Rust jobs green.
 Install the pinned frontend workspace dependencies before GUI development:
 
 ```text
