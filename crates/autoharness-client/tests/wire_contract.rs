@@ -111,6 +111,7 @@ fn sample_snapshot() -> ClientSnapshot {
             )
             .expect("valid provider projection"),
         ],
+        ClientSettingsProjection::default(),
         0,
     )
     .expect("valid client snapshot")
@@ -366,6 +367,74 @@ fn provider_management_commands_are_bounded_typed_and_secret_free() {
 }
 
 #[test]
+fn renderer_settings_are_typed_resettable_and_versioned() {
+    let mut snapshot = sample_snapshot();
+    snapshot.settings = ClientSettingsProjection {
+        theme_preset: EffectiveSetting::new(
+            ThemePreset::Rose,
+            PreferenceSource::WorkspaceFile,
+            true,
+        ),
+        color_mode: EffectiveSetting::new(
+            ColorMode::HighContrast,
+            PreferenceSource::UserFile,
+            true,
+        ),
+        zoom_percent: EffectiveSetting::new(
+            GuiZoomPercent::new(200).expect("maximum zoom"),
+            PreferenceSource::UserFile,
+            true,
+        ),
+        font_size: EffectiveSetting::new(GuiFontSize::ExtraLarge, PreferenceSource::Default, false),
+        density: EffectiveSetting::new(Density::Compact, PreferenceSource::UserFile, true),
+        reduced_motion: EffectiveSetting::new(true, PreferenceSource::WorkspaceFile, false),
+        timestamp_style: EffectiveSetting::new(
+            TimestampStyle::Absolute,
+            PreferenceSource::UserFile,
+            true,
+        ),
+        composer_submit_behavior: EffectiveSetting::new(
+            ComposerSubmitBehavior::Enter,
+            PreferenceSource::UserFile,
+            true,
+        ),
+    };
+
+    let encoded = serde_json::to_value(&snapshot).expect("serialize settings projection");
+    assert_eq!(encoded["schema_version"], 3);
+    assert_eq!(encoded["settings"]["zoom_percent"]["value"], 200);
+    assert_eq!(
+        encoded["settings"]["theme_preset"]["source"],
+        "workspace_file"
+    );
+    assert_eq!(
+        serde_json::from_value::<ClientSnapshot>(encoded).expect("round trip"),
+        snapshot
+    );
+
+    let reset = CommandEnvelope::new(ClientCommand::UpdateClientPreference {
+        change: ClientPreferenceChange::ThemePreset { value: None },
+    });
+    assert_eq!(
+        serde_json::to_value(reset).expect("serialize reset")["command"]["payload"]["change"]["kind"],
+        "theme_preset"
+    );
+}
+
+#[test]
+fn renderer_settings_reject_zoom_outside_the_accessibility_range() {
+    assert!(GuiZoomPercent::new(74).is_err());
+    assert!(GuiZoomPercent::new(201).is_err());
+    for invalid in [74, 201] {
+        let wire = json!({
+            "kind": "zoom_percent",
+            "payload": {"value": invalid}
+        });
+        assert!(serde_json::from_value::<ClientPreferenceChange>(wire).is_err());
+    }
+}
+
+#[test]
 fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
     let sentinel = "credential-sentinel-value";
     let ingress = SecretIngress::new(
@@ -578,6 +647,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session.clone(),
             base.catalog.clone(),
             vec![base.providers[0].clone(), second],
+            base.settings.clone(),
             0,
         )
         .is_ok()
@@ -605,6 +675,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session,
             base.catalog,
             vec![base.providers[0].clone(), duplicate_connection],
+            base.settings,
             0,
         )
         .is_err()

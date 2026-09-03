@@ -11,8 +11,8 @@ use crate::bounds::{
     validate_non_empty_text, validate_security_text, validate_text,
 };
 use crate::{
-    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, DecimalU64, InputId, ModelId,
-    ProviderConfiguration, ProviderCredentialState, ProviderId, ProviderProfileScope,
+    AttemptId, CLIENT_SCHEMA_VERSION, ClientSettingsProjection, ConnectionId, DecimalU64, InputId,
+    ModelId, ProviderConfiguration, ProviderCredentialState, ProviderId, ProviderProfileScope,
     ReasoningEffort, SafeFailure, SessionId, SessionRevision, SessionTitle, ToolCallId,
     TranscriptContent, UnixMillis, ValidationError,
 };
@@ -828,6 +828,7 @@ pub struct ClientSnapshot {
     pub active_session: Option<SessionProjection>,
     pub catalog: CatalogProjection,
     pub providers: Vec<ProviderProjection>,
+    pub settings: ClientSettingsProjection,
     pub provider_recovery_pending: DecimalU64,
 }
 
@@ -839,6 +840,7 @@ impl ClientSnapshot {
         active_session: Option<SessionProjection>,
         catalog: CatalogProjection,
         providers: Vec<ProviderProjection>,
+        settings: ClientSettingsProjection,
         provider_recovery_pending: u64,
     ) -> Result<Self, ValidationError> {
         validate_count("sessions", sessions.len(), MAX_SESSIONS)?;
@@ -884,6 +886,7 @@ impl ClientSnapshot {
             active_session,
             catalog,
             providers,
+            settings,
             provider_recovery_pending: DecimalU64::new(provider_recovery_pending),
         })
     }
@@ -904,6 +907,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
             active_session: Option<SessionProjection>,
             catalog: CatalogProjection,
             providers: Vec<ProviderProjection>,
+            settings: ClientSettingsProjection,
             provider_recovery_pending: DecimalU64,
         }
         let wire = WireSnapshot::deserialize(deserializer)?;
@@ -919,6 +923,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
             wire.active_session,
             wire.catalog,
             wire.providers,
+            wire.settings,
             wire.provider_recovery_pending.get(),
         )
         .map_err(D::Error::custom)

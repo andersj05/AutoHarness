@@ -1055,6 +1055,9 @@ fn map_command(
                 profile_id: connection_id.into_inner(),
             })
         }
+        ClientCommand::UpdateClientPreference { .. } => {
+            return Err(GuiIpcError::invalid_command());
+        }
         ClientCommand::StartCodexAuthentication => {
             CommandAction::Intent(UiIntent::StartCodexLogin { request_id })
         }
@@ -1256,6 +1259,7 @@ fn map_snapshot(
         Some(active_session),
         catalog,
         providers,
+        autoharness_client::ClientSettingsProjection::default(),
         u64::try_from(profiles.pending_recovery).map_err(|_| GuiIpcError::invalid_projection())?,
     )
     .map_err(|_| GuiIpcError::invalid_projection())

@@ -15,6 +15,7 @@ mod frame;
 mod id;
 mod profile;
 mod projection;
+mod settings;
 
 pub use bounds::*;
 pub use command::*;
@@ -26,6 +27,7 @@ pub use frame::*;
 pub use id::*;
 pub use profile::*;
 pub use projection::*;
+pub use settings::*;
 
 /// Exact schema version implemented by this client contract.
-pub const CLIENT_SCHEMA_VERSION: u16 = 2;
+pub const CLIENT_SCHEMA_VERSION: u16 = 3;
