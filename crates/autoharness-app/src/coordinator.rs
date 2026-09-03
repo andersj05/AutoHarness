@@ -11676,14 +11676,16 @@ mod tests {
             Err(StartAttemptError::Context(error)) => panic!("context start failure: {error}"),
         }
 
-        for _ in 0..3 {
+        let turn_two = loop {
+            if let Some(turn) = handle
+                .load_attempt_context_turn(current_attempt.clone(), 2)
+                .await
+                .expect("load turn two")
+            {
+                break turn;
+            }
             handle_next_provider_message(&mut coordinator).await;
-        }
-        let turn_two = handle
-            .load_attempt_context_turn(current_attempt.clone(), 2)
-            .await
-            .expect("load turn two")
-            .expect("compaction turn two");
+        };
         let replacement_epoch = handle
             .load_context_epoch(turn_two.epoch_id().clone())
             .await
@@ -11704,7 +11706,7 @@ mod tests {
             &turn_two
         );
 
-        for _ in 0..2 {
+        while provider.requests.lock().expect("request lock").len() < 3 {
             handle_next_provider_message(&mut coordinator).await;
         }
         let prepared = coordinator
@@ -11728,7 +11730,9 @@ mod tests {
             assert_eq!(requests[2].context, prepared.turn.request().context);
         }
 
-        handle_next_provider_message(&mut coordinator).await;
+        while provider.requests.lock().expect("request lock").len() < 4 {
+            handle_next_provider_message(&mut coordinator).await;
+        }
         let turn_three = handle
             .load_attempt_context_turn(current_attempt.clone(), 3)
             .await
@@ -11743,7 +11747,7 @@ mod tests {
             assert_eq!(requests.len(), 4);
             assert_eq!(requests[2].context, requests[3].context);
         }
-        for _ in 0..3 {
+        while coordinator.active.is_some() {
             handle_next_provider_message(&mut coordinator).await;
         }
         assert_eq!(
