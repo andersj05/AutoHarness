@@ -6,7 +6,9 @@ import { CredentialDialog } from "./components/CredentialDialog";
 import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
-import { SessionsWorkspace, SimpleWorkspace } from "./components/RouteWorkspaces";
+import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
+import { SimpleWorkspace } from "./components/RouteWorkspaces";
+import { SessionsWorkspace } from "./components/SessionsWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
 import type { ColorMode, ThemePreset } from "./design-system/appearance";
 import { useClientStore } from "./store/react";
@@ -37,11 +39,13 @@ export function App({ store }: AppProps) {
   const client = useClientStore(store);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [railWidth, setRailWidth] = useState(248);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(() => !mediaMatches("(max-width: 1180px)"));
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [transcriptSearchRequest, setTranscriptSearchRequest] = useState(0);
   const [theme, setTheme] = useState<ThemePreset>("system");
   const [colorMode, setColorMode] = useState<ColorMode>("color");
   const [reduceMotion, setReduceMotion] = useState(() => mediaMatches("(prefers-reduced-motion: reduce)"));
@@ -178,9 +182,12 @@ export function App({ store }: AppProps) {
     { id: "new-session", label: "New session", description: "Create a durable conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
     { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat" },
     { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions" },
+    { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers" },
     { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory" },
     { id: "settings", label: "Open settings", description: "Preview themes, contrast, and motion", icon: "settings" },
     { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
+    { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
+    { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
   ];
 
@@ -193,7 +200,12 @@ export function App({ store }: AppProps) {
     } else if (command === "toggle-inspector") {
       setRoute("chat");
       setInspectorOpen((open) => !open);
-    } else if (command === "chat" || command === "sessions" || command === "memory" || command === "settings") {
+    } else if (command === "find-transcript") {
+      setRoute("chat");
+      setTranscriptSearchRequest((value) => value + 1);
+    } else if (command === "export-transcript") {
+      if (activeSession) void store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id });
+    } else if (command === "chat" || command === "sessions" || command === "providers" || command === "memory" || command === "settings") {
       setRoute(command);
     }
   };
@@ -204,7 +216,10 @@ export function App({ store }: AppProps) {
         catalog={projection.catalog}
         connection={projection.connection}
         draft={activeDraft}
+        interactionBlocked={blockingDialogOpen}
         model={activeModel}
+        optimisticPrompts={client.optimisticPrompts}
+        searchRequest={transcriptSearchRequest}
         onCancel={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "cancel_attempt", sessionId: activeSession.id, attemptId });
         }}
@@ -214,6 +229,7 @@ export function App({ store }: AppProps) {
         onOpenModelPicker={() => setModelPickerOpen(true)}
         onOpenNavigation={() => setMobileRailOpen(true)}
         onRefresh={() => void store.dispatch({ type: "refresh_catalog" })}
+        onExport={() => activeSession ? store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id }) : Promise.resolve("rejected")}
         onRetry={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "retry_attempt", sessionId: activeSession.id, attemptId });
         }}
@@ -225,7 +241,22 @@ export function App({ store }: AppProps) {
         session={activeSession}
       />
     ) : route === "sessions" ? (
-      <SessionsWorkspace onOpen={openSession} onOpenNavigation={() => setMobileRailOpen(true)} snapshot={projection} />
+      <SessionsWorkspace
+        onCommand={(command) => store.dispatchAndWait(command)}
+        onOpen={openSession}
+        onOpenNavigation={() => setMobileRailOpen(true)}
+        snapshot={projection}
+      />
+    ) : route === "providers" ? (
+      <ProvidersWorkspace
+        interactionBlocked={Boolean(projection.pendingPermission)}
+        notice={client.notice}
+        onCommand={(command) => store.dispatchAndWait(command)}
+        onCredential={async (submission) => Boolean(await store.submitCredential(submission))}
+        onOpenNavigation={() => setMobileRailOpen(true)}
+        onStartAuthentication={async () => (await store.dispatch({ type: "start_codex_authentication" }))?.requestId}
+        snapshot={projection}
+      />
     ) : (
       <SimpleWorkspace
         colorMode={colorMode}
@@ -260,8 +291,10 @@ export function App({ store }: AppProps) {
         onOpenSession={openSession}
         onRoute={setRoute}
         onToggleCollapsed={() => setRailCollapsed((value) => !value)}
+        onWidthChange={setRailWidth}
         runtimeMode={projection.runtimeMode}
         sessions={projection.sessions}
+        width={railWidth}
         />
         <div className="workspaceSurface" ref={workspaceRef}>
           {route === "chat" && inspectorOpen ? (
@@ -307,7 +340,11 @@ export function App({ store }: AppProps) {
           connectionId={projection.connectionId}
           onClose={() => setCredentialOpen(false)}
           onSubmit={async (connectionId, credential) => {
-            const receipt = await store.submitCredential({ connectionId, credential });
+            const receipt = await store.submitCredential({
+              connectionId,
+              operation: "session_only",
+              credential,
+            });
             return Boolean(receipt);
           }}
           providerLabel={projection.connection.kind === "offline" ? "provider" : projection.connection.providerLabel}

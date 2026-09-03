@@ -2405,7 +2405,7 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Writes the active session transcript as Markdown beside the database.
+    /// Writes one exact session transcript as Markdown beside the database.
     ///
     /// The session is read-only for this operation, so it is allowed even
     /// while other work is active; a concurrent export is deduplicated by
@@ -2427,18 +2427,6 @@ impl Coordinator {
             .await?;
             return Ok(());
         };
-        if session_id != self.session_id {
-            self.reject(
-                request_id,
-                UiFailure::new(
-                    ErrorClass::Validation,
-                    "Only the active session can be exported from here",
-                    RetryPolicy::Never,
-                ),
-            )
-            .await?;
-            return Ok(());
-        }
         match self.engine.export_transcript_markdown(session_id).await {
             Ok(path) => {
                 let _ = path;
@@ -10812,7 +10800,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slash_export_writes_markdown_beside_the_database_without_touching_history() {
+    async fn inactive_session_export_writes_markdown_without_touching_history() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = directory.path().join("export-md.sqlite3");
         let (actor, session_id, session) =
@@ -10842,42 +10830,21 @@ mod tests {
         );
         let task = tokio::spawn(coordinator.run());
 
-        // Connect the fake provider through the same in-app path users take.
-        let connect_id = RequestId::new(9);
+        // Switch authority to a new conversation before exporting the first.
+        let create_id = RequestId::new(3);
         ui.intents
-            .send(UiIntent::ConfigureCredential {
-                request_id: connect_id,
-                credential: ApiCredential::new("export-fixture-key".to_owned())
-                    .expect("fixture credential"),
+            .send(UiIntent::CreateSession {
+                request_id: create_id,
             })
             .await
-            .expect("credential intent");
-        expect_commit(&mut ui, connect_id).await;
-        wait_for_catalog(&mut ui).await;
+            .expect("create session intent");
+        expect_commit(&mut ui, create_id).await;
+        wait_for_session(&mut ui.sessions, |projection| {
+            projection.session_id != session_id.as_str()
+        })
+        .await;
 
-        // Select the fake catalog's model so submissions are admitted.
-        let select_request = RequestId::new(8);
-        ui.intents
-            .send(UiIntent::SelectModel {
-                request_id: select_request,
-                model: fixture_model(),
-            })
-            .await
-            .expect("select model");
-        expect_commit(&mut ui, select_request).await;
-
-        // Admit one prompt so the transcript has content.
-        let submit_id = RequestId::new(1);
-        ui.intents
-            .send(UiIntent::SubmitPrompt {
-                request_id: submit_id,
-                prompt: "export me".to_owned(),
-            })
-            .await
-            .expect("submit intent");
-        expect_commit(&mut ui, submit_id).await;
-
-        // Export through the same typed intent the terminal dispatches.
+        // Export the inactive session through the exact typed intent.
         let export_id = RequestId::new(2);
         ui.intents
             .send(UiIntent::ExportTranscript {
@@ -10908,12 +10875,12 @@ mod tests {
             .expect("a Markdown transcript must exist beside the database");
         let contents = std::fs::read_to_string(&markdown).expect("read export");
         assert!(contents.contains("# "));
-        assert!(contents.contains("export me"));
+        assert!(contents.contains(session_id.as_str()));
 
         // The exported session is untouched and still lists durably.
         let store =
             SqliteStore::open(directory.path().join("export-md.sqlite3")).expect("reopen store");
-        assert_eq!(store.list_sessions().expect("sessions").len(), 1);
+        assert_eq!(store.list_sessions().expect("sessions").len(), 2);
     }
 
     #[tokio::test]
@@ -11709,14 +11676,16 @@ mod tests {
             Err(StartAttemptError::Context(error)) => panic!("context start failure: {error}"),
         }
 
-        for _ in 0..3 {
+        let turn_two = loop {
+            if let Some(turn) = handle
+                .load_attempt_context_turn(current_attempt.clone(), 2)
+                .await
+                .expect("load turn two")
+            {
+                break turn;
+            }
             handle_next_provider_message(&mut coordinator).await;
-        }
-        let turn_two = handle
-            .load_attempt_context_turn(current_attempt.clone(), 2)
-            .await
-            .expect("load turn two")
-            .expect("compaction turn two");
+        };
         let replacement_epoch = handle
             .load_context_epoch(turn_two.epoch_id().clone())
             .await
@@ -11737,7 +11706,7 @@ mod tests {
             &turn_two
         );
 
-        for _ in 0..2 {
+        while provider.requests.lock().expect("request lock").len() < 3 {
             handle_next_provider_message(&mut coordinator).await;
         }
         let prepared = coordinator
@@ -11761,7 +11730,9 @@ mod tests {
             assert_eq!(requests[2].context, prepared.turn.request().context);
         }
 
-        handle_next_provider_message(&mut coordinator).await;
+        while provider.requests.lock().expect("request lock").len() < 4 {
+            handle_next_provider_message(&mut coordinator).await;
+        }
         let turn_three = handle
             .load_attempt_context_turn(current_attempt.clone(), 3)
             .await
@@ -11776,7 +11747,7 @@ mod tests {
             assert_eq!(requests.len(), 4);
             assert_eq!(requests[2].context, requests[3].context);
         }
-        for _ in 0..3 {
+        while coordinator.active.is_some() {
             handle_next_provider_message(&mut coordinator).await;
         }
         assert_eq!(

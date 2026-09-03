@@ -8,10 +8,13 @@ import type {
   ConnectionState,
   ModelDescriptor,
   PermissionRequest,
+  ProviderProfile,
+  SessionSummary,
   ToolMessage,
   TranscriptItem,
 } from "../protocol";
 import type {
+  WireActiveSessionDelta,
   WireAttemptState,
   WireCatalogProjection,
   WireClientCommand,
@@ -19,9 +22,12 @@ import type {
   WireCommandEnvelope,
   WireCommandReceipt,
   WireModelRef,
+  WirePermissionRequest,
   WireProviderProjection,
+  WireSessionSummary,
   WireServerFrame,
   WireToolCallProjection,
+  WireTranscriptItem,
 } from "./wire";
 import { WIRE_SCHEMA_VERSION } from "./wire";
 
@@ -123,23 +129,64 @@ function toolFromWire(tool: WireToolCallProjection): ToolMessage {
   };
 }
 
-function activeSessionFromWire(snapshot: WireClientSnapshot, catalog: readonly ModelDescriptor[]): ActiveSessionProjection | undefined {
-  const session = snapshot.active_session;
-  if (!session) return undefined;
-  let latestAttempt: AttemptProjection = { kind: "idle" };
-  const transcript: TranscriptItem[] = session.transcript.map((item) => {
-    if (item.kind === "user") {
-      return { kind: "message", id: item.payload.input_id, role: "user", content: item.payload.content };
-    }
-    if (item.kind === "tool") return toolFromWire(item.payload);
-    latestAttempt = attemptFromWire(item.payload.attempt_id, item.payload.state, item.payload.usage);
+function transcriptItemFromWire(item: WireTranscriptItem): {
+  item: TranscriptItem;
+  attempt?: AttemptProjection;
+} {
+  if (item.kind === "user") {
     return {
+      item: { kind: "message", id: item.payload.input_id, role: "user", content: item.payload.content },
+    };
+  }
+  if (item.kind === "tool") return { item: toolFromWire(item.payload) };
+  const attempt = attemptFromWire(item.payload.attempt_id, item.payload.state, item.payload.usage);
+  return {
+    attempt,
+    item: {
       kind: "message",
       id: item.payload.attempt_id,
       role: "agent",
       content: item.payload.content,
       streaming: item.payload.state.kind === "streaming" || item.payload.state.kind === "cancelling",
-    };
+    },
+  };
+}
+
+function sessionSummaryFromWire(session: WireSessionSummary): SessionSummary {
+  if (session.revision !== null) decimalU64(session.revision);
+  if (session.message_count !== null) decimalU64(session.message_count);
+  return {
+    id: session.session_id,
+    title: session.title,
+    updatedAt: session.updated_at_ms === null ? undefined : unixMillisToIso(session.updated_at_ms),
+    messageCount: session.message_count === null ? undefined : decimalU64(session.message_count),
+    archived: session.archived,
+  };
+}
+
+function permissionRequestFromWire(
+  permission: WirePermissionRequest,
+  sessionId: string,
+): PermissionRequest {
+  return {
+    id: permission.tool_call_id,
+    sessionId,
+    toolName: permission.tool_name,
+    capability: permission.capability,
+    resource: permission.resource,
+    reason: "The durable runtime requires your answer before this exact tool call can continue.",
+    trustedFields: permission.details,
+  };
+}
+
+function activeSessionFromWire(snapshot: WireClientSnapshot, catalog: readonly ModelDescriptor[]): ActiveSessionProjection | undefined {
+  const session = snapshot.active_session;
+  if (!session) return undefined;
+  let latestAttempt: AttemptProjection = { kind: "idle" };
+  const transcript: TranscriptItem[] = session.transcript.map((item) => {
+    const mapped = transcriptItemFromWire(item);
+    if (mapped.attempt) latestAttempt = mapped.attempt;
+    return mapped.item;
   });
   const summary = snapshot.sessions.find((candidate) => candidate.session_id === session.session_id);
   const selectedModelId = session.selected_model ? modelRefKey(session.selected_model) : undefined;
@@ -204,27 +251,38 @@ function connectionFromWire(snapshot: WireClientSnapshot): ConnectionState {
   return { kind: "offline", reason: failure ?? "The provider is unavailable. Durable replay remains available.", recoverable: true };
 }
 
+function providerFromWire(provider: WireProviderProjection): ProviderProfile {
+  return {
+    id: provider.connection_id,
+    providerId: provider.provider_id,
+    displayName: provider.display_name,
+    configuration: {
+      kind: provider.configuration.kind,
+      baseUrl: provider.configuration.base_url ?? undefined,
+      project: provider.configuration.project ?? undefined,
+      authHeader: provider.configuration.auth_header ?? undefined,
+    },
+    scope: provider.scope,
+    active: provider.active,
+    status: provider.status.kind,
+    safeError: provider.status.kind === "failed" ? provider.status.payload.failure.message : undefined,
+    credentialSource: provider.credential_source,
+    credentialState: provider.credential_state,
+    defaultModelId: provider.default_model ? modelRefKey(provider.default_model) : undefined,
+    defaultReasoningEffort: provider.default_reasoning_effort ?? undefined,
+  };
+}
+
 function permissionFromWire(snapshot: WireClientSnapshot): PermissionRequest | undefined {
   const permission = snapshot.active_session?.permission_requests[0];
   if (!permission || !snapshot.active_session) return undefined;
-  return {
-    id: permission.tool_call_id,
-    sessionId: snapshot.active_session.session_id,
-    toolName: permission.tool_name,
-    capability: permission.capability,
-    resource: permission.resource,
-    reason: "The durable runtime requires your answer before this exact tool call can continue.",
-    trustedFields: permission.details,
-  };
+  return permissionRequestFromWire(permission, snapshot.active_session.session_id);
 }
 
 export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string): ClientSnapshot {
   if (snapshot.schema_version !== WIRE_SCHEMA_VERSION) throw new Error("Unsupported host snapshot schema");
   positiveDecimalU64(revision, "transport revision");
-  snapshot.sessions.forEach((session) => {
-    if (session.revision !== null) decimalU64(session.revision);
-    if (session.message_count !== null) decimalU64(session.message_count);
-  });
+  snapshot.sessions.forEach(sessionSummaryFromWire);
   if (snapshot.active_session) {
     decimalU64(snapshot.active_session.revision);
     snapshot.active_session.transcript.forEach((item) => {
@@ -235,6 +293,7 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     });
   }
   if (snapshot.catalog.kind === "ready") decimalU64(snapshot.catalog.payload.generation);
+  decimalU64(snapshot.provider_recovery_pending);
   const catalog = catalogFromWire(snapshot.catalog, snapshot.providers);
   const activeSession = activeSessionFromWire(snapshot, catalog.models);
   return {
@@ -244,14 +303,10 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     connection: connectionFromWire(snapshot),
     connectionId: snapshot.providers.find((provider) => provider.active)?.connection_id,
     activeSessionId: snapshot.active_session_id ?? undefined,
-    sessions: snapshot.sessions.map((session) => ({
-      id: session.session_id,
-      title: session.title,
-      updatedAt: session.updated_at_ms === null ? undefined : unixMillisToIso(session.updated_at_ms),
-      messageCount: session.message_count === null ? undefined : decimalU64(session.message_count),
-      archived: session.archived,
-    })),
+    sessions: snapshot.sessions.map(sessionSummaryFromWire),
     catalog,
+    providers: snapshot.providers.map(providerFromWire),
+    providerRecoveryPending: snapshot.provider_recovery_pending,
     activeSession,
     pendingPermission: permissionFromWire(snapshot),
     activity: activeSession
@@ -273,11 +328,99 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
   };
 }
 
+function activeSessionDeltaFromWire(
+  delta: WireActiveSessionDelta,
+  revision: string,
+): Extract<ClientFrame, { kind: "active_session_delta" }> {
+  decimalU64(delta.revision);
+  if (
+    !Number.isSafeInteger(delta.transcript.start)
+    || delta.transcript.start < 0
+    || delta.transcript.start > 65_536
+    || !Number.isSafeInteger(delta.transcript.delete_count)
+    || delta.transcript.delete_count < 0
+    || delta.transcript.delete_count > 65_536
+    || delta.transcript.items.length > 65_536
+  ) {
+    throw new Error("Host published an invalid transcript delta range");
+  }
+  let attempt: AttemptProjection | undefined;
+  const items = delta.transcript.items.map((item) => {
+    if (item.kind === "assistant" && item.payload.usage) {
+      Object.values(item.payload.usage).forEach((value) => {
+        if (value !== null) decimalU64(value);
+      });
+    }
+    const mapped = transcriptItemFromWire(item);
+    if (mapped.attempt) attempt = mapped.attempt;
+    return mapped.item;
+  });
+  const pending = delta.permission_requests[0];
+  return {
+    kind: "active_session_delta",
+    revision,
+    sessionId: delta.session_id,
+    sessionRevision: delta.revision,
+    summary: sessionSummaryFromWire(delta.summary),
+    selectedModelId: delta.selected_model ? modelRefKey(delta.selected_model) : undefined,
+    transcript: {
+      start: delta.transcript.start,
+      deleteCount: delta.transcript.delete_count,
+      items,
+    },
+    attempt,
+    pendingPermission: pending ? permissionRequestFromWire(pending, delta.session_id) : undefined,
+  };
+}
+
 export function commandToWire(command: ClientCommand): WireCommandEnvelope {
   let wire: WireClientCommand;
   switch (command.type) {
     case "create_session": wire = { kind: "create_session" }; break;
     case "open_session": wire = { kind: "open_session", payload: { session_id: command.sessionId } }; break;
+    case "rename_session": wire = { kind: "rename_session", payload: { session_id: command.sessionId, title: command.title } }; break;
+    case "archive_session": wire = { kind: "archive_session", payload: { session_id: command.sessionId } }; break;
+    case "unarchive_session": wire = { kind: "unarchive_session", payload: { session_id: command.sessionId } }; break;
+    case "export_transcript": wire = { kind: "export_transcript", payload: { session_id: command.sessionId } }; break;
+    case "delete_session": wire = { kind: "delete_session", payload: { session_id: command.sessionId } }; break;
+    case "upsert_provider_profile": wire = {
+      kind: "upsert_provider_profile",
+      payload: {
+        profile: {
+          connection_id: command.profile.id,
+          configuration: {
+            kind: command.profile.configuration.kind,
+            base_url: command.profile.configuration.baseUrl ?? null,
+            project: command.profile.configuration.project ?? null,
+            auth_header: command.profile.configuration.authHeader ?? null,
+          },
+        },
+      },
+    }; break;
+    case "duplicate_provider_profile": wire = {
+      kind: "duplicate_provider_profile",
+      payload: {
+        source_connection_id: command.sourceId,
+        destination_connection_id: command.destinationId,
+      },
+    }; break;
+    case "activate_provider_profile": wire = { kind: "activate_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "test_provider_profile": wire = { kind: "test_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "set_provider_defaults": wire = {
+      kind: "set_provider_defaults",
+      payload: {
+        connection_id: command.connectionId,
+        model: modelRefFromKey(command.modelId),
+        reasoning_effort: command.reasoningEffort ?? null,
+      },
+    }; break;
+    case "disconnect_provider_profile": wire = { kind: "disconnect_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "delete_provider_profile": wire = { kind: "delete_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "start_codex_authentication": wire = { kind: "start_codex_authentication" }; break;
+    case "cancel_codex_authentication": wire = {
+      kind: "cancel_codex_authentication",
+      payload: { authentication_request_id: command.authenticationRequestId },
+    }; break;
     case "refresh_catalog": wire = { kind: "refresh_catalog" }; break;
     case "select_model": wire = { kind: "select_model", payload: { session_id: command.sessionId, model: modelRefFromKey(command.modelId) } }; break;
     case "submit_prompt": wire = { kind: "submit_prompt", payload: { session_id: command.sessionId, prompt: command.prompt } }; break;
@@ -303,6 +446,9 @@ export function frameFromWire(frame: WireServerFrame): ClientFrame {
       revision,
       snapshot: snapshotFromWire(frame.payload.payload.snapshot, revision),
     };
+  }
+  if (frame.payload.kind === "active_session_delta") {
+    return activeSessionDeltaFromWire(frame.payload.payload, revision);
   }
   const notice = frame.payload.payload;
   if (notice.kind === "command_rejected") {

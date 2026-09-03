@@ -5,12 +5,14 @@ import type {
   ClientTransport,
   CommandOutcome,
   CommandReceipt,
-  EphemeralCredential,
+  CredentialSubmission,
   NoticeLevel,
+  TranscriptItem,
 } from "../protocol";
 import { CLIENT_SCHEMA_VERSION } from "../protocol";
 
 export interface ClientNotice {
+  requestId?: string;
   level: NoticeLevel;
   code: string;
   message: string;
@@ -22,6 +24,17 @@ export interface ClientStoreSnapshot {
   transportRevision?: string;
   notice?: ClientNotice;
   commandError?: string;
+  optimisticPrompts: readonly OptimisticPrompt[];
+}
+
+export interface OptimisticPrompt {
+  requestId: string;
+  sessionId: string;
+  content: string;
+}
+
+interface TrackedOptimisticPrompt extends OptimisticPrompt {
+  baselineUserMessageIds: ReadonlySet<string>;
 }
 
 type StoreListener = () => void;
@@ -46,12 +59,13 @@ function validateSnapshot(snapshot: ClientSnapshot): void {
 
 export class ClientStore {
   private readonly listeners = new Set<StoreListener>();
-  private state: ClientStoreSnapshot = { lifecycle: "booting" };
+  private state: ClientStoreSnapshot = { lifecycle: "booting", optimisticPrompts: [] };
   private started = false;
   private closed = false;
   private resync?: Promise<void>;
   private readonly commandSettlements = new Map<string, boolean>();
   private readonly commandWaiters = new Map<string, (outcome: CommandOutcome) => void>();
+  private readonly optimisticPrompts = new Map<string, TrackedOptimisticPrompt>();
 
   constructor(
     private readonly transport: ClientTransport,
@@ -83,6 +97,7 @@ export class ClientStore {
           lifecycle: "ready",
           projection: baseline,
           transportRevision: baseline.transportRevision,
+          optimisticPrompts: [],
         });
       }
     } catch (error) {
@@ -95,6 +110,7 @@ export class ClientStore {
     this.commandWaiters.forEach((waiter) => waiter("unknown"));
     this.commandWaiters.clear();
     this.commandSettlements.clear();
+    this.optimisticPrompts.clear();
     await this.transport.close();
     this.listeners.clear();
   }
@@ -114,6 +130,19 @@ export class ClientStore {
   async dispatchAndWait(command: ClientCommand): Promise<CommandOutcome> {
     if (this.closed || this.state.lifecycle !== "ready") return "rejected";
     this.publish({ ...this.state, commandError: undefined });
+    const optimistic = command.type === "submit_prompt"
+      ? {
+          sessionId: command.sessionId,
+          content: command.prompt,
+          baselineUserMessageIds: new Set(
+            this.state.projection?.activeSession?.id === command.sessionId
+              ? this.state.projection.activeSession.transcript
+                  .filter((item) => item.kind === "message" && item.role === "user")
+                  .map((item) => item.id)
+              : [],
+          ),
+        }
+      : undefined;
     let receipt: CommandReceipt;
     try {
       receipt = await this.transport.command(command);
@@ -124,6 +153,7 @@ export class ClientStore {
       return outcome;
     }
     if (this.closed || this.state.lifecycle !== "ready") return "unknown";
+    if (optimistic) this.trackOptimisticPrompt(receipt.requestId, optimistic);
     const observed = this.commandSettlements.get(receipt.requestId);
     if (observed !== undefined) {
       this.commandSettlements.delete(receipt.requestId);
@@ -146,7 +176,7 @@ export class ClientStore {
     });
   }
 
-  async submitCredential(secret: EphemeralCredential): Promise<CommandReceipt | undefined> {
+  async submitCredential(secret: CredentialSubmission): Promise<CommandReceipt | undefined> {
     if (this.closed || this.state.lifecycle !== "ready") return undefined;
     this.publish({ ...this.state, commandError: undefined });
     try {
@@ -186,12 +216,100 @@ export class ClientStore {
           throw new Error("Snapshot and frame revisions do not match");
         }
         const recovering = this.state.lifecycle === "resyncing" && frame.reason !== "resynchronization";
+        this.reconcileOptimisticPrompts(frame.snapshot, frame.reason === "resynchronization");
         this.publish({
           ...this.state,
           lifecycle: recovering ? "resyncing" : "ready",
           projection: frame.snapshot,
           transportRevision: frame.revision,
           commandError: undefined,
+          optimisticPrompts: this.optimisticPromptList(),
+        });
+        return;
+      }
+
+      if (frame.kind === "active_session_delta") {
+        const projection = this.state.projection;
+        const active = projection?.activeSession;
+        if (
+          !projection
+          || !active
+          || projection.activeSessionId !== frame.sessionId
+          || active.id !== frame.sessionId
+          || frame.summary.id !== frame.sessionId
+        ) {
+          throw new Error("Active-session delta does not match the authoritative baseline");
+        }
+        const { start, deleteCount, items } = frame.transcript;
+        if (
+          !Number.isSafeInteger(start)
+          || !Number.isSafeInteger(deleteCount)
+          || start < 0
+          || deleteCount < 0
+          || start + deleteCount > active.transcript.length
+        ) {
+          throw new Error("Active-session delta exceeds the authoritative transcript");
+        }
+        const tailUpdate = start + deleteCount === active.transcript.length;
+        const transcript = tailUpdate
+          ? active.transcript as TranscriptItem[]
+          : [
+              ...active.transcript.slice(0, start),
+              ...items,
+              ...active.transcript.slice(start + deleteCount),
+            ];
+        if (tailUpdate) transcript.splice(start, deleteCount, ...items);
+        if (transcript.length > 65_536) {
+          throw new Error("Active-session delta exceeds the transcript row limit");
+        }
+        const summaryIndex = projection.sessions.findIndex((session) => session.id === frame.sessionId);
+        if (summaryIndex < 0) {
+          throw new Error("Active-session delta has no matching session summary");
+        }
+        const sessions = [...projection.sessions];
+        sessions[summaryIndex] = frame.summary;
+        const attempt = frame.attempt ?? active.attempt;
+        const nextProjection: ClientSnapshot = {
+          ...projection,
+          transportRevision: frame.revision,
+          sessions,
+          activeSession: {
+            ...active,
+            revision: frame.sessionRevision,
+            title: frame.summary.title,
+            selectedModelId: frame.selectedModelId,
+            transcript,
+            attempt,
+          },
+          pendingPermission: frame.pendingPermission,
+          activity: [
+            {
+              id: "replay",
+              label: "Session projection",
+              detail: `revision ${frame.sessionRevision}`,
+              status: "complete",
+            },
+            {
+              id: "attempt",
+              label: "Provider turn",
+              detail: attempt.kind.replaceAll("_", " "),
+              status:
+                attempt.kind === "streaming" || attempt.kind === "cancelling"
+                  ? "active"
+                  : attempt.kind === "failed"
+                    ? "warning"
+                    : "complete",
+            },
+          ],
+        };
+        this.reconcileOptimisticPrompts(nextProjection);
+        this.publish({
+          ...this.state,
+          lifecycle: this.state.lifecycle === "resyncing" ? "resyncing" : "ready",
+          projection: nextProjection,
+          transportRevision: frame.revision,
+          commandError: undefined,
+          optimisticPrompts: this.optimisticPromptList(),
         });
         return;
       }
@@ -202,7 +320,7 @@ export class ClientStore {
           ? "resyncing"
           : this.state.projection ? "ready" : this.state.lifecycle,
         transportRevision: frame.revision,
-        notice: { level: frame.level, code: frame.code, message: frame.message },
+        notice: { requestId: frame.requestId, level: frame.level, code: frame.code, message: frame.message },
         commandError: frame.level === "error" ? frame.message : this.state.commandError,
       });
       this.settleCommandNotice(frame);
@@ -226,6 +344,7 @@ export class ClientStore {
         if (currentRevision !== undefined && revisionValue(baseline.transportRevision) < currentRevision) {
           return;
         }
+        this.reconcileOptimisticPrompts(baseline, true);
         this.publish({
           lifecycle: "ready",
           projection: baseline,
@@ -236,6 +355,7 @@ export class ClientStore {
             code: "projection_resynchronized",
             message: "The local view was repaired from the durable host snapshot.",
           },
+          optimisticPrompts: this.optimisticPromptList(),
         });
       } catch (error) {
         this.fail(error);
@@ -251,21 +371,26 @@ export class ClientStore {
     this.commandWaiters.forEach((waiter) => waiter("unknown"));
     this.commandWaiters.clear();
     this.commandSettlements.clear();
-    this.publish({ ...this.state, lifecycle: "failed", commandError: message });
+    this.optimisticPrompts.clear();
+    this.publish({ ...this.state, lifecycle: "failed", commandError: message, optimisticPrompts: [] });
   }
 
   private observeGapNotice(frame: Extract<ClientFrame, { kind: "notice" }>): void {
     this.publish({
       ...this.state,
-      notice: { level: frame.level, code: frame.code, message: frame.message },
+      notice: { requestId: frame.requestId, level: frame.level, code: frame.code, message: frame.message },
       commandError: frame.level === "error" ? frame.message : this.state.commandError,
     });
     this.settleCommandNotice(frame);
   }
 
   private settleCommandNotice(frame: Extract<ClientFrame, { kind: "notice" }>): void {
-    if (!frame.requestId || (frame.code !== "command_committed" && frame.level !== "error")) return;
-    const committed = frame.code === "command_committed";
+    const committed = frame.code === "command_committed" || frame.code === "authentication_completed";
+    const rejected = frame.level === "error" || frame.code === "authentication_cancelled";
+    if (!frame.requestId || (!committed && !rejected)) return;
+    if (!committed && this.optimisticPrompts.delete(frame.requestId)) {
+      this.publish({ ...this.state, optimisticPrompts: this.optimisticPromptList() });
+    }
     const waiter = this.commandWaiters.get(frame.requestId);
     if (waiter) {
       this.commandWaiters.delete(frame.requestId);
@@ -277,6 +402,37 @@ export class ClientStore {
       if (oldest) this.commandSettlements.delete(oldest);
     }
     this.commandSettlements.set(frame.requestId, committed);
+  }
+
+  private trackOptimisticPrompt(
+    requestId: string,
+    prompt: Omit<TrackedOptimisticPrompt, "requestId">,
+  ): void {
+    const tracked = { requestId, ...prompt };
+    this.optimisticPrompts.set(requestId, tracked);
+    this.reconcileOptimisticPrompts(this.state.projection);
+    this.publish({ ...this.state, optimisticPrompts: this.optimisticPromptList() });
+  }
+
+  private reconcileOptimisticPrompts(snapshot?: ClientSnapshot, replace = false): void {
+    for (const [requestId, prompt] of this.optimisticPrompts) {
+      const observed = snapshot?.activeSession?.id === prompt.sessionId
+        && snapshot.activeSession.transcript.some((item) => (
+          item.kind === "message"
+          && item.role === "user"
+          && item.content === prompt.content
+          && !prompt.baselineUserMessageIds.has(item.id)
+        ));
+      if (observed || replace) this.optimisticPrompts.delete(requestId);
+    }
+  }
+
+  private optimisticPromptList(): readonly OptimisticPrompt[] {
+    return [...this.optimisticPrompts.values()].map(({ requestId, sessionId, content }) => ({
+      requestId,
+      sessionId,
+      content,
+    }));
   }
 
   private publish(next: ClientStoreSnapshot): void {

@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { SessionSummary } from "../protocol";
 import { Icon, type IconName } from "./Icon";
 
-export type RouteId = "chat" | "sessions" | "memory" | "settings";
+export type RouteId = "chat" | "sessions" | "providers" | "memory" | "settings";
 
 interface AppRailProps {
   activeRoute: RouteId;
@@ -12,16 +12,19 @@ interface AppRailProps {
   mobileOpen: boolean;
   runtimeMode: "native" | "fixture";
   sessions: readonly SessionSummary[];
+  width: number;
   onCloseMobile: () => void;
   onCreateSession: () => void;
   onOpenSession: (id: string) => void;
   onRoute: (route: RouteId) => void;
   onToggleCollapsed: () => void;
+  onWidthChange: (width: number) => void;
 }
 
 const routes: readonly { id: RouteId; label: string; icon: IconName }[] = [
   { id: "chat", label: "Chat", icon: "chat" },
   { id: "sessions", label: "Sessions", icon: "sessions" },
+  { id: "providers", label: "Providers", icon: "providers" },
   { id: "memory", label: "Memory", icon: "memory" },
 ];
 
@@ -33,11 +36,13 @@ export function AppRail({
   mobileOpen,
   runtimeMode,
   sessions,
+  width,
   onCloseMobile,
   onCreateSession,
   onOpenSession,
   onRoute,
   onToggleCollapsed,
+  onWidthChange,
 }: AppRailProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeMobileRef = useRef(onCloseMobile);
@@ -99,6 +104,7 @@ export function AppRail({
       data-mobile-open={mobileOpen}
       ref={railRef}
       role={mobileViewport ? "dialog" : undefined}
+      style={{ "--rail-size": `${width}px` } as CSSProperties}
     >
       <div className="railBrand">
         <div className="brandGlyph" aria-hidden="true">
@@ -199,6 +205,39 @@ export function AppRail({
           <span className="onlineDot" data-fixture={runtimeMode === "fixture"} title={runtimeMode === "fixture" ? "Fixture preview" : "Runtime ready"} />
         </div>
       </div>
+      {!collapsed && !mobileViewport ? (
+        <button
+          aria-label="Resize navigation"
+          aria-orientation="vertical"
+          aria-valuemax={340}
+          aria-valuemin={208}
+          aria-valuenow={width}
+          className="railResizeHandle"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              onWidthChange(Math.max(208, width - (event.shiftKey ? 24 : 8)));
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              onWidthChange(Math.min(340, width + (event.shiftKey ? 24 : 8)));
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              onWidthChange(208);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              onWidthChange(340);
+            }
+          }}
+          onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            onWidthChange(Math.min(340, Math.max(208, Math.round(event.clientX))));
+          }}
+          onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+          role="separator"
+          type="button"
+        ><span /></button>
+      ) : null}
     </aside>
   );
 }

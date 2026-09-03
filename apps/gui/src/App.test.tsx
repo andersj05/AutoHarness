@@ -2,20 +2,20 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { ClientCommand, ClientFrame, ClientTransport, CommandReceipt, EphemeralCredential } from "./protocol";
+import type { ClientCommand, ClientFrame, ClientTransport, CommandReceipt, CredentialSubmission } from "./protocol";
 import { ClientStore } from "./store/clientStore";
 import { createFixtureSnapshot, FixtureTransport, type FixtureScenario } from "./transport/fixtureTransport";
 
 class RecordingFixtureTransport extends FixtureTransport {
   readonly commands: ClientCommand[] = [];
-  readonly credentials: EphemeralCredential[] = [];
+  readonly credentials: CredentialSubmission[] = [];
 
   override async command(command: ClientCommand): Promise<CommandReceipt> {
     this.commands.push(structuredClone(command));
     return super.command(command);
   }
 
-  override async submitCredential(secret: EphemeralCredential): Promise<CommandReceipt> {
+  override async submitCredential(secret: CredentialSubmission): Promise<CommandReceipt> {
     this.credentials.push({ ...secret });
     return super.submitCredential(secret);
   }
@@ -87,7 +87,7 @@ class ManualProjectionTransport implements ClientTransport {
   }
 
   async snapshot() { return structuredClone(this.snapshotValue); }
-  async submitCredential(_secret: EphemeralCredential) { return { requestId: `manual-secret-${++this.requestSequence}` }; }
+  async submitCredential(_secret: CredentialSubmission) { return { requestId: `manual-secret-${++this.requestSequence}` }; }
   async close() {}
 }
 
@@ -146,13 +146,13 @@ class AdmittedFailedPromptTransport extends ManualProjectionTransport {
 }
 
 class CredentialRetryTransport extends ManualProjectionTransport {
-  readonly credentials: EphemeralCredential[] = [];
+  readonly credentials: CredentialSubmission[] = [];
 
   constructor() {
     super(createFixtureSnapshot("credential"));
   }
 
-  override async submitCredential(secret: EphemeralCredential): Promise<CommandReceipt> {
+  override async submitCredential(secret: CredentialSubmission): Promise<CommandReceipt> {
     this.credentials.push({ ...secret });
     const requestId = `credential-${String(this.credentials.length)}`;
     if (this.credentials.length === 1) {
@@ -251,6 +251,31 @@ describe("AutoHarness GUI", () => {
     expect(separator).toHaveAttribute("aria-valuenow", "72");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(separator).toHaveAttribute("aria-valuenow", "70");
+  });
+
+  it("retains independently resizable navigation and inspector panes", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    const navigation = screen.getByRole("separator", { name: "Resize navigation" });
+    expect(navigation).toHaveAttribute("aria-valuenow", "248");
+    fireEvent.keyDown(navigation, { key: "ArrowRight", shiftKey: true });
+    expect(navigation).toHaveAttribute("aria-valuenow", "272");
+
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    expect(await screen.findByRole("heading", { name: "Sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize navigation" })).toHaveAttribute("aria-valuenow", "272");
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(screen.getByRole("separator", { name: "Resize context inspector" })).toHaveAttribute("aria-valuenow", "72");
+  });
+
+  it("opens provider management from the primary application rail", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.click(screen.getByRole("button", { name: "Providers" }));
+    expect(await screen.findByRole("heading", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Personal Gemini/ })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("heading", { name: "Credential" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Model and reasoning" })).toBeInTheDocument();
   });
 
   it("preserves exact prompt whitespace and clears only after mailbox acceptance", async () => {
@@ -435,7 +460,7 @@ describe("AutoHarness GUI", () => {
     await user.click(screen.getByRole("button", { name: "Connect provider" }));
     expect(input).toHaveValue("");
     await waitFor(() => expect(transport.credentials).toHaveLength(1));
-    expect(transport.credentials[0]).toEqual({ connectionId: "connection-gemini", credential: sentinel });
+    expect(transport.credentials[0]).toEqual({ connectionId: "connection-gemini", operation: "session_only", credential: sentinel });
     expect(document.body.textContent).not.toContain(sentinel);
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
@@ -455,8 +480,8 @@ describe("AutoHarness GUI", () => {
 
     await waitFor(() => expect(screen.getByText("connected")).toBeInTheDocument());
     expect(transport.credentials).toEqual([
-      { connectionId: "connection-gemini", credential: "rejected-key" },
-      { connectionId: "connection-gemini", credential: "replacement-key" },
+      { connectionId: "connection-gemini", operation: "session_only", credential: "rejected-key" },
+      { connectionId: "connection-gemini", operation: "session_only", credential: "replacement-key" },
     ]);
     expect(document.body.textContent).not.toContain("replacement-key");
   });

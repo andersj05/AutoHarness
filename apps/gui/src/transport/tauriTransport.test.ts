@@ -13,20 +13,21 @@ import { TauriTransport } from "./tauriTransport";
 
 function initialFrame() {
   return {
-    schema_version: 1,
+    schema_version: 2,
     revision: "1",
     payload: {
       kind: "snapshot",
       payload: {
         reason: "initial",
         snapshot: {
-          schema_version: 1,
+          schema_version: 2,
           lifecycle: { kind: "ready" },
           active_session_id: null,
           sessions: [],
           active_session: null,
           catalog: { kind: "loading" },
           providers: [],
+          provider_recovery_pending: "0",
         },
       },
     },
@@ -54,7 +55,7 @@ describe("TauriTransport", () => {
     carrier.invoke.mockImplementation(async (command: string, arguments_: { onFrame?: { onmessage?: (frame: unknown) => void } }) => {
       if (command === "gui_connect") {
         queueMicrotask(() => arguments_.onFrame?.onmessage?.({
-          schema_version: 2,
+          schema_version: 3,
           revision: "1",
           payload: { kind: "notice", payload: { kind: "shutdown", payload: { state: "ready" } } },
         }));
@@ -137,7 +138,7 @@ describe("TauriTransport", () => {
         return;
       }
       if (command === "gui_dispatch") {
-        return { schema_version: 1, request_id: "1" };
+        return { schema_version: 2, request_id: "1" };
       }
     });
     const transport = new TauriTransport();
@@ -160,5 +161,21 @@ describe("TauriTransport", () => {
     })).rejects.toMatchObject({ code: "invalid_command" });
     expect(carrier.invoke).toHaveBeenCalledTimes(invokeCountBeforePrompts + 1);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("forwards the non-secret credential operation through the dedicated ingress", async () => {
+    carrier.invoke.mockResolvedValue({ schema_version: 2, request_id: "7" });
+    const transport = new TauriTransport();
+
+    await expect(transport.submitCredential({
+      connectionId: "work-router",
+      operation: "replace",
+      credential: "replacement-secret",
+    })).resolves.toEqual({ requestId: "7" });
+    expect(carrier.invoke).toHaveBeenCalledWith("gui_submit_credential", {
+      connectionId: "work-router",
+      operation: "replace",
+      credential: "replacement-secret",
+    });
   });
 });

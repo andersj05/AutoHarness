@@ -6,9 +6,19 @@ use zeroize::Zeroizing;
 
 use crate::bounds::validate_credential;
 use crate::{
-    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, RequestId,
-    SafeFailure, SessionId, ToolCallId, TransportRevision, ValidationError,
+    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, ProviderProfileInput,
+    ReasoningEffort, RequestId, SafeFailure, SessionId, SessionTitle, ToolCallId,
+    TransportRevision, ValidationError,
 };
+
+/// Purpose of one dedicated secret-ingress submission.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialOperation {
+    SessionOnly,
+    Save,
+    Replace,
+}
 
 /// Exact user decision for one frozen durable permission request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +43,50 @@ pub enum ClientCommand {
     CreateSession,
     OpenSession {
         session_id: SessionId,
+    },
+    RenameSession {
+        session_id: SessionId,
+        title: SessionTitle,
+    },
+    ArchiveSession {
+        session_id: SessionId,
+    },
+    UnarchiveSession {
+        session_id: SessionId,
+    },
+    ExportTranscript {
+        session_id: SessionId,
+    },
+    DeleteSession {
+        session_id: SessionId,
+    },
+    UpsertProviderProfile {
+        profile: ProviderProfileInput,
+    },
+    DuplicateProviderProfile {
+        source_connection_id: ConnectionId,
+        destination_connection_id: ConnectionId,
+    },
+    ActivateProviderProfile {
+        connection_id: ConnectionId,
+    },
+    TestProviderProfile {
+        connection_id: ConnectionId,
+    },
+    SetProviderDefaults {
+        connection_id: ConnectionId,
+        model: ModelRef,
+        reasoning_effort: Option<ReasoningEffort>,
+    },
+    DisconnectProviderProfile {
+        connection_id: ConnectionId,
+    },
+    DeleteProviderProfile {
+        connection_id: ConnectionId,
+    },
+    StartCodexAuthentication,
+    CancelCodexAuthentication {
+        authentication_request_id: RequestId,
     },
     RefreshCatalog,
     SelectModel {
@@ -145,6 +199,7 @@ impl<'de> Deserialize<'de> for CommandReceipt {
 /// This type deliberately implements neither `Serialize` nor `Deserialize`.
 pub struct SecretIngress {
     connection_id: ConnectionId,
+    operation: CredentialOperation,
     credential: Zeroizing<String>,
 }
 
@@ -154,10 +209,20 @@ impl SecretIngress {
         connection_id: ConnectionId,
         credential: impl Into<String>,
     ) -> Result<Self, ValidationError> {
+        Self::with_operation(connection_id, CredentialOperation::SessionOnly, credential)
+    }
+
+    /// Takes ownership of one purpose-scoped secret without serializing it.
+    pub fn with_operation(
+        connection_id: ConnectionId,
+        operation: CredentialOperation,
+        credential: impl Into<String>,
+    ) -> Result<Self, ValidationError> {
         let credential = Zeroizing::new(credential.into());
         validate_credential(credential.as_str())?;
         Ok(Self {
             connection_id,
+            operation,
             credential,
         })
     }
@@ -166,6 +231,12 @@ impl SecretIngress {
     #[must_use]
     pub const fn connection_id(&self) -> &ConnectionId {
         &self.connection_id
+    }
+
+    /// Returns the non-secret operation applied to this submission.
+    #[must_use]
+    pub const fn operation(&self) -> CredentialOperation {
+        self.operation
     }
 
     /// Borrows credential text for immediate transfer into the Rust runtime.
@@ -179,6 +250,12 @@ impl SecretIngress {
     pub fn into_credential(self) -> Zeroizing<String> {
         self.credential
     }
+
+    /// Consumes ingress into its non-secret target, operation, and zeroizing value.
+    #[must_use]
+    pub fn into_parts(self) -> (ConnectionId, CredentialOperation, Zeroizing<String>) {
+        (self.connection_id, self.operation, self.credential)
+    }
 }
 
 impl Debug for SecretIngress {
@@ -186,6 +263,7 @@ impl Debug for SecretIngress {
         formatter
             .debug_struct("SecretIngress")
             .field("connection_id", &self.connection_id)
+            .field("operation", &self.operation)
             .field("credential", &"[REDACTED]")
             .finish()
     }

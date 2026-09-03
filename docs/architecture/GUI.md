@@ -2,7 +2,7 @@
 
 **Status:** Accepted migration target
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-02
 
 ## Purpose
 
@@ -75,7 +75,8 @@ React never imports a Rust runtime implementation and never receives a provider,
 
 ## Client protocol
 
-The protocol starts at schema version 1.
+The protocol is currently at schema version 2.
+Schema version 2 adds typed provider profiles, non-secret connection configuration, profile scope, credential state, model defaults, reasoning effort, and native Codex authentication commands without adding secret material to serializable frames.
 All numeric identities that can exceed JavaScript's safe integer range cross the boundary as strings.
 Secret inputs use dedicated one-way commands and never appear in snapshots, frames, notices, frontend storage, or diagnostics.
 
@@ -85,30 +86,37 @@ Commands express requested intent and receive a Rust-issued request identifier.
 A successful command response means the request entered the bounded application mailbox, not that the durable mutation succeeded.
 Commit or rejection arrives separately through a correlated notice or durable projection.
 
-The first command set covers:
+The current command set covers:
 
-- Create or open a session.
+- Create, open, rename, archive, unarchive, export, or delete an exact session.
 - Refresh the model catalog.
 - Select a model.
 - Submit a prompt.
 - Cancel or retry an attempt.
 - Answer an exact tool permission request.
 - Submit an ephemeral credential through a dedicated secret ingress.
+- Create or edit, duplicate, activate, test, disconnect, or delete an exact named provider profile.
+- Save model and reasoning defaults together for the active provider profile.
+- Start or cancel one request-correlated native Codex subscription authentication flow.
 
 ### Frames
 
 The first carrier sends:
 
 - A complete startup snapshot.
-- Coalesced projection snapshots during the first vertical slice.
+- Bounded active-session deltas for changes confined to the current session.
+- Coalesced projection snapshots when state outside the active session changes.
 - Correlated commit, rejection, and authentication notices.
 - An explicit resynchronization snapshot when the client detects a gap.
+- Bounded provider projections that distinguish named profiles from a temporary session default and expose only safe connection, credential-source, default, health, and recovery metadata.
 
 Each frame carries a monotonic transport revision.
 Durable session revisions remain visible inside session data and are not replaced by the transport revision.
 
-Whole-snapshot streaming is transitional.
-Before long-session performance parity is claimed, transcript updates must use keyed patches or bounded committed deltas so serialization cost does not grow with total history for every provider chunk.
+An active-session delta carries the exact session identity, updated session summary and revision, selected model, permission requests, and one transcript splice.
+The splice retains the unchanged prefix and suffix and serializes only inserted or replaced transcript rows.
+The client rejects a delta whose identity or splice range does not match its authoritative baseline.
+Ordinary streaming therefore scales with the changed transcript item, while a complete snapshot remains the recovery and cross-session baseline.
 
 ### Ordering and recovery
 
@@ -136,6 +144,13 @@ A future WebSocket, local daemon, or remote carrier must implement the same comm
 Credential fields use ordinary semantic password controls with browser persistence, spellcheck, and autocomplete disabled.
 Submitting a credential immediately transfers the owned string to a Rust zeroizing type and clears the DOM value and client state.
 The host never echoes credential content or credential length.
+The dedicated ingress distinguishes session-only, saved-vault, and replacement operations.
+Rust validates the exact target and permits vault writes only for named Gemini or router profiles, while session-only credentials apply only to the active connection.
+Environment credentials remain read-only overrides, and a linked vault credential is shown only as a fallback while that override is effective.
+
+Codex subscription credentials never enter the renderer.
+The renderer asks Rust to start one native PKCE browser flow and can cancel only the exact Rust-issued request identifier.
+Rust owns browser launch, loopback callback handling, token storage, refresh, and safe terminal notices.
 
 Remote assets, analytics scripts, form persistence, local storage, and crash payloads are prohibited on credential surfaces.
 Secret-sentinel tests scan application data, Rust logs, packaged frontend output, browser storage, and captured diagnostics.
@@ -177,9 +192,9 @@ The GUI adds these gates without weakening the Rust gates:
 - Browser-mode component, reducer, keyboard, and accessibility tests.
 - Screenshot and geometry review at compact, standard, and wide desktop sizes.
 - Long-transcript virtualization and stream-to-paint performance tests.
+- Complete session lifecycle tests across shutdown and restart.
 - Tauri packaged-app tests on Windows, macOS, and Linux system webviews.
 - Credential sentinel, permission preemption, window-close recovery, and crash-interruption tests.
 - Keyboard-only and screen-reader smoke reviews.
 
 The TUI and its PTY tests remain until the GUI release checklist explicitly retires them.
-

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ClientCommand, ClientFrame, ClientSnapshot, ClientTransport, CommandReceipt, EphemeralCredential } from "../protocol";
+import type { ClientCommand, ClientFrame, ClientSnapshot, ClientTransport, CommandReceipt, CredentialSubmission } from "../protocol";
 import { createFixtureSnapshot } from "../transport/fixtureTransport";
 import { ClientStore } from "./clientStore";
 
@@ -8,7 +8,7 @@ class TestTransport implements ClientTransport {
   errorListener?: (error: unknown) => void;
   snapshotCalls = 0;
   readonly commands: ClientCommand[] = [];
-  readonly credentials: EphemeralCredential[] = [];
+  readonly credentials: CredentialSubmission[] = [];
   baseline = createFixtureSnapshot("ready");
   resyncSnapshot: ClientSnapshot = { ...createFixtureSnapshot("ready"), transportRevision: "9" };
 
@@ -28,7 +28,7 @@ class TestTransport implements ClientTransport {
     return structuredClone(this.resyncSnapshot);
   }
 
-  async submitCredential(secret: EphemeralCredential) {
+  async submitCredential(secret: CredentialSubmission) {
     this.credentials.push({ ...secret });
     return { requestId: "2" };
   }
@@ -112,6 +112,66 @@ describe("ClientStore", () => {
     expect(store.getSnapshot().projection?.connection.kind).toBe("offline");
   });
 
+  it("applies a bounded active-session splice without rebuilding unchanged rows", async () => {
+    const transport = new TestTransport();
+    const fixture = createFixtureSnapshot("ready");
+    const history = Array.from({ length: 65_000 }, (_, index) => ({
+      kind: "message" as const,
+      id: `history-${String(index)}`,
+      role: index % 2 === 0 ? "user" as const : "agent" as const,
+      content: `Durable history row ${String(index)}`,
+    }));
+    transport.baseline = {
+      ...fixture,
+      sessions: fixture.sessions.map((session) => (
+        session.id === fixture.activeSessionId ? { ...session, messageCount: "65000" } : session
+      )),
+      activeSession: { ...fixture.activeSession!, transcript: history },
+    };
+    const store = new ClientStore(transport);
+    await store.start();
+    const baseline = store.getSnapshot().projection!;
+    const active = baseline.activeSession!;
+    const transcriptReference = active.transcript;
+    const firstRow = active.transcript[0];
+
+    store.applyFrame({
+      kind: "active_session_delta",
+      revision: "2",
+      sessionId: active.id,
+      sessionRevision: "15",
+      summary: { ...baseline.sessions[0]!, title: "Renamed while streaming", messageCount: "8" },
+      selectedModelId: active.selectedModelId,
+      transcript: {
+        start: active.transcript.length - 1,
+        deleteCount: 1,
+        items: [{
+          kind: "message",
+          id: "attempt-delta",
+          role: "agent",
+          content: "Only this changed row crossed the carrier.",
+          streaming: true,
+        }],
+      },
+      attempt: { kind: "streaming", id: "attempt-delta", startedAt: "" },
+    });
+
+    const updated = store.getSnapshot().projection!;
+    expect(updated.transportRevision).toBe("2");
+    expect(updated.activeSession).toMatchObject({
+      revision: "15",
+      title: "Renamed while streaming",
+      attempt: { kind: "streaming", id: "attempt-delta" },
+    });
+    expect(updated.activeSession?.transcript).toHaveLength(65_000);
+    expect(updated.activeSession?.transcript).toBe(transcriptReference);
+    expect(updated.activeSession?.transcript[0]).toBe(firstRow);
+    expect(updated.activeSession?.transcript.at(-1)).toMatchObject({
+      id: "attempt-delta",
+      content: "Only this changed row crossed the carrier.",
+    });
+  });
+
   it("ignores stale frames after a baseline", async () => {
     const transport = new TestTransport();
     const store = new ClientStore(transport);
@@ -190,6 +250,35 @@ describe("ClientStore", () => {
     await vi.waitFor(() => expect(store.getSnapshot().transportRevision).toBe("9"));
   });
 
+  it("settles native authentication only when the terminal lifecycle notice arrives", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const settlement = store.dispatchAndWait({ type: "start_codex_authentication" });
+    await Promise.resolve();
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "info",
+      code: "authentication_browser_opened",
+      message: "Finish signing in in the browser.",
+    });
+    expect(store.getSnapshot().notice?.code).toBe("authentication_browser_opened");
+    expect(store.getSnapshot().notice?.requestId).toBe("1");
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "3",
+      requestId: "1",
+      level: "success",
+      code: "authentication_completed",
+      message: "Codex connected.",
+    });
+    await expect(settlement).resolves.toBe("committed");
+  });
+
   it("fails closed when the transport reports an asynchronous frame decode error", async () => {
     const transport = new TestTransport();
     const store = new ClientStore(transport);
@@ -198,7 +287,7 @@ describe("ClientStore", () => {
     expect(store.getSnapshot()).toMatchObject({ lifecycle: "failed", commandError: "Invalid server frame" });
 
     await expect(store.dispatch({ type: "create_session" })).resolves.toBeUndefined();
-    await expect(store.submitCredential({ connectionId: "connection-gemini", credential: "secret" })).resolves.toBeUndefined();
+    await expect(store.submitCredential({ connectionId: "connection-gemini", operation: "session_only", credential: "secret" })).resolves.toBeUndefined();
     expect(transport.commands).toHaveLength(0);
     expect(transport.credentials).toHaveLength(0);
 
@@ -253,5 +342,74 @@ describe("ClientStore", () => {
     await expect(store.dispatchAndWait({ type: "create_session" })).resolves.toBe("unknown");
     await vi.waitFor(() => expect(transport.snapshotCalls).toBe(1));
     expect(store.getSnapshot().commandError).toBe("The host did not confirm whether the command committed.");
+  });
+
+  it("keeps a request-correlated optimistic prompt until authoritative observation", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const baseline = store.getSnapshot().projection!;
+
+    const settlement = store.dispatchAndWait({
+      type: "submit_prompt",
+      sessionId: baseline.activeSessionId!,
+      prompt: "Optimistic exact prompt",
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().optimisticPrompts).toEqual([{
+      requestId: "1",
+      sessionId: baseline.activeSessionId,
+      content: "Optimistic exact prompt",
+    }]));
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "success",
+      code: "command_committed",
+      message: "committed",
+    });
+    await expect(settlement).resolves.toBe("committed");
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(1);
+
+    const activeSession = baseline.activeSession!;
+    store.applyFrame({
+      kind: "snapshot",
+      reason: "projection",
+      revision: "3",
+      snapshot: {
+        ...baseline,
+        transportRevision: "3",
+        activeSession: {
+          ...activeSession,
+          transcript: [
+            ...activeSession.transcript,
+            { kind: "message", id: "durable-input-new", role: "user", content: "Optimistic exact prompt" },
+          ],
+        },
+      },
+    });
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(0);
+  });
+
+  it("retires an optimistic prompt on correlated rejection", async () => {
+    const transport = new TestTransport();
+    const store = new ClientStore(transport);
+    await store.start();
+    const sessionId = store.getSnapshot().projection!.activeSessionId!;
+    const settlement = store.dispatchAndWait({ type: "submit_prompt", sessionId, prompt: "Rejected prompt" });
+    await vi.waitFor(() => expect(store.getSnapshot().optimisticPrompts).toHaveLength(1));
+
+    store.applyFrame({
+      kind: "notice",
+      revision: "2",
+      requestId: "1",
+      level: "error",
+      code: "prompt_rejected",
+      message: "rejected",
+    });
+
+    await expect(settlement).resolves.toBe("rejected");
+    expect(store.getSnapshot().optimisticPrompts).toHaveLength(0);
   });
 });

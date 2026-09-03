@@ -59,7 +59,7 @@ pub enum StorageRequest {
         expected_last_sequence: u64,
         reply: oneshot::Sender<Result<Option<std::path::PathBuf>, AppError>>,
     },
-    /// Writes the active session transcript as Markdown beside the database.
+    /// Writes one exact session transcript as Markdown beside the database.
     ExportTranscriptMarkdown {
         session_id: SessionId,
         reply: oneshot::Sender<Result<std::path::PathBuf, AppError>>,

@@ -1,7 +1,9 @@
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{CLIENT_SCHEMA_VERSION, ClientNotice, ClientSnapshot, TransportRevision};
+use crate::{
+    ActiveSessionDelta, CLIENT_SCHEMA_VERSION, ClientNotice, ClientSnapshot, TransportRevision,
+};
 
 /// Why a complete authoritative snapshot was emitted.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,6 +27,7 @@ pub enum FramePayload {
         reason: SnapshotReason,
         snapshot: Box<ClientSnapshot>,
     },
+    ActiveSessionDelta(Box<ActiveSessionDelta>),
     Notice(ClientNotice),
 }
 
@@ -61,6 +64,16 @@ impl ServerFrame {
             schema_version: CLIENT_SCHEMA_VERSION,
             revision,
             payload: FramePayload::Notice(notice),
+        }
+    }
+
+    /// Constructs an incremental active-session frame.
+    #[must_use]
+    pub fn active_session_delta(revision: TransportRevision, delta: ActiveSessionDelta) -> Self {
+        Self {
+            schema_version: CLIENT_SCHEMA_VERSION,
+            revision,
+            payload: FramePayload::ActiveSessionDelta(Box::new(delta)),
         }
     }
 

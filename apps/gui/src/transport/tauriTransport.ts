@@ -5,7 +5,7 @@ import type {
   ClientSnapshot,
   ClientTransport,
   CommandReceipt,
-  EphemeralCredential,
+  CredentialSubmission,
 } from "../protocol";
 import { MAX_PROMPT_UTF8_BYTES } from "../protocol";
 import { commandToWire, frameFromWire, receiptFromWire } from "./wireAdapter";
@@ -158,9 +158,10 @@ export class TauriTransport implements ClientTransport {
     }
   }
 
-  submitCredential(secret: EphemeralCredential): Promise<CommandReceipt> {
+  submitCredential(secret: CredentialSubmission): Promise<CommandReceipt> {
     return invoke<WireCommandReceipt>("gui_submit_credential", {
       connectionId: secret.connectionId,
+      operation: secret.operation,
       credential: secret.credential,
     }).then(receiptFromWire).catch((error) => {
       const failure = carrierError(error, "The native host did not accept the credential");

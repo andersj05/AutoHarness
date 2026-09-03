@@ -12,7 +12,10 @@ fn forced_shutdown_leaves_a_recoverable_store() {
     let environment = ScenarioEnvironment::prepare();
     let mut interrupted = PtySession::start(&environment, 24, 80);
     interrupted.wait_for(
-        |screen| screen.contents().contains("AutoHarness"),
+        |screen| {
+            let text = screen.contents();
+            text.contains("no model") && text.contains("Ask Agent")
+        },
         "application should draw before forced termination",
     );
     interrupted.send_bytes(&CTRL_N);
@@ -32,7 +35,7 @@ fn forced_shutdown_leaves_a_recoverable_store() {
     recovered.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness") && text.contains("Ask Agent")
+            text.contains("no model") && text.contains("Ask Agent")
         },
         "restart should reopen and render the store left by forced termination",
     );
