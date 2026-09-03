@@ -232,6 +232,7 @@ name = "autoharness-presentation"
 version = "0.1.0"
 dependencies = [
  "autoharness-settings",
+ "libm",
 ]
 
 [[package]]

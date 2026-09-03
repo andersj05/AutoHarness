@@ -1,4 +1,7 @@
 //! Linear RGB and Oklab arithmetic shared by every renderer.
+//!
+//! Transcendental operations use pure-Rust `libm` implementations so reviewed
+//! color output remains bit-for-bit stable across supported operating systems.
 
 /// Linear-light RGB in `0.0..=1.0`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,9 +73,9 @@ impl Rgb {
             0.211_903_498_2 * self.red + 0.680_699_545_1 * self.green + 0.107_396_956_6 * self.blue;
         let short =
             0.088_302_461_9 * self.red + 0.281_718_837_6 * self.green + 0.629_978_700_5 * self.blue;
-        let long_c = long.cbrt();
-        let medium_c = medium.cbrt();
-        let short_c = short.cbrt();
+        let long_c = libm::cbrtf(long);
+        let medium_c = libm::cbrtf(medium);
+        let short_c = libm::cbrtf(short);
         Oklab {
             lightness: 0.210_454_255_3 * long_c + 0.793_617_785_0 * medium_c
                 - 0.004_072_046_8 * short_c,
@@ -105,7 +108,7 @@ impl Oklab {
     /// Returns chroma independently of lightness.
     #[must_use]
     pub fn chroma(self) -> f32 {
-        (self.a * self.a + self.b * self.b).sqrt()
+        libm::sqrtf(self.a * self.a + self.b * self.b)
     }
 
     /// Interpolates toward `other`.
@@ -200,7 +203,7 @@ fn srgb_to_linear(channel: f32) -> f32 {
     if channel <= 0.04045 {
         channel / 12.92
     } else {
-        ((channel + 0.055) / 1.055).powf(2.4)
+        libm::powf((channel + 0.055) / 1.055, 2.4)
     }
 }
 
@@ -208,7 +211,7 @@ fn linear_to_srgb(channel: f32) -> f32 {
     if channel <= 0.003_130_8 {
         channel * 12.92
     } else {
-        1.055 * channel.powf(1.0 / 2.4) - 0.055
+        1.055 * libm::powf(channel, 1.0 / 2.4) - 0.055
     }
 }
 
