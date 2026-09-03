@@ -35,7 +35,7 @@ fn wait_for_chat(session: &mut PtySession) {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn nerd_font_mode_emits_reserved_private_use_glyphs_without_replacement_characters() {
     let environment = ScenarioEnvironment::prepare();
     persist_glyph_mode(&environment, GlyphMode::NerdFont);
@@ -58,7 +58,7 @@ fn nerd_font_mode_emits_reserved_private_use_glyphs_without_replacement_characte
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn unicode_mode_emits_portable_glyphs_without_private_use_dependencies() {
     let environment = ScenarioEnvironment::prepare();
     persist_glyph_mode(&environment, GlyphMode::Unicode);
@@ -80,7 +80,7 @@ fn unicode_mode_emits_portable_glyphs_without_private_use_dependencies() {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn basic_sixteen_color_mode_reports_capability_and_avoids_extended_color_sequences() {
     let mut environment = ScenarioEnvironment::prepare();
     environment.remove("COLORTERM");

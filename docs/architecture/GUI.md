@@ -197,4 +197,5 @@ The GUI adds these gates without weakening the Rust gates:
 - Credential sentinel, permission preemption, window-close recovery, and crash-interruption tests.
 - Keyboard-only and screen-reader smoke reviews.
 
-The TUI and its PTY tests remain until the GUI release checklist explicitly retires them.
+The frozen TUI and its PTY tests remain available as local migration references until the GUI release checklist explicitly retires them.
+They do not gate ordinary GUI migration pull requests.

@@ -60,7 +60,7 @@ fn completion(text: &str) -> String {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn invalid_tool_call_is_denied_and_repaired_in_the_same_terminal_attempt() {
     let fixture = RouterFixture::start(vec![
         tool_call("call-invalid", "web_search", r#"{"query":"news"}"#),
@@ -106,7 +106,7 @@ fn invalid_tool_call_is_denied_and_repaired_in_the_same_terminal_attempt() {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn permission_deny_and_allow_both_settle_durably() {
     let fixture = RouterFixture::start(vec![
         tool_call(

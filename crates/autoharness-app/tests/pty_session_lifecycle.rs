@@ -12,7 +12,7 @@ const CTRL_R: [u8; 1] = [0x12];
 const CTRL_Z: [u8; 1] = [0x1a];
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn sessions_switch_and_destructive_actions_require_confirmation() {
     let environment = ScenarioEnvironment::prepare();
     environment.seed_completed_session("durable lifecycle prompt", "durable lifecycle response");

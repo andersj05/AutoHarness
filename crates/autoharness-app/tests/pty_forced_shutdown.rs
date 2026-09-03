@@ -7,7 +7,7 @@ use pty_support::{PtySession, ScenarioEnvironment, ctrl_c};
 const CTRL_N: [u8; 1] = [0x0e];
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn forced_shutdown_leaves_a_recoverable_store() {
     let environment = ScenarioEnvironment::prepare();
     let mut interrupted = PtySession::start(&environment, 24, 80);

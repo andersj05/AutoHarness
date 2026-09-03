@@ -1,6 +1,6 @@
 # Progress memory
 
-**Last reviewed:** 2026-09-02
+**Last reviewed:** 2026-09-03
 
 **Evidence rule:** Mark capabilities complete only when verified by repository contents, automated checks, or observable behavior.
 
@@ -47,6 +47,7 @@
 - A real Windows Tauri development window rendered the native desktop workspace and settled keyboard command palette against the Rust host and exited without leaving the application or Vite listener running.
 - Rust formatting, strict workspace Clippy, the complete locked Rust suite, frontend type checking, 94 GUI tests, the Windows Credential Manager smoke, and focused compact, mobile-resilience, and wide browser review pass locally for Stage 5.
 - The final independent review of the client contract, native bridge, provider projections, frontend transport and store, permission identity, and root package and CI wiring reports no actionable P0 through P2 findings.
+- On 2026-09-03, default CI was narrowed to renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark gates; the frozen TUI package and ignored PTY acceptance matrix remain available locally but no longer gate ordinary GUI migration pull requests.
 
 - Human-facing README routes to authoritative project documentation.
 - Cross-tool root `AGENTS.md` defines read order, architecture guardrails, and memory maintenance.

@@ -185,6 +185,8 @@ The schema-v2 client contract, Tauri carrier, React-free store, responsive deskt
 The Providers workspace creates and edits Gemini and router profiles, duplicates non-secret configuration, activates and tests exact connections, manages environment, vault, and session-only credential states, saves model and reasoning defaults atomically, runs request-correlated native Codex sign-in, and requires exact confirmation for deletion.
 Secret entry clears before transport, only a dedicated zeroizing native ingress accepts it, temporary session-default rows cannot write to the vault, environment overrides remain visibly authoritative, and diagnostics stay content free.
 Focused browser review covers the provider workspace at compact, mobile-resilience, and wide layouts, including navigation, action wrapping, credential actions, fallback messaging, and destructive controls.
+Default pull-request CI now gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage without running the frozen TUI package or ignored PTY acceptance matrix.
+The terminal tests remain available for deliberate local migration-reference checks until final retirement.
 
 The current implementation does not complete Stage 1 because application orchestration still maps TUI-owned projections through a temporary adapter.
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.

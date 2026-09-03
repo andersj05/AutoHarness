@@ -1,6 +1,6 @@
 # Active memory
 
-**Last reviewed:** 2026-09-02
+**Last reviewed:** 2026-09-03
 
 **Phase:** Native GUI migration Stage 5 provider and profile parity
 
@@ -45,6 +45,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - A real Windows Tauri development window launched against the Rust host, rendered the shared desktop shell and keyboard command palette in WebView2, and exited cleanly.
 - Rust formatting, strict workspace Clippy, the complete locked Rust suite, frontend type checking, 94 GUI tests, the Windows Credential Manager smoke, and focused responsive browser review pass locally for Stage 5.
 - The final independent client, bridge, coordinator, frontend, Tauri, package, and CI audit reports no remaining actionable P0 through P2 findings.
+- Default CI gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage on the relevant platforms without running the frozen TUI package or ignored PTY acceptance matrix.
 
 ## Open migration work
 
@@ -56,7 +57,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - Windows WebView2 received a live wide-shell and command-palette review, while the exact compact, standard, and wide viewport matrix is currently browser-fixture evidence only.
 - Stage 5 macOS and Linux GUI-host credential-vault smokes remain open; the Windows vault primitive passed its opt-in save, load, replace, and delete smoke on this branch.
 - The GUI is not the default application and `bundle.active` remains false.
-- Existing Phase 3.9, Phase 3.10, and Phase 4 release evidence gaps remain open, including cross-platform vault smokes, live router evidence, approved reference-machine reports, human review, rollback, checklist, approval, and promotion.
+- Existing Phase 3.9, Phase 3.10, and Phase 4 terminal release evidence gaps remain recorded as historical evidence rather than default GUI-migration CI blockers, including cross-platform vault smokes, live router evidence, approved reference-machine reports, human review, rollback, checklist, approval, and promotion.
 
 ## Immediate next actions
 
