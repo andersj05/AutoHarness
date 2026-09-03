@@ -2,7 +2,7 @@
 
 **Status:** Active migration contract
 
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-03
 
 ## Direction
 
@@ -155,6 +155,20 @@ Credential controls keep the masked field next to the immediate-transfer boundar
 Model and reasoning defaults form one atomic action against the active authoritative catalog.
 Codex authentication presents one native-browser action and a correlated cancellation state without rendering tokens.
 Permanent profile deletion moves into a separate danger zone and remains disabled until the exact profile identity is typed.
+
+## Implemented Stage 6 personalization and accessibility
+
+The Settings workspace groups all eight renderer-relevant preferences into Appearance, Accessibility, and Conversation sections with searchable labels and descriptions.
+Every row presents the effective value, its authoritative source, an explanation, and a Reset action when a user-file override exists.
+An override hidden by a higher-precedence layer remains visible as a warning so reset never appears ineffective or ambiguous.
+
+System theme and motion preferences follow operating-system media queries until the user selects an explicit value.
+Zoom from 75 through 200 percent, four font sizes, comfortable and compact density, timestamp visibility, color treatment, and composer submission all update the live shell from the host projection.
+At high zoom the rail compacts, route workspaces reflow, and the inspector becomes an overlay while every primary and security-critical action remains reachable.
+
+The application exposes named navigation and main landmarks, a skip link, route headings, icon labels, polite status announcements, and deterministic document order.
+Alt+1 through Alt+5 opens each primary route and restores focus to its main landmark.
+Permission and credential dialogs retain labelled descriptions, logical screen-reader order, focus containment, and focus restoration.
 
 ## Visual validation
 

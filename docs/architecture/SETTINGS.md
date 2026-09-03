@@ -1,6 +1,6 @@
 # Settings, profiles, and credential handling
 
-**Status:** Current settings, credential, and local-preference contract through Phase 3.8.
+**Status:** Current settings, credential, and local-preference contract through GUI migration Stage 6.
 
 This document describes how AutoHarness resolves settings, stores provider profiles and local preferences, and handles credentials.
 The durable decisions are [ADR-0009](../adr/0009-use-os-backed-provider-credential-profiles.md) for the credential vault, [ADR-0012](../adr/0012-use-typed-settings-resolver.md) for layered settings resolution, [ADR-0013](../adr/0013-use-durable-credential-mutation-recovery.md) for cross-system mutation recovery, and [ADR-0015](../adr/0015-use-native-codex-subscription-adapter.md) for native Codex subscription authentication.
@@ -21,33 +21,36 @@ A future schema version fails closed with an explicit error.
 Workspace files may override only explicitly permitted appearance, accessibility, and terminal-presentation preferences.
 Workspace files may not override local display identity, provider, profiles, active profile, internal credential recovery state, approvals, retention, telemetry, sandbox policy, or credentials.
 
-The profile document carries schema version 4 and is written atomically through a temporary file plus rename.
-Schema-v1, schema-v2, and schema-v3 documents migrate on their next mutation.
-Schema 3 added typed non-secret local preferences, and schema 4 adds an optional validated default reasoning effort beside each profile default model.
+The profile document carries schema version 5 and is written atomically through a temporary file plus rename.
+Schema-v1 through schema-v4 documents migrate on their next mutation.
+Schema 3 added typed non-secret local preferences, schema 4 added an optional validated default reasoning effort beside each profile default model, and schema 5 partitions local preferences into shared, GUI-only, and terminal-only groups.
 An unparseable or invalid existing document is renamed to `autoharness.profiles.json.bad` and replaced with defaults so AutoHarness remains usable.
 Future schema documents remain intact and fail closed.
 
 ## Local profile and preferences
 
-The application-owned profile document is also the one durable store for a local display label and terminal preferences.
+The application-owned profile document is also the one durable store for a local display label and client preferences.
 There is no second preferences file or profile store.
 Every local preference is optional in a layer, so an absent user value inherits a permitted lower-layer value or the built-in default.
 The Settings route offers reset to inherited by clearing the user-layer value and reset to default by writing the built-in default at the user layer.
 
-The typed persisted preferences are:
+The shared preferences consumed by both clients are:
 
 - Theme preset.
 - Color mode: color, no color, or high contrast.
-- Glyph mode: Unicode or ASCII chrome.
 - Reduced motion.
 - Density: comfortable or compact.
-- Layout: responsive or single column.
-- Terminal timestamp style: relative, absolute, or hidden.
+- Timestamp style: relative, absolute, or hidden.
 - Composer submission behavior: Control-S or Enter.
 
-The terminal receives a safe effective projection with each value, source, and explanation.
-The TUI emits typed preference changes only.
-The application validates display labels, atomically updates the document, resolves the new projection, and republishes it before the TUI acknowledges the action.
+The GUI-only preferences are a validated zoom percentage from 75 through 200 and a small, standard, large, or extra-large prose font size.
+The terminal-only preferences are Unicode or ASCII glyphs, responsive or single-column layout, and essential, workspace, or detailed prompt status.
+
+Each client receives only its safe effective projection with each value and source.
+The GUI projection also states whether the user file contains an override, even when a higher-precedence layer currently hides it, so reset behavior remains explainable.
+Clients emit typed preference changes only.
+The application validates the change, atomically updates the document, resolves the new projection, and republishes it before acknowledging the action.
+The GUI Reset action clears the user-layer override and immediately shows the resulting inherited authority.
 
 ## Provider profiles
 
