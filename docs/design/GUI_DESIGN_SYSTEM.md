@@ -118,6 +118,7 @@ Zoom to 200 percent must preserve every primary action and security-critical det
 - `ToolCard`.
 - `Composer`.
 - `ModelPicker`.
+- `ProvidersWorkspace`.
 - `ContextInspector`.
 - `StatusChip`.
 - `Callout`.
@@ -144,6 +145,16 @@ These primitives remain transport-free and expose native roles, accessible names
 The live shell consumes the shared appearance matrix, command palette, split pane, virtual session list, status surfaces, meters, tool cards, fields, chips, and buttons.
 Permission review remains the highest-authority dialog and preempts the command palette and ordinary shortcuts.
 Reduced-motion preference is accepted from the operating system and can also be enabled through presentation settings.
+
+## Implemented Stage 5 provider workspace
+
+The Providers workspace uses a master-detail layout with a bounded profile list, one selected detail surface, and compact status, scope, credential-source, and active-state labels.
+Named profiles expose grouped connection and configuration actions, while the temporary session-default row is visibly distinct and omits durable edit, test, default, and deletion controls.
+Environment overrides use a prominent explanatory callout and describe saved vault material only as a fallback.
+Credential controls keep the masked field next to the immediate-transfer boundary, stack at narrow widths, and clear before native transfer.
+Model and reasoning defaults form one atomic action against the active authoritative catalog.
+Codex authentication presents one native-browser action and a correlated cancellation state without rendering tokens.
+Permanent profile deletion moves into a separate danger zone and remains disabled until the exact profile identity is typed.
 
 ## Visual validation
 

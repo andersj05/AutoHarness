@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-02
 
 **Decision:** [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md)
 
@@ -167,7 +167,7 @@ Exit criteria:
 
 ## First implementation slice
 
-This branch begins Stages 0 through 2 with a deliberately bounded scope:
+The migration began with Stages 0 through 2 in a deliberately bounded scope:
 
 1. Establish the versioned GUI client protocol and secret ingress split.
 2. Add the Tauri and React workspace with fixture-mode browser development.
@@ -180,11 +180,13 @@ It must remain explicit in code and memory until Stage 1 exits.
 
 ## Current slice evidence
 
-The branch implements the bounded development preview described above.
-The schema-v1 client contract, Tauri carrier, React-free store, responsive desktop shell, deterministic fixture scenarios, permission preemption, one-way credential ingress, ordered recovery, native Windows launch, complete locked Rust workspace gates, frontend tests, production bundle, documentation links, and diff checks are verified locally.
-Focused regressions cover request correlation, gaps, resynchronization, renderer replacement, shutdown ordering, post-admission failures, credential reconstruction, permission display safety and full planner bounds, malformed catalogs, and unnamed-profile fallback connections.
-The final independent audit reports no remaining actionable P0 through P2 findings across the client, bridge, coordinator projection paths, frontend, Tauri package wiring, and CI integration.
+The current implementation completes the Stage 3 design-system slice, the Stage 4 session and workspace slice, and the Stage 5 provider-management slice locally.
+The schema-v2 client contract, Tauri carrier, React-free store, responsive desktop shell, deterministic fixtures, permission preemption, ordered recovery, complete locked Rust workspace gates, 94 GUI tests, and the Windows operating-system vault smoke are verified locally.
+The Providers workspace creates and edits Gemini and router profiles, duplicates non-secret configuration, activates and tests exact connections, manages environment, vault, and session-only credential states, saves model and reasoning defaults atomically, runs request-correlated native Codex sign-in, and requires exact confirmation for deletion.
+Secret entry clears before transport, only a dedicated zeroizing native ingress accepts it, temporary session-default rows cannot write to the vault, environment overrides remain visibly authoritative, and diagnostics stay content free.
+Focused browser review covers the provider workspace at compact, mobile-resilience, and wide layouts, including navigation, action wrapping, credential actions, fallback messaging, and destructive controls.
 
-The branch does not complete Stage 1 because application orchestration still maps TUI-owned projections through a temporary adapter.
+The current implementation does not complete Stage 1 because application orchestration still maps TUI-owned projections through a temporary adapter.
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.
-Stages 3 through 8 remain planned migration work.
+Stage 5's cross-platform exit evidence remains open because macOS and Linux GUI-host credential-vault smokes have not run on this Windows branch.
+Stages 6 through 8 remain planned migration work.
