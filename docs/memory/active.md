@@ -4,7 +4,7 @@
 
 **Phase:** Native GUI migration Stage 5 provider and profile parity
 
-**Status:** Stages 3 and 4 are merged into `dev`; Stage 5 provider, profile, model-default, reasoning, credential, and Codex authentication parity is implemented on `feat/gui-provider-profiles`, its local implementation gates pass, and cross-platform migration release evidence remains open
+**Status:** Stage 5 provider, profile, model-default, reasoning, credential, and Codex authentication parity is implemented and locally validated, while cross-platform migration release evidence remains open
 
 ## Current objective
 
