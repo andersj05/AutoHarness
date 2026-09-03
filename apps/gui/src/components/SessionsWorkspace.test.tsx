@@ -31,6 +31,7 @@ function renderWorkspace(value = snapshot()) {
       onOpen={onOpen}
       onOpenNavigation={() => undefined}
       snapshot={value}
+      timestampStyle="relative"
     />,
   );
   return { commands, onCommand, onOpen, user };

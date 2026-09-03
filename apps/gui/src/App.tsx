@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { AppRail, type RouteId } from "./components/AppRail";
 import { ContextInspector } from "./components/ContextInspector";
 import { Conversation } from "./components/Conversation";
@@ -7,10 +7,10 @@ import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
-import { SimpleWorkspace } from "./components/RouteWorkspaces";
+import { MemoryWorkspace } from "./components/RouteWorkspaces";
 import { SessionsWorkspace } from "./components/SessionsWorkspace";
+import { SettingsWorkspace } from "./components/SettingsWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
-import type { ColorMode, ThemePreset } from "./design-system/appearance";
 import { useClientStore } from "./store/react";
 import type { ClientStore } from "./store/clientStore";
 
@@ -46,15 +46,15 @@ export function App({ store }: AppProps) {
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [transcriptSearchRequest, setTranscriptSearchRequest] = useState(0);
-  const [theme, setTheme] = useState<ThemePreset>("system");
-  const [colorMode, setColorMode] = useState<ColorMode>("color");
-  const [reduceMotion, setReduceMotion] = useState(() => mediaMatches("(prefers-reduced-motion: reduce)"));
   const [inspectorPercent, setInspectorPercent] = useState(72);
   const [answeringPermissionIdentity, setAnsweringPermissionIdentity] = useState<string>();
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({});
   const mobileViewport = useMediaQuery("(max-width: 680px)");
+  const systemDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
+  const systemReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const shellRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const previousRouteRef = useRef<RouteId>(route);
 
   useEffect(() => {
     void store.start();
@@ -64,10 +64,16 @@ export function App({ store }: AppProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       const newSessionShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "n";
       const paletteShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k";
-      if (!newSessionShortcut && !paletteShortcut) return;
+      const routeShortcut = event.altKey && !event.ctrlKey && !event.metaKey
+        ? ({ "1": "chat", "2": "sessions", "3": "providers", "4": "memory", "5": "settings" } as const)[event.key]
+        : undefined;
+      if (!newSessionShortcut && !paletteShortcut && !routeShortcut) return;
       event.preventDefault();
       if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen) return;
-      if (paletteShortcut) {
+      if (routeShortcut) {
+        setCommandPaletteOpen(false);
+        setRoute(routeShortcut);
+      } else if (paletteShortcut) {
         setCommandPaletteOpen(true);
       } else if (!commandPaletteOpen) {
         void store.dispatch({ type: "create_session" });
@@ -77,6 +83,12 @@ export function App({ store }: AppProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, store]);
+
+  useEffect(() => {
+    if (previousRouteRef.current === route) return;
+    previousRouteRef.current = route;
+    queueMicrotask(() => document.getElementById("main-content")?.focus({ preventScroll: true }));
+  }, [route]);
 
   const projection = client.projection;
   const activeSession = projection?.activeSession;
@@ -173,6 +185,17 @@ export function App({ store }: AppProps) {
     );
   }
 
+  const settings = projection.settings;
+  const themePreference = settings.themePreset.value;
+  const resolvedTheme = themePreference === "system" ? (systemDarkTheme ? "system" : "light") : themePreference;
+  const colorMode = settings.colorMode.value;
+  const reduceMotion = settings.reducedMotion.value || systemReducedMotion;
+  const zoomFactor = settings.zoomPercent.value / 100;
+  const appStyle = {
+    "--app-zoom": zoomFactor,
+    "--app-zoom-inverse": `${100 / zoomFactor}%`,
+  } as CSSProperties;
+
   const openSession = (sessionId: string) => {
     if (sessionId !== projection.activeSessionId) void store.dispatch({ type: "open_session", sessionId });
     setRoute("chat");
@@ -180,11 +203,11 @@ export function App({ store }: AppProps) {
 
   const commandItems: readonly CommandItem[] = [
     { id: "new-session", label: "New session", description: "Create a durable conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
-    { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat" },
-    { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions" },
-    { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers" },
-    { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory" },
-    { id: "settings", label: "Open settings", description: "Preview themes, contrast, and motion", icon: "settings" },
+    { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat", shortcut: "Alt 1" },
+    { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions", shortcut: "Alt 2" },
+    { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers", shortcut: "Alt 3" },
+    { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory", shortcut: "Alt 4" },
+    { id: "settings", label: "Open settings", description: "Inspect and change renderer preferences", icon: "settings", shortcut: "Alt 5" },
     { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
     { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
@@ -220,6 +243,8 @@ export function App({ store }: AppProps) {
         model={activeModel}
         optimisticPrompts={client.optimisticPrompts}
         searchRequest={transcriptSearchRequest}
+        submissionBehavior={settings.composerSubmitBehavior.value}
+        timestampStyle={settings.timestampStyle.value}
         onCancel={(attemptId) => {
           if (activeSession) void store.dispatch({ type: "cancel_attempt", sessionId: activeSession.id, attemptId });
         }}
@@ -246,6 +271,7 @@ export function App({ store }: AppProps) {
         onOpen={openSession}
         onOpenNavigation={() => setMobileRailOpen(true)}
         snapshot={projection}
+        timestampStyle={settings.timestampStyle.value}
       />
     ) : route === "providers" ? (
       <ProvidersWorkspace
@@ -257,21 +283,29 @@ export function App({ store }: AppProps) {
         onStartAuthentication={async () => (await store.dispatch({ type: "start_codex_authentication" }))?.requestId}
         snapshot={projection}
       />
+    ) : route === "memory" ? (
+      <MemoryWorkspace onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : (
-      <SimpleWorkspace
-        colorMode={colorMode}
-        onColorMode={setColorMode}
+      <SettingsWorkspace
+        onCommand={(command) => store.dispatchAndWait(command)}
         onOpenNavigation={() => setMobileRailOpen(true)}
-        onReduceMotion={setReduceMotion}
-        onTheme={setTheme}
-        reduceMotion={reduceMotion}
-        route={route}
-        theme={theme}
+        settings={settings}
       />
     );
 
   return (
-    <div className="app" data-color-mode={colorMode} data-high-contrast={colorMode === "high-contrast"} data-reduce-motion={reduceMotion} data-theme={theme}>
+    <div
+      className="app"
+      data-color-mode={colorMode}
+      data-density={settings.density.value}
+      data-font-size={settings.fontSize.value}
+      data-high-contrast={colorMode === "high-contrast"}
+      data-reduce-motion={reduceMotion}
+      data-theme={resolvedTheme}
+      data-theme-preference={themePreference}
+      data-zoom={settings.zoomPercent.value}
+      style={appStyle}
+    >
       <a aria-hidden={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? true : undefined} className="skipLink" href="#main-content" tabIndex={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? -1 : undefined}>Skip to main content</a>
       <div className="appShell" ref={shellRef}>
         <div className="ambient ambientOne" />
