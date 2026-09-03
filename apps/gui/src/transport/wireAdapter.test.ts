@@ -4,7 +4,7 @@ import type { WireClientSnapshot, WireServerFrame } from "./wire";
 
 function wireSnapshot(): WireClientSnapshot {
   return {
-    schema_version: 2,
+    schema_version: 3,
     lifecycle: { kind: "ready" },
     active_session_id: "session-1",
     sessions: [
@@ -78,6 +78,16 @@ function wireSnapshot(): WireClientSnapshot {
         default_reasoning_effort: "high",
       },
     ],
+    settings: {
+      theme_preset: { value: "ocean", source: "workspace_file", user_override: false },
+      color_mode: { value: "high_contrast", source: "user_file", user_override: true },
+      zoom_percent: { value: 125, source: "user_file", user_override: true },
+      font_size: { value: "large", source: "user_file", user_override: true },
+      density: { value: "compact", source: "workspace_file", user_override: false },
+      reduced_motion: { value: true, source: "environment", user_override: false },
+      timestamp_style: { value: "absolute", source: "user_file", user_override: true },
+      composer_submit_behavior: { value: "control_s", source: "default", user_override: false },
+    },
     provider_recovery_pending: "0",
   };
 }
@@ -86,7 +96,7 @@ describe("wire adapter", () => {
   it("emits the exact Rust command envelope and model identity", () => {
     const modelId = modelRefKey({ provider_id: "gemini", model_id: "gemini-2.5-pro" });
     expect(commandToWire({ type: "select_model", sessionId: "session-1", modelId })).toEqual({
-      schema_version: 2,
+      schema_version: 3,
       command: {
         kind: "select_model",
         payload: {
@@ -99,7 +109,7 @@ describe("wire adapter", () => {
 
   it("maps the complete session lifecycle without losing exact scope", () => {
     expect(commandToWire({ type: "rename_session", sessionId: "session-1", title: "Exact title" })).toEqual({
-      schema_version: 2,
+      schema_version: 3,
       command: {
         kind: "rename_session",
         payload: { session_id: "session-1", title: "Exact title" },
@@ -188,12 +198,52 @@ describe("wire adapter", () => {
       credentialState: "stored",
       defaultReasoningEffort: "high",
     });
+    expect(snapshot.settings).toMatchObject({
+      themePreset: { value: "ocean", source: "workspace_file", userOverride: false },
+      colorMode: { value: "high-contrast", source: "user_file", userOverride: true },
+      zoomPercent: { value: 125, source: "user_file", userOverride: true },
+      reducedMotion: { value: true, source: "environment", userOverride: false },
+    });
+  });
+
+  it("maps typed preference updates and reset intent exactly", () => {
+    expect(commandToWire({
+      type: "update_client_preference",
+      change: { kind: "color_mode", value: "no-color" },
+    })).toEqual({
+      schema_version: 3,
+      command: {
+        kind: "update_client_preference",
+        payload: { change: { kind: "color_mode", payload: { value: "no_color" } } },
+      },
+    });
+    expect(commandToWire({
+      type: "update_client_preference",
+      change: { kind: "font_size", value: null },
+    }).command).toEqual({
+      kind: "update_client_preference",
+      payload: { change: { kind: "font_size", payload: { value: null } } },
+    });
+  });
+
+  it("rejects renderer zoom values outside the versioned contract", () => {
+    expect(() => commandToWire({
+      type: "update_client_preference",
+      change: { kind: "zoom_percent", value: 201 },
+    })).toThrow(/zoom/i);
+    expect(() => snapshotFromWire({
+      ...wireSnapshot(),
+      settings: {
+        ...wireSnapshot().settings,
+        zoom_percent: { value: 74, source: "user_file", user_override: true },
+      },
+    }, "4")).toThrow(/zoom/i);
   });
 
   it("rejects noncanonical, zero, and out-of-range wire identities", () => {
-    expect(() => receiptFromWire({ schema_version: 2, request_id: "01" })).toThrow(/request|decimal/i);
-    expect(() => receiptFromWire({ schema_version: 2, request_id: "0" })).toThrow(/zero/i);
-    expect(() => receiptFromWire({ schema_version: 2, request_id: "18446744073709551616" })).toThrow(/u64/i);
+    expect(() => receiptFromWire({ schema_version: 3, request_id: "01" })).toThrow(/request|decimal/i);
+    expect(() => receiptFromWire({ schema_version: 3, request_id: "0" })).toThrow(/zero/i);
+    expect(() => receiptFromWire({ schema_version: 3, request_id: "18446744073709551616" })).toThrow(/u64/i);
   });
 
   it("prefers an exact provider identity label before an unrelated active connection", () => {
@@ -295,7 +345,7 @@ describe("wire adapter", () => {
 
   it("preserves resynchronization reason on a server frame", () => {
     const frame: WireServerFrame = {
-      schema_version: 2,
+      schema_version: 3,
       revision: "22",
       payload: {
         kind: "snapshot",
@@ -308,7 +358,7 @@ describe("wire adapter", () => {
   it("maps only the changed active-session transcript rows", () => {
     const snapshot = wireSnapshot();
     const frame: WireServerFrame = {
-      schema_version: 2,
+      schema_version: 3,
       revision: "5",
       payload: {
         kind: "active_session_delta",

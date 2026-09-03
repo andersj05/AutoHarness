@@ -1,4 +1,4 @@
-export const CLIENT_SCHEMA_VERSION = 2 as const;
+export const CLIENT_SCHEMA_VERSION = 3 as const;
 export const MAX_PROMPT_UTF8_BYTES = 128 * 1024;
 export const MAX_SESSION_TITLE_UTF8_BYTES = 128;
 
@@ -14,6 +14,40 @@ export type CredentialSource = "none" | "environment" | "vault" | "session_only"
 export type ProviderCredentialState = "disconnected" | "stored" | "recovery_pending";
 export type ProviderProfileScope = "named" | "session_default";
 export type ProviderStatus = "disconnected" | "credential_required" | "untested" | "connecting" | "ready" | "offline" | "failed";
+export type ThemePreset = "system" | "light" | "dark" | "aurora" | "ember" | "midnight" | "ocean" | "forest" | "rose";
+export type ColorMode = "color" | "soft" | "vivid" | "no-color" | "high-contrast";
+export type Density = "comfortable" | "compact";
+export type TimestampStyle = "relative" | "absolute" | "hidden";
+export type ComposerSubmitBehavior = "control_s" | "enter";
+export type GuiFontSize = "small" | "standard" | "large" | "extra_large";
+export type PreferenceSource = "default" | "user_file" | "workspace_file" | "environment" | "command_line";
+
+export interface EffectiveSetting<T> {
+  value: T;
+  source: PreferenceSource;
+  userOverride: boolean;
+}
+
+export interface ClientSettingsProjection {
+  themePreset: EffectiveSetting<ThemePreset>;
+  colorMode: EffectiveSetting<ColorMode>;
+  zoomPercent: EffectiveSetting<number>;
+  fontSize: EffectiveSetting<GuiFontSize>;
+  density: EffectiveSetting<Density>;
+  reducedMotion: EffectiveSetting<boolean>;
+  timestampStyle: EffectiveSetting<TimestampStyle>;
+  composerSubmitBehavior: EffectiveSetting<ComposerSubmitBehavior>;
+}
+
+export type ClientPreferenceChange =
+  | { kind: "theme_preset"; value: ThemePreset | null }
+  | { kind: "color_mode"; value: ColorMode | null }
+  | { kind: "zoom_percent"; value: number | null }
+  | { kind: "font_size"; value: GuiFontSize | null }
+  | { kind: "density"; value: Density | null }
+  | { kind: "reduced_motion"; value: boolean | null }
+  | { kind: "timestamp_style"; value: TimestampStyle | null }
+  | { kind: "composer_submit_behavior"; value: ComposerSubmitBehavior | null };
 
 export type ConnectionState =
   | { kind: "online"; providerLabel: string; credentialSource: string }
@@ -143,6 +177,7 @@ export interface ClientSnapshot {
   sessions: readonly SessionSummary[];
   catalog: CatalogProjection;
   providers: readonly ProviderProfile[];
+  settings: ClientSettingsProjection;
   providerRecoveryPending: string;
   activeSession?: ActiveSessionProjection;
   pendingPermission?: PermissionRequest;
@@ -169,6 +204,7 @@ export type ClientCommand =
     }
   | { type: "disconnect_provider_profile"; connectionId: string }
   | { type: "delete_provider_profile"; connectionId: string }
+  | { type: "update_client_preference"; change: ClientPreferenceChange }
   | { type: "start_codex_authentication" }
   | { type: "cancel_codex_authentication"; authenticationRequestId: RequestId }
   | { type: "refresh_catalog" }

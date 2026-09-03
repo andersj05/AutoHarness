@@ -4,7 +4,10 @@ import type {
   CatalogProjection,
   ClientCommand,
   ClientFrame,
+  ClientPreferenceChange,
+  ClientSettingsProjection,
   ClientSnapshot,
+  ColorMode,
   ConnectionState,
   ModelDescriptor,
   PermissionRequest,
@@ -18,6 +21,8 @@ import type {
   WireAttemptState,
   WireCatalogProjection,
   WireClientCommand,
+  WireClientPreferenceChange,
+  WireClientSettingsProjection,
   WireClientSnapshot,
   WireCommandEnvelope,
   WireCommandReceipt,
@@ -51,6 +56,87 @@ function retryable(state: WireAttemptState): boolean {
 const U64_MAX = 18_446_744_073_709_551_615n;
 const I64_MAX = 9_223_372_036_854_775_807n;
 const I64_MIN = -9_223_372_036_854_775_808n;
+
+function colorModeFromWire(value: WireClientSettingsProjection["color_mode"]["value"]): ColorMode {
+  return value === "no_color" ? "no-color" : value === "high_contrast" ? "high-contrast" : value;
+}
+
+function colorModeToWire(value: ColorMode): WireClientSettingsProjection["color_mode"]["value"] {
+  return value === "no-color" ? "no_color" : value === "high-contrast" ? "high_contrast" : value;
+}
+
+function settingsFromWire(settings: WireClientSettingsProjection): ClientSettingsProjection {
+  const zoomPercent = settings.zoom_percent.value;
+  if (!Number.isInteger(zoomPercent) || zoomPercent < 75 || zoomPercent > 200) {
+    throw new Error("Host published a GUI zoom outside the supported range");
+  }
+  return {
+    themePreset: {
+      value: settings.theme_preset.value,
+      source: settings.theme_preset.source,
+      userOverride: settings.theme_preset.user_override,
+    },
+    colorMode: {
+      value: colorModeFromWire(settings.color_mode.value),
+      source: settings.color_mode.source,
+      userOverride: settings.color_mode.user_override,
+    },
+    zoomPercent: {
+      value: zoomPercent,
+      source: settings.zoom_percent.source,
+      userOverride: settings.zoom_percent.user_override,
+    },
+    fontSize: {
+      value: settings.font_size.value,
+      source: settings.font_size.source,
+      userOverride: settings.font_size.user_override,
+    },
+    density: {
+      value: settings.density.value,
+      source: settings.density.source,
+      userOverride: settings.density.user_override,
+    },
+    reducedMotion: {
+      value: settings.reduced_motion.value,
+      source: settings.reduced_motion.source,
+      userOverride: settings.reduced_motion.user_override,
+    },
+    timestampStyle: {
+      value: settings.timestamp_style.value,
+      source: settings.timestamp_style.source,
+      userOverride: settings.timestamp_style.user_override,
+    },
+    composerSubmitBehavior: {
+      value: settings.composer_submit_behavior.value,
+      source: settings.composer_submit_behavior.source,
+      userOverride: settings.composer_submit_behavior.user_override,
+    },
+  };
+}
+
+function preferenceChangeToWire(change: ClientPreferenceChange): WireClientPreferenceChange {
+  switch (change.kind) {
+    case "theme_preset":
+      return { kind: change.kind, payload: { value: change.value } };
+    case "color_mode":
+      return { kind: change.kind, payload: { value: change.value === null ? null : colorModeToWire(change.value) } };
+    case "zoom_percent":
+      if (change.value !== null && (!Number.isInteger(change.value) || change.value < 75 || change.value > 200)) {
+        throw new Error("GUI zoom must be a whole percentage from 75 through 200");
+      }
+      return { kind: change.kind, payload: { value: change.value } };
+    case "font_size":
+      return { kind: change.kind, payload: { value: change.value } };
+    case "density":
+      return { kind: change.kind, payload: { value: change.value } };
+    case "reduced_motion":
+      return { kind: change.kind, payload: { value: change.value } };
+    case "timestamp_style":
+      return { kind: change.kind, payload: { value: change.value } };
+    case "composer_submit_behavior":
+      return { kind: change.kind, payload: { value: change.value } };
+  }
+}
 
 function decimalU64(value: string): string {
   if (!/^(0|[1-9]\d*)$/.test(value)) throw new Error("Host published a non-canonical unsigned decimal");
@@ -306,6 +392,7 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     sessions: snapshot.sessions.map(sessionSummaryFromWire),
     catalog,
     providers: snapshot.providers.map(providerFromWire),
+    settings: settingsFromWire(snapshot.settings),
     providerRecoveryPending: snapshot.provider_recovery_pending,
     activeSession,
     pendingPermission: permissionFromWire(snapshot),
@@ -416,6 +503,10 @@ export function commandToWire(command: ClientCommand): WireCommandEnvelope {
     }; break;
     case "disconnect_provider_profile": wire = { kind: "disconnect_provider_profile", payload: { connection_id: command.connectionId } }; break;
     case "delete_provider_profile": wire = { kind: "delete_provider_profile", payload: { connection_id: command.connectionId } }; break;
+    case "update_client_preference": wire = {
+      kind: "update_client_preference",
+      payload: { change: preferenceChangeToWire(command.change) },
+    }; break;
     case "start_codex_authentication": wire = { kind: "start_codex_authentication" }; break;
     case "cancel_codex_authentication": wire = {
       kind: "cancel_codex_authentication",
