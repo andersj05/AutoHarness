@@ -425,10 +425,20 @@ fn chat_body(
     request: &ChatRequest,
     credential: &RouterCredential,
 ) -> Result<Vec<u8>, ProviderError> {
-    let messages = request
-        .messages
-        .iter()
-        .map(|message| match message {
+    let mut messages = Vec::with_capacity(
+        request
+            .messages
+            .len()
+            .saturating_add(usize::from(request.context.is_some())),
+    );
+    if let Some(context) = &request.context {
+        messages.push(NativeMessage::Text {
+            role: "system",
+            content: credential.redact(context.as_str()),
+        });
+    }
+    messages.extend(request.messages.iter().map(|message| {
+        match message {
             autoharness_provider::ChatMessage::Text { role, content } => NativeMessage::Text {
                 role: match role {
                     ChatRole::User => "user",
@@ -458,8 +468,8 @@ fn chat_body(
                 tool_call_id: provider_call_id.as_str().to_owned(),
                 content: credential.redact(content.as_str()),
             },
-        })
-        .collect();
+        }
+    }));
     let tools = request
         .tools
         .iter()
@@ -567,7 +577,7 @@ mod tests {
     use super::*;
     use autoharness_domain::ModelId;
     use autoharness_provider::{
-        CapabilitySupport, ChatContent, ChatMessage, TextDelta, UsageSnapshot,
+        CapabilitySupport, ChatContent, ChatMessage, ContextPrelude, TextDelta, UsageSnapshot,
     };
 
     use crate::test_http::{ResponseSpec, spawn, spawn_slow_sse};
@@ -623,6 +633,22 @@ mod tests {
         assert_eq!(value["stream"], true);
         assert_eq!(value["stream_options"]["include_usage"], true);
         assert_eq!(value["messages"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn context_prelude_is_a_native_system_message_before_history() {
+        let credential = RouterCredential::new("router-secret").expect("credential");
+        let request = request().with_context(
+            ContextPrelude::new("classified router context").expect("context prelude"),
+        );
+        let value: Value =
+            serde_json::from_slice(&chat_body("model-a", &request, &credential).expect("body"))
+                .expect("JSON");
+
+        assert_eq!(value["messages"].as_array().map(Vec::len), Some(3));
+        assert_eq!(value["messages"][0]["role"], "system");
+        assert_eq!(value["messages"][0]["content"], "classified router context");
+        assert_eq!(value["messages"][1]["role"], "user");
     }
 
     #[tokio::test]

@@ -1,0 +1,117 @@
+.dsButton {
+  display: inline-flex;
+  min-height: var(--control-height-md);
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--type-label);
+  font-weight: 700;
+  line-height: var(--leading-tight);
+  transition: transform var(--motion-fast) var(--ease-standard), background var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.dsButton[data-size="small"] { min-height: var(--control-height-sm); padding: var(--space-1) var(--space-3); font-size: var(--type-meta); }
+.dsButton[data-variant="primary"] { background: linear-gradient(135deg, var(--color-accent), var(--color-accent-alt)); color: var(--color-text-on-accent); box-shadow: var(--elevation-1); }
+.dsButton[data-variant="secondary"] { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
+.dsButton[data-variant="quiet"] { background: transparent; color: var(--color-text-secondary); }
+.dsButton[data-variant="danger"] { border-color: var(--color-danger); background: var(--color-danger-soft); color: var(--color-danger); }
+.dsButton:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--color-border-focus); }
+.dsButton:active:not(:disabled) { transform: translateY(0); }
+.dsButton:disabled { color: var(--color-text-disabled); }
+.dsButtonSpinner { width: 0.875rem; height: 0.875rem; border: 2px solid currentColor; border-right-color: transparent; border-radius: var(--radius-round); animation: dsSpin var(--motion-pane) linear infinite; }
+
+.dsField { display: grid; gap: var(--space-2); color: var(--color-text-secondary); font-size: var(--type-label); font-weight: 650; }
+.dsFieldControl { display: flex; min-height: var(--control-height-lg); align-items: center; gap: var(--space-2); padding-inline: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-surface-sunken); color: var(--color-text-primary); transition: border-color var(--motion-fast), box-shadow var(--motion-fast); }
+.dsFieldControl:focus-within { border-color: var(--color-border-focus); box-shadow: 0 0 0 1px var(--color-border-focus); }
+.dsField[data-invalid="true"] .dsFieldControl { border-color: var(--color-danger); }
+.dsFieldControl input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: inherit; }
+.dsFieldAdornment { display: inline-grid; place-items: center; color: var(--color-text-muted); }
+.dsFieldHint, .dsFieldError { color: var(--color-text-muted); font-size: var(--type-meta); font-weight: 500; }
+.dsFieldError { color: var(--color-danger); }
+
+.dsChip { display: inline-flex; min-height: 1.5rem; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-round); color: var(--color-text-secondary); font-family: var(--font-technical); font-size: var(--type-micro); font-weight: 700; line-height: 1; text-transform: uppercase; }
+.dsChipMark { width: 0.35rem; height: 0.35rem; border-radius: var(--radius-round); background: currentColor; }
+.dsChip[data-intent="info"] { border-color: var(--color-info); background: var(--color-info-soft); color: var(--color-info); }
+.dsChip[data-intent="success"] { border-color: var(--color-success); background: var(--color-success-soft); color: var(--color-success); }
+.dsChip[data-intent="warning"] { border-color: var(--color-warning); background: var(--color-warning-soft); color: var(--color-warning); }
+.dsChip[data-intent="danger"] { border-color: var(--color-danger); background: var(--color-danger-soft); color: var(--color-danger); }
+
+.dsMenu { display: grid; gap: var(--space-1); padding: var(--space-1); }
+.dsMenuItem { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); width: 100%; min-height: 3.25rem; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: transparent; color: var(--color-text-secondary); text-align: left; }
+.dsMenuItem:hover, .dsMenuItem:focus-visible, .dsMenuItem[data-active="true"] { background: var(--color-surface-selected-muted); color: var(--color-text-primary); }
+.dsMenuItem[data-active="true"] { box-shadow: inset 3px 0 var(--color-accent); }
+.dsMenuIcon { display: inline-grid; place-items: center; color: var(--color-accent-on-surface); }
+.dsMenuCopy { display: grid; min-width: 0; gap: 0.125rem; }
+.dsMenuCopy strong, .dsMenuCopy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsMenuCopy small { color: var(--color-text-muted); font-size: var(--type-meta); font-weight: 400; }
+.dsMenuEmpty { padding: var(--space-8) var(--space-4); color: var(--color-text-muted); text-align: center; }
+
+.dsCommandPalette { display: grid; gap: var(--space-3); }
+.dsCommandSearch { display: flex; min-height: var(--control-height-lg); align-items: center; gap: var(--space-2); padding-inline: var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface-sunken); color: var(--color-text-muted); }
+.dsCommandSearch:focus-within { border-color: var(--color-border-focus); box-shadow: 0 0 0 1px var(--color-border-focus); }
+.dsCommandSearch input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--color-text-primary); }
+.dsCommandPalette .dsMenu { max-height: min(50vh, 28rem); overflow: auto; }
+
+.dsSplitPane { display: grid; grid-template-columns: minmax(0, var(--split-primary)) 0.75rem minmax(0, 1fr); min-width: 0; min-height: 0; }
+.dsSplitPrimary, .dsSplitSecondary { min-width: 0; min-height: 0; overflow: auto; }
+.dsSplitHandle { position: relative; display: grid; width: 0.75rem; min-width: 0.75rem; padding: 0; place-items: center; background: transparent; cursor: col-resize; touch-action: none; }
+.dsSplitHandle::before { width: 1px; height: 100%; background: var(--color-divider); content: ""; }
+.dsSplitHandle span { position: absolute; width: 3px; height: 2rem; border-radius: var(--radius-round); background: var(--color-border-strong); transition: width var(--motion-fast), background var(--motion-fast); }
+.dsSplitHandle:hover span, .dsSplitHandle:focus-visible span { width: 5px; background: var(--color-focus-ring); }
+
+.dsVirtualList { position: relative; overflow: auto; overscroll-behavior: contain; }
+.dsVirtualListTrack { position: relative; width: 100%; }
+.dsVirtualListItem { position: absolute; top: 0; right: 0; left: 0; overflow: hidden; transform: translateY(var(--virtual-offset)); contain: layout paint style; }
+
+.dsCallout { border-color: var(--color-info); background: var(--color-info-soft); }
+.dsCallout[data-intent="success"] { border-color: var(--color-success); background: var(--color-success-soft); }
+.dsCallout[data-intent="warning"] { border-color: var(--color-warning); background: var(--color-warning-soft); }
+.dsCallout[data-intent="danger"] { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.dsCalloutAction { display: flex; align-items: center; justify-content: flex-end; }
+
+.dsToolCard .dsChip { justify-self: end; }
+.dsToolCard[data-status="running"] { border-left-color: var(--color-info); }
+.dsToolCard[data-status="succeeded"] { border-left-color: var(--color-success); }
+.dsToolCard[data-status="denied"], .dsToolCard[data-status="failed"] { border-left-color: var(--color-danger); }
+
+.dsMeter { display: grid; gap: var(--space-2); }
+.dsMeterHeading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); color: var(--color-text-secondary); font-size: var(--type-label); }
+.dsMeterHeading strong { color: var(--color-text-primary); font-family: var(--font-technical); }
+.dsMeter progress { width: 100%; height: 0.5rem; overflow: hidden; border: 0; border-radius: var(--radius-round); background: var(--color-scrollbar-track); accent-color: var(--color-accent); }
+.dsMeter progress::-webkit-progress-bar { background: var(--color-scrollbar-track); }
+.dsMeter progress::-webkit-progress-value { border-radius: var(--radius-round); background: linear-gradient(90deg, var(--color-accent), var(--color-accent-alt)); }
+.dsMeter small { color: var(--color-text-muted); font-size: var(--type-meta); }
+.dsMeter[data-available="false"] progress { opacity: 0.45; }
+
+.dsStatusSurface { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-4); padding: var(--space-5); border: 1px solid var(--color-info); border-radius: var(--radius-lg); background: var(--color-info-soft); }
+.dsStatusSurface[data-intent="success"] { border-color: var(--color-success); background: var(--color-success-soft); }
+.dsStatusSurface[data-intent="warning"] { border-color: var(--color-warning); background: var(--color-warning-soft); }
+.dsStatusSurface[data-intent="danger"] { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.dsStatusIcon { display: inline-grid; width: 2.5rem; height: 2.5rem; place-items: center; border: 1px solid currentColor; border-radius: var(--radius-md); color: var(--color-info); }
+.dsStatusSurface[data-intent="success"] .dsStatusIcon { color: var(--color-success); }
+.dsStatusSurface[data-intent="warning"] .dsStatusIcon { color: var(--color-warning); }
+.dsStatusSurface[data-intent="danger"] .dsStatusIcon { color: var(--color-danger); }
+.dsStatusSurface strong { color: var(--color-text-primary); }
+.dsStatusSurface p { margin-top: var(--space-1); color: var(--color-text-secondary); }
+
+[data-color-mode="no-color"] .dsChip { border-style: solid; }
+[data-color-mode="no-color"] .dsChip[data-intent="warning"] { border-style: dashed; }
+[data-color-mode="no-color"] .dsChip[data-intent="danger"] { border-style: double; }
+[data-color-mode="no-color"] .dsChip[data-intent="success"] { border-width: 2px; }
+[data-color-mode="no-color"] .dsCallout[data-intent="warning"], [data-color-mode="no-color"] .dsStatusSurface[data-intent="warning"] { border-style: dashed; }
+[data-color-mode="no-color"] .dsCallout[data-intent="danger"], [data-color-mode="no-color"] .dsStatusSurface[data-intent="danger"] { border-style: double; }
+[data-color-mode="high-contrast"] .dsButton, [data-color-mode="high-contrast"] .dsChip, [data-color-mode="high-contrast"] .dsStatusSurface { border-width: 2px; }
+
+@media (max-width: 680px) {
+  .dsSplitPane { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
+  .dsSplitHandle { display: none; }
+  .dsStatusSurface { grid-template-columns: auto minmax(0, 1fr); }
+  .dsStatusAction { grid-column: 1 / -1; }
+}
+
+@keyframes dsSpin { to { transform: rotate(360deg); } }

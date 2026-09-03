@@ -168,6 +168,7 @@ fn ctrl_number_routes_cover_every_primary_destination() {
         ('3', Route::Profiles, Focus::Profiles),
         ('4', Route::Settings, Focus::Settings),
         ('5', Route::Help, Focus::Help),
+        ('6', Route::Memory, Focus::Memory),
         ('1', Route::Chat, Focus::Composer),
     ] {
         let _ = update(&mut model, Message::Input(ctrl(key)));
@@ -292,11 +293,12 @@ fn composer_draft_survives_primary_route_navigation() {
 #[test]
 fn every_route_renders_through_wide_rail_and_compact_tabs() {
     let cases = [
-        ('1', "New conversation"),
+        ('1', "Ask Agent"),
         ('2', "Sessions"),
         ('3', "Providers"),
         ('4', "Settings"),
         ('5', "Help"),
+        ('6', "Memory index"),
     ];
     for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
         let mut model = model();
@@ -336,7 +338,7 @@ fn every_route_renders_through_wide_rail_and_compact_tabs() {
 }
 
 #[test]
-fn chat_empty_states_name_one_primary_recovery_action() {
+fn chat_empty_states_leave_the_conversation_canvas_uncluttered() {
     let mut model = model();
     let _ = update(
         &mut model,
@@ -344,15 +346,17 @@ fn chat_empty_states_name_one_primary_recovery_action() {
     );
     let _ = update(&mut model, Message::Input(ctrl('1')));
     let offline = render_text(&model, 80, 24);
-    assert!(offline.contains("Offline"));
-    assert!(offline.contains("/settings"));
+    assert!(offline.contains("Ask Agent"));
+    assert!(!offline.contains("Connect a provider key"));
+    assert!(!offline.contains("Choose a compatible model"));
 
     let _ = update(
         &mut model,
         Message::CatalogChanged(Arc::new(CatalogProjection::Loading)),
     );
     let loading = render_text(&model, 80, 24);
-    assert!(loading.contains("Connecting"));
+    assert!(loading.contains("Ask Agent"));
+    assert!(!loading.contains("Loading provider models"));
 
     let _ = update(
         &mut model,
@@ -363,9 +367,9 @@ fn chat_empty_states_name_one_primary_recovery_action() {
         )))),
     );
     let failed = render_text(&model, 80, 24);
-    assert!(failed.contains("Connection error"));
-
-    assert!(failed.contains("Ctrl+R retry"));
+    assert!(failed.contains("Ask Agent"));
+    assert!(!failed.contains("Connection error"));
+    assert!(!failed.contains("Ctrl+R retry"));
 }
 #[test]
 fn startup_boot_surface_animates_and_exits_deterministically() {
@@ -384,8 +388,8 @@ fn startup_boot_surface_animates_and_exits_deterministically() {
     let _ = update(&mut model, Message::Tick(UiClock::new(400, 0)));
     let settled = render_text(&model, 80, 24);
     assert!(!settled.contains("Starting"));
-    assert!(settled.contains("Connecting"));
-    assert!(settled.contains("Loading provider models..."));
+    assert!(settled.contains("Ask Agent"));
+    assert!(!settled.contains("Loading provider models..."));
 }
 
 #[test]
@@ -398,15 +402,19 @@ fn startup_surface_exits_as_soon_as_model_loading_finishes() {
 
     let rendered = render_text(&model, 80, 24);
     assert!(!rendered.contains("Starting"));
-    assert!(rendered.contains("Offline"));
+    assert!(rendered.contains("Ask Agent"));
+    assert!(!rendered.contains("Offline"));
 }
 
 #[test]
-fn chat_empty_state_explains_the_zero_shell_start_path() {
+fn a_new_conversation_is_blank_apart_from_the_composer() {
     let model = model();
     let rendered = render_text(&model, 80, 24);
-    assert!(rendered.contains("New conversation"));
-    assert!(rendered.contains("Write a prompt below"));
+    assert!(rendered.contains("Ask Agent"));
+    assert!(!rendered.contains("New conversation"));
+    assert!(!rendered.contains("Write a prompt below"));
+    assert!(!rendered.contains("Connect a provider key"));
+    assert!(!rendered.contains("Choose a compatible model"));
     assert!(!rendered.contains("Conversation"));
 }
 
@@ -587,9 +595,9 @@ fn compact_shell_uses_commands_and_bottom_actions() {
     let model = model();
     let rendered = render_text(&model, 48, 18);
     assert!(!rendered.contains("1 Chat"));
-    assert!(rendered.contains("New conversation"));
+    assert!(rendered.contains("Ask Agent"));
     assert_eq!(
-        hit_test(&model, 48, 18, 2, 17),
+        hit_test(&model, 48, 18, 2, 2),
         Some(MouseAction::FocusComposer)
     );
 }
@@ -620,6 +628,7 @@ fn render_route_review_matrix() {
             ('3', Route::Profiles),
             ('4', Route::Settings),
             ('5', Route::Help),
+            ('6', Route::Memory),
         ] {
             let _ = update(&mut model, Message::Input(ctrl(key)));
             println!(
@@ -643,19 +652,19 @@ fn render_route_review_matrix() {
 fn mouse_hit_testing_covers_wide_sidebar_and_compact_routes() {
     let model = model();
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 1),
+        hit_test(&model, 120, 40, 2, 2),
         Some(MouseAction::Route(Route::Chat))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 2, 39),
+        hit_test(&model, 120, 40, 2, 5),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 120, 40, 14, 39),
+        hit_test(&model, 120, 40, 14, 5),
         Some(MouseAction::Route(Route::Settings))
     );
     assert_eq!(
-        hit_test(&model, 80, 24, 2, 23),
+        hit_test(&model, 80, 24, 2, 2),
         Some(MouseAction::FocusComposer)
     );
 }
@@ -686,16 +695,15 @@ fn profile_help_row_has_no_hidden_mouse_action() {
 fn mouse_session_action_bar_exposes_each_visible_action() {
     let mut model = model();
     let _ = update(&mut model, Message::Input(ctrl('2')));
-    for (column, expected) in [
-        (2, MouseAction::SessionOpen),
-        (20, MouseAction::SessionRename),
-        (40, MouseAction::SessionArchive),
-        (60, MouseAction::SessionDelete),
+    for expected in [
+        MouseAction::SessionOpen,
+        MouseAction::SessionRename,
+        MouseAction::SessionArchive,
+        MouseAction::SessionDelete,
     ] {
-        assert_eq!(
-            hit_test(&model, 80, 24, column, 22),
-            Some(expected),
-            "missing session action at column {column}"
+        assert!(
+            (0..80).any(|column| hit_test(&model, 80, 24, column, 22) == Some(expected.clone())),
+            "missing measured session action {expected:?}"
         );
     }
 }
@@ -721,11 +729,19 @@ fn mouse_modal_rows_select_models_and_run_commands() {
 
     let mut palette = model();
     let _ = update(&mut palette, Message::Input(ctrl('/')));
-    let command = hit_test(&palette, 80, 24, 12, 14);
+    type_text(&mut palette, "settings");
+    let command = (0..24).find_map(|row| {
+        (0..80).find_map(|column| {
+            hit_test(&palette, 80, 24, column, row).filter(
+                |action| matches!(action, MouseAction::PaletteRun(command) if command == "settings"),
+            )
+        })
+    });
     assert!(matches!(command, Some(MouseAction::PaletteRun(_))));
     let effects = update(&mut palette, Message::Mouse(command.expect("palette row")));
     assert!(effects.is_empty());
     assert!(!palette.palette_open());
+    assert_eq!(palette.route(), Route::Settings);
 }
 
 #[test]
@@ -780,6 +796,28 @@ fn variant_name(action: &MouseAction) -> &'static str {
         MouseAction::OverlayCancel => "OverlayCancel",
         MouseAction::PermissionAllow => "PermissionAllow",
         MouseAction::PermissionDeny => "PermissionDeny",
+        MouseAction::MemoryFocusSearch => "MemoryFocusSearch",
+        MouseAction::MemorySelect(_) => "MemorySelect",
+        MouseAction::MemorySelectAdmission(_) => "MemorySelectAdmission",
+        MouseAction::MemoryCycleStatus => "MemoryCycleStatus",
+        MouseAction::MemoryCycleScope => "MemoryCycleScope",
+        MouseAction::MemoryPreviousPage => "MemoryPreviousPage",
+        MouseAction::MemoryNextPage => "MemoryNextPage",
+        MouseAction::MemoryOpen => "MemoryOpen",
+        MouseAction::MemoryBack => "MemoryBack",
+        MouseAction::MemoryAdmissions => "MemoryAdmissions",
+        MouseAction::MemoryRemember => "MemoryRemember",
+        MouseAction::MemoryImport => "MemoryImport",
+        MouseAction::MemoryRevise => "MemoryRevise",
+        MouseAction::MemoryReview => "MemoryReview",
+        MouseAction::MemoryActions => "MemoryActions",
+        MouseAction::MemoryRetract => "MemoryRetract",
+        MouseAction::MemoryDelete => "MemoryDelete",
+        MouseAction::MemoryExport => "MemoryExport",
+        MouseAction::MemoryActionSelect(_) => "MemoryActionSelect",
+        MouseAction::MemoryLifecycleSubmit => "MemoryLifecycleSubmit",
+        MouseAction::MemoryProposalReject => "MemoryProposalReject",
+        MouseAction::MemoryLifecycleCancel => "MemoryLifecycleCancel",
     }
 }
 

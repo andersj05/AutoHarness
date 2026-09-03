@@ -20,3 +20,11 @@
 .vscode/
 .DS_Store
 Thumbs.db
+
+# JavaScript workspace output
+/node_modules/
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+.vite/
+coverage/

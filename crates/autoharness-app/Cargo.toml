@@ -1,12 +1,14 @@
 [package]
 name = "autoharness-app"
-description = "AutoHarness terminal application composition"
+description = "AutoHarness desktop and terminal application composition"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 publish.workspace = true
+build = "build.rs"
+default-run = "autoharness"
 
 [lib]
 name = "autoharness_app"
@@ -23,11 +25,14 @@ path = "src/ah.rs"
 
 [features]
 benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
+gui = ["dep:autoharness-client", "dep:tauri", "dep:tauri-build"]
 
 [dependencies]
 async-trait.workspace = true
+autoharness-client = { workspace = true, optional = true }
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
+autoharness-memory.workspace = true
 autoharness-provider.workspace = true
 autoharness-provider-gemini.workspace = true
 autoharness-provider-codex-cli.workspace = true
@@ -41,7 +46,9 @@ crossterm.workspace = true
 futures-util.workspace = true
 keyring.workspace = true
 ratatui.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
@@ -49,6 +56,12 @@ tracing-appender.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 uuid = { workspace = true, features = ["v4"] }
 zeroize.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", optional = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+tauri = { version = "2.11.5", optional = true }
 
 [dev-dependencies]
 async-stream.workspace = true

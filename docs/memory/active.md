@@ -1,178 +1,65 @@
 # Active memory
 
-**Last reviewed:** 2026-08-27
+**Last reviewed:** 2026-09-02
 
-**Phase:** 3.10 terminal visual overhaul, with Phase 3.9 release evidence still pending
+**Phase:** Native GUI migration Stage 5 provider and profile parity
 
-**Status:** Phase 3.10 steps 0 through 9 are on `dev`; step 10 local Windows implementation and validation pass on `feat/tui-redesign-validation`, while same-candidate cross-platform CI, three human terminal smokes, release-checklist approval, and the full Phase 3.9 evidence remain pending
+**Status:** Stage 5 provider, profile, model-default, reasoning, credential, and Codex authentication parity is implemented and locally validated, while cross-platform migration release evidence remains open
 
 ## Current objective
 
-Finish Phase 3.10 step 10 on one final candidate without changing route semantics, overlay ownership, durable intents, or the settings schema.
-
-Keep the Phase 3.9 release-candidate evidence gates open in parallel.
-Do not mark [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md) accepted until the same candidate passes Windows, macOS, and Linux PTY CI, three human terminal smokes, and the approved release checklist.
-
-Phase 3.10 steps 0 through 9 are implemented.
-The local Windows portion of step 10 is complete and recorded in [the validation report](../release/TUI_REDESIGN_VALIDATION.md).
+Finish the staged native GUI migration without making it the default client or claiming terminal parity.
+Keep Rust authoritative for durability, providers, credentials, permissions, tools, memory, and recovery.
+Retain the TUI as the compatibility and behavioral reference until the GUI release gate is complete.
 
 ## Current repository state
 
-- The repository contains an eleven-crate Rust 2024 workspace pinned to Rust 1.97.1 and a runnable `autoharness` terminal binary.
-- `autoharness-domain` and `autoharness-engine` define schema-v1 commands and events, deterministic replay, durable attempt and tool lifecycles, immutable run limits, explicit permissions, cancellation state, usage, safe failures, and retry lineage.
-- `autoharness-tool` provides the trusted versioned tool registry, deny, ask, and allow policy, restart-aware run budgets, content-addressed artifacts, and workspace filesystem, direct-process, and exact-origin HTTP capability ports.
-- `autoharness-provider` exposes provider-neutral catalog, streaming, versioned tool definition, complete tool call, and tool-result ports.
-- `autoharness-provider` also provides shared SSE framing, fixture conformance assertions, capability preflight, deadlines, bounded pre-stream retries, concurrency, per-project rate limits, and catalog freshness policy.
-- `autoharness-provider-gemini` implements paginated Google model discovery, stable Interactions v1 streaming, a narrow pre-stream Generate Content fallback, cancellation, retry classification, limits, environment or in-app credential admission, and credential redaction.
-- `autoharness-provider-openai` implements configurable OpenAI-compatible router discovery and streamed chat completions with a validated base URL, configurable sensitive authentication header, pagination, cumulative usage, cancellation, limits, and credential redaction.
-- `autoharness-provider-codex-cli` retains its stable package and provider identifiers for compatibility but now owns the native PKCE browser callback, vault-safe OAuth payload, refresh path, GPT-5.6 Responses Lite request framing, direct bounded Codex Responses stream, static supported catalog, and token redaction without an installed Codex CLI.
-- `autoharness-store` and `autoharness-store-sqlite` provide an event-authoritative store, transactional projections, WAL-mode local durability, idempotent append, migration verification, projection rebuilding, and an integrity-checked provider-neutral model-catalog cache.
-- `autoharness-settings` resolves defaults, user file, workspace file, environment, and override layers in fixed precedence with per-key provenance; schema 4 adds optional profile default reasoning effort beside default models while older documents migrate on mutation (ADR-0012).
-- The atomic application-owned `autoharness.profiles.json` document stores validated named profiles, non-secret connection fields, optional default models, opaque credential references, and bounded credential-recovery records.
-- `autoharness-app::vault` defines the credential-vault port with an operating-system implementation through the `keyring` crate and a fake implementation for tests; Windows Credential Manager save, load, replace, and delete passed the opt-in platform smoke.
-- Startup and runtime switching resolve one provider-matched credential source in precedence order: environment, then the active profile's vault entry, then session-only; locked or unavailable vaults preserve offline use without plaintext fallback.
-- Active Gemini and router profiles rebuild their exact provider adapters and connection fields at runtime; the Models tab saves a compatible model and reasoning effort as the active profile default, fresh sessions select it durably, and catalog refresh does not overwrite an intentional session-specific model.
-- The terminal consumes live safe settings and profile projections through one typed shell with Chat, Sessions, Profiles, Settings, and Help routes.
-- `Route` is the single primary-page authority and `OverlayKind` is the mutually exclusive modal authority for model selection, credential entry, command and transcript search, permission, and confirmation.
-- Wide terminals show a persistent navigation rail separated by one vertical accent rule; the rail is 26 columns at `Lg` and 32 at `Xl`, and narrower terminals collapse it without introducing a compact Chat Profile|Settings footer.
-- Chat paints through `MessageBlock`, `ToolCard`, `Callout`, `Hero`, `StatusBar`, and `SearchField`, keeps You / AutoHarness roles, places the gradient rule between the transcript and the prompt, preserves the terminal background through its rail, transcript, and composer, and animates generation with a six-cell Unicode gradient wave, an ASCII bar, and a static reduced-motion bar.
-- The prompt status bar uses `StatusBar` priority dropping, names an `auto` thinking level without empty circles, omits the workspace segment when the path is empty or `.`, and still carries model, context utilization, optional Git metadata, and Detailed latest-turn token totals.
-- Sessions, Profiles, Settings, and Help are primary routes with contextual action bars.
-- Settings is a responsive two-pane workspace with nine categories, editable typed rows, non-selectable information rows, provenance chips, label-and-value search, an inline nine-theme preview, the shared shortcut table, populated Profile and About pages, and truthful focused-row reset help.
-- Sessions is a responsive grouped list and detail workspace with deterministic relative ages, aligned metadata, active, archived, and default-model chips, message counts from durable transcript projections, and a shared search field.
-- Models persists the selected model and thinking level together from one workspace, while Providers uses catalog and saved-connection panes with grouped identity, connection, credential, and default tables and measured action buttons.
-- Every modal-like dialog now uses the shared scrim, modal sizing, semantic border rule, and measured button footer, including provider profile editing and Codex browser sign-in.
-- The command palette uses one grouped three-column renderer for its anchored Chat panel and centered modal, with whole-word ellipsis, exact, prefix, substring, and fuzzy match highlighting, right-aligned keys, and a full-width selected row.
-- The Phase 3.10 conformance harness pins 5,035 style-aware cells across nineteen routes and overlays, five terminal sizes, all nine themes and five color treatments, Unicode, ASCII, Nerd Font, reduced motion, compact density, single-column layout, Indexed256, and Basic16.
-- Reduced motion produces identical frames at different tick times for every conformance surface, NoColor semantic states have distinct modifier signatures, and source guards keep presentation colors and symbols in their declared authorities.
-- Tail-following Chat rendering scans only the visible transcript window, so 32-turn and 4,096-turn renders use the same 333 allocations and approximately 67.5 KiB while remaining inside the recorded pre-redesign allocation envelope.
-- Route changes preserve drafts and stable selections while clearing hidden confirmations and secret editors, and permission prompts preempt lower-authority overlays before taking focus.
-- Phase 3.7 layouts are reviewed at 120x50, 120x40, 80x24, 60x18, and 40x12 across all routes and an exact destructive confirmation.
-- Phase 3.4 usability surfaces are implemented: a `Ctrl+/` searchable command palette and generalized slash commands over one shared typed command table, an `F1` contextual help overlay whose section order follows the surface help was opened from, an enriched header status surface (profile, credential source, selected model, attempt state, token usage) that degrades at narrow widths, `Ctrl+Up`/`Ctrl+Down` composer history with draft stashing, `Ctrl+F` transcript search with match counting and jump-to-match wrapped-row scrolling, `Ctrl+Y` OSC 52 transcript copy plus `/export` Markdown export written beside the database from durable events, structured collapsible tool rows with `Ctrl+X` expand toggle, and confirm-gated archiving with one-shot `Ctrl+Z` undo in the session browser.
-- Phase 3.5 real-PTY scenarios cover credential-free first run and restoration, returning-profile offline replay, settings provenance, resize and restart, multi-session switching and destructive confirmations, invalid-call repair, permission deny and allow with replay, and forced-shutdown recovery.
-- Eight real-PTY scenario binaries now contain twelve tests for first run, routed shell navigation, Settings persistence, returning-profile offline replay, resize and restart, multi-session lifecycle, provider recovery and login, invalid-call repair, permission outcomes, forced-shutdown recovery, Nerd Font and Unicode glyph emission, and Basic16 color output.
-- The instrumented release binary and three-sample real-PTY loopback runner produce valid correlated first-draw, input-to-dispatch, and decoded-chunk-to-render intervals outside network time; the result is local smoke evidence, not authoritative reference-machine evidence.
-- Environment credentials are paired only with the effective provider, active-profile identity remains visible when environment credentials override vault storage, and locked or unavailable vault access degrades to session-only mode.
-- Corrupt catalog caches are discarded before live replacement, the configured router now has both plain-chat and function-calling live probes, and the terminal release checklist covers security, accessibility, restoration, documentation, benchmark provenance, and database rollback.
-- The cross-platform PTY gate exposed and now covers Windows cursor-position report handling, inactive-session mutation isolation, reverse-causation event deletion, visible durable tool rows, and notice clearing when destructive confirmation is cancelled.
-- Tool definitions are advertised only for positively identified model support, and the current single safe-agent interaction mode enables the exact built-in registry.
-- Gemini Interactions function-call arguments are buffered across streamed deltas and emitted only after a complete bounded JSON object is available.
-- Unknown names and invalid argument shapes become durable `InvalidToolCall` no-authority proposals, are force-denied even under permissive policy, and return a deterministic result for bounded model repair.
-- Provider request history includes completed turns and the current input while excluding unrelated prior failed or cancelled prompts.
-- `Ctrl+N` creates and activates a fresh durable session even when credentials or the catalog are unavailable, and `Ctrl+L` opens a searchable session browser over every durable session.
-- The session lifecycle is event-sourced under [ADR-0011](../adr/0011-use-event-sourced-session-lifecycle.md): rename, archive, and unarchive are schema-v1 commands and events, archived sessions accept only unarchive, switching replays the target history before any projection swap and is refused while an attempt or permission prompt is active.
-- Deleting a session exports the complete authoritative event stream to a documented provider-neutral JSON archive beside the database first ([format](../architecture/SESSION_EXPORT.md)); export failure aborts deletion, and version-mismatched deletes fail closed.
-- Session titles use the validated `SessionTitle` value type (non-empty, bounded, no control characters) and store titles live in SQLite migration 3.
-- Non-secret runtime configuration remains environment-driven for values not yet covered by profiles, and the in-app credential overlay remains available under [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md) for session-only entry.
-- The user-observed 2026-08-22 Gemini wire shape is represented by a recorded structural SSE fixture that survives one-byte fragmentation without emitting empty arguments.
-- On 2026-08-22 both opt-in Gemini live probes passed against production Google AI Studio using current-generation models: plain chat with the complete registry streamed text to completion, and streamed function calling produced one complete bounded `http_request` call before a tool-calls completion.
-- Stable failure codes, compact safe attempt references, retry actions, and the global fresh-session action are rendered in failed transcript rows and fixed-size golden buffers.
-- Formatting, strict Clippy, 325 workspace tests across 46 suites, fixed-size goldens, documentation links, focused navigation tests, and the complete serial Windows PTY matrix passed locally before Phase 3.7 promotion.
-- A real Windows terminal smoke selected a loopback router model, submitted a prompt, rendered the completed response, emitted one correctly correlated marker chain, exited with code 0, and restored the terminal.
-- Continuous integration defines formatting, Clippy, documentation, doctest, native Linux, Windows, and macOS gates, a serial cross-platform PTY scenario gate, and separate formatting, Clippy, and test gates for the isolated benchmark workspace.
+- [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md) selects Tauri 2, React, TypeScript, and Vite for the native desktop client.
+- [`autoharness-client`](../../crates/autoharness-client/src/lib.rs) defines schema-v2 renderer-neutral commands, snapshots, bounded active-session deltas, notices, bounded permission and provider projections, request correlation, monotonic transport revisions, typed secret ingress operations, and resynchronization.
+- [`autoharness-app::gui`](../../crates/autoharness-app/src/gui.rs) embeds the authoritative runtime in the Tauri process and exposes only narrow client commands, ordered frames, acknowledgements, and one-way credential ingress.
+- The bridge keeps one bounded frame in flight, coalesces projections, gives acknowledgements a dedicated mailbox, requires a process restart after an unacknowledged renderer replacement, and publishes shutdown lifecycle before terminal notices.
+- The React workspace under [`apps/gui`](../../apps/gui/package.json) owns presentation state only and uses a React-free client store between components and the native or fixture transport.
+- The initial shell provides responsive navigation, active-session chat, catalog and model selection, prompt composition, stream and cancellation state, retry, exact permission review, ephemeral credential entry, offline recovery, and deterministic fixture scenarios.
+- [`autoharness-presentation`](../../crates/autoharness-presentation/src/lib.rs) is the renderer-neutral source for nine theme seeds, five color treatments, semantic color ramps, and contrast floors consumed by both GUI CSS generation and the TUI adapter.
+- The GUI has semantic typography, spacing, elevation, radii, focus, motion, responsive, control-size, and stacking tokens plus shared transport-free primitives for buttons, fields, chips, menus, dialogs, command palette, split panes, virtual lists, callouts, tool cards, meters, and status surfaces.
+- The live shell exposes all appearance combinations, native and explicit reduced motion, `Ctrl+K` command navigation, a keyboard-resizable context split, and virtualized session rows while preserving permission preemption.
+- The Sessions workspace searches titles and identities, filters open and archived rows, switches, renames, archives, restores, exports, and deletes exact sessions through the Rust-owned lifecycle commands.
+- Permanent deletion names the exact session, explains export-before-delete behavior, and stays disabled until the user types the complete session title.
+- Chat mounts at most 36 transcript rows, searches messages and rich tool evidence, copies plain text, requests host-owned Markdown export, and expands a matching tool disclosure.
+- Any selected open or archived session can be exported directly without changing the active conversation.
+- Navigation and inspector panes are keyboard and pointer resizable and retain their values across route changes.
+- Optimistic prompts are keyed by Rust-issued request identifiers and retire only after the matching durable user row is observed or the request is rejected.
+- Active-session streaming crosses the native carrier as a bounded transcript splice, preserving unchanged client rows instead of serializing total transcript history for every update.
+- Permission review uses one injective visible encoding for controls, directional formatting, default-ignorable characters, and literal backslashes.
+- The permission wire contract losslessly covers the built-in tool planner's maximum argument count and worst-case safe-display expansion while retaining an aggregate byte bound.
+- Session-only credential sentinels remain zeroized and participate in cross-delta output rejection without entering durable state.
+- Prompt and retry commands settle as committed after their durable admission boundary even when provider startup subsequently fails.
+- GUI catalog projection bounds provider-authored labels, details, and row count so malformed remote presentation data cannot deny client startup.
+- Saved inactive profiles coexist with one synthetic active default connection when no named profile is active.
+- The Providers workspace creates and edits named Gemini and router profiles, duplicates only non-secret configuration, activates and tests exact connections, disconnects and deletes profiles, and distinguishes temporary session defaults from durable named profiles.
+- Credential actions use one dedicated one-way ingress for session-only, save, and replace operations, clear renderer state before transfer, preserve environment-over-vault fallback messaging, and expose safe recovery-pending state without credential content.
+- The active profile can save one catalog-validated model and provider-native reasoning effort atomically.
+- Native Codex subscription sign-in starts and cancels through one request-correlated Rust-owned browser flow, so OAuth material never enters renderer state or browser storage.
+- The desktop icon and platform icon set derive from [`icon-source.png`](../../crates/autoharness-app/icons/icon-source.png).
+- Browser fixture review covers ready, streaming, offline, credential, permission, failure, empty, compact, standard, wide, resilience, no-color, and high-contrast states.
+- A real Windows Tauri development window launched against the Rust host, rendered the shared desktop shell and keyboard command palette in WebView2, and exited cleanly.
+- Rust formatting, strict workspace Clippy, the complete locked Rust suite, frontend type checking, 94 GUI tests, the Windows Credential Manager smoke, and focused responsive browser review pass locally for Stage 5.
+- The final independent client, bridge, coordinator, frontend, Tauri, package, and CI audit reports no remaining actionable P0 through P2 findings.
 
-## Recently completed
+## Open migration work
 
-- On 2026-08-27, `feat/tui-redesign-validation` aligned every stale real-PTY assertion with the delivered presentation, added visible rename-mode guidance, and added cross-platform real-binary smokes for Nerd Font, Unicode, and Basic16 output; all twelve explicit Windows PTY tests, formatting, strict workspace Clippy, the full locked workspace suite, warning-denied rustdoc and doctests, documentation links, isolated benchmark gates, and the release render-cost report pass locally.
-- On 2026-08-27, `feat/tui-conformance` implemented Phase 3.10 step 9 with a 5,035-cell deterministic visual manifest, all-surface reduced-motion freezing, full mouse-action coverage, NoColor modifier distinctions, whole-word truncation, centralized glyph enforcement, viewport-bounded transcript rendering, and a checked-in pre-redesign render-cost comparison; formatting, strict workspace Clippy, the full locked workspace suite, the matrix, the allocation gate, and documentation links pass.
-- On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 8 by routing every modal-like dialog through the shared scrim, sizing, intent-border, and measured-footer system, fixing permission copy, and unifying the anchored and centered command palettes around grouped aligned rows, whole-word ellipsis, four-mode match highlighting, and full-width selection; formatting, strict workspace Clippy, and the full locked workspace suite pass.
-- On 2026-08-27, `feat/tui-content-overlays` implemented Phase 3.10 step 7 with grouped Sessions list and detail panes, durable message counts, deterministic relative ages, one-page model and thinking defaults, provider catalog and saved-connection detail tables, unavailable-provider reasons, exact measured button hits, and generated grouped Help content.
-- On 2026-08-27, `feat/tui-settings-workspace` replaced supplementary-plane Material Design Nerd Font symbols with verified BMP Font Awesome, Octicon, and Devicon equivalents after otherwise compatible Windows terminals rendered the former as replacement diamonds; all 33 forms exist in the installed reference font, retain the two-cell slot, and are guarded by a BMP-only test.
-- On 2026-08-27, `feat/tui-settings-workspace` implemented Phase 3.10 step 6 with a responsive nine-category rail, typed toggle, choice, text, action, and information rows, provenance chips, cross-category search, inline theme previews, complete glyph checks, shared shortcuts, populated Profile and About pages, and level-by-level focus behavior; Chat rail, transcript, and composer cells also preserve the terminal background, and formatting, strict workspace Clippy, the full locked workspace suite, focused visual review, and style-aware golden review pass.
-- On 2026-08-27, `feat/tui-chat-workspace` rebuilt Chat from the presentation catalog: `MessageBlock` transcript turns, `ToolCard` tool rows, `Callout` plus `ButtonRow` recovery, `Hero` empty and loading states, `StatusBar` composer metadata, a 26/32-column icon rail with recent sessions and workspace, and reviewed 80x24 snapshots for streaming, cancelling, failed, offline, loading, no-model, empty-catalog, and new-conversation.
-- On 2026-08-27, `feat/tui-layout-contract` added `Layout::compute` named rects, reverse-scan hit testing, metrics-only width and height literals, and wired composer, transcript, Settings, `ChatRetry`, and `ChatFreshSession` mouse actions without changing route semantics.
-- On 2026-08-27, `feat/tui-gradient-icons` added the three-stop Oklab gradient engine with normalized sampling and NoColor/HighContrast degradation, the Nerd Font / Unicode / ASCII icon table with a two-cell Nerd Font slot and glyph-check data, motion frame tables with a 100 ms floor and 30-second idle gate, and the step-3 component catalog under `ui/component/` with width-matrix tests, ButtonRow hit-region checks, KeyValueTable alignment, StatusBar priority dropping, and an ignored gallery harness.
-- On 2026-08-27, `feat/tui-theme-foundation` added `crates/autoharness-tui/src/ui/` with linear RGB and Oklab color math, nine four-value seeds, semantic tokens with explicit background intent, ColorMode treatments, ColorDepth detection, contrast-floor enforcement, and VisualRole mapping through one resolved `Theme`.
-- On 2026-08-27, `feat/tui-redesign-prerequisites` published a wall-clock millisecond field beside the monotonic `UiInstant` on the same tick and converted the fixed-size goldens to a style-aware snapshot helper that records symbol, foreground, background, and modifiers.
-- On 2026-08-27, `feat/tui-redesign-plan` added the terminal interface audit, the terminal design system contract, the ten-step Phase 3.10 redesign plan, and proposed ADR-0016 for a typed presentation layer; the audit is backed by review-harness buffer captures plus source citations, and it establishes that the layout skeleton is sound while the layer between preferences and cells is missing.
-- On 2026-08-27, the Codex startup path now applies the active profile's saved reasoning effort just as runtime profile rebuilding does, and the opt-in live probe passes with the currently saved profile model and reasoning configuration; persisted `codex/default` selections continue to resolve to the live-verified `gpt-5.6-luna` fallback.
-- On 2026-08-26, Chat moved its open composer beneath the tail-following transcript, re-anchored inline command results above the prompt, clears transcript text beneath those results, and shows a tick-driven ASCII generation scanner with a static reduced-motion fallback; thinking-mode Up and Down now move within the thinking list and return to model selection only from its first option.
-- On 2026-08-26, the prompt status bar gained a persisted Essential, Workspace, or Detailed setting, labeled six-step thinking circles, real metric dividers, home-relative Nerd Font workspace metadata, Git branch context, provider-advertised context percentages with warning thresholds, and optional compact latest-turn input and output totals; reviewed goldens cover 120x40, 80x24, 60x18, and 40x12, and formatting, strict workspace Clippy, the full locked workspace suite, and the routed-shell Windows PTY journey pass.
-- On 2026-08-26, Chat moved to an open prompt-first shell with a single gradient sidebar divider, a borderless scrollable transcript, responsive unlabeled model, ASCII thinking meter, compact home-relative workspace path, Git branch symbol, an optional Nerd Font glyph mode, theme-aware RGB accent gradients, and reviewed 120x40, 80x24, 60x18, and 40x12 goldens.
-- On 2026-08-26, the native Codex adapter replaced the rejected AutoHarness package identity with the current Codex protocol identity and version, adopted GPT-5.6 Responses Lite framing, accepted the backend's headerless but bounded SSE response, and passed an opt-in live `gpt-5.6-luna` request with `high` reasoning through the stored AutoHarness profile and vault credential.
-- On 2026-08-26, Settings replaced the multi-profile Agents wizard with a direct Models tab for the active profile, preselects and marks the saved model, persists model and thinking together, applies the default only to fresh sessions, preserves per-session choices across catalog refresh, and renders responsive model, thinking, workspace-path, and Git-branch metadata above the composer; formatting, strict workspace Clippy, the full locked workspace test suite, and Markdown-link validation pass.
-- On 2026-08-26, Settings gained Midnight, Ocean, Forest, and Rose themes plus Soft and Vivid color treatments, focused editable values render previous, current, and next options as a responsive carousel, and focus-specific help distinguishes page navigation from option changes.
-- On 2026-08-26, command filtering became deterministic relevance ranking with typo tolerance, the best result becomes selected after each query edit, and `/new`, `/connect`, `/refresh`, `/tools`, and `/user` replaced longer visible spellings while the old commands remain exact compatibility aliases.
-- On 2026-08-26, the fixed 1.8-second startup presentation was replaced by a two-line indicator capped at 400 ms that exits immediately when model discovery resolves, removes fake progress and phase copy, and hands longer work to the actual provider-model loading state.
-- On 2026-08-26, Providers became a stable catalog beside always-visible connected accounts, Left and Right explicitly switch sections, Up and Down stay within a section, provider statuses remain compact at narrow widths, and General, Providers, Profile, and Agents share one page hierarchy and navigation vocabulary.
-- On 2026-08-26, ADR-0015 superseded the external CLI boundary: Codex browser login, callback validation, vault persistence, refresh, and direct provider streaming are now application-owned, while the `codex_cli` identifier remains stable for persisted settings compatibility.
-- On 2026-08-25, `feat/tui-navigation-audit` removed Tab-driven page switching, made Settings and provider connection surfaces arrow-key-first, preserved connected-profile selection across provider navigation, rendered connected accounts beside safe details, added arrow-selected Codex login actions and profile-editor fields, and passed focused TUI tests, strict TUI Clippy, formatting, routed-shell PTY, and Codex provider PTY smoke.
-- On 2026-08-26, `feat/fix-provider-login` removed the `codex` executable dependency, made Enter start a cancellable native PKCE flow, automatically creates or updates and activates the Codex profile after callback completion, and replaces CLI readiness inference with direct typed provider state.
-- OAuth URL, state, callback, credential encoding, JWT claim, request-shape, SSE normalization, model validation, token redaction, cancellation, and Windows PTY browser-handoff paths have focused coverage.
-- A real TUI-to-Chrome acceptance test opened the visible OpenAI sign-in tab titled `Welcome back - OpenAI - Google Chrome`; the flow was cancelled before authentication was completed.
-- The provider pane is titled Connected Providers, distinguishes selected-but-disconnected state from active credentials, names the actual sign-in and vault boundaries, and keeps action labels responsive at 80 columns.
-- Provider actions now use clear button labels with matching mouse geometry, remain fully visible at 80 columns, and do not expose hidden actions from help text.
-- Implemented Phase 3.8 locally: schema-3 typed non-secret preferences, fixed layer precedence, safe workspace restrictions, atomic local profile persistence, Settings editing and reset controls, projection-driven themes and accessibility modes, generated shortcut reference, responsive security-overlay matrix, and an ASCII persistence PTY journey.
-- On 2026-08-25, `feat/tui-professional-overhaul` corrected compact-shell mouse geometry from the rendered content rectangle, added exact profile click coverage, added a bounded reduced-motion-safe startup boot surface, exposed `/profile` beside `/settings`, refreshed the dark preset to a dark neon cockpit palette, and passed 66 focused TUI tests, 350 workspace tests, strict Clippy, formatting, and three ignored Windows PTY journeys.
-- On 2026-08-25, the follow-up TUI cutover made the initial boot surface visible on the first draw, stopped automatic credential dialogs, routed `/settings`, `/models`, `/sessions`, `/connect-api-key`, `/retry`, `/cancel`, `/search`, and `/toggle-tools` through the shared command table, removed the prompt footer, tightened prompt/transcript borders, applied the neon palette to the default System theme, and passed 385 workspace tests plus first-run and routed-shell Windows PTY journeys.
-- On 2026-08-25, slash input now opens a live filtered command browser, `/provider` opens provider setup, `/models` supports `D` to save the selected model as the active provider default, and Aurora and Ember theme presets were added with distinct color anchors; 389 workspace tests pass with strict Clippy and formatting.
-- On 2026-08-25, the command palette became an eight-row inline Chat overlay with live filtering, and the prompt became a borderless metadata bar showing safe thinking mode, workspace basename, Git branch when available, model, and attempt state; 390 workspace tests and the routed-shell PTY journey pass.
-- On 2026-08-25, the inline command browser moved to the bottom of Chat immediately above the prompt bar, while the active command query is rendered inside the prompt editor line; the routed-shell PTY journey and 390 workspace tests remain green.
-- On 2026-08-25, the prompt bar was refined into a single Claude-like bottom composer surface, every visible Settings option became keyboard-selectable with safe no-op rows for policy/runtime values, and Backspace on an empty slash query now closes command mode; 391 workspace tests pass.
-- On 2026-08-25, `feat/tui-redesign` removed the opaque Chat background, applied rounded borders through the shared panel helper, reduced the wide rail to previous sessions and projects with a bottom Settings action, added Settings, Providers, Profile, and Agents navigation placeholders, and passed 128 focused TUI tests, strict TUI Clippy, formatting, ignored visual review, and a clean Windows TUI launch smoke.
-- On 2026-08-25, `feat/tui-audit` made the route bar persistent above both wide and compact shells, removed duplicate compact Chat headers, added cyclic arrow-key Settings page navigation with body focus transitions, ellipsized named sidebar sessions to one line, removed session IDs from untitled fallback labels, fixed compact tab widths at 48 columns, and passed 132 focused TUI tests plus a built-binary Windows launch smoke.
-- On 2026-08-25, `feat/tui-chat-polish` removed visible route and provider status chrome, moved Profile and Settings to the bottom action bar, removed the sidebar session heading, replaced chat mode metadata with model capability-aware thinking and slash-style workspace paths, and added a transparent rounded composer with a `❯` prompt line.
-- On 2026-08-25, `feat/tui-visual-refinement` moved Profile and Settings into the wide sidebar footer, kept the compact fallback footer only when no sidebar exists, routed provider access through Settings tabs, reset border backgrounds, dimmed inline slash commands, and removed the adjacent transcript/composer shared border.
-- On 2026-08-25, `feat/tui-command-settings` made slash rows unique and identifier-first, preserved a visible cursor during command filtering, routed `/profile`, `/provider`, `/agents`, `/settings`, and the legacy `/profiles` alias into Settings tabs, and rendered provider/profile content inside the Settings page.
-- Merged Phase 3.7 into `dev` through [pull request #17](https://github.com/andersj05/AutoHarness/pull/17) after green formatting, Clippy, documentation, benchmark, workspace, and serial PTY CI jobs on Windows, macOS, and Linux.
-- Implemented Phase 3.7 end to end: typed routes, one modal owner, wide navigation rail, compact route tabs, unified status, routed Sessions, Profiles, Settings, and Help, redesigned Chat hierarchy and recovery states, exact confirmation dialogs, focus restoration, permission preemption, route visual matrix, and real PTY coverage.
-- Fixed fresh-session list publication so a new durable session appears in Sessions immediately after commit.
-- Implemented Phase 3.6 end to end: ADR-0013 recovery semantics, settings schema 2, `ProfileManager`, distinct per-profile vault entries, runtime adapter switching, safe connection tests, profile defaults, the responsive `Ctrl+G` center, composed lifecycle coverage, PTY coverage, and Windows vault smoke evidence.
-- Implemented the Phase 3.5 PTY scenario harness and six release scenarios covering all planned terminal paths without live credentials.
-- Expanded the roadmap with Phase 3.6 profile and provider management, Phase 3.7 unified TUI shell and navigation, Phase 3.8 personalization and accessibility, and Phase 3.9 integrated terminal product validation.
-- Added monotonic benchmark markers, the real-PTY terminal latency runner, report validation, reference-machine fields, and content-free loopback correlation.
-- Added the configured-router plain-chat live probe, locked-vault degradation, corrupt-cache live replacement coverage, and provider-matched environment credential resolution.
-- Added and routed the terminal release checklist, updated benchmark and root documentation, and kept the baseline and isolated benchmark gates green.
-- Implemented Phase 3.4 across eight test-first slices: command palette with generalized slash commands, contextual help overlay and footer affordances, enriched header status surface, composer history recall, transcript search, OSC 52 copy plus Markdown export intent satisfied from durable events in the coordinator and engine actor, structured collapsible tool rows, and archive confirmation with `Ctrl+Z` undo.
-- Verified Phase 3.4 surfaces visually at 120x50, 120x40, 80x24, 60x18, and 40x12 through a checked-in ignored review harness, and updated the fixed-size goldens for the new header and footer.
-- Implemented Phase 3.3: layered typed settings resolution with provenance, validated provider profiles with atomic durable storage, the operating-system credential-vault port, startup credential resolution with safe degradation, TUI settings provenance display, and secret sentinel coverage.
-- Accepted ADR-0009 (operating-system-backed credential profiles) and recorded ADR-0012 (typed settings resolver with layered precedence).
-- Added the `autoharness-settings` crate with fixed-order layer merging, workspace allowlist enforcement, schema-version handling, and unknown-active-profile validation.
-- Added the app library target exposing vault, profiles, and credential-resolution modules to integration tests.
-- Wired launch resolution into `main.rs`: profile document plus live environment feed the resolver, the active profile selects the adapter and connection fields, and resolved provenance publishes to the terminal before the first draw.
-- Verified a returning profile reconnects from the fake vault across store reopen without prompting and without writing secret bytes anywhere on disk.
-- Implemented Phase 3.2: schema-v3 session titles, enriched summaries, event-sourced rename/archive/unarchive with aggregate guards, atomic version-checked deletion, pre-deletion export, and a searchable `Ctrl+L` browser with slash commands and per-session composer drafts.
-- Verified the composed two-session create, rename, archive, unarchive, switch, restart, and replay-equivalence path against real SQLite.
-- Recorded the lifecycle contract in [ADR-0011](../adr/0011-use-event-sourced-session-lifecycle.md) and the export format in [SESSION_EXPORT](../architecture/SESSION_EXPORT.md).
-- Buffered Gemini Interactions function calls until every streamed `partial_arguments` fragment forms the complete bounded JSON object.
-- Added capability-aware tool advertisement with backward-compatible catalog decoding and positive support required before exposing functions.
-- Added durable force-denied invalid-call proposals, deterministic provider repair results, no-authority authorization checks, and content-free rejection telemetry.
-- Excluded prior failed and cancelled prompts from unrelated future provider requests while preserving explicit retry and completed history behavior.
-- Added a global typed `Ctrl+N` intent, durable session creation, session-identity-aware TUI projection replacement, fixed-size footer affordances, and a successful credential-overlay PTY smoke run.
-- Added stable UI failure codes, compact safe attempt references, and concrete retry or fresh-session recovery actions.
-- Added opt-in ignored Gemini plain-chat, Gemini HTTP-function, and configured-router HTTP-function compatibility probes that retain only structural assertions.
-- Completed the Phase 3 safe agent execution path without adding provider-native payloads or concrete capabilities to the engine.
-- Recorded the durable capability boundary in [ADR-0007](../adr/0007-use-durable-capability-tool-runtime.md).
-- On this branch, focused TUI tests (108 passed), the ignored visual review (2 passed), Windows PTY onboarding, routed shell, profile center, offline resume, session lifecycle, forced shutdown, and permission/tool journeys passed.
-- Workspace formatting, strict Clippy, full workspace tests (336 passed across 46 suites), and documentation link checks passed.
-- Added a local user-profile dialog with typed display-label persistence, command-palette and `Alt+U` access, visible Save/Cancel controls, and active provider/model summary.
-- Added semantic mouse actions, responsive hit testing for route tabs, chat/session/profile controls, confirmations, picker rows, palette rows, credential dialogs, permission controls, and the user-profile dialog.
-- Terminal lifecycle now enables mouse capture and restores it precisely on normal exit and partial setup failure; selected Windows PTY journeys pass, while panic-hook-specific and cross-platform restoration evidence remains open.
-- Final local step-10 verification passes formatting, strict workspace Clippy, the complete locked workspace suite, warning-denied rustdoc and doctests, documentation links, isolated benchmark gates, the release render-cost report, and twelve explicit Windows PTY tests across eight scenario binaries.
+- `autoharness-app` still maps temporary TUI-owned projections into the renderer-neutral contract.
+- Stage 1 exits only after application orchestration no longer imports renderer-owned types and both clients consume the shared contract directly.
+- The GUI does not yet provide complete Settings, Help, Memory, or document-import parity.
+- Renderer restart recovery currently requires restarting the desktop process when an earlier native frame remains unacknowledged.
+- Packaging, signing, updates, installers, macOS and Linux system-webview screenshot matrices, and Windows, macOS, and Linux packaged-app tests remain open.
+- Windows WebView2 received a live wide-shell and command-palette review, while the exact compact, standard, and wide viewport matrix is currently browser-fixture evidence only.
+- Stage 5 macOS and Linux GUI-host credential-vault smokes remain open; the Windows vault primitive passed its opt-in save, load, replace, and delete smoke on this branch.
+- The GUI is not the default application and `bundle.active` remains false.
+- Existing Phase 3.9, Phase 3.10, and Phase 4 release evidence gaps remain open, including cross-platform vault smokes, live router evidence, approved reference-machine reports, human review, rollback, checklist, approval, and promotion.
 
 ## Immediate next actions
 
-1. Designate one final candidate and collect green Windows, macOS, and Linux CI links for that exact commit.
-2. Perform and record the Nerd Font, no-Nerd-Font, and sixteen-color human terminal smokes against the same candidate.
-3. Execute migration and rollback rehearsal against the last Phase 3.5 database and settings formats.
-4. Preserve configured-router live, macOS Keychain and Linux Secret Service vault smoke, approved reference-machine, and final release-checklist evidence for Phase 3.9.
-5. Obtain independent release-checklist approval, then mark ADR-0016 Accepted.
-6. Promote the validated step-10 branch into `dev` and reconcile memory with the final evidence.
-
-## Open questions
-
-- What reference machine should define the final Phase 3.9 startup and stream-overhead budgets?
-
-## Blockers
-
-The local Windows step-10 slice is complete, but the same final candidate has not run through macOS and Linux CI or the three human terminal smokes.
-Configured router access, macOS and Linux platform vault environments, an approved reference machine, operator-owned rollback inputs, and an independent reviewer remain prerequisites for release approval.
-
-## Handoff note
-
-Phase 3.10 steps 0 through 9 are implemented, validated, and merged on `dev`.
-Step 10 local Windows implementation and validation are complete on `feat/tui-redesign-validation`.
-The component catalog is frozen for later surface work; any new component requires an amendment to [the design system](../design/TUI_DESIGN_SYSTEM.md) first.
-ADR-0016 stays Proposed until the cross-platform, human terminal, and release-approval gates pass on one candidate.
-Relative session timestamps now derive deterministically from the wall-clock tick and session update time.
-Do not treat the automated glyph-emission tests as evidence that a particular terminal font draws the intended shapes.
+1. Collect exact compact, standard, and wide native screenshot evidence plus GUI-host vault journeys on Windows, macOS, and Linux for Stages 3 through 5.
+2. Implement Stage 6 settings, accessibility, and personalization parity without widening webview authority.
+3. Continue Stage 1 and Stage 2 migration cleanup by removing the temporary TUI projection adapter and extending native runtime restart journeys.

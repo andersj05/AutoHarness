@@ -5,11 +5,14 @@ use autoharness_domain::{ErrorClass, ModelId, ModelRef, ProviderId};
 use autoharness_settings::{LayerKind, SettingsBuilder};
 use autoharness_tui::{
     AttemptKey, AttemptStatus, CatalogProjection, ColorDepth, CredentialSourceLabel,
-    LocalUserProfileProjection, Message, Model, ModelSummary, PermissionDetailView,
-    PermissionRequestView, ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection,
-    ProviderKindLabel, ProviderProfileProjection, RetryPolicy, SessionBrowserEntry,
-    SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey, ToolRowView,
-    TranscriptItem, UiClock, UiFailure, UsageView, update, view,
+    LocalUserProfileProjection, MemoryAdmission, MemoryAdmissionContext, MemoryDetail,
+    MemoryEvidence, MemoryFindingKind, MemoryOrigin, MemoryProjection, MemoryRelation,
+    MemoryRelationKind, MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus,
+    MemorySummary, MemoryTrust, MemoryValidationFinding, Message, Model, ModelSummary,
+    PermissionDetailView, PermissionRequestView, ProfileConnectionState,
+    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileProjection,
+    RetryPolicy, SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection,
+    ToolCallKey, ToolRowView, TranscriptItem, UiClock, UiFailure, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -43,11 +46,21 @@ enum Surface {
     ProfileEditor,
     CodexLogin,
     CodexOpening,
+    Memory,
+    MemoryAdmissions,
+    MemoryRemember,
+    MemoryImport,
+    MemoryCorrect,
+    MemoryProposal,
+    MemoryActions,
+    MemoryRetract,
+    MemoryDelete,
+    MemoryExport,
     Startup,
 }
 
 impl Surface {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 29] = [
         Self::Chat,
         Self::StreamingChat,
         Self::Sessions,
@@ -66,6 +79,16 @@ impl Surface {
         Self::ProfileEditor,
         Self::CodexLogin,
         Self::CodexOpening,
+        Self::Memory,
+        Self::MemoryAdmissions,
+        Self::MemoryRemember,
+        Self::MemoryImport,
+        Self::MemoryCorrect,
+        Self::MemoryProposal,
+        Self::MemoryActions,
+        Self::MemoryRetract,
+        Self::MemoryDelete,
+        Self::MemoryExport,
         Self::Startup,
     ];
 
@@ -89,13 +112,23 @@ impl Surface {
             Self::ProfileEditor => "profile-editor",
             Self::CodexLogin => "codex-login",
             Self::CodexOpening => "codex-opening",
+            Self::Memory => "memory",
+            Self::MemoryAdmissions => "memory-admissions",
+            Self::MemoryRemember => "memory-remember",
+            Self::MemoryImport => "memory-import",
+            Self::MemoryCorrect => "memory-correct",
+            Self::MemoryProposal => "memory-proposal",
+            Self::MemoryActions => "memory-actions",
+            Self::MemoryRetract => "memory-retract",
+            Self::MemoryDelete => "memory-delete",
+            Self::MemoryExport => "memory-export",
             Self::Startup => "startup",
         }
     }
 
     const fn anchor(self) -> &'static str {
         match self {
-            Self::Chat => "AutoHarness",
+            Self::Chat => "Agent",
             Self::StreamingChat => "Waiting for the first token",
             Self::Sessions => "Sessions",
             Self::Profiles => "Providers",
@@ -112,6 +145,16 @@ impl Surface {
             Self::ProfileEditor => "Connect Gemini",
             Self::CodexLogin => "Sign in to Codex",
             Self::CodexOpening => "Opening your browser",
+            Self::Memory => "Memory index",
+            Self::MemoryAdmissions => "Admission history",
+            Self::MemoryRemember => "Remember",
+            Self::MemoryImport => "Import document",
+            Self::MemoryCorrect => "Correct memory",
+            Self::MemoryProposal => "Review proposal",
+            Self::MemoryActions => "Memory actions",
+            Self::MemoryRetract => "Retract memory",
+            Self::MemoryDelete => "Delete memory",
+            Self::MemoryExport => "Export memory",
             Self::Startup => "Starting",
         }
     }
@@ -278,9 +321,146 @@ fn transcript() -> Vec<TranscriptItem> {
     ]
 }
 
+fn memory_projection() -> Arc<MemoryProjection> {
+    let active_summary = MemorySummary::new(
+        "memory-conformance-active",
+        "Prefer concise implementation outcomes with exact verification evidence.",
+        MemoryStatus::Active,
+        MemoryScope::Workspace,
+        1_700_000_098_000,
+        Some(9_600),
+        2,
+    )
+    .expect("active memory summary");
+    let proposal_summary = MemorySummary::new(
+        "memory-conformance-proposal",
+        "Use keyboard-first terminal navigation while preserving mouse targets.",
+        MemoryStatus::Proposed,
+        MemoryScope::User,
+        1_700_000_099_000,
+        Some(7_500),
+        0,
+    )
+    .expect("proposal memory summary");
+    let admission = MemoryAdmission::new(
+        "conformance-active",
+        "gemini-conformance-pro",
+        "Workspace scope matched and the verified fact fit the frozen turn budget.",
+        1_700_000_099_500,
+        1,
+    )
+    .expect("memory admission")
+    .with_context(
+        MemoryAdmissionContext::new(
+            "attempt-conformance-memory",
+            2,
+            "epoch-conformance-memory",
+            32,
+            "revision-conformance-active-2",
+            "memory-renderer-v1",
+            vec![
+                "workspace scope matched".to_owned(),
+                "verified user evidence".to_owned(),
+            ],
+        )
+        .expect("memory admission context"),
+    );
+    let active_detail = MemoryDetail::new(
+        "memory-conformance-active",
+        2,
+        "Prefer concise implementation outcomes with exact verification evidence.",
+        "explicit user memory",
+        MemoryTrust::UserApproved,
+        1_700_000_098_000,
+        None,
+        vec![admission],
+    )
+    .expect("active memory detail")
+    .with_revision_context(
+        MemoryRevisionContext::new(
+            8,
+            "revision-conformance-active-2",
+            None,
+            "workspace conformance-workspace",
+            MemoryOrigin::ExplicitUser,
+            MemorySensitivity::Internal,
+            vec![
+                MemoryEvidence::new(
+                    "User instruction",
+                    "conformance-active",
+                    "Keep status updates concise and include exact test evidence.",
+                )
+                .expect("active evidence"),
+            ],
+            vec![
+                MemoryRelation::new(MemoryRelationKind::DerivedFrom, "memory-conformance-prior")
+                    .expect("active relation"),
+            ],
+            Vec::new(),
+        )
+        .expect("active revision context"),
+    );
+    let proposal_detail = MemoryDetail::new(
+        "memory-conformance-proposal",
+        1,
+        "Use keyboard-first terminal navigation while preserving mouse targets.",
+        "model-authored proposal",
+        MemoryTrust::UntrustedProposal,
+        1_700_000_099_000,
+        None,
+        Vec::new(),
+    )
+    .expect("proposal memory detail")
+    .with_revision_context(
+        MemoryRevisionContext::new(
+            2,
+            "revision-conformance-proposal-1",
+            Some("revision-conformance-proposal-1".to_owned()),
+            "user conformance-user",
+            MemoryOrigin::ModelProposal,
+            MemorySensitivity::Internal,
+            vec![
+                MemoryEvidence::new(
+                    "Observed request",
+                    "conformance-active",
+                    "The user requested an easy keyboard-first terminal workflow.",
+                )
+                .expect("proposal evidence"),
+            ],
+            vec![
+                MemoryRelation::new(
+                    MemoryRelationKind::Contradicts,
+                    "memory-conformance-mouse-first",
+                )
+                .expect("proposal relation"),
+            ],
+            vec![
+                MemoryValidationFinding::new(
+                    MemoryFindingKind::Contradiction,
+                    "memory-conformance-mouse-first",
+                    "An older preference may prioritize mouse-first navigation.",
+                )
+                .expect("proposal finding"),
+            ],
+        )
+        .expect("proposal revision context"),
+    );
+    Arc::new(
+        MemoryProjection::ready(
+            10,
+            vec![active_summary, proposal_summary],
+            vec![active_detail, proposal_detail],
+            2,
+            false,
+        )
+        .expect("memory conformance projection"),
+    )
+}
+
 fn base_model() -> Model {
     let mut model = Model::new(session(transcript()), sessions(), catalog());
     model.apply_profiles(profiles());
+    model.apply_memory(memory_projection());
     let _ = update(
         &mut model,
         Message::Tick(UiClock::new(1_400, 1_700_000_100_000)),
@@ -401,6 +581,53 @@ fn surface_model(surface: Surface) -> Model {
             if matches!(surface, Surface::CodexOpening) {
                 press(&mut model, key(Key::Enter));
             }
+        }
+        Surface::Memory => press(&mut model, alt('6')),
+        Surface::MemoryAdmissions => {
+            press(&mut model, alt('6'));
+            press(&mut model, key(Key::Enter));
+            press(&mut model, key(Key::Enter));
+        }
+        Surface::MemoryRemember => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('n'));
+        }
+        Surface::MemoryImport => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('i'));
+            let _ = update(
+                &mut model,
+                Message::Paste("docs/architecture/OVERVIEW.md".to_owned()),
+            );
+        }
+        Surface::MemoryCorrect => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('e'));
+        }
+        Surface::MemoryProposal => {
+            press(&mut model, alt('6'));
+            for _ in 0..4 {
+                press(&mut model, key(Key::Tab));
+            }
+            press(&mut model, key(Key::Enter));
+            press(&mut model, key(Key::Down));
+            press(&mut model, alt('v'));
+        }
+        Surface::MemoryActions => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('a'));
+        }
+        Surface::MemoryRetract => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('x'));
+        }
+        Surface::MemoryDelete => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('d'));
+        }
+        Surface::MemoryExport => {
+            press(&mut model, alt('6'));
+            press(&mut model, alt('s'));
         }
         Surface::Startup => unreachable!(),
     }

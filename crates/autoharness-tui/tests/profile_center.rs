@@ -148,6 +148,10 @@ fn providers_list_connection_choices_at_responsive_sizes() {
     for (width, height) in [(80, 24), (60, 18), (40, 12)] {
         assert!(render_text(&model, width, height).contains("Providers"));
     }
+    let narrow = render_text(&model, 40, 12);
+    assert!(narrow.contains("Gemini"));
+    assert!(narrow.contains("personal-gemini"));
+    assert!(narrow.contains("active"));
 }
 
 #[test]
@@ -258,7 +262,8 @@ fn models_tab_saves_the_active_profiles_model_and_thinking_mode() {
     let rendered = render_text(&model, 120, 40);
     assert!(rendered.contains("Models"));
     assert!(rendered.contains("Thinking"));
-    assert!(rendered.contains("Active profile  personal-gemini"));
+    assert!(rendered.contains("SAVED DEFAULT"));
+    assert!(rendered.contains("personal-gemini"));
     for _ in 0..4 {
         let _ = update(&mut model, Message::Input(key(Key::Right)));
     }

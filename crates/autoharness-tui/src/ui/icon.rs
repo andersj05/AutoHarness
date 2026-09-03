@@ -12,6 +12,7 @@ pub enum Icon {
     RouteSettings,
     RouteModels,
     RouteHelp,
+    RouteMemory,
     User,
     Assistant,
     Tool,
@@ -42,7 +43,7 @@ pub enum Icon {
 
 impl Icon {
     /// Every icon, in table order.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Brand,
         Self::RouteChat,
         Self::RouteSessions,
@@ -50,6 +51,7 @@ impl Icon {
         Self::RouteSettings,
         Self::RouteModels,
         Self::RouteHelp,
+        Self::RouteMemory,
         Self::User,
         Self::Assistant,
         Self::Tool,
@@ -313,6 +315,11 @@ fn triple(icon: Icon) -> Triple {
             nerd: " ",
             unicode: "?",
             ascii: "?",
+        },
+        Icon::RouteMemory => Triple {
+            nerd: " ",
+            unicode: "◇",
+            ascii: "M",
         },
         Icon::User => Triple {
             nerd: " ",

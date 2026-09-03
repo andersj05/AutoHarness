@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use autoharness_engine::DurableEngineError;
+use autoharness_memory::MemoryError;
 use autoharness_provider::ProviderError;
 use autoharness_store::StoreError;
 
@@ -18,6 +19,12 @@ pub enum AppError {
     Engine(DurableEngineError),
     /// Provider initialization failed safely.
     Provider(ProviderError),
+    /// Deterministic context or memory policy failed safely.
+    Memory(MemoryError),
+    /// Saved credentials could not be loaded for a required redaction boundary.
+    CredentialRedactionUnavailable,
+    /// A trusted memory lifecycle command was rejected.
+    MemoryCommand(crate::memory_runtime::MemoryCommandError),
     /// Terminal initialization, input, drawing, or restoration failed.
     Terminal,
     /// A required application worker stopped unexpectedly.
@@ -36,6 +43,11 @@ impl Display for AppError {
             Self::Store(source) => Display::fmt(source, formatter),
             Self::Engine(source) => Display::fmt(source, formatter),
             Self::Provider(source) => Display::fmt(source, formatter),
+            Self::Memory(source) => Display::fmt(source, formatter),
+            Self::CredentialRedactionUnavailable => {
+                formatter.write_str("saved credentials are unavailable for redaction")
+            }
+            Self::MemoryCommand(source) => Display::fmt(source, formatter),
             Self::Terminal => formatter.write_str("terminal operation failed"),
             Self::WorkerStopped => formatter.write_str("an application worker stopped"),
             Self::Configuration => formatter.write_str("application configuration is invalid"),
@@ -49,7 +61,10 @@ impl Error for AppError {
             Self::Store(source) => Some(source),
             Self::Engine(source) => Some(source),
             Self::Provider(source) => Some(source),
+            Self::Memory(source) => Some(source),
+            Self::MemoryCommand(source) => Some(source),
             Self::FileSystem
+            | Self::CredentialRedactionUnavailable
             | Self::WriterAlreadyRunning
             | Self::Terminal
             | Self::WorkerStopped
@@ -73,5 +88,23 @@ impl From<DurableEngineError> for AppError {
 impl From<ProviderError> for AppError {
     fn from(value: ProviderError) -> Self {
         Self::Provider(value)
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(_: serde_json::Error) -> Self {
+        Self::Configuration
+    }
+}
+
+impl From<MemoryError> for AppError {
+    fn from(value: MemoryError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+impl From<crate::memory_runtime::MemoryCommandError> for AppError {
+    fn from(value: crate::memory_runtime::MemoryCommandError) -> Self {
+        Self::MemoryCommand(value)
     }
 }

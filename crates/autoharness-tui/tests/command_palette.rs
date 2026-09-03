@@ -187,13 +187,7 @@ fn typing_slash_opens_live_command_browser_and_filters_as_you_type() {
     assert!(all.contains("/provider"));
     type_text(&mut model, "mod");
     let filtered = buffer_text(&render_model(&model, 80, 24));
-    assert!(
-        filtered
-            .lines()
-            .rev()
-            .take(4)
-            .any(|line| line.contains("/mod"))
-    );
+    assert!(filtered.lines().any(|line| line.contains("/mod")));
     assert!(filtered.contains("/models"));
     assert!(!filtered.contains("/sessions"));
 }
@@ -222,16 +216,16 @@ fn command_rows_are_unique_identifier_first_and_keep_cursor_visible() {
 }
 
 #[test]
-fn inline_command_rows_stay_above_the_bottom_prompt_at_narrow_width() {
+fn inline_command_rows_follow_the_top_prompt_at_narrow_width() {
     let mut model = empty_model();
     let _ = update(&mut model, Message::Input(key_input(Key::Char('/'))));
 
     let rendered = render_model(&model, 40, 12);
     let text = buffer_text(&rendered);
-    assert!(text.lines().rev().take(4).any(|line| line.contains("❯ /")));
+    assert!(text.lines().take(4).any(|line| line.contains("❯ /")));
     let command = text.find("/chat").expect("command row");
-    let prompt = text.rfind("❯ /").expect("bottom prompt");
-    assert!(command < prompt);
+    let prompt = text.find("❯ /").expect("top prompt");
+    assert!(prompt < command);
 }
 #[test]
 fn deleting_the_initial_slash_closes_command_browser() {
@@ -461,7 +455,11 @@ fn default_model_page_starts_at_the_saved_values_and_persists_them_together() {
 
     let rendered = buffer_text(&render_model(&model, 100, 30));
     assert!(rendered.contains("Gemini 2.5 Pro"));
-    assert!(rendered.contains("Default"));
+    assert!(rendered.contains("SAVED DEFAULT"));
+    assert!(rendered.contains("Saved default"));
+    assert!(rendered.contains("Matches active profile"));
+    assert!(rendered.contains("DEFAULT DRAFT  Gemini 2.5 Pro  high  saved"));
+    assert!(rendered.contains("Enter save both"));
     assert!(rendered.contains("Thinking"));
     assert!(rendered.contains("high"));
 
@@ -490,6 +488,9 @@ fn thinking_mode_changes_inline_before_saving_with_the_model() {
     let rendered = buffer_text(&render_model(&model, 100, 30));
     assert!(rendered.contains("Thinking"));
     assert!(rendered.contains("medium"));
+    assert!(rendered.contains("Unsaved selection"));
+    assert!(rendered.contains("Enter saves both values"));
+    assert!(rendered.contains("DEFAULT DRAFT  Gemini 2.5 Pro  medium  unsaved"));
 
     let effects = update(&mut model, Message::Input(enter()));
     assert!(matches!(
@@ -499,6 +500,45 @@ fn thinking_mode_changes_inline_before_saving_with_the_model() {
             ..
         })] if effort == "medium"
     ));
+}
+
+#[test]
+fn highlighted_model_is_distinct_from_the_saved_profile_default() {
+    let mut model = empty_model();
+    apply_active_profile(&mut model);
+    type_text(&mut model, "/models");
+    let _ = update(&mut model, Message::Input(enter()));
+
+    let _ = update(&mut model, Message::Input(key_input(Key::Down)));
+    let rendered = buffer_text(&render_model(&model, 100, 30));
+    assert!(rendered.contains("Router Reasoner"));
+    assert!(rendered.contains("Selected"));
+    assert!(rendered.contains("Unsaved selection"));
+    assert!(rendered.contains("Gemini 2.5 Pro"));
+    assert!(rendered.contains("Saved default"));
+
+    let effects = update(&mut model, Message::Input(enter()));
+    assert!(matches!(
+        effects.as_slice(),
+        [UiEffect::Dispatch(UiIntent::SetProfileDefault { model, .. })]
+            if model.model_id().as_str() == "router-reasoner"
+    ));
+}
+
+#[test]
+#[ignore = "visual review harness for model-default selection states"]
+fn render_model_default_review_sizes() {
+    for (width, height) in [(120, 40), (80, 24), (60, 18), (40, 12)] {
+        let mut model = empty_model();
+        apply_active_profile(&mut model);
+        type_text(&mut model, "/models");
+        let _ = update(&mut model, Message::Input(enter()));
+        let _ = update(&mut model, Message::Input(key_input(Key::Down)));
+        println!(
+            "=== model defaults {width}x{height} ===\n{}",
+            buffer_text(&render_model(&model, width, height))
+        );
+    }
 }
 
 #[test]
@@ -636,7 +676,7 @@ fn inline_and_centered_palettes_paint_the_same_command_row() {
     let command_row = |rendered: &str| {
         rendered
             .lines()
-            .find(|line| line.contains("/settings"))
+            .find(|line| line.contains("/settings") && line.contains("Show effective"))
             .map(str::trim)
             .expect("settings palette row")
             .to_owned()

@@ -433,6 +433,8 @@ impl ReplaySafety {
 #[derive(Serialize)]
 struct InteractionRequest<'a> {
     model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<String>,
     input: Vec<InteractionInput>,
     stream: bool,
     store: bool,
@@ -482,7 +484,14 @@ struct InteractionTool<'a> {
 
 #[derive(Serialize)]
 struct GenerateContentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GenerateSystemInstruction>,
     contents: Vec<GenerateMessage>,
+}
+
+#[derive(Serialize)]
+struct GenerateSystemInstruction {
+    parts: [GeneratePart; 1],
 }
 
 #[derive(Serialize)]
@@ -548,6 +557,10 @@ fn interaction_body(
         .collect();
     serde_json::to_vec(&InteractionRequest {
         model,
+        system_instruction: request
+            .context
+            .as_ref()
+            .map(|context| key.redact(context.as_str())),
         input,
         stream: true,
         store: false,
@@ -588,7 +601,19 @@ fn generate_content_body(
             | autoharness_provider::ChatMessage::ToolResult { .. } => None,
         })
         .collect();
-    serde_json::to_vec(&GenerateContentRequest { contents }).map_err(|_| internal_error())
+    let system_instruction = request
+        .context
+        .as_ref()
+        .map(|context| GenerateSystemInstruction {
+            parts: [GeneratePart {
+                text: key.redact(context.as_str()),
+            }],
+        });
+    serde_json::to_vec(&GenerateContentRequest {
+        system_instruction,
+        contents,
+    })
+    .map_err(|_| internal_error())
 }
 
 async fn read_bounded(
@@ -767,7 +792,8 @@ mod tests {
     use super::*;
     use autoharness_domain::{ClassifiedError, ModelId};
     use autoharness_provider::{
-        CapabilitySupport, ChatContent, ChatMessage, CompletionReason, TextDelta, UsageSnapshot,
+        CapabilitySupport, ChatContent, ChatMessage, CompletionReason, ContextPrelude, TextDelta,
+        UsageSnapshot,
     };
 
     use crate::test_http::{ResponseSpec, spawn, spawn_slow_sse};
@@ -802,6 +828,29 @@ mod tests {
         assert_eq!(value["input"][0]["type"], "user_input");
         assert_eq!(value["input"][1]["type"], "model_output");
         assert!(value.get("previous_interaction_id").is_none());
+    }
+
+    #[test]
+    fn both_request_transports_use_the_native_system_instruction() {
+        let key = GeminiApiKey::new("fixture-key").expect("key");
+        let request = request()
+            .with_context(ContextPrelude::new("classified context").expect("context prelude"));
+        let interaction: Value = serde_json::from_slice(
+            &interaction_body("gemini-test", &request, &key).expect("Interactions body"),
+        )
+        .expect("Interactions JSON");
+        let generate: Value = serde_json::from_slice(
+            &generate_content_body(&request, &key).expect("Generate Content body"),
+        )
+        .expect("Generate Content JSON");
+
+        assert_eq!(interaction["system_instruction"], "classified context");
+        assert_eq!(
+            generate["system_instruction"]["parts"][0]["text"],
+            "classified context"
+        );
+        assert_eq!(interaction["input"].as_array().map(Vec::len), Some(3));
+        assert_eq!(generate["contents"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]

@@ -118,7 +118,11 @@ impl CodexProvider {
             return Err(cancelled_error());
         }
         let model = request_model_name(&request.model_id)?;
-        let body = request_body(model, request, self.settings.reasoning_effort())?;
+        let context = request
+            .context
+            .as_ref()
+            .map_or_else(String::new, |context| self.redact_secrets(context.as_str()));
+        let body = request_body(model, request, self.settings.reasoning_effort(), &context)?;
         if body.len() > MAX_REQUEST_BODY_BYTES {
             return Err(limit_error());
         }
@@ -233,7 +237,7 @@ impl Chat for CodexProvider {
 struct CodexRequest<'a> {
     model: &'a str,
     input: [CodexInputItem<'a>; 3],
-    instructions: &'static str,
+    instructions: &'a str,
     stream: bool,
     store: bool,
     include: [&'static str; 1],
@@ -289,6 +293,7 @@ fn request_body(
     model: &str,
     request: &ChatRequest,
     reasoning_effort: Option<&str>,
+    context_instruction: &str,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
@@ -330,7 +335,7 @@ fn request_body(
     serde_json::to_vec(&CodexRequest {
         model,
         input,
-        instructions: "",
+        instructions: context_instruction,
         stream: true,
         store: false,
         include: ["reasoning.encrypted_content"],
@@ -713,7 +718,7 @@ mod tests {
 
     #[test]
     fn request_is_stateless_streaming_and_contains_no_authentication_material() {
-        let body = request_body("gpt-5.6-terra", &request(), Some("high")).expect("body");
+        let body = request_body("gpt-5.6-terra", &request(), Some("high"), "").expect("body");
         let value: Value = serde_json::from_slice(&body).expect("JSON");
         assert_eq!(value["model"], "gpt-5.6-terra");
         assert_eq!(value["stream"], true);
@@ -731,6 +736,22 @@ mod tests {
         assert_eq!(value["input"][2]["role"], "user");
         assert_eq!(value["input"][2]["content"][0]["type"], "input_text");
         assert!(!String::from_utf8(body).expect("UTF-8").contains("Bearer"));
+    }
+
+    #[test]
+    fn context_prelude_uses_the_native_instructions_field() {
+        let body = request_body(
+            "gpt-5.6-terra",
+            &request(),
+            Some("high"),
+            "classified Codex context",
+        )
+        .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("JSON");
+
+        assert_eq!(value["instructions"], "classified Codex context");
+        assert_eq!(value["input"][1]["role"], "developer");
+        assert_eq!(value["input"][2]["role"], "user");
     }
 
     #[test]

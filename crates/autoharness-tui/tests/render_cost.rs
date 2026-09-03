@@ -5,11 +5,13 @@ use std::time::Instant;
 use allocation_counter::{AllocationInfo, measure};
 use autoharness_domain::{ModelId, ModelRef, ProviderId};
 use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, Model, ModelSummary, SessionProjection,
-    SessionsProjection, TranscriptItem, UsageView, view,
+    AttemptKey, AttemptStatus, CatalogProjection, MemoryDetail, MemoryProjection, MemoryScope,
+    MemoryStatus, MemorySummary, MemoryTrust, Message, Model, ModelSummary, SessionProjection,
+    SessionsProjection, TranscriptItem, UsageView, update, view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui_textarea::{Input, Key};
 
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
@@ -77,6 +79,90 @@ fn allocation_sample(turns: usize) -> AllocationInfo {
     measure(|| draw(&mut terminal, &model))
 }
 
+fn memory_render_model(entries: usize) -> Model {
+    let mut model = render_model(4);
+    let summaries = (0..entries)
+        .map(|index| {
+            MemorySummary::new(
+                format!("memory-render-{index:03}"),
+                format!(
+                    "Bounded memory row {index:03} with provenance and enough text for wrapping."
+                ),
+                MemoryStatus::Active,
+                MemoryScope::Workspace,
+                1_700_000_000_000_i64.saturating_add(i64::try_from(index).unwrap_or(i64::MAX)),
+                Some(9_000),
+                u32::try_from(index % 4).unwrap_or_default(),
+            )
+            .expect("memory summary")
+        })
+        .collect::<Vec<_>>();
+    let details = (entries > 0)
+        .then_some(0)
+        .map(|index| {
+            MemoryDetail::new(
+                format!("memory-render-{index:03}"),
+                2,
+                "Selected bounded memory detail with exact provenance metadata.",
+                "render-cost fixture",
+                MemoryTrust::UserApproved,
+                1_700_000_000_000,
+                None,
+                Vec::new(),
+            )
+            .expect("memory detail")
+        })
+        .into_iter()
+        .collect();
+    model.apply_memory(Arc::new(
+        MemoryProjection::ready(
+            1,
+            summaries,
+            details,
+            u32::try_from(entries).unwrap_or(u32::MAX),
+            false,
+        )
+        .expect("memory projection"),
+    ));
+    let _ = update(
+        &mut model,
+        Message::Input(Input {
+            key: Key::Char('6'),
+            ctrl: false,
+            alt: true,
+            shift: false,
+        }),
+    );
+    model
+}
+
+fn memory_allocation_sample(entries: usize) -> AllocationInfo {
+    let model = memory_render_model(entries);
+    let mut terminal = terminal();
+    draw(&mut terminal, &model);
+    let _ = measure(|| draw(&mut terminal, &model));
+    measure(|| draw(&mut terminal, &model))
+}
+
+fn assert_allocation_envelope(name: &str, sample: AllocationInfo) {
+    assert!(
+        sample.count_total <= PRE_REDESIGN_ALLOCATIONS,
+        "{name} render exceeded the pre-redesign allocation envelope: {sample:?}"
+    );
+    assert!(
+        sample.bytes_total <= PRE_REDESIGN_ALLOCATED_BYTES,
+        "{name} render exceeded the pre-redesign byte envelope: {sample:?}"
+    );
+    assert!(
+        sample.count_max <= PRE_REDESIGN_PEAK_ALLOCATIONS,
+        "{name} render exceeded the pre-redesign live-allocation envelope: {sample:?}"
+    );
+    assert!(
+        sample.bytes_max <= PRE_REDESIGN_PEAK_BYTES,
+        "{name} render exceeded the pre-redesign peak-byte envelope: {sample:?}"
+    );
+}
+
 #[test]
 fn tail_render_allocations_do_not_scale_with_transcript_length() {
     let short = allocation_sample(32);
@@ -94,23 +180,14 @@ fn tail_render_allocations_do_not_scale_with_transcript_length() {
         "peak live bytes grew with transcript length: short={short:?}, long={long:?}"
     );
     for (name, sample) in [("short", short), ("long", long)] {
-        assert!(
-            sample.count_total <= PRE_REDESIGN_ALLOCATIONS,
-            "{name} render exceeded the pre-redesign allocation envelope: {sample:?}"
-        );
-        assert!(
-            sample.bytes_total <= PRE_REDESIGN_ALLOCATED_BYTES,
-            "{name} render exceeded the pre-redesign byte envelope: {sample:?}"
-        );
-        assert!(
-            sample.count_max <= PRE_REDESIGN_PEAK_ALLOCATIONS,
-            "{name} render exceeded the pre-redesign live-allocation envelope: {sample:?}"
-        );
-        assert!(
-            sample.bytes_max <= PRE_REDESIGN_PEAK_BYTES,
-            "{name} render exceeded the pre-redesign peak-byte envelope: {sample:?}"
-        );
+        assert_allocation_envelope(name, sample);
     }
+}
+
+#[test]
+fn memory_render_allocations_stay_inside_the_recorded_envelope() {
+    assert_allocation_envelope("memory-short", memory_allocation_sample(8));
+    assert_allocation_envelope("memory-page-limit", memory_allocation_sample(100));
 }
 
 #[test]
@@ -138,6 +215,35 @@ fn report_render_cost_envelope() {
         );
         println!(
             "turns={turns} samples={} median_ns={median} p95_ns={p95} allocations={} bytes_total={} peak_allocations={} peak_bytes={}",
+            samples.len(),
+            allocations.count_total,
+            allocations.bytes_total,
+            allocations.count_max,
+            allocations.bytes_max,
+        );
+    }
+    for entries in [8, 100] {
+        let model = memory_render_model(entries);
+        let mut terminal = terminal();
+        for _ in 0..20 {
+            draw(&mut terminal, &model);
+        }
+        let mut samples = Vec::with_capacity(500);
+        for _ in 0..500 {
+            let started = Instant::now();
+            draw(&mut terminal, &model);
+            samples.push(started.elapsed().as_nanos());
+        }
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2];
+        let p95 = samples[(samples.len() * 95).div_ceil(100) - 1];
+        let allocations = memory_allocation_sample(entries);
+        assert!(
+            p95 <= PRE_REDESIGN_P95_NS,
+            "{entries} memories exceeded the pre-redesign p95 envelope: {p95} ns"
+        );
+        println!(
+            "memories={entries} samples={} median_ns={median} p95_ns={p95} allocations={} bytes_total={} peak_allocations={} peak_bytes={}",
             samples.len(),
             allocations.count_total,
             allocations.bytes_total,

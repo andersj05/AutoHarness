@@ -15,14 +15,20 @@ mod view;
 pub use model::{
     ApiCredential, AttemptKey, AttemptStatus, COMMANDS, CatalogProjection, CommandEntry,
     ComposerState, CredentialSourceLabel, Focus, LocalPreferenceChange, LocalUserProfileProjection,
-    Message, Model, ModelSummary, MouseAction, Notice, OverlayKind, PendingKind,
-    PermissionDetailView, PermissionRequestView, ProfileConnectionState,
-    ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
-    ProviderProfileProjection, ProviderStatusProjection, RequestId, RetryPolicy, Route,
-    SessionBrowserEntry, SessionProjection, SessionsProjection, SettingsProjection, ToolCallKey,
-    ToolRowView, TranscriptItem, TranscriptState, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
-    UsageView,
+    MemoryAdmission, MemoryAdmissionContext, MemoryContent, MemoryDetail, MemoryEvidence,
+    MemoryEvidenceAvailability, MemoryFindingKind, MemoryImportPath, MemoryLifecycleMode,
+    MemoryLoadState, MemoryOrigin, MemoryPageDirection, MemoryPane, MemoryProjection,
+    MemoryRelation, MemoryRelationKind, MemoryRevisionContext, MemoryScope, MemoryScopeFilter,
+    MemorySensitivity, MemoryStatus, MemoryStatusFilter, MemorySummary, MemoryTrust,
+    MemoryValidationFinding, MemoryViewCursor, MemoryViewQuery, Message, Model, ModelSummary,
+    MouseAction, Notice, OverlayKind, PendingKind, PermissionDetailView, PermissionRequestView,
+    ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
+    ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
+    RetryPolicy, Route, SessionBrowserEntry, SessionProjection, SessionsProjection,
+    SettingsProjection, ToolCallKey, ToolRowView, TranscriptItem, TranscriptState, UiClock,
+    UiEffect, UiFailure, UiIntent, UiNotice, UsageView,
 };
+pub use model::{MAX_MEMORY_VIEW_QUERY_CHARS, MEMORY_VIEW_PAGE_SIZE};
 pub use runner::{
     APP_NOTICE_CAPACITY, AppPorts, ExitReason, INTENT_CAPACITY, RunnerError, UiPorts,
     bounded_ports, run,

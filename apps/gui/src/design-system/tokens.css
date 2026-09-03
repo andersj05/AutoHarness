@@ -1,0 +1,103 @@
+:root {
+  --font-prose: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-technical: ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+  --type-display: 2rem;
+  --type-title: 1.375rem;
+  --type-heading: 1rem;
+  --type-body: 0.9375rem;
+  --type-label: 0.8125rem;
+  --type-meta: 0.75rem;
+  --type-micro: 0.6875rem;
+  --leading-tight: 1.25;
+  --leading-body: 1.6;
+  --leading-technical: 1.5;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --radius-xs: 0.375rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.5rem;
+  --radius-round: 999px;
+  --elevation-1: 0 1px 2px rgb(0 0 0 / 22%), 0 5px 14px rgb(0 0 0 / 10%);
+  --elevation-2: 0 14px 40px rgb(0 0 0 / 30%);
+  --elevation-3: 0 28px 80px rgb(0 0 0 / 52%);
+  --focus-inner: var(--color-surface-base);
+  --focus-outer: var(--color-focus-ring);
+  --focus-width: 2px;
+  --focus-offset: 2px;
+  --motion-instant: 80ms;
+  --motion-fast: 140ms;
+  --motion-micro: 180ms;
+  --motion-pane: 220ms;
+  --motion-stream-floor: 100ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --rail-width: 248px;
+  --rail-collapsed-width: 72px;
+  --inspector-width: 320px;
+  --conversation-measure: 860px;
+  --control-height-sm: 2rem;
+  --control-height-md: 2.5rem;
+  --control-height-lg: 2.75rem;
+  --z-base: 1;
+  --z-pane: 10;
+  --z-drawer: 20;
+  --z-dialog: 100;
+  --z-permission: 200;
+  --z-toast: 300;
+}
+
+[data-density="compact"] {
+  --space-3: 0.625rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.25rem;
+  --control-height-md: 2.25rem;
+  --control-height-lg: 2.5rem;
+}
+
+[data-color-mode="high-contrast"] {
+  --elevation-1: none;
+  --elevation-2: none;
+  --elevation-3: none;
+  --focus-width: 3px;
+  --focus-offset: 3px;
+}
+
+[data-reduce-motion="true"],
+[data-reduce-motion="true"] *,
+[data-reduce-motion="true"] *::before,
+[data-reduce-motion="true"] *::after {
+  scroll-behavior: auto !important;
+  transition-delay: 0ms !important;
+  transition-duration: 1ms !important;
+  animation-delay: 0ms !important;
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 1ms;
+    --motion-fast: 1ms;
+    --motion-micro: 1ms;
+    --motion-pane: 1ms;
+  }
+
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

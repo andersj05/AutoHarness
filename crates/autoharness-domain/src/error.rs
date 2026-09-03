@@ -100,6 +100,54 @@ pub enum ValueError {
     ZeroSequence,
     /// A session event sequence exceeded the signed durable-store range.
     SequenceTooLarge,
+    /// Memory content was empty or contained only whitespace.
+    EmptyMemoryContent,
+    /// Memory content exceeded its durable byte bound.
+    MemoryContentTooLong,
+    /// A memory evidence excerpt was empty or contained only whitespace.
+    EmptyMemoryEvidenceExcerpt,
+    /// A memory evidence excerpt exceeded its durable byte bound.
+    MemoryEvidenceExcerptTooLong,
+    /// A SHA-256 digest was not exactly 64 lowercase hexadecimal characters.
+    InvalidSha256Digest,
+    /// Confidence exceeded the inclusive basis-point range from zero to 10,000.
+    ConfidenceOutOfRange,
+    /// A memory-ledger sequence was zero.
+    ZeroMemorySequence,
+    /// A memory-ledger sequence exceeded the signed durable-store range.
+    MemorySequenceTooLarge,
+    /// A memory revision number was zero.
+    ZeroMemoryRevision,
+    /// A memory revision number exceeded the signed durable-store range.
+    MemoryRevisionTooLarge,
+    /// A memory validity window ended before it began.
+    InvalidMemoryValidity,
+    /// Memory evidence excerpt fields were not both present or both absent.
+    InvalidMemoryEvidence,
+    /// Memory validation candidates were inconsistent with reported issues.
+    InvalidMemoryValidation,
+    /// A create command supplied an expected sequence or an update omitted one.
+    InvalidMemoryExpectedSequence,
+    /// A bounded collection exceeded its durable item limit.
+    CollectionTooLarge,
+    /// A schema or algorithm version was zero.
+    ZeroVersion,
+    /// A context token budget was zero or exceeded the durable-store range.
+    InvalidContextTokenBudget,
+    /// An estimated token count exceeded the durable-store range.
+    EstimatedTokensTooLarge,
+    /// A context turn number was zero.
+    ZeroContextRunTurn,
+    /// A context source observation had inconsistent revision or hash fields.
+    InvalidContextObservation,
+    /// A memory-store generation exceeded the signed durable-store range.
+    MemoryGenerationTooLarge,
+    /// A context admission rank or reason ordinal was zero.
+    ZeroContextOrdinal,
+    /// A context epoch referred to itself as its predecessor.
+    InvalidContextEpoch,
+    /// A context admission or turn manifest violated a deterministic ordering invariant.
+    InvalidContextManifest,
 }
 
 impl Display for ValueError {
@@ -128,6 +176,50 @@ impl Display for ValueError {
             Self::InvalidArtifact => "artifact metadata is invalid",
             Self::ZeroSequence => "session sequence must be greater than zero",
             Self::SequenceTooLarge => "session sequence exceeds the durable storage range",
+            Self::EmptyMemoryContent => "memory content must contain non-whitespace text",
+            Self::MemoryContentTooLong => "memory content exceeds the supported length",
+            Self::EmptyMemoryEvidenceExcerpt => {
+                "memory evidence excerpt must contain non-whitespace text"
+            }
+            Self::MemoryEvidenceExcerptTooLong => {
+                "memory evidence excerpt exceeds the supported length"
+            }
+            Self::InvalidSha256Digest => {
+                "SHA-256 digest must be 64 lowercase hexadecimal characters"
+            }
+            Self::ConfidenceOutOfRange => "confidence basis points must be between zero and 10,000",
+            Self::ZeroMemorySequence => "memory sequence must be greater than zero",
+            Self::MemorySequenceTooLarge => "memory sequence exceeds the durable storage range",
+            Self::ZeroMemoryRevision => "memory revision must be greater than zero",
+            Self::MemoryRevisionTooLarge => "memory revision exceeds the durable storage range",
+            Self::InvalidMemoryValidity => "memory validity window ends before it begins",
+            Self::InvalidMemoryEvidence => {
+                "memory evidence excerpt and digest must be present together"
+            }
+            Self::InvalidMemoryValidation => {
+                "memory validation candidates require their matching issue"
+            }
+            Self::InvalidMemoryExpectedSequence => {
+                "memory command expected sequence does not match its operation"
+            }
+            Self::CollectionTooLarge => "collection exceeds the supported item count",
+            Self::ZeroVersion => "schema and algorithm versions must be greater than zero",
+            Self::InvalidContextTokenBudget => {
+                "context token budget must be non-zero and fit durable storage"
+            }
+            Self::EstimatedTokensTooLarge => {
+                "estimated token count exceeds the durable storage range"
+            }
+            Self::ZeroContextRunTurn => "context run turn must be greater than zero",
+            Self::InvalidContextObservation => {
+                "context observation fields are inconsistent with its state"
+            }
+            Self::MemoryGenerationTooLarge => "memory generation exceeds the durable storage range",
+            Self::ZeroContextOrdinal => "context ordinals must be greater than zero",
+            Self::InvalidContextEpoch => "context epoch cannot be its own predecessor",
+            Self::InvalidContextManifest => {
+                "context manifest violates a deterministic ordering invariant"
+            }
         };
 
         formatter.write_str(message)

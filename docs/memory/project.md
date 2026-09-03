@@ -1,6 +1,6 @@
 # Project memory
 
-**Last reviewed:** 2026-08-20
+**Last reviewed:** 2026-08-30
 
 **Stability:** Durable; change only when product direction or accepted constraints change.
 
@@ -8,7 +8,7 @@
 
 - **Name:** AutoHarness
 - **Type:** Open-source agent runtime and experimentation platform
-- **Primary interface:** Native terminal application, followed by headless and remote clients
+- **Primary interface:** Native desktop GUI, followed by headless and remote clients, with the TUI retained temporarily as a migration reference
 
 ## Vision
 
@@ -16,7 +16,7 @@ Create better infrastructure around current language models than provider-defaul
 
 ## First user outcome
 
-A user pastes a Google AI Studio credential into the running terminal or supplies it through `GEMINI_API_KEY`, sees a dynamically discovered list of compatible models, selects one, sends a prompt, receives cancellable streamed output, and can resume the replayable session after restarting AutoHarness.
+A user pastes a Google AI Studio credential into the desktop application or supplies it through `GEMINI_API_KEY`, sees a dynamically discovered list of compatible models, selects one, sends a prompt, receives cancellable streamed output, and can resume the replayable session after restarting AutoHarness.
 
 The second provider outcome is the same experience through the user's configurable OpenAI-compatible model router.
 
@@ -26,7 +26,9 @@ The second provider outcome is the same experience through the user's configurab
 - Runtime performance, scalability, customization, safety, and observability are primary qualities.
 - Rust 2024 is the core implementation language; see [ADR-0001](../adr/0001-use-rust-modular-monolith.md).
 - Begin as a modular monolith and preserve a headless engine boundary.
-- The TUI, provider protocols, storage implementation, and plugin runtime are adapters around the engine.
+- Desktop, terminal, provider, storage, and plugin implementations are adapters around the engine.
+- The native desktop client uses Tauri 2 with React, TypeScript, and Vite under [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md).
+- Rust remains authoritative for durable state, providers, tools, permissions, credentials, memory, and recovery.
 - Normalize provider streams into typed lifecycle events.
 - Persist replayable inputs and events before adding autonomous tools.
 - Treat model-generated memory and behavior changes as untrusted proposals.
@@ -47,7 +49,9 @@ The second provider outcome is the same experience through the user's configurab
 
 ## Initial technology direction
 
-- Rust 2024, Tokio, Ratatui, and Crossterm.
+- Rust 2024 and Tokio for the authoritative runtime.
+- Tauri 2, React, TypeScript, and Vite for the native desktop client.
+- Ratatui and Crossterm remain only for the temporary migration reference until GUI parity and release gates pass.
 - SQLite in WAL mode for local durable state.
 - Serde-based domain serialization with explicit schema versions.
 - `tracing` and OpenTelemetry-compatible observability.

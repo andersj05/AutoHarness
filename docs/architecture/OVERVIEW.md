@@ -2,17 +2,19 @@
 
 **Status:** Proposed baseline
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-30
 
 ## System shape
 
-AutoHarness begins as a modular monolith distributed as one native executable. The terminal and headless commands compose the same engine in-process. Stable internal contracts allow the engine to move behind a local or remote daemon later without changing domain semantics.
+AutoHarness is a modular monolith distributed as a native application.
+The desktop GUI, transitional terminal client, and headless commands compose the same engine in-process.
+Stable client and engine contracts allow the runtime to move behind a local or remote daemon later without changing domain semantics.
 
 ```text
-┌──────────────┐    commands     ┌──────────────────────┐
-│ TUI / CLI    │ ──────────────> │ Application engine   │
-│ clients      │ <────────────── │ sessions + scheduler │
-└──────────────┘     events      └───────┬──────┬───────┘
+┌────────────────┐  commands     ┌──────────────────────┐
+│ GUI / TUI /    │ ────────────> │ Application engine   │
+│ headless       │ <──────────── │ sessions + scheduler │
+└────────────────┘   projections └───────┬──────┬───────┘
                                          │      │
                               ports      │      │ ports
                                          v      v
@@ -30,11 +32,11 @@ Durable events ──> context + memory ──> evaluations ──> candidates
 
 ## Dependency rules
 
-1. Domain and protocol types do not depend on TUI, HTTP, SQLite, Wasmtime, or a concrete provider.
+1. Domain and protocol types do not depend on React, Tauri, Ratatui, HTTP, SQLite, Wasmtime, or a concrete provider.
 2. The engine depends on ports expressed in domain terms.
 3. Provider, storage, plugin, and telemetry crates implement ports and depend inward.
 4. The application crate owns composition, configuration, and process lifecycle.
-5. The TUI consumes commands, read models, and events; it does not call provider or storage adapters directly.
+5. Every client consumes renderer-neutral commands, projections, notices, and frames; no client calls provider, vault, tool, or storage adapters directly.
 6. Provider-native payloads stay inside the adapter. Persisted protocol-independent events are the integration boundary.
 7. No crate cycle is allowed. Shared types move inward only when they are stable domain concepts, not merely to break a compiler error.
 
@@ -54,8 +56,11 @@ crates/
   autoharness-memory/              # context sources, retrieval, admission
   autoharness-evals/               # datasets, experiments, promotion evidence
   autoharness-plugin-host/         # Wasmtime/WIT capability host
+  autoharness-client/              # versioned renderer-neutral client contract
   autoharness-tui/                 # Ratatui model/update/view client
   autoharness-app/                 # binary, config, composition, lifecycle
+apps/
+  gui/                             # React, TypeScript, Vite desktop frontend
 ```
 
 This is a target map, not a requirement to create empty crates. Introduce each crate with its first real consumer. Closely coupled, small modules may begin together and split only when their boundary is proven.
@@ -109,7 +114,9 @@ One provider-neutral management wrapper applies deadlines, bounded pre-stream re
 
 ### Storage
 
-The local store uses SQLite with write-ahead logging. The storage boundary exposes domain transactions rather than raw SQL across the engine. Append-only events remain authoritative; read-optimized projections serve the TUI and queries.
+The local store uses SQLite with write-ahead logging.
+The storage boundary exposes domain transactions rather than raw SQL across the engine.
+Append-only events remain authoritative, while read-optimized projections serve clients and queries.
 
 Initial durable records include:
 
@@ -170,9 +177,22 @@ Run limits are immutable per attempt and cover provider turns, elapsed wall time
 Elapsed time and durable counters are reconstructed after restart.
 Monetary limits are intentionally absent until trusted versioned pricing snapshots can make modeled cost enforceable and recoverable, as recorded in [ADR-0008](../adr/0008-defer-modeled-cost-authority.md).
 
-### Terminal rendering
+### Client presentation
 
-The TUI follows model/update/view:
+The native desktop GUI is the future primary product interface under [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md).
+It consumes a versioned renderer-neutral client contract through a Tauri carrier while the Rust application remains authoritative.
+React owns routes, panes, local drafts, focus, disclosure, and rendering only.
+It does not own provider, vault, storage, permission, memory, or tool state.
+
+The logical client protocol carries typed commands, complete snapshots, monotonic transport revisions, bounded frames, correlated notices, and explicit resynchronization.
+The Tauri carrier is replaceable by a future local or remote transport without changing application semantics.
+High-frequency provider output is coalesced before crossing the carrier, and long-session parity requires keyed patches or bounded committed deltas rather than complete-history serialization per chunk.
+
+The detailed contract lives in [GUI.md](GUI.md).
+
+### Transitional terminal rendering
+
+The frozen TUI migration reference follows model/update/view:
 
 - **Model:** local read state needed to draw the current screen.
 - **Update:** pure or narrowly effectful handling of input and engine events.
@@ -184,7 +204,7 @@ The theme owns semantic tokens, background intent, color-depth quantization, ico
 One layout pass computes the named rectangles and ordered hit regions consumed by both painting and reverse-scan mouse dispatch.
 Route pages compose measured components that return their own action geometry, while provider, storage, model, and credential logic remain outside the render boundary.
 
-One typed `Route` is always active: Chat, Sessions, Profiles, Settings, or Help.
+One typed terminal `Route` is always active: Chat, Sessions, Profiles, Settings, Help, or Memory.
 Wide terminals render a persistent navigation rail; narrower terminals render compact route tabs over the same content routes.
 The shell owns the one safe status projection for local profile, provider, credential source, model, attempt, usage, and catalog state.
 
@@ -223,7 +243,7 @@ Generation, evaluation, and promotion must not share mutable authority.
 ## Configuration and secrets
 
 - Human-editable non-secret configuration uses a versioned file format and environment overrides.
-- Interactive provider credentials may enter through a dedicated masked, zeroizing terminal overlay and remain process-memory-only; see [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md).
+- Interactive provider credentials may enter through a dedicated masked client surface, transfer immediately into zeroizing Rust memory, and remain process-memory-only; see [ADR-0005](../adr/0005-use-ephemeral-in-app-credentials.md) and [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md).
 - Non-interactive secret configuration is represented as references such as `env:GEMINI_API_KEY` or a future OS-keyring entry.
 - Secret-bearing UI intents are ephemeral, non-serializable, and excluded from the engine and durable event model.
 - Debug views render a redacted configuration projection.
@@ -244,7 +264,7 @@ No plugin may obtain ambient filesystem, network, process, secret, memory, or pr
 Move a boundary out of process only after its local semantics and failure states are covered by conformance tests. The expected sequence is:
 
 1. Run the same engine behind a local daemon transport.
-2. Make the TUI a thin client using the versioned protocol.
+2. Make the desktop GUI and any retained terminal client thin clients using the versioned protocol.
 3. Add remote worker leases for provider/tool/evaluation jobs.
 4. Replace SQLite with PostgreSQL for shared coordination while preserving the store port.
 5. Move large artifacts to object storage.

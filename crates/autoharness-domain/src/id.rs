@@ -92,6 +92,45 @@ identifier!(
 );
 identifier!(ProviderId, "Stable provider adapter identity.");
 identifier!(ModelId, "Provider-owned model identity.");
+identifier!(MemoryId, "Stable identity for one durable memory item.");
+identifier!(
+    MemorySubjectKey,
+    "Optional stable semantic key used for exact memory contradiction grouping."
+);
+identifier!(
+    MemoryRevisionId,
+    "Stable identity for one immutable memory revision."
+);
+identifier!(
+    MemoryOperationId,
+    "Stable identity for one durable memory-ledger operation."
+);
+identifier!(
+    MemoryEvidenceId,
+    "Stable identity for one evidence record attached to memory."
+);
+identifier!(
+    ContextEpochId,
+    "Stable identity for one immutable context epoch."
+);
+identifier!(
+    ContextTurnId,
+    "Stable identity for one provider-turn context manifest."
+);
+identifier!(
+    ContextAdmissionId,
+    "Stable identity for one context admission decision."
+);
+identifier!(
+    ContextSourceKey,
+    "Stable key for one deterministic context source."
+);
+identifier!(UserId, "Stable opaque identity for one user scope.");
+identifier!(
+    WorkspaceId,
+    "Stable opaque identity for one workspace scope."
+);
+identifier!(AgentId, "Stable identity for one configured agent scope.");
 identifier!(
     ErrorCode,
     "Stable public error code safe for logs and storage."

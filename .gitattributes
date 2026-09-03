@@ -14,3 +14,4 @@
 *.sql text eol=lf
 *.sse text eol=lf
 *.txt text eol=lf
+apps/gui/src/design-system/themes.generated.css text eol=lf

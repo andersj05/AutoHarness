@@ -24,7 +24,8 @@ impl SecretAccumulator {
         self.observe_ascii_sequence(value.bytes(), secrets)
     }
 
-    /// Adds every structured string leaf and checks every protected secret form.
+    /// Conservatively checks every string key and leaf, then adds string values to the ordered
+    /// sequence.
     pub fn observe_structured(&mut self, value: &Value, secrets: &[&str]) -> bool {
         let mut available = [0_usize; 128];
         collect_ascii_string_bytes(value, &mut available);
@@ -91,7 +92,7 @@ impl Default for SecretAccumulator {
     }
 }
 
-/// Returns whether string leaves could reconstruct any complete secret form.
+/// Returns whether string keys and leaves could reconstruct any complete secret form.
 ///
 /// This conservative boundary check deliberately ignores field ordering and
 /// separators. High-entropy credentials split across any number of structured
@@ -115,7 +116,8 @@ fn collect_ascii_string_bytes(value: &Value, counts: &mut [usize; 128]) {
             }
         }
         Value::Object(values) => {
-            for value in values.values() {
+            for (key, value) in values {
+                collect_ascii_bytes(key.bytes(), counts);
                 collect_ascii_string_bytes(value, counts);
             }
         }
@@ -165,6 +167,18 @@ mod tests {
             &value,
             &["different-secret"]
         ));
+    }
+
+    #[test]
+    fn detects_secret_fragments_across_an_object_key_and_value() {
+        let value = json!({"key-fragment":"value-fragment"});
+
+        assert!(structured_value_may_contain_secret(
+            &value,
+            &["key-fragmentvalue-fragment"]
+        ));
+        let mut accumulator = SecretAccumulator::new();
+        assert!(accumulator.observe_structured(&value, &["key-fragmentvalue-fragment"]));
     }
 
     #[test]

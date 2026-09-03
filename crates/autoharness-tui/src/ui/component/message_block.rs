@@ -1,4 +1,4 @@
-//! Conversation turn with a two-cell role gutter, metadata, and hanging body.
+//! Conversation turn with a compact role gutter, metadata, and hanging body.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -42,7 +42,7 @@ impl<'a> MessageBlock<'a> {
     /// Rows required at `width`.
     #[must_use]
     pub fn measure(&self, width: u16) -> u16 {
-        let inner = width.saturating_sub(4).max(1);
+        let inner = width.saturating_sub(2).max(1);
         1 + u16::try_from(wrap_cells(self.body, inner).len()).unwrap_or(1)
     }
 
@@ -64,19 +64,8 @@ impl<'a> MessageBlock<'a> {
             self.icons.glyph(self.role),
             self.theme.style(role_token),
         );
-        let rule_x = area.x.saturating_add(self.icons.width(self.role).min(1));
         let body_x = area.x.saturating_add(2);
         let height = self.measure(area.width).min(area.height);
-        for row in 0..height {
-            put(
-                buf,
-                rule_x,
-                area.y.saturating_add(row),
-                1,
-                self.icons.vertical_rule(),
-                self.theme.style(Token::Divider),
-            );
-        }
         put(
             buf,
             body_x,
@@ -96,7 +85,7 @@ impl<'a> MessageBlock<'a> {
                 self.theme.style(Token::TextMuted),
             );
         }
-        let lines = wrap_cells(self.body, area.width.saturating_sub(4).max(1));
+        let lines = wrap_cells(self.body, area.width.saturating_sub(2).max(1));
         for (index, line) in lines.iter().enumerate() {
             let y = area
                 .y
@@ -106,9 +95,9 @@ impl<'a> MessageBlock<'a> {
             }
             put(
                 buf,
-                body_x.saturating_add(2),
+                body_x,
                 y,
-                area.right().saturating_sub(body_x.saturating_add(2)),
+                area.right().saturating_sub(body_x),
                 line,
                 self.theme.style(Token::TextPrimary),
             );

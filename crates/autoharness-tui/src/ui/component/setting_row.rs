@@ -4,10 +4,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
+use super::super::Icon;
+use super::super::metrics::SETTINGS_ROW_SELECTION_INSET;
 use super::super::theme::Theme;
 use super::super::tokens::Token;
 use super::chip::{Chip, ChipVariant};
-use super::paint::put;
+use super::paint::{fill, put};
 use super::segmented::SegmentedControl;
 
 /// Provenance layer chip.
@@ -118,6 +120,27 @@ impl<'a> SettingRow<'a> {
         if area.width == 0 || area.height == 0 {
             return area;
         }
+        if self.focused {
+            fill(
+                buf,
+                Rect::new(area.x, area.y, area.width, self.measure().min(area.height)),
+                self.theme.style(Token::SurfaceSelectedMuted),
+                Some(' '),
+            );
+        }
+        let marker_width = SETTINGS_ROW_SELECTION_INSET.min(area.width);
+        if self.focused {
+            put(
+                buf,
+                area.x,
+                area.y,
+                marker_width,
+                self.theme.icons().glyph(Icon::SelectionCaret),
+                self.theme.gradient_emphasis_style(0.0),
+            );
+        }
+        let content_x = area.x.saturating_add(marker_width);
+        let content_width = area.right().saturating_sub(content_x);
         let label_style = if self.kind.editable() {
             if self.focused {
                 self.theme.style(Token::TextPrimary)
@@ -127,10 +150,10 @@ impl<'a> SettingRow<'a> {
         } else {
             self.theme.style(Token::TextMuted)
         };
-        let label_width = self.label_width.min(area.width);
+        let label_width = self.label_width.min(content_width);
         let padded = format!("{:width$}", self.label, width = usize::from(label_width));
-        put(buf, area.x, area.y, label_width, &padded, label_style);
-        let control_x = area.x.saturating_add(label_width.saturating_add(1));
+        put(buf, content_x, area.y, label_width, &padded, label_style);
+        let control_x = content_x.saturating_add(label_width.saturating_add(1));
         let chip_label = self.provenance.label();
         let chip_w = u16::try_from(chip_label.width())
             .unwrap_or(0)
@@ -142,39 +165,14 @@ impl<'a> SettingRow<'a> {
         let control = Rect::new(control_x, area.y, control_width, 1);
         match self.kind {
             SettingKind::Toggle { on } => {
-                let on_style = if on {
-                    self.theme.filled(Token::Accent)
-                } else {
-                    self.theme.style(Token::TextMuted)
-                };
-                let off_style = if on {
-                    self.theme.style(Token::TextMuted)
-                } else {
-                    self.theme.filled(Token::Accent)
-                };
-                let mut x = control.x;
-                x = x.saturating_add(put(
-                    buf,
-                    x,
-                    area.y,
-                    1,
-                    "[",
-                    self.theme.style(Token::TextMuted),
-                ));
-                x = x.saturating_add(put(buf, x, area.y, 4, " on ", on_style));
-                x = x.saturating_add(put(
-                    buf,
-                    x,
-                    area.y,
-                    1,
-                    "|",
-                    self.theme.style(Token::TextMuted),
-                ));
-                x = x.saturating_add(put(buf, x, area.y, 5, " off ", off_style));
-                put(buf, x, area.y, 1, "]", self.theme.style(Token::TextMuted));
+                SegmentedControl::new(self.theme, &["on", "off"], usize::from(!on))
+                    .focused(self.focused)
+                    .render(buf, control);
             }
             SettingKind::Choice { options, selected } => {
-                SegmentedControl::new(self.theme, options, selected).render(buf, control);
+                SegmentedControl::new(self.theme, options, selected)
+                    .focused(self.focused)
+                    .render(buf, control);
             }
             SettingKind::Text { value, max_len } => {
                 let indicator = format!("{}/{}", value.chars().count(), max_len);

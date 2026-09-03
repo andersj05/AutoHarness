@@ -8,7 +8,7 @@ use super::super::icon::{Icon, IconSet};
 use super::super::metrics::{PANEL_PAD_X, PANEL_PAD_Y, PANEL_PAD_Y_TITLED};
 use super::super::theme::Theme;
 use super::super::tokens::Token;
-use super::paint::{clear_surface, ellipsize_words_with, put};
+use super::paint::{clear_transparent, ellipsize_words_with, put};
 
 /// Framed panel.
 pub struct Panel<'a> {
@@ -62,12 +62,34 @@ impl<'a> Panel<'a> {
         height
     }
 
+    /// Exact content rectangle shared by painting and hit testing.
+    #[must_use]
+    pub fn content_rect(&self, area: Rect) -> Rect {
+        if area.width == 0 || area.height == 0 {
+            return area;
+        }
+        let mut y = area.y.saturating_add(1);
+        if self.title.is_some() {
+            y = y.saturating_add(1);
+        }
+        if self.subtitle.is_some() {
+            y = y.saturating_add(1);
+        }
+        let bottom_inset = 1 + u16::from(self.footer.is_some());
+        Rect {
+            x: area.x.saturating_add(PANEL_PAD_X),
+            y,
+            width: area.width.saturating_sub(PANEL_PAD_X.saturating_mul(2)),
+            height: area.bottom().saturating_sub(bottom_inset).saturating_sub(y),
+        }
+    }
+
     /// Inner content rectangle after painting the frame.
     pub fn render(&self, buf: &mut Buffer, area: Rect) -> Rect {
         if area.width == 0 || area.height == 0 {
             return area;
         }
-        clear_surface(buf, area, self.theme);
+        clear_transparent(buf, area, self.theme);
         paint_border(buf, area, self.theme, self.icons, self.focused);
         let mut y = area.y.saturating_add(1);
         if let Some(title) = self.title {
@@ -108,7 +130,6 @@ impl<'a> Panel<'a> {
                 &subtitle,
                 self.theme.style(Token::TextMuted),
             );
-            y = y.saturating_add(1);
         }
         if let Some(footer) = self.footer
             && area.height > 2
@@ -124,13 +145,7 @@ impl<'a> Panel<'a> {
                 self.theme.style(Token::TextMuted),
             );
         }
-        let bottom_inset = 1 + u16::from(self.footer.is_some());
-        Rect {
-            x: area.x.saturating_add(PANEL_PAD_X),
-            y,
-            width: area.width.saturating_sub(PANEL_PAD_X.saturating_mul(2)),
-            height: area.bottom().saturating_sub(bottom_inset).saturating_sub(y),
-        }
+        self.content_rect(area)
     }
 }
 

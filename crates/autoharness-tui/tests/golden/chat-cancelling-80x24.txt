@@ -1,84 +1,27 @@
 # autoharness-tui style snapshot v1
 # 80x24
 @0
- ◆│AutoHarness                                           generating  cancelling 
+ ◆ Agent                                                 generating  cancelling 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
- | 3-13 fg=#67dbf1 bg=reset bold
- | 14-56 fg=reset bg=reset
+ | 2-2 fg=reset bg=reset
+ | 3-7 fg=#67dbf1 bg=reset bold
+ | 8-56 fg=reset bg=reset
  | 57-78 fg=#656b75 bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @1
-  │  Waiting for the first token...                                             
+   Waiting for the first token...                                               
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-34 fg=#f2f9fc bg=reset
- | 35-78 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-32 fg=#f2f9fc bg=reset
+ | 33-78 fg=reset bg=reset
  | 79-79 fg=#f2f9fc bg=reset
 @2
                                                                                 
  | 0-79 fg=#f2f9fc bg=reset
 @3
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@4
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@5
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@6
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@7
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@8
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@9
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@10
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@11
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@12
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@13
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@14
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@15
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@16
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@17
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@18
-                                                                                
- | 0-79 fg=#f2f9fc bg=reset
-@19
-Cancellation requested                                                          
- | 0-21 fg=#60a5fa bg=reset
- | 22-79 fg=reset bg=reset
-@20
-                                                                                
- | 0-79 fg=reset bg=reset
-@21
  ────────────────────────────────────────────────────────────────────────────── 
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#2ad3ee bg=reset
  | 3-3 fg=#30d2ef bg=reset
@@ -157,10 +100,10 @@ Cancellation requested
  | 76-76 fg=#a68efa bg=reset
  | 77-77 fg=#a78dfa bg=reset
  | 78-78 fg=#a78bfa bg=reset
- | 79-79 fg=reset bg=reset
-@22
+ | 79-79 fg=#f2f9fc bg=reset
+@4
  ● Gemini 2.5 Pro · ◐ auto · ▰ ctx 0%                                           
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#a2a9b0 bg=reset
  | 3-16 fg=#f2f9fc bg=reset
@@ -171,13 +114,66 @@ Cancellation requested
  | 26-28 fg=#2e343f bg=reset
  | 29-29 fg=#22d3ee bg=reset
  | 30-30 fg=#a2a9b0 bg=reset
- | 31-78 fg=#f2f9fc bg=reset
- | 79-79 fg=reset bg=reset
-@23
- ❯  Ask AutoHarness...                                                          
- | 0-0 fg=reset bg=reset
+ | 31-79 fg=#f2f9fc bg=reset
+@5
+ ❯  Ask Agent...                                                                
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-2 fg=#67dbf1 bg=reset bold
  | 3-3 fg=#f8fafc bg=#0b0f19 bold
- | 4-21 fg=darkgray bg=reset
- | 22-78 fg=#f2f9fc bg=reset
- | 79-79 fg=reset bg=reset
+ | 4-15 fg=darkgray bg=reset
+ | 16-79 fg=#f2f9fc bg=reset
+@6
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@7
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@8
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@9
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@10
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@11
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@12
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@13
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@14
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@15
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@16
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@17
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@18
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@19
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@20
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@21
+                                                                                
+ | 0-79 fg=#f2f9fc bg=reset
+@22
+Cancellation requested                                                          
+ | 0-21 fg=#60a5fa bg=reset
+ | 22-79 fg=reset bg=reset
+@23
+                                                                                
+ | 0-79 fg=reset bg=reset

@@ -642,6 +642,26 @@ impl ProfileManager {
             .map_err(ProfileManagementError::Vault)
     }
 
+    /// Loads every configured profile credential into zeroizing memory for exact redaction.
+    ///
+    /// The result is ordered by opaque profile identity and fails closed when any linked vault
+    /// entry cannot be read.
+    pub fn configured_credentials_for_redaction(
+        &self,
+    ) -> Result<Vec<Zeroizing<String>>, ProfileManagementError> {
+        let snapshot = self.snapshot()?;
+        if snapshot.pending_recovery != 0 {
+            return Err(ProfileManagementError::RecoveryPending);
+        }
+        let mut profiles = snapshot.profiles;
+        profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles
+            .into_iter()
+            .filter(|profile| profile.credential_state == StoredCredentialState::Stored)
+            .map(|profile| self.credential_for_test(&profile.id))
+            .collect()
+    }
+
     /// Reconciles every durable recovery record idempotently.
     pub fn recover_pending(&self) -> Result<usize, ProfileManagementError> {
         let records = self.store.recovery_records()?;

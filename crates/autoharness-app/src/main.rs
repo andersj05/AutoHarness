@@ -1,11 +1,20 @@
 mod catalog_cache;
 mod config;
+mod context_runtime;
 mod coordinator;
 mod engine_actor;
 mod error;
 mod export;
+#[cfg(all(
+    feature = "gui",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+mod gui;
 mod ids;
+mod import_runtime;
+mod memory_runtime;
 mod projection;
+mod proposal_runtime;
 mod telemetry;
 mod terminal;
 
@@ -31,7 +40,7 @@ use autoharness_tool::{
 use autoharness_tui::{
     ApiCredential, CatalogProjection, CredentialSourceLabel, Model, ProviderKindLabel,
     ProviderStatusProjection, RetryPolicy, SessionsProjection, SettingsProjection, UiFailure,
-    bounded_ports,
+    UiPorts, bounded_ports,
 };
 use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, WriterLease};
@@ -52,6 +61,16 @@ struct ConfiguredProvider {
     catalog: CatalogProjection,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClientMode {
+    Tui,
+    #[cfg(all(
+        feature = "gui",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ))]
+    Gui,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run().await {
@@ -64,6 +83,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), AppError> {
+    let client_mode = client_mode_from(env::args().skip(1))?;
     #[cfg(feature = "benchmark-instrumentation")]
     autoharness_tui::benchmark::initialize();
     let paths = AppPaths::prepare()?;
@@ -94,29 +114,22 @@ async fn run() -> Result<(), AppError> {
         config::workspace_root()?.display().to_string(),
     );
     let tool_runtime = configure_tool_runtime(&paths)?;
+    let artifact_root = paths.artifacts();
     let (engine_actor, session_id, session) = EngineActor::start(paths.database())?;
 
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
     let initial_settings = Arc::new(settings_projection(&resolved, initial_local_profile));
-    let model = Model::new(
+    let (ui_ports, app_ports) = bounded_ports(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
         Arc::clone(&initial_catalog),
     );
-    let mut model = model;
-    model.apply_settings(Arc::clone(&initial_settings));
-    let (ui_ports, app_ports) = bounded_ports(initial_session, initial_sessions, initial_catalog);
+    app_ports
+        .settings
+        .send_replace(Arc::clone(&initial_settings));
     let shutdown = CancellationToken::new();
-
-    let mut terminal = match TerminalGuard::enter() {
-        Ok(terminal) => terminal,
-        Err(error) => {
-            engine_actor.shutdown().await?;
-            return Err(error);
-        }
-    };
 
     let coordinator = Coordinator::with_runtime(
         session_id,
@@ -126,16 +139,31 @@ async fn run() -> Result<(), AppError> {
             provider: provider.composition,
             profiles: Some(profile_runtime),
             tool_runtime,
+            artifact_root: Some(artifact_root),
         },
         app_ports,
         shutdown.clone(),
     );
     let coordinator_task = tokio::spawn(coordinator.run());
     let signal_task = spawn_signal_handler(shutdown.clone());
-
-    let ui_result =
-        autoharness_tui::run(terminal.terminal_mut(), model, ui_ports, shutdown.clone()).await;
-    terminal.restore();
+    let client_result = match client_mode {
+        ClientMode::Tui => {
+            run_terminal(
+                ui_ports,
+                initial_session,
+                initial_sessions,
+                initial_catalog,
+                initial_settings,
+                shutdown.clone(),
+            )
+            .await
+        }
+        #[cfg(all(
+            feature = "gui",
+            any(target_os = "windows", target_os = "macos", target_os = "linux")
+        ))]
+        ClientMode::Gui => gui::run(ui_ports, shutdown.clone()).await,
+    };
     shutdown.cancel();
 
     let coordinator_result = match coordinator_task.await {
@@ -147,9 +175,55 @@ async fn run() -> Result<(), AppError> {
 
     coordinator_result?;
     engine_result?;
-    ui_result.map_err(|_| AppError::Terminal)?;
+    client_result?;
     telemetry::app_stopped();
     Ok(())
+}
+
+fn client_mode_from(arguments: impl IntoIterator<Item = String>) -> Result<ClientMode, AppError> {
+    let mut requested = None;
+    for argument in arguments {
+        let candidate = match argument.as_str() {
+            "--tui" => ClientMode::Tui,
+            "--gui" => {
+                #[cfg(all(
+                    feature = "gui",
+                    any(target_os = "windows", target_os = "macos", target_os = "linux")
+                ))]
+                {
+                    ClientMode::Gui
+                }
+                #[cfg(not(all(
+                    feature = "gui",
+                    any(target_os = "windows", target_os = "macos", target_os = "linux")
+                )))]
+                {
+                    return Err(AppError::Configuration);
+                }
+            }
+            _ => return Err(AppError::Configuration),
+        };
+        if requested.replace(candidate).is_some() {
+            return Err(AppError::Configuration);
+        }
+    }
+    Ok(requested.unwrap_or(ClientMode::Tui))
+}
+
+async fn run_terminal(
+    ui_ports: UiPorts,
+    initial_session: Arc<autoharness_tui::SessionProjection>,
+    initial_sessions: Arc<SessionsProjection>,
+    initial_catalog: Arc<CatalogProjection>,
+    initial_settings: Arc<SettingsProjection>,
+    shutdown: CancellationToken,
+) -> Result<(), AppError> {
+    let mut model = Model::new(initial_session, initial_sessions, initial_catalog);
+    model.apply_settings(initial_settings);
+    let mut terminal = TerminalGuard::enter()?;
+    let result = autoharness_tui::run(terminal.terminal_mut(), model, ui_ports, shutdown).await;
+    terminal.restore();
+    result.map(|_| ()).map_err(|_| AppError::Terminal)
 }
 
 /// Everything resolved before any UI or provider construction begins.
@@ -619,6 +693,32 @@ fn spawn_signal_handler(shutdown: CancellationToken) -> tokio::task::JoinHandle<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_client_remains_the_default_and_explicit_migration_path() {
+        assert_eq!(
+            client_mode_from(Vec::<String>::new()).expect("default mode"),
+            ClientMode::Tui
+        );
+        assert_eq!(
+            client_mode_from(["--tui".to_owned()]).expect("terminal mode"),
+            ClientMode::Tui
+        );
+        assert!(client_mode_from(["--unknown".to_owned()]).is_err());
+        assert!(client_mode_from(["--tui".to_owned(), "--tui".to_owned()]).is_err());
+    }
+
+    #[cfg(all(
+        feature = "gui",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ))]
+    #[test]
+    fn gui_client_is_an_explicit_feature_gated_mode() {
+        assert_eq!(
+            client_mode_from(["--gui".to_owned()]).expect("GUI mode"),
+            ClientMode::Gui
+        );
+    }
 
     #[test]
     fn launch_codex_settings_preserve_the_active_profile_reasoning_effort() {

@@ -115,6 +115,30 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
         "Ctrl+Z should reverse the most recent lifecycle transition once",
     );
 
+    session.send_bytes(&ctrl_c());
+    assert_eq!(
+        session.wait_for_exit(),
+        0,
+        "the lifecycle restart boundary should shut down cleanly"
+    );
+    session = PtySession::start(&environment, 30, 100);
+    session.send_bytes(&CTRL_L);
+    session.wait_for(
+        |screen| screen.contents().contains("Sessions"),
+        "the session workspace should reopen after restart",
+    );
+    session.type_text("renamed");
+    session.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Offline seed renamed")
+                && text.contains("State")
+                && text.contains("active")
+                && !text.contains("archived")
+        },
+        "rename and restored lifecycle state should survive process restart",
+    );
+
     session.send_bytes(&CTRL_D);
     session.wait_for(
         |screen| {
@@ -140,12 +164,45 @@ fn sessions_switch_and_destructive_actions_require_confirmation() {
         .expect("scenario data directory")
         .filter_map(Result::ok)
         .any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("autoharness-session-pty-offline-session.export.v1.json")
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("autoharness-session-pty-offline-session.export.v")
+                && name.ends_with(".json")
         });
     assert!(exported, "confirmed deletion must leave its JSON archive");
+
+    // Clear the retained filter and delete the currently open conversation.
+    // Another fresh conversation exists, so the coordinator should switch to
+    // it after the current session is safely exported and removed.
+    session.send_bytes(&[0x7f; 12]);
+    session.wait_for(
+        |screen| screen.contents().contains("Session details"),
+        "clearing the filter should reveal the remaining conversations",
+    );
+    session.send_bytes(&CTRL_R);
+    session.wait_for(
+        |screen| screen.contents().contains("Rename session"),
+        "the current conversation should remain directly manageable",
+    );
+    session.type_text(" XDEL");
+    session.send_bytes(b"\r");
+    session.wait_for(
+        |screen| screen.contents().contains("XDEL"),
+        "the current conversation should receive its temporary title",
+    );
+    session.send_bytes(&CTRL_D);
+    session.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("Delete session") && text.contains("XDEL")
+        },
+        "Ctrl+D should allow deletion of the current conversation",
+    );
+    session.send_bytes(b"y");
+    session.wait_for(
+        |screen| !screen.contents().contains("XDEL"),
+        "deleting the current conversation should open the next one",
+    );
 
     session.send_bytes(&ctrl_c());
     assert_eq!(

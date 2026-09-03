@@ -53,18 +53,18 @@ pub const COMPACT_CHAT_MIN_HEIGHT: u16 = 7;
 pub const SIDEBAR_WIDTH_LG: u16 = 26;
 /// Sidebar width at the extra-large breakpoint.
 pub const SIDEBAR_WIDTH_XL: u16 = 32;
-/// Brand row above the rail destinations.
-pub const SIDEBAR_BRAND_ROWS: u16 = 1;
+/// Brand row plus breathing room above the rail destinations.
+pub const SIDEBAR_BRAND_ROWS: u16 = 2;
 /// Primary route rows in the rebuilt rail.
-pub const SIDEBAR_NAV_COUNT: u16 = 5;
+pub const SIDEBAR_NAV_COUNT: u16 = 6;
 /// Blank row between the rail and the recent-session group.
-pub const SIDEBAR_GROUP_GAP: u16 = 1;
+pub const SIDEBAR_GROUP_GAP: u16 = 0;
 /// Group heading above recent sessions.
 pub const SIDEBAR_RECENT_HEADER: u16 = 1;
 /// Workspace heading plus the current project label.
 pub const SIDEBAR_WORKSPACE_ROWS: u16 = 2;
-/// Bottom action row in the rail.
-pub const SIDEBAR_FOOTER_ROWS: u16 = 1;
+/// No duplicate route is reserved below the workspace context.
+pub const SIDEBAR_FOOTER_ROWS: u16 = 0;
 /// Rows reserved around the sidebar session list.
 pub const SIDEBAR_SESSION_CHROME: u16 = SIDEBAR_BRAND_ROWS
     + SIDEBAR_NAV_COUNT
@@ -161,8 +161,8 @@ pub const USER_PROFILE_MARGIN_Y: u16 = 4;
 /// Inner line index of the user-profile Save/Cancel row.
 pub const USER_PROFILE_BUTTON_LINE: u16 = 9;
 
-/// Two-pane provider list requires at least this width.
-pub const PROFILE_TWO_PANE_MIN_WIDTH: u16 = 60;
+/// Provider panes share a row at the medium breakpoint and above.
+pub const PROFILE_TWO_PANE_MIN_WIDTH: u16 = 72;
 /// Profile-center copy and layout compact below this width.
 pub const PROFILE_COMPACT_WIDTH: u16 = 72;
 /// Profile-center help uses the shortest string below this width.
@@ -176,23 +176,56 @@ pub const PROFILE_LIST_PERCENT: u16 = 52;
 /// Horizontal split for the connected-profile pane.
 pub const PROFILE_DETAIL_PERCENT: u16 = 48;
 /// Vertical split for the provider catalog pane in one column.
-pub const PROFILE_LIST_PERCENT_STACKED: u16 = 62;
+pub const PROFILE_LIST_PERCENT_STACKED: u16 = 35;
 /// Vertical split for the connected-profile pane in one column.
-pub const PROFILE_DETAIL_PERCENT_STACKED: u16 = 38;
+pub const PROFILE_DETAIL_PERCENT_STACKED: u16 = 65;
 /// Detail-pane chrome rows above the profile action buttons.
 pub const PROFILE_DETAIL_CHROME_ROWS: u16 = 9;
 
 /// Session action bar uses the long hint at or above this width.
 pub const SESSION_HELP_WIDE: u16 = 50;
+/// Session action bar can show every measured action at or above this width.
+pub const SESSION_ACTIONS_FULL_WIDTH: u16 = 76;
+/// Session action bar keeps rename between the compact and full widths.
+pub const SESSION_ACTIONS_MEDIUM_WIDTH: u16 = 54;
 /// Sessions use list and detail panes at the medium breakpoint and above.
 pub const SESSION_TWO_PANE_MIN_WIDTH: u16 = 72;
 /// Session list share in the two-pane workspace.
 pub const SESSION_LIST_PERCENT: u16 = 58;
 /// Session detail share in the two-pane workspace.
 pub const SESSION_DETAIL_PERCENT: u16 = 42;
-/// Session action hits land this many rows above the frame bottom.
-pub const SESSION_ACTION_FROM_BOTTOM: u16 = 2;
-
+/// Memory shows all three inspection panes at or above this width.
+pub const MEMORY_THREE_PANE_MIN_WIDTH: u16 = 106;
+/// Memory shows index and detail side by side at or above this width.
+pub const MEMORY_TWO_PANE_MIN_WIDTH: u16 = 72;
+/// Memory index share in the three-pane workspace.
+pub const MEMORY_LIST_PERCENT_WIDE: u16 = 32;
+/// Memory detail share in the three-pane workspace.
+pub const MEMORY_DETAIL_PERCENT_WIDE: u16 = 43;
+/// Memory admission share in the three-pane workspace.
+pub const MEMORY_ADMISSIONS_PERCENT_WIDE: u16 = 25;
+/// Memory index share in the two-pane workspace.
+pub const MEMORY_LIST_PERCENT: u16 = 42;
+/// Memory detail share in the two-pane workspace.
+pub const MEMORY_DETAIL_PERCENT: u16 = 58;
+/// Height at which a Memory list row may use a second metadata line.
+pub const MEMORY_TALL_LIST_MIN_HEIGHT: u16 = 8;
+/// Height at which Memory renders the expanded two-row page header.
+pub const MEMORY_TALL_HEADER_MIN_HEIGHT: u16 = 20;
+/// Height at which Memory reserves a contextual footer.
+pub const MEMORY_FOOTER_MIN_HEIGHT: u16 = 12;
+/// Width at which Memory index rows keep a trailing status badge.
+pub const MEMORY_ROW_BADGE_MIN_WIDTH: u16 = 28;
+/// Maximum wrapped content rows shown before Memory metadata.
+pub const MEMORY_CONTENT_PREVIEW_ROWS: u16 = 3;
+/// Memory footer shows a context-specific direct action at or above this width.
+pub const MEMORY_ACTIONS_FULL_WIDTH: u16 = 72;
+/// Remember defaults and safety copy above the bounded editor.
+pub const MEMORY_REMEMBER_EDITOR_CHROME_ROWS: u16 = 4;
+/// Admission panes at this height reserve exact selected-turn coordinates.
+pub const MEMORY_ADMISSION_CONTEXT_MIN_HEIGHT: u16 = 12;
+/// Rows reserved for selected admission coordinates and reason factors.
+pub const MEMORY_ADMISSION_CONTEXT_ROWS: u16 = 7;
 /// Inline command palette shows at most this many grouped result rows.
 pub const INLINE_PALETTE_MAX_ROWS: u16 = 10;
 /// Inline palette left inset.
@@ -278,12 +311,21 @@ pub const SETTINGS_CATEGORY_RAIL_XS: u16 = 3;
 pub const SETTINGS_CATEGORY_RAIL_WIDE: u16 = 22;
 /// Settings footer height with context and active controls.
 pub const SETTINGS_FOOTER_ROWS: u16 = 2;
+/// Reserved caret and gap before every typed Settings row.
+pub const SETTINGS_ROW_SELECTION_INSET: u16 = 2;
 /// Accent cells in the focused theme preview.
 pub const SETTINGS_THEME_PREVIEW_CELLS: u16 = 8;
 /// Theme picker label width before its visual preview.
 pub const SETTINGS_THEME_LABEL_WIDTH: u16 = 11;
 /// Theme picker preview inset including the label gap.
 pub const SETTINGS_THEME_PREVIEW_INSET: u16 = 12;
+
+/// Model defaults show the full saved-state summary at this height.
+pub const MODEL_DEFAULT_SUMMARY_TALL_MIN: u16 = 14;
+/// Saved model, thinking, and structural accent rows.
+pub const MODEL_DEFAULT_SUMMARY_ROWS: u16 = 3;
+/// Thinking label, segmented control, and save-state rows.
+pub const MODEL_DEFAULT_THINKING_ROWS: u16 = 3;
 
 /// Returns the width band for a column count.
 #[must_use]

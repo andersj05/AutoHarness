@@ -138,7 +138,9 @@ Move the gradient rule from below the composer to between the transcript and the
 Replace the status line with `StatusBar` priority segments, omit the workspace segment when the workspace is unknown, and render an `auto` thinking level as an explicit label rather than six empty slots.
 Replace the streaming bar with the gradient wave, keeping the ASCII bar for ASCII mode and a static bar under reduced motion.
 Replace the onboarding and empty-conversation states with `Hero`.
-Rebuild the sidebar to carry route navigation with icons, a grouped recent-session list, the workspace, and a bottom action row, sized 26 columns at `Lg` and 32 at `Xl`.
+Rebuild the sidebar to carry route navigation with icons, a grouped recent-session list, and the workspace, sized 26 columns at `Lg` and 32 at `Xl`.
+The selected route uses one full-width themed surface with a caret and icon, while inactive rows and the surrounding rail preserve the terminal background.
+Do not duplicate a primary route in a bottom action row.
 Remove the two-item compact footer from routes where it is meaningless.
 
 **Exit criteria**

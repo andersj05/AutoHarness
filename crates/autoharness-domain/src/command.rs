@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptFailure, AttemptId, CommandId, CorrelationId, DeliveryMode, InputId, ModelRef,
-    PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText, RunLimits,
-    SessionId, SessionTitle, ToolCallId, ToolCallSpec, ToolOutput, UsageSnapshot,
+    AttemptFailure, AttemptId, CommandId, ContextTurnId, CorrelationId, DeliveryMode, InputId,
+    ModelRef, PermissionAnswer, PermissionDecisionId, PermissionOutcome, PromptText, ResponseText,
+    RunLimits, SessionId, SessionTitle, Sha256Digest, ToolCallId, ToolCallSpec, ToolOutput,
+    UsageSnapshot,
 };
 
 /// A command and the metadata used to correlate its resulting events.
@@ -193,6 +194,19 @@ pub enum CommandPayload {
         /// Immutable bounded limits.
         limits: RunLimits,
     },
+    /// Bind one exact durable context manifest to the next provider turn.
+    BindContextTurn {
+        /// Target session.
+        session_id: SessionId,
+        /// Active attempt receiving the context.
+        attempt_id: AttemptId,
+        /// Exact one-based provider turn being prepared.
+        run_turn: u32,
+        /// Stable identity of the committed context manifest.
+        context_turn_id: ContextTurnId,
+        /// Canonical digest of the committed context manifest.
+        manifest_hash: Sha256Digest,
+    },
     /// Record a provider-turn dispatch boundary within an active agent run.
     StartRunTurn {
         /// Target session.
@@ -315,6 +329,7 @@ impl CommandPayload {
             | Self::CancelAttempt { session_id, .. }
             | Self::MarkAttemptUnknown { session_id, .. }
             | Self::ConfigureRunBudget { session_id, .. }
+            | Self::BindContextTurn { session_id, .. }
             | Self::StartRunTurn { session_id, .. }
             | Self::ProposeToolCall { session_id, .. }
             | Self::RecordToolPermission { session_id, .. }

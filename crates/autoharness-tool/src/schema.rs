@@ -1,12 +1,13 @@
+use std::fmt::{self, Debug, Formatter};
 use std::path::{Component, Path, PathBuf};
 
 use autoharness_domain::{
-    CapabilityKind, CapabilityRequest, ProviderCallId, ResourceRef, TOOL_SCHEMA_V1, ToolArguments,
-    ToolCallId, ToolCallSpec, ToolName,
+    CapabilityKind, CapabilityRequest, MemoryContent, MemoryKind, ProviderCallId, ResourceRef,
+    Sensitivity, TOOL_SCHEMA_V1, ToolArguments, ToolCallId, ToolCallSpec, ToolName,
 };
 use reqwest::{Method, Url};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{ToolError, ToolErrorKind};
@@ -42,10 +43,92 @@ pub struct IncomingToolCall {
     pub arguments: ToolArguments,
 }
 
+/// Relative scope selected by a model without accepting a durable scope identity.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryProposalScope {
+    /// Resolve the proposal to the currently running session.
+    Session,
+    /// Resolve the proposal to the currently bound workspace.
+    Workspace,
+}
+
+impl MemoryProposalScope {
+    const fn as_resource_name(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+/// Strict model-authored candidate passed only to the application-owned proposal sink.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub struct MemoryProposal {
+    content: MemoryContent,
+    memory_kind: MemoryKind,
+    scope: MemoryProposalScope,
+    sensitivity: Sensitivity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_provider_call_id: Option<ProviderCallId>,
+}
+
+impl MemoryProposal {
+    /// Returns the exact bounded candidate content.
+    #[must_use]
+    pub const fn content(&self) -> &MemoryContent {
+        &self.content
+    }
+
+    /// Returns the requested semantic class.
+    #[must_use]
+    pub const fn memory_kind(&self) -> MemoryKind {
+        self.memory_kind
+    }
+
+    /// Returns the relative scope that trusted application code must resolve.
+    #[must_use]
+    pub const fn scope(&self) -> MemoryProposalScope {
+        self.scope
+    }
+
+    /// Returns the admitted non-secret handling class.
+    #[must_use]
+    pub const fn sensitivity(&self) -> Sensitivity {
+        self.sensitivity
+    }
+
+    /// Returns an unverified provider-call evidence reference, when supplied.
+    #[must_use]
+    pub const fn source_provider_call_id(&self) -> Option<&ProviderCallId> {
+        self.source_provider_call_id.as_ref()
+    }
+}
+
+impl Debug for MemoryProposal {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryProposal")
+            .field("content", &"[REDACTED]")
+            .field("content_bytes", &self.content.as_str().len())
+            .field("memory_kind", &self.memory_kind)
+            .field("scope", &self.scope)
+            .field("sensitivity", &self.sensitivity)
+            .field(
+                "has_source_provider_call_id",
+                &self.source_provider_call_id.is_some(),
+            )
+            .finish()
+    }
+}
+
 /// Trusted parsed operation retained only in process memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Operation {
     RejectInvalid,
+    SubmitMemoryProposal {
+        proposal: MemoryProposal,
+    },
     ReadFile {
         path: PathBuf,
     },
@@ -86,6 +169,19 @@ impl PlannedToolCall {
     #[must_use]
     pub const fn spec(&self) -> &ToolCallSpec {
         &self.spec
+    }
+
+    /// Returns the typed review-only proposal when this is the internal memory sink tool.
+    #[must_use]
+    pub const fn memory_proposal(&self) -> Option<&MemoryProposal> {
+        match &self.operation {
+            Operation::SubmitMemoryProposal { proposal } => Some(proposal),
+            Operation::RejectInvalid
+            | Operation::ReadFile { .. }
+            | Operation::WriteFile { .. }
+            | Operation::RunProcess { .. }
+            | Operation::HttpRequest { .. } => None,
+        }
     }
 
     pub(crate) fn into_parts(self) -> (ToolCallSpec, Operation) {
@@ -146,6 +242,43 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "body":{"type":"string"}
                 },
                 "required":["method","url"],
+                "additionalProperties":false
+            }),
+        ),
+        definition(
+            "memory_propose",
+            "Submit one bounded untrusted memory candidate for independent review. This tool cannot activate, approve, or directly make memory eligible for context.",
+            json!({
+                "type":"object",
+                "properties":{
+                    "content":{
+                        "type":"string",
+                        "minLength":1,
+                        "maxLength":MemoryContent::MAX_BYTES,
+                        "description":"Exact candidate content to retain for review."
+                    },
+                    "kind":{
+                        "type":"string",
+                        "enum":["fact","preference","constraint","lesson","procedure"]
+                    },
+                    "scope":{
+                        "type":"string",
+                        "enum":["session","workspace"],
+                        "description":"Relative scope resolved by the application; scope identifiers are never accepted."
+                    },
+                    "sensitivity":{
+                        "type":"string",
+                        "enum":["public","internal"]
+                    },
+                    "source_provider_call_id":{
+                        "type":"string",
+                        "minLength":1,
+                        "maxLength":512,
+                        "pattern":"^[A-Za-z0-9_.:/@+%~-]+$",
+                        "description":"Optional exact provider call identifier for evidence verification."
+                    }
+                },
+                "required":["content","kind","scope","sensitivity"],
                 "additionalProperties":false
             }),
         ),
@@ -279,6 +412,33 @@ fn plan_supported(name: &str, value: Value) -> Result<(Operation, CapabilityRequ
                 },
             )
         }
+        "memory_propose" => {
+            let arguments: MemoryProposalArguments = parse(value)?;
+            let sensitivity = match arguments.sensitivity {
+                MemoryProposalSensitivity::Public => Sensitivity::Public,
+                MemoryProposalSensitivity::Internal => Sensitivity::Internal,
+            };
+            let resource = ResourceRef::new(format!(
+                "memory-proposal:{}",
+                arguments.scope.as_resource_name()
+            ))
+            .map_err(|_| invalid_call())?;
+            (
+                Operation::SubmitMemoryProposal {
+                    proposal: MemoryProposal {
+                        content: arguments.content,
+                        memory_kind: arguments.kind,
+                        scope: arguments.scope,
+                        sensitivity,
+                        source_provider_call_id: arguments.source_provider_call_id,
+                    },
+                },
+                CapabilityRequest {
+                    kind: CapabilityKind::MemoryProposal,
+                    resource,
+                },
+            )
+        }
         _ => return Err(invalid_call()),
     };
     Ok(planned)
@@ -306,6 +466,29 @@ pub fn permission_details(spec: &ToolCallSpec) -> Result<Vec<PermissionDetail>, 
     let planned = replan(spec.clone())?;
     let details = match planned.operation {
         Operation::RejectInvalid => Vec::new(),
+        Operation::SubmitMemoryProposal { proposal } => vec![
+            PermissionDetail {
+                label: "Scope",
+                value: proposal.scope.as_resource_name().to_owned(),
+            },
+            PermissionDetail {
+                label: "Kind",
+                value: memory_kind_name(proposal.memory_kind).to_owned(),
+            },
+            PermissionDetail {
+                label: "Sensitivity",
+                value: sensitivity_name(proposal.sensitivity).to_owned(),
+            },
+            PermissionDetail {
+                label: "Evidence reference",
+                value: if proposal.source_provider_call_id.is_some() {
+                    "supplied"
+                } else {
+                    "none"
+                }
+                .to_owned(),
+            },
+        ],
         Operation::ReadFile { path } => vec![PermissionDetail {
             label: "Path",
             value: display_relative(&path),
@@ -373,6 +556,25 @@ fn definition(name: &str, description: &'static str, parameters: Value) -> ToolD
         description,
         schema_version: TOOL_SCHEMA_V1,
         parameters,
+    }
+}
+
+const fn memory_kind_name(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Fact => "fact",
+        MemoryKind::Preference => "preference",
+        MemoryKind::Constraint => "constraint",
+        MemoryKind::Lesson => "lesson",
+        MemoryKind::Procedure => "procedure",
+    }
+}
+
+const fn sensitivity_name(sensitivity: Sensitivity) -> &'static str {
+    match sensitivity {
+        Sensitivity::Public => "public",
+        Sensitivity::Internal => "internal",
+        Sensitivity::Sensitive => "sensitive",
+        Sensitivity::Secret => "secret",
     }
 }
 
@@ -481,6 +683,23 @@ struct HttpArguments {
     body: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MemoryProposalSensitivity {
+    Public,
+    Internal,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryProposalArguments {
+    content: MemoryContent,
+    kind: MemoryKind,
+    scope: MemoryProposalScope,
+    sensitivity: MemoryProposalSensitivity,
+    source_provider_call_id: Option<ProviderCallId>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +739,166 @@ mod tests {
                 rejected.spec().capability.resource.as_str(),
                 "tool-call:invalid"
             );
+        }
+    }
+
+    #[test]
+    fn memory_proposal_schema_is_closed_and_cannot_request_promotion() {
+        let definition = definitions()
+            .into_iter()
+            .find(|definition| definition.name.as_str() == "memory_propose")
+            .expect("memory proposal definition");
+
+        assert!(definition.description.contains("cannot activate"));
+        assert_eq!(definition.parameters["type"], json!("object"));
+        assert_eq!(definition.parameters["additionalProperties"], json!(false));
+        assert_eq!(
+            definition.parameters["required"],
+            json!(["content", "kind", "scope", "sensitivity"])
+        );
+        assert_eq!(
+            definition.parameters["properties"]["scope"]["enum"],
+            json!(["session", "workspace"])
+        );
+        assert_eq!(
+            definition.parameters["properties"]["sensitivity"]["enum"],
+            json!(["public", "internal"])
+        );
+        assert!(
+            definition.parameters["properties"].get("status").is_none(),
+            "the model must not select lifecycle status"
+        );
+        assert!(
+            definition.parameters["properties"]
+                .get("trust_class")
+                .is_none(),
+            "the model must not select trust"
+        );
+    }
+
+    #[test]
+    fn memory_proposal_preserves_unicode_and_exposes_only_typed_metadata() {
+        const CONTENT: &str = "Prefer concise 日本語 notes with café examples. 🔒";
+        let planned = plan(incoming(
+            "memory_propose",
+            json!({
+                "content":CONTENT,
+                "kind":"preference",
+                "scope":"workspace",
+                "sensitivity":"internal",
+                "source_provider_call_id":"provider/call:42"
+            }),
+        ))
+        .expect("valid proposal");
+
+        assert_eq!(
+            planned.spec().capability.kind,
+            CapabilityKind::MemoryProposal
+        );
+        assert_eq!(
+            planned.spec().capability.resource.as_str(),
+            "memory-proposal:workspace"
+        );
+        let proposal = planned.memory_proposal().expect("typed proposal");
+        assert_eq!(proposal.content().as_str(), CONTENT);
+        assert_eq!(proposal.memory_kind(), MemoryKind::Preference);
+        assert_eq!(proposal.scope(), MemoryProposalScope::Workspace);
+        assert_eq!(proposal.sensitivity(), Sensitivity::Internal);
+        assert_eq!(
+            proposal
+                .source_provider_call_id()
+                .expect("provider evidence reference")
+                .as_str(),
+            "provider/call:42"
+        );
+        assert_eq!(
+            serde_json::to_value(proposal).expect("serialize typed proposal"),
+            json!({
+                "content":CONTENT,
+                "memory_kind":"preference",
+                "scope":"workspace",
+                "sensitivity":"internal",
+                "source_provider_call_id":"provider/call:42"
+            })
+        );
+        assert!(!format!("{proposal:?}").contains(CONTENT));
+        assert_eq!(
+            replan(planned.spec().clone())
+                .expect("replan")
+                .memory_proposal(),
+            Some(proposal)
+        );
+        assert!(
+            permission_details(planned.spec())
+                .expect("content-free details")
+                .iter()
+                .all(|detail| !detail.value.contains(CONTENT))
+        );
+    }
+
+    #[test]
+    fn memory_proposal_rejects_unbounded_or_authority_expanding_arguments() {
+        let oversized = "雪".repeat(MemoryContent::MAX_BYTES / "雪".len() + 1);
+        assert!(oversized.len() > MemoryContent::MAX_BYTES);
+        let rejected = [
+            json!({
+                "content":oversized,
+                "kind":"fact",
+                "scope":"session",
+                "sensitivity":"public"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":"workspace:arbitrary-id",
+                "sensitivity":"public"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":{"kind":"workspace","id":"arbitrary-id"},
+                "sensitivity":"public"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":"session",
+                "sensitivity":"sensitive"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":"session",
+                "sensitivity":"secret"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":"session",
+                "sensitivity":"public",
+                "source_provider_call_id":"provider call with spaces"
+            }),
+            json!({
+                "content":"candidate",
+                "kind":"fact",
+                "scope":"session",
+                "sensitivity":"public",
+                "activate":true
+            }),
+        ];
+
+        for arguments in rejected {
+            let planned = plan(incoming("memory_propose", arguments))
+                .expect("invalid calls become deterministic no-authority plans");
+            assert_eq!(
+                planned.spec().capability.kind,
+                CapabilityKind::InvalidToolCall
+            );
+            assert_eq!(
+                planned.spec().capability.resource.as_str(),
+                "tool-call:invalid"
+            );
+            assert!(planned.memory_proposal().is_none());
         }
     }
 
@@ -581,6 +960,87 @@ mod tests {
                 .any(|detail| { detail.value == "https://example.com/items/7?force=true" })
         );
         assert!(http_details.iter().any(|detail| detail.value == "7"));
+    }
+
+    #[test]
+    fn permission_details_remain_exact_for_security_safe_projection() {
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":["safe\u{202e}txt.exe\u{200b}"]}),
+        ))
+        .expect("process plan");
+
+        let details = permission_details(planned.spec()).expect("permission details");
+        let argument = details
+            .iter()
+            .find(|detail| detail.label == "Argument")
+            .expect("argument detail");
+
+        assert_eq!(argument.value, "1: safe\u{202e}txt.exe\u{200b}");
+        assert_eq!(
+            autoharness_domain::security_display_safe(&argument.value),
+            "1: safe\\u{202e}txt.exe\\u{200b}"
+        );
+    }
+
+    #[test]
+    fn permission_details_cover_every_admitted_process_and_url_boundary() {
+        let thirty_one = (0..31)
+            .map(|index| format!("argument-{index}"))
+            .collect::<Vec<_>>();
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":thirty_one}),
+        ))
+        .expect("31-argument process plan");
+        assert_eq!(
+            permission_details(planned.spec())
+                .expect("31-argument details")
+                .len(),
+            33
+        );
+
+        let maximum = (0..MAX_PROCESS_ARGUMENTS)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":maximum}),
+        ))
+        .expect("maximum-argument process plan");
+        assert_eq!(
+            permission_details(planned.spec())
+                .expect("maximum-argument details")
+                .len(),
+            MAX_PROCESS_ARGUMENTS + 2
+        );
+
+        let long_argument = "x".repeat(5 * 1024);
+        let planned = plan(incoming(
+            "process_run",
+            json!({"program":"cargo","arguments":[long_argument]}),
+        ))
+        .expect("long-argument process plan");
+        let details = permission_details(planned.spec()).expect("long-argument details");
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.value == format!("1: {}", "x".repeat(5 * 1024)))
+        );
+
+        let long_url = format!("https://example.com/{}", "é".repeat(8 * 1024));
+        let planned = plan(incoming(
+            "http_request",
+            json!({"method":"GET","url":long_url}),
+        ))
+        .expect("long URL plan");
+        let details = permission_details(planned.spec()).expect("long URL details");
+        let projected_url = details
+            .iter()
+            .find(|detail| detail.label == "URL")
+            .expect("URL detail");
+        assert!(projected_url.value.len() > 4 * 1024);
+        assert!(projected_url.value.starts_with("https://example.com/"));
     }
 
     #[test]

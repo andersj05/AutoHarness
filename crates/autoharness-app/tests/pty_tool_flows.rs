@@ -24,9 +24,7 @@ fn select_fixture_model(session: &mut PtySession) {
     session.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("PTY Router")
-                && text.contains("Ask AutoHarness")
-                && !text.contains("Models")
+            text.contains("PTY Router") && text.contains("Ask Agent") && !text.contains("Models")
         },
         "Enter should select the fixture model and return to the composer",
     );

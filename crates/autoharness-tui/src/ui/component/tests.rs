@@ -84,7 +84,9 @@ fn every_component_renders_symbols_and_styles_at_reviewed_widths() {
     });
     let options = ["unicode", "nerd font", "ascii"];
     for_widths(2, |buf, area| {
-        SegmentedControl::new(&theme, &options, 0).render(buf, area);
+        SegmentedControl::new(&theme, &options, 0)
+            .focused(true)
+            .render(buf, area);
     });
     let rows = [
         KeyValue {
@@ -399,13 +401,78 @@ fn modal_scrim_occludes_background_and_intent_selects_the_border_rule() {
         for x in area.x..area.right() {
             let outside = x < frame.x || x >= frame.right() || y < frame.y || y >= frame.bottom();
             if outside {
-                assert_eq!(buf.cell((x, y)).expect("scrim cell").symbol(), " ");
+                let cell = buf.cell((x, y)).expect("scrim cell");
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(
+                    cell.bg,
+                    theme
+                        .style(Token::SurfaceScrim)
+                        .bg
+                        .expect("scrim background intent"),
+                    "scrim background at {x},{y}"
+                );
             }
         }
     }
+    let body_cell = buf
+        .cell((frame.x.saturating_add(2), frame.y.saturating_add(3)))
+        .expect("modal body cell");
+    assert_eq!(
+        body_cell.bg,
+        theme
+            .style_transparent(Token::TextPrimary)
+            .bg
+            .expect("transparent body background intent")
+    );
     assert_eq!(
         buf.cell((frame.x, frame.y)).expect("danger border").fg,
         theme.style(Token::Danger).fg.expect("danger foreground")
+    );
+}
+
+#[test]
+fn selected_controls_use_a_glyph_fill_and_distinct_focus_surface() {
+    let theme = theme();
+    let area = Rect::new(0, 0, 80, 3);
+    let mut buf = Buffer::empty(area);
+    SegmentedControl::new(&theme, &["low", "medium", "high"], 1)
+        .focused(true)
+        .render(&mut buf, Rect::new(0, 0, 40, 1));
+    assert!(
+        (0..40).any(|x| buf[(x, 0)].symbol() == theme.icons().glyph(Icon::SelectionCaret)),
+        "focused selected segment needs a redundant caret"
+    );
+    assert!(
+        (0..40).any(|x| {
+            buf[(x, 0)].bg
+                == theme
+                    .filled(Token::Accent)
+                    .bg
+                    .expect("accent fill background")
+        }),
+        "selected segment needs an accent fill"
+    );
+
+    let _ = SettingRow::new(
+        &theme,
+        "Reduced motion",
+        SettingKind::Toggle { on: true },
+        Provenance::User,
+        Some("Freezes animation tables."),
+        true,
+        16,
+    )
+    .render(&mut buf, Rect::new(0, 1, 80, 2));
+    assert_eq!(
+        buf[(79, 2)].bg,
+        theme
+            .style(Token::SurfaceSelectedMuted)
+            .bg
+            .expect("selected row background")
+    );
+    assert_eq!(
+        buf[(0, 1)].symbol(),
+        theme.icons().glyph(Icon::SelectionCaret)
     );
 }
 

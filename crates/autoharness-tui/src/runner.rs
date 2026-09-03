@@ -14,8 +14,9 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    CatalogProjection, Message, Model, ProfilesProjection, RetryPolicy, SessionProjection,
-    SessionsProjection, SettingsProjection, UiClock, UiEffect, UiFailure, UiIntent, UiNotice,
+    CatalogProjection, MemoryProjection, Message, Model, MouseAction, ProfilesProjection,
+    RetryPolicy, SessionProjection, SessionsProjection, SettingsProjection, UiClock, UiEffect,
+    UiFailure, UiIntent, UiNotice,
 };
 use crate::ui::ColorDepth;
 use crate::{update, view};
@@ -38,6 +39,8 @@ pub struct UiPorts {
     pub profiles: watch::Receiver<Arc<ProfilesProjection>>,
     /// Latest resolved settings and provenance projection.
     pub settings: watch::Receiver<Arc<SettingsProjection>>,
+    /// Latest bounded memory read model, coalesced by `watch`.
+    pub memories: watch::Receiver<Arc<MemoryProjection>>,
     /// Bounded commit and rejection notices.
     pub notices: mpsc::Receiver<UiNotice>,
 }
@@ -56,6 +59,8 @@ pub struct AppPorts {
     pub profiles: watch::Sender<Arc<ProfilesProjection>>,
     /// Resolved settings and provenance publisher.
     pub settings: watch::Sender<Arc<SettingsProjection>>,
+    /// Bounded memory read-model publisher.
+    pub memories: watch::Sender<Arc<MemoryProjection>>,
     /// Bounded commit and rejection publisher.
     pub notices: mpsc::Sender<UiNotice>,
 }
@@ -73,6 +78,7 @@ pub fn bounded_ports(
     let (catalog_tx, catalog_rx) = watch::channel(catalog);
     let (profile_tx, profile_rx) = watch::channel(Arc::new(ProfilesProjection::default()));
     let (settings_tx, settings_rx) = watch::channel(Arc::new(SettingsProjection::default()));
+    let (memory_tx, memory_rx) = watch::channel(Arc::new(MemoryProjection::default()));
     let (notice_tx, notice_rx) = mpsc::channel(APP_NOTICE_CAPACITY);
     (
         UiPorts {
@@ -82,6 +88,7 @@ pub fn bounded_ports(
             catalogs: catalog_rx,
             profiles: profile_rx,
             settings: settings_rx,
+            memories: memory_rx,
             notices: notice_rx,
         },
         AppPorts {
@@ -91,6 +98,7 @@ pub fn bounded_ports(
             catalogs: catalog_tx,
             profiles: profile_tx,
             settings: settings_tx,
+            memories: memory_tx,
             notices: notice_tx,
         },
     )
@@ -157,6 +165,7 @@ where
         mut catalogs,
         mut profiles,
         mut settings,
+        mut memories,
         mut notices,
     } = ports;
     let mut events = EventStream::new();
@@ -221,6 +230,11 @@ where
                 let settings = Arc::clone(&settings.borrow_and_update());
                 let _ = update(&mut model, Message::SettingsChanged(settings));
             }
+            result = memories.changed() => {
+                result.map_err(|_| RunnerError::ApplicationDisconnected("memory projection"))?;
+                let memory = Arc::clone(&memories.borrow_and_update());
+                let _ = update(&mut model, Message::MemoryChanged(memory));
+            }
             notice = notices.recv() => {
                 let notice = notice.ok_or(RunnerError::ApplicationDisconnected("notice"))?;
                 let _ = update(&mut model, Message::Notice(notice));
@@ -232,7 +246,13 @@ where
                     .ok()
                     .and_then(|elapsed_wall| i64::try_from(elapsed_wall.as_millis()).ok())
                     .unwrap_or(0);
-                let _ = update(&mut model, Message::Tick(UiClock::new(elapsed, wall_ms)));
+                if update_and_dispatch(
+                    &mut model,
+                    Message::Tick(UiClock::new(elapsed, wall_ms)),
+                    &intents,
+                ) {
+                    return Ok(ExitReason::UserQuit);
+                }
             }
             _ = frames.tick() => {
                 if model.dirty {
@@ -257,6 +277,18 @@ fn terminal_message(
         Event::Resize(_, _) => Some(Message::Resize),
         Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) => {
             crate::view::hit_test(model, width, height, mouse.column, mouse.row).map(Message::Mouse)
+        }
+        Event::Mouse(mouse)
+            if matches!(
+                crate::view::hit_test(model, width, height, mouse.column, mouse.row),
+                Some(MouseAction::FocusTranscript | MouseAction::FocusComposer)
+            ) =>
+        {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => Some(Message::TranscriptScroll(3)),
+                MouseEventKind::ScrollDown => Some(Message::TranscriptScroll(-3)),
+                _ => None,
+            }
         }
         Event::FocusGained | Event::FocusLost | Event::Key(_) | Event::Mouse(_) => None,
     }
@@ -307,13 +339,27 @@ fn dispatch_effects(
     false
 }
 
+fn update_and_dispatch(
+    model: &mut Model,
+    message: Message,
+    intents: &mpsc::Sender<UiIntent>,
+) -> bool {
+    let effects = update(model, message);
+    dispatch_effects(model, effects, intents)
+}
+
 fn draw<B>(terminal: &mut Terminal<B>, model: &mut Model) -> Result<(), RunnerError>
 where
     B: Backend,
     B::Error: Display,
 {
     terminal
-        .draw(|frame| view(frame, model))
+        .draw(|frame| {
+            if let Some(transcript) = crate::ui::layout::chat_transcript_rect(frame.area(), model) {
+                crate::ui::page::chat::normalize_scroll(transcript, model);
+            }
+            view(frame, model);
+        })
         .map_err(|error| RunnerError::Draw(error.to_string()))?;
     #[cfg(feature = "benchmark-instrumentation")]
     crate::benchmark::rendered_projection(&model.session.session_id, model.session.revision);
@@ -378,6 +424,24 @@ mod tests {
     }
 
     #[test]
+    fn memory_projection_mailbox_coalesces_to_the_latest_generation() {
+        let model = model_with_draft();
+        let (mut ui, app) = bounded_ports(
+            Arc::clone(&model.session),
+            Arc::clone(&model.sessions),
+            Arc::clone(&model.catalog),
+        );
+
+        app.memories
+            .send_replace(Arc::new(MemoryProjection::loading(1)));
+        app.memories
+            .send_replace(Arc::new(MemoryProjection::loading(2)));
+
+        assert!(ui.memories.has_changed().expect("memory channel open"));
+        assert_eq!(ui.memories.borrow_and_update().generation(), 2);
+    }
+
+    #[test]
     fn full_intent_mailbox_becomes_an_explicit_rejection() {
         let mut model = model_with_draft();
         let effects = submit_effect(&mut model);
@@ -425,12 +489,55 @@ mod tests {
     }
 
     #[test]
+    fn timer_tick_dispatches_a_due_memory_query_to_the_application() {
+        let mut model = model_with_draft();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let _ = update(
+            &mut model,
+            Message::Input(Input {
+                key: Key::Char('6'),
+                ctrl: false,
+                alt: true,
+                shift: false,
+            }),
+        );
+        let _ = update(
+            &mut model,
+            Message::Input(Input {
+                key: Key::Char('/'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            }),
+        );
+        let _ = update(&mut model, Message::Paste("durable evidence".to_owned()));
+
+        assert!(!update_and_dispatch(
+            &mut model,
+            Message::Tick(UiClock::new(149, 1_725_000_000_000)),
+            &sender,
+        ));
+        assert!(receiver.try_recv().is_err());
+        assert!(!update_and_dispatch(
+            &mut model,
+            Message::Tick(UiClock::new(150, 1_725_000_000_000)),
+            &sender,
+        ));
+        let intent = receiver.try_recv().expect("due query dispatched");
+        assert!(matches!(
+            intent,
+            UiIntent::QueryMemory { query, .. }
+                if query.literal() == "durable evidence"
+        ));
+    }
+
+    #[test]
     fn left_mouse_down_becomes_a_semantic_click() {
         let model = model_with_draft();
         let profile_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 2,
-            row: 23,
+            row: 2,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
@@ -440,13 +547,33 @@ mod tests {
         let settings_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 14,
-            row: 23,
+            row: 2,
             modifiers: KeyModifiers::NONE,
         });
         assert!(matches!(
             terminal_message(settings_event, &model, 80, 24),
             Some(Message::Mouse(MouseAction::FocusComposer))
         ));
+    }
+
+    #[test]
+    fn mouse_wheel_over_chat_becomes_transcript_scroll() {
+        let model = model_with_draft();
+        for (kind, expected) in [
+            (MouseEventKind::ScrollUp, Message::TranscriptScroll(3)),
+            (MouseEventKind::ScrollDown, Message::TranscriptScroll(-3)),
+        ] {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 10,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(
+                format!("{:?}", terminal_message(event, &model, 80, 24)),
+                format!("Some({expected:?})")
+            );
+        }
     }
 
     #[test]

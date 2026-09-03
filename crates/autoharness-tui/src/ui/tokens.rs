@@ -1,121 +1,21 @@
-//! Semantic tokens, background intents, and color-mode treatments.
+//! Ratatui paint translation for shared semantic appearance tokens.
 
+use autoharness_presentation::{Ramp, Rgb, resolve_ramp};
 use autoharness_settings::ColorMode;
 use ratatui::style::Modifier;
 
-use super::color::{Rgb, clamp_contrast};
-use super::palette::Ramp;
+pub use autoharness_presentation::{
+    BORDER_FOCUS_FLOOR, SEMANTIC_SOFT_FLOOR, TEXT_MUTED_FLOOR, TEXT_ON_ACCENT_FLOOR,
+    TEXT_PRIMARY_FLOOR, TEXT_SECONDARY_FLOOR, Token,
+};
 
-/// Semantic color token. Pages may use only these names.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[repr(u8)]
-pub enum Token {
-    SurfaceBase,
-    SurfaceSunken,
-    SurfaceRaised,
-    SurfaceOverlay,
-    SurfaceScrim,
-    SurfaceSelected,
-    SurfaceSelectedMuted,
-    SurfaceDanger,
-    SurfaceWarning,
-    SurfaceSuccess,
-    TextPrimary,
-    TextSecondary,
-    TextMuted,
-    TextDisabled,
-    TextOnAccent,
-    TextOnDanger,
-    TextLink,
-    Accent,
-    AccentAlt,
-    AccentSoft,
-    AccentOnSurface,
-    Success,
-    Warning,
-    Danger,
-    Info,
-    SuccessSoft,
-    WarningSoft,
-    DangerSoft,
-    InfoSoft,
-    BorderSubtle,
-    BorderStrong,
-    BorderFocus,
-    Divider,
-    ScrollbarTrack,
-    ScrollbarThumb,
-    FocusRing,
-    RoleUser,
-    RoleAssistant,
-    RoleTool,
-    RoleSystem,
-}
-
-impl Token {
-    /// Every token, in index order.
-    pub const ALL: [Self; 40] = [
-        Self::SurfaceBase,
-        Self::SurfaceSunken,
-        Self::SurfaceRaised,
-        Self::SurfaceOverlay,
-        Self::SurfaceScrim,
-        Self::SurfaceSelected,
-        Self::SurfaceSelectedMuted,
-        Self::SurfaceDanger,
-        Self::SurfaceWarning,
-        Self::SurfaceSuccess,
-        Self::TextPrimary,
-        Self::TextSecondary,
-        Self::TextMuted,
-        Self::TextDisabled,
-        Self::TextOnAccent,
-        Self::TextOnDanger,
-        Self::TextLink,
-        Self::Accent,
-        Self::AccentAlt,
-        Self::AccentSoft,
-        Self::AccentOnSurface,
-        Self::Success,
-        Self::Warning,
-        Self::Danger,
-        Self::Info,
-        Self::SuccessSoft,
-        Self::WarningSoft,
-        Self::DangerSoft,
-        Self::InfoSoft,
-        Self::BorderSubtle,
-        Self::BorderStrong,
-        Self::BorderFocus,
-        Self::Divider,
-        Self::ScrollbarTrack,
-        Self::ScrollbarThumb,
-        Self::FocusRing,
-        Self::RoleUser,
-        Self::RoleAssistant,
-        Self::RoleTool,
-        Self::RoleSystem,
-    ];
-
-    /// Stable index into a resolved style table.
-    #[must_use]
-    pub const fn index(self) -> usize {
-        self as usize
-    }
-}
-
-/// How a token paints its cell background.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackgroundIntent {
-    /// Leave the existing background unchanged.
     Inherit,
-    /// Paint a named surface.
     Surface(Token),
-    /// Force a transparent (`Reset`) background.
     Transparent,
 }
 
-/// Unquantized paint for one token.
 #[derive(Clone, Copy, Debug)]
 pub struct TokenPaint {
     pub foreground: Rgb,
@@ -124,10 +24,9 @@ pub struct TokenPaint {
     pub modifiers: Modifier,
 }
 
-/// Applies color-mode treatment and contrast clamps to a derived ramp.
 #[must_use]
 pub fn paints(ramp: Ramp, mode: ColorMode) -> ([TokenPaint; Token::ALL.len()], Ramp) {
-    let ramp = enforce_floors(treat_ramp(ramp, mode));
+    let ramp = resolve_ramp(ramp, mode);
     let mut paints = [TokenPaint {
         foreground: ramp.text_primary,
         background: None,
@@ -140,108 +39,9 @@ pub fn paints(ramp: Ramp, mode: ColorMode) -> ([TokenPaint; Token::ALL.len()], R
     (paints, ramp)
 }
 
-fn treat_ramp(mut ramp: Ramp, mode: ColorMode) -> Ramp {
-    match mode {
-        ColorMode::Color | ColorMode::NoColor => ramp,
-        ColorMode::Soft => {
-            scale_chroma(&mut ramp, 0.65);
-            ramp
-        }
-        ColorMode::Vivid => {
-            scale_chroma(&mut ramp, 1.25);
-            ramp.accent = ramp.accent.to_oklab().add_lightness(0.08).to_rgb();
-            ramp.accent_alt = ramp.accent_alt.to_oklab().add_lightness(0.08).to_rgb();
-            ramp
-        }
-        ColorMode::HighContrast => high_contrast_ramp(ramp),
-    }
-}
-
-fn scale_chroma(ramp: &mut Ramp, scale: f32) {
-    ramp.accent = ramp.accent.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.accent_alt = ramp.accent_alt.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.accent_soft = ramp
-        .accent_soft
-        .to_oklab()
-        .with_chroma_scale(scale)
-        .to_rgb();
-    ramp.accent_on_surface = ramp
-        .accent_on_surface
-        .to_oklab()
-        .with_chroma_scale(scale)
-        .to_rgb();
-    ramp.success = ramp.success.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.warning = ramp.warning.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.danger = ramp.danger.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.info = ramp.info.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.role_user = ramp.role_user.to_oklab().with_chroma_scale(scale).to_rgb();
-    ramp.role_assistant = ramp
-        .role_assistant
-        .to_oklab()
-        .with_chroma_scale(scale)
-        .to_rgb();
-    ramp.role_tool = ramp.role_tool.to_oklab().with_chroma_scale(scale).to_rgb();
-}
-
-fn high_contrast_ramp(ramp: Ramp) -> Ramp {
-    let light = ramp.surface_base.relative_luminance() > 0.5;
-    let base = if light {
-        Rgb::from_srgb8(255, 255, 255)
-    } else {
-        Rgb::from_srgb8(0, 0, 0)
-    };
-    let inverse = if light {
-        Rgb::from_srgb8(0, 0, 0)
-    } else {
-        Rgb::from_srgb8(255, 255, 255)
-    };
-    Ramp {
-        surface_base: base,
-        surface_sunken: base,
-        surface_raised: base,
-        surface_overlay: inverse,
-        surface_scrim: base,
-        surface_selected: inverse,
-        surface_selected_muted: inverse,
-        surface_danger: inverse,
-        surface_warning: inverse,
-        surface_success: inverse,
-        text_primary: inverse,
-        text_secondary: inverse,
-        text_muted: inverse,
-        text_disabled: inverse,
-        text_on_accent: base,
-        text_on_danger: base,
-        text_link: inverse,
-        accent: inverse,
-        accent_alt: inverse,
-        accent_soft: base,
-        accent_on_surface: inverse,
-        success: inverse,
-        warning: inverse,
-        danger: inverse,
-        info: inverse,
-        success_soft: base,
-        warning_soft: base,
-        danger_soft: base,
-        info_soft: base,
-        border_subtle: inverse,
-        border_strong: inverse,
-        border_focus: inverse,
-        divider: inverse,
-        scrollbar_track: base,
-        scrollbar_thumb: inverse,
-        focus_ring: inverse,
-        role_user: inverse,
-        role_assistant: inverse,
-        role_tool: inverse,
-        role_system: inverse,
-    }
-}
-
 fn paint_for(token: Token, ramp: &Ramp, mode: ColorMode) -> TokenPaint {
     if mode == ColorMode::NoColor {
-        return nocolor_paint(token);
+        return no_color_paint(token);
     }
     let mut paint = colored_paint(token, ramp);
     if mode == ColorMode::Vivid && is_accent_or_semantic_text(token) {
@@ -265,22 +65,22 @@ fn paint_for(token: Token, ramp: &Ramp, mode: ColorMode) -> TokenPaint {
 }
 
 fn colored_paint(token: Token, ramp: &Ramp) -> TokenPaint {
-    let inherit = |foreground: Rgb| TokenPaint {
+    let inherit = |foreground| TokenPaint {
         foreground,
         background: None,
         intent: BackgroundIntent::Inherit,
         modifiers: Modifier::empty(),
     };
-    let transparent = |foreground: Rgb| TokenPaint {
+    let transparent = |foreground| TokenPaint {
         foreground,
         background: None,
         intent: BackgroundIntent::Transparent,
         modifiers: Modifier::empty(),
     };
-    let surface = |background: Rgb, foreground: Rgb, token: Token| TokenPaint {
+    let surface = |background, foreground, surface_token| TokenPaint {
         foreground,
         background: Some(background),
-        intent: BackgroundIntent::Surface(token),
+        intent: BackgroundIntent::Surface(surface_token),
         modifiers: Modifier::empty(),
     };
     match token {
@@ -288,7 +88,7 @@ fn colored_paint(token: Token, ramp: &Ramp) -> TokenPaint {
         Token::SurfaceSunken => surface(ramp.surface_sunken, ramp.text_primary, token),
         Token::SurfaceRaised => surface(ramp.surface_raised, ramp.text_primary, token),
         Token::SurfaceOverlay => surface(ramp.surface_overlay, ramp.text_primary, token),
-        Token::SurfaceScrim => surface(ramp.surface_scrim, ramp.text_muted, token),
+        Token::SurfaceScrim => transparent(ramp.text_muted),
         Token::SurfaceSelected => surface(ramp.surface_selected, ramp.text_on_accent, token),
         Token::SurfaceSelectedMuted => {
             surface(ramp.surface_selected_muted, ramp.text_primary, token)
@@ -364,8 +164,7 @@ fn colored_paint(token: Token, ramp: &Ramp) -> TokenPaint {
     }
 }
 
-fn nocolor_paint(token: Token) -> TokenPaint {
-    let dummy = Rgb::from_srgb8(0, 0, 0);
+fn no_color_paint(token: Token) -> TokenPaint {
     let modifiers = match token {
         Token::SurfaceSelected
         | Token::SurfaceSelectedMuted
@@ -380,12 +179,11 @@ fn nocolor_paint(token: Token) -> TokenPaint {
         }
         Token::Info | Token::InfoSoft => Modifier::REVERSED,
         Token::RoleUser | Token::RoleAssistant | Token::RoleTool => Modifier::BOLD,
-        Token::TextMuted | Token::TextDisabled | Token::TextSecondary => Modifier::empty(),
         Token::TextLink => Modifier::UNDERLINED,
         _ => Modifier::empty(),
     };
     TokenPaint {
-        foreground: dummy,
+        foreground: Rgb::from_srgb8(0, 0, 0),
         background: None,
         intent: BackgroundIntent::Transparent,
         modifiers,
@@ -408,33 +206,4 @@ const fn is_accent_or_semantic_text(token: Token) -> bool {
             | Token::RoleTool
             | Token::FocusRing
     )
-}
-
-/// Contrast floors from the design system.
-pub const TEXT_PRIMARY_FLOOR: f32 = 7.0;
-pub const TEXT_SECONDARY_FLOOR: f32 = 4.5;
-pub const TEXT_MUTED_FLOOR: f32 = 3.5;
-pub const TEXT_ON_ACCENT_FLOOR: f32 = 4.5;
-pub const SEMANTIC_SOFT_FLOOR: f32 = 4.5;
-pub const BORDER_FOCUS_FLOOR: f32 = 3.0;
-
-/// Re-clamps the ramp after color-mode treatment so floors still hold.
-#[must_use]
-pub fn enforce_floors(ramp: Ramp) -> Ramp {
-    let mut ramp = ramp;
-    ramp.text_primary = clamp_contrast(ramp.text_primary, ramp.surface_base, TEXT_PRIMARY_FLOOR);
-    ramp.text_secondary =
-        clamp_contrast(ramp.text_secondary, ramp.surface_base, TEXT_SECONDARY_FLOOR);
-    ramp.text_muted = clamp_contrast(ramp.text_muted, ramp.surface_base, TEXT_MUTED_FLOOR);
-    ramp.text_on_accent = clamp_contrast(
-        ramp.text_on_accent,
-        ramp.surface_selected,
-        TEXT_ON_ACCENT_FLOOR,
-    );
-    ramp.success = clamp_contrast(ramp.success, ramp.success_soft, SEMANTIC_SOFT_FLOOR);
-    ramp.warning = clamp_contrast(ramp.warning, ramp.warning_soft, SEMANTIC_SOFT_FLOOR);
-    ramp.danger = clamp_contrast(ramp.danger, ramp.danger_soft, SEMANTIC_SOFT_FLOOR);
-    ramp.info = clamp_contrast(ramp.info, ramp.info_soft, SEMANTIC_SOFT_FLOOR);
-    ramp.border_focus = clamp_contrast(ramp.border_focus, ramp.surface_base, BORDER_FOCUS_FLOOR);
-    ramp
 }

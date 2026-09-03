@@ -13,7 +13,63 @@ const CTRL_N: [u8; 1] = [0x0e];
 const CTRL_P: [u8; 1] = [0x10];
 const CTRL_D: [u8; 1] = [0x04];
 const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
+const PAGE_UP: [u8; 4] = [0x1b, b'[', b'5', b'~'];
+const PAGE_DOWN: [u8; 4] = [0x1b, b'[', b'6', b'~'];
 const RIGHT: [u8; 3] = [0x1b, b'[', b'C'];
+
+#[test]
+#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+fn long_chat_scrolls_the_composer_with_the_conversation_flow() {
+    let environment = ScenarioEnvironment::prepare();
+    let response = (0..48)
+        .map(|index| format!("restored response line {index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    environment.seed_completed_session("restored long prompt", &response);
+    let mut terminal = PtySession::start(&environment, 24, 80);
+
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("restored response line 47") && text.contains("Ask Agent")
+        },
+        "tail-follow should show the final response lines and composer",
+    );
+
+    for _ in 0..20 {
+        terminal.send_bytes(&PAGE_UP);
+    }
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            text.contains("restored long prompt")
+                && text.contains("restored response line 00")
+                && !text.contains("restored response line 47")
+                && !text.contains("Ask Agent")
+        },
+        "repeated Page Up should stop at a stable, populated conversation start",
+    );
+
+    terminal.send_bytes(&PAGE_DOWN);
+    terminal.wait_for(
+        |screen| {
+            let text = screen.contents();
+            !text.contains("restored long prompt") && text.contains("restored response line")
+        },
+        "one Page Down should recover immediately from the top boundary",
+    );
+
+    for _ in 0..10 {
+        terminal.send_bytes(&PAGE_DOWN);
+    }
+    terminal.wait_for(
+        |screen| screen.contents().contains("Ask Agent"),
+        "continued Page Down should return to the conversation tail and composer",
+    );
+
+    terminal.send_bytes(&ctrl_c());
+    assert_eq!(terminal.wait_for_exit(), 0);
+}
 
 #[test]
 #[ignore = "runs in the cross-platform terminal PTY CI gate"]
@@ -31,7 +87,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
                 && text.contains("Session details")
                 && text.contains("Offline seed")
                 && text.contains("active")
-                && text.contains("[ Open ]")
+                && text.contains("[ Open (Enter) ]")
         },
         "Alt+2 should leave first-run credential entry for the Sessions route",
     );
@@ -107,7 +163,7 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
         |screen| {
             let text = screen.contents();
             text.contains("seeded navigation response")
-                && text.contains("Ask AutoHarness")
+                && text.contains("Ask Agent")
                 && !text.contains("Conversation")
         },
         "Alt+1 should return to replayable offline Chat",
@@ -163,14 +219,12 @@ fn routed_shell_restores_focus_drafts_confirmations_and_terminal_state() {
     terminal.wait_for(
         |screen| {
             let text = screen.contents();
-            text.contains("AutoHarness")
-                && text.contains("Offline")
-                && text.contains("Connect a provider key")
-                && text.contains("/settings")
-                && text.contains("Ask AutoHarness")
+            text.contains("no model")
+                && text.contains("Ask Agent")
+                && !text.contains("Connect a provider key")
                 && !text.contains("Profile")
         },
-        "narrow layout should retain the primary recovery path without a redundant footer",
+        "narrow layout should retain a clean composer without a redundant footer",
     );
 
     terminal.send_bytes(&ctrl_c());

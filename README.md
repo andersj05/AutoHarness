@@ -10,7 +10,35 @@ Shared provider policy applies timeouts, bounded pre-stream retries, concurrency
 Gemini function arguments are aggregated across streamed deltas, malformed model calls are durably denied and returned for bounded repair, and failed prompts are not replayed into unrelated later turns.
 Reviewed live Gemini plain-chat and function-calling probes passed on 2026-08-22; reviewed configured-router release-candidate evidence remains open.
 
-## Run the terminal application
+## GUI preview
+
+AutoHarness now includes an initial Tauri 2 and React desktop preview built on a renderer-neutral Rust client contract.
+The preview is not the default client, a packaged release, or a claim of feature parity with the terminal application.
+Install the pinned frontend workspace dependencies from the repository root:
+
+```text
+pnpm install
+```
+
+Launch the native development preview:
+
+```text
+pnpm gui:desktop
+```
+
+For browser-only interface development against deterministic fixture state, run:
+
+```text
+pnpm gui:dev
+```
+
+The browser fixture exercises presentation, interaction, recovery, and responsive states without connecting to the authoritative Rust runtime or writing real sessions and credentials.
+Use the native preview when validating the Tauri carrier and engine integration.
+The macOS preview requires macOS 11.3 or later so its system WebView provides the layout and protocol features used by the interface.
+This preview intentionally permits one renderer connection per process while native frame delivery is outstanding.
+If the development renderer reloads before acknowledging its last native frame, restart AutoHarness to establish a fresh bounded channel.
+
+## Terminal application compatibility and reference
 
 The repository pins Rust 1.97.1 through `rust-toolchain.toml`.
 Run the binary from the repository root:
@@ -155,13 +183,23 @@ A tool interrupted after its durable start boundary becomes unknown and is not e
 
 ## Development
 
-Run the verified baseline gates from the repository root:
+Run the verified Rust baseline gates from the repository root:
 
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
+
+Run the verified frontend gates when changing the GUI, its transport contract, or the desktop bridge:
+
+```text
+pnpm gui:typecheck
+pnpm gui:test
+pnpm gui:build
+```
+
+The terminal application remains the compatibility and behavioral reference while the GUI preview advances through its documented parity and release gates.
 
 The local Phase 3.7 validation passes formatting, strict Clippy, the full workspace suite, and the serial Windows PTY matrix.
 The TUI suite covers typed routes, single-overlay ownership, permission preemption, exact focus restoration, hidden-confirmation clearing, draft and selection preservation, responsive rail and tab layouts, every primary route, explicit empty and recovery states, and fixed-size goldens.
@@ -192,6 +230,9 @@ Harness overhead and provider-network time remain separate, and unavailable netw
 
 - [Project plan](docs/PROJECT_PLAN.md)
 - [Architecture overview](docs/architecture/OVERVIEW.md)
+- [GUI architecture](docs/architecture/GUI.md)
+- [GUI implementation plan](docs/design/GUI_IMPLEMENTATION_PLAN.md)
+- [GUI design system](docs/design/GUI_DESIGN_SYSTEM.md)
 - [Persistent memory architecture](docs/architecture/PERSISTENT_MEMORY.md)
 - [Repository memory](docs/memory/README.md)
 - [Architecture decision records](docs/adr/README.md)
@@ -200,7 +241,8 @@ Harness overhead and provider-network time remain separate, and unavailable netw
 
 ## Guiding principles
 
-- Keep the engine independent from the terminal interface and model providers.
+- Keep the engine independent from terminal and GUI renderers, desktop carriers, and model providers.
+- Evolve shared client behavior through the versioned renderer-neutral contract instead of renderer-owned runtime logic.
 - Treat every provider response as a typed, replayable event stream.
 - Preserve provenance for every memory, decision, experiment, and promoted change.
 - Evaluate proposed improvements before promotion and retain rollback paths.

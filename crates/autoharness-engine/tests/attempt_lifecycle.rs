@@ -1,10 +1,10 @@
 use autoharness_domain::{
     AttemptFailure, AttemptId, CapabilityKind, CapabilityRequest, Causation, CommandEnvelope,
-    CommandId, CommandPayload, CorrelationId, DeliveryMode, ErrorClass, ErrorCode, EventEnvelope,
-    EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer, PermissionDecisionId,
-    PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage, ResourceRef,
-    ResponseText, RetryAdvice, RunLimits, SessionId, TimestampMillis, ToolArguments, ToolCallId,
-    ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
+    CommandId, CommandPayload, ContextTurnId, CorrelationId, DeliveryMode, ErrorClass, ErrorCode,
+    EventEnvelope, EventId, EventPayload, InputId, ModelId, ModelRef, PermissionAnswer,
+    PermissionDecisionId, PermissionOutcome, PromptText, ProviderCallId, ProviderId, PublicMessage,
+    ResourceRef, ResponseText, RetryAdvice, RunLimits, SessionId, Sha256Digest, TimestampMillis,
+    ToolArguments, ToolCallId, ToolCallSpec, ToolName, ToolOutput, UsageSnapshot,
 };
 use autoharness_engine::{
     AttemptStatus, CommandRejection, EngineError, EventMetadataSource, GeneratedEventMetadata,
@@ -48,6 +48,7 @@ fn tool_effect_requires_frozen_permission_and_resumes_after_durable_settlement()
             attempt_id: attempt.clone(),
         },
     );
+    bind_context_turn(&mut engine, "bind-turn-one", &attempt, 1);
     execute(
         &mut engine,
         "turn-one",
@@ -213,6 +214,7 @@ fn tool_effect_requires_frozen_permission_and_resumes_after_durable_settlement()
             attempt_id: attempt.clone(),
         },
     );
+    bind_context_turn(&mut engine, "bind-turn-two", &attempt, 2);
     execute(
         &mut engine,
         "turn-two",
@@ -260,6 +262,26 @@ fn input_id() -> InputId {
 
 fn attempt_id(value: &str) -> AttemptId {
     AttemptId::new(value).expect("valid attempt ID")
+}
+
+fn bind_context_turn(
+    engine: &mut InMemoryEngine<CounterMetadata>,
+    name: &str,
+    attempt_id: &AttemptId,
+    run_turn: u32,
+) {
+    execute(
+        engine,
+        name,
+        CommandPayload::BindContextTurn {
+            session_id: session_id(),
+            attempt_id: attempt_id.clone(),
+            run_turn,
+            context_turn_id: ContextTurnId::new(format!("context-{attempt_id}-{run_turn}"))
+                .expect("context turn ID"),
+            manifest_hash: Sha256Digest::new(format!("{run_turn:064x}")).expect("manifest hash"),
+        },
+    );
 }
 
 fn model() -> ModelRef {
@@ -478,15 +500,24 @@ fn failed_attempt_can_be_retried_and_replay_matches_live_projection() {
     );
 
     let live = engine.session(&session_id()).expect("live session").clone();
+    let completion_event = engine.events().last().expect("completion event");
+    assert!(matches!(
+        completion_event.payload(),
+        EventPayload::AttemptCompleted { attempt_id } if attempt_id == &retry
+    ));
     assert_eq!(live.attempts().len(), 2);
-    assert_eq!(
-        live.attempt(&first).expect("first attempt").status(),
-        AttemptStatus::Failed
-    );
+    let failed = live.attempt(&first).expect("first attempt");
+    assert_eq!(failed.status(), AttemptStatus::Failed);
+    assert_eq!(failed.completed_sequence(), None);
     let retried = live.attempt(&retry).expect("retry attempt");
     assert_eq!(retried.retry_of(), Some(&first));
     assert_eq!(retried.status(), AttemptStatus::Completed);
     assert_eq!(retried.response_text(), "complete 世界");
+    assert_eq!(
+        retried.completed_sequence(),
+        Some(completion_event.sequence())
+    );
+    assert_eq!(live.last_event_id(), Some(completion_event.event_id()));
 
     let serialized = serde_json::to_vec(engine.events()).expect("serialize history");
     let decoded: Vec<EventEnvelope> =
@@ -494,6 +525,18 @@ fn failed_attempt_can_be_retried_and_replay_matches_live_projection() {
     let replayed =
         InMemoryEngine::replay(CounterMetadata::new(100), decoded).expect("history should replay");
     assert_eq!(replayed.session(&session_id()), Some(&live));
+    let replayed_session = replayed.session(&session_id()).expect("replayed session");
+    assert_eq!(
+        replayed_session
+            .attempt(&retry)
+            .expect("replayed completed attempt")
+            .completed_sequence(),
+        Some(completion_event.sequence())
+    );
+    assert_eq!(
+        replayed_session.last_event_id(),
+        Some(completion_event.event_id())
+    );
 }
 
 #[test]

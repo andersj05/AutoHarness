@@ -1,51 +1,45 @@
 # autoharness-tui style snapshot v1
 # 60x18
 @0
- ☺│You                                                      
+ ☺ You                                                      
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#86bbfc bg=reset bold
- | 2-2 fg=#2e343f bg=reset
+ | 2-2 fg=reset bg=reset
  | 3-5 fg=#86bbfc bg=reset bold
  | 6-58 fg=reset bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @1
-  │  What could go wrong?                                   
+   What could go wrong?                                     
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-24 fg=#f2f9fc bg=reset
- | 25-58 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-22 fg=#f2f9fc bg=reset
+ | 23-58 fg=reset bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @2
                                                             
  | 0-59 fg=#f2f9fc bg=reset
 @3
- ◆│AutoHarness                                retry  failed 
+ ◆ Agent                                      retry  failed 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#67dbf1 bg=reset bold
- | 2-2 fg=#2e343f bg=reset
- | 3-13 fg=#67dbf1 bg=reset bold
- | 14-45 fg=reset bg=reset
+ | 2-2 fg=reset bg=reset
+ | 3-7 fg=#67dbf1 bg=reset bold
+ | 8-45 fg=reset bg=reset
  | 46-58 fg=#656b75 bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @4
-  │  The provider returned \u{1b}[31ma partial              
+   The provider returned \u{1b}[31ma partial                
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-45 fg=#f2f9fc bg=reset
- | 46-58 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-43 fg=#f2f9fc bg=reset
+ | 44-58 fg=reset bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @5
-  │  answer\u{1b}[0m.                                       
+   answer\u{1b}[0m.                                         
  | 0-0 fg=#f2f9fc bg=reset
- | 1-1 fg=reset bg=reset
- | 2-2 fg=#2e343f bg=reset
- | 3-4 fg=reset bg=reset
- | 5-20 fg=#f2f9fc bg=reset
- | 21-58 fg=reset bg=reset
+ | 1-2 fg=reset bg=reset
+ | 3-18 fg=#f2f9fc bg=reset
+ | 19-58 fg=reset bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @6
  ╭────────────────────────────────────────────────────────╮ 
@@ -57,21 +51,21 @@
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
  | 2-2 fg=#22d3ee bg=reset
- | 3-57 fg=#f2f9fc bg=#080c18
+ | 3-57 fg=#f2f9fc bg=reset
  | 58-58 fg=#2e343f bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @8
  │Capacity is temporarily exhausted; no credentials were  │ 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
- | 2-57 fg=#f2f9fc bg=#080c18
+ | 2-57 fg=#f2f9fc bg=reset
  | 58-58 fg=#2e343f bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @9
  │exposed.                                                │ 
  | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#2e343f bg=reset
- | 2-57 fg=#f2f9fc bg=#080c18
+ | 2-57 fg=#f2f9fc bg=reset
  | 58-58 fg=#2e343f bg=reset
  | 59-59 fg=#f2f9fc bg=reset
 @10
@@ -81,7 +75,7 @@
  | 2-14 fg=#fb7185 bg=#482937
  | 15-15 fg=#fb7185 bg=#482937 bold
  | 16-32 fg=#0b0f19 bg=#22d3ee bold
- | 33-33 fg=#656b75 bg=#080c18
+ | 33-33 fg=#656b75 bg=reset
  | 34-57 fg=#777d86 bg=reset
  | 58-58 fg=#2e343f bg=reset
  | 59-59 fg=#f2f9fc bg=reset
@@ -98,7 +92,7 @@
  | 0-59 fg=#f2f9fc bg=reset
 @14
  ────────────────────────────────────────────────────────── 
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#2cd3ef bg=reset
  | 3-3 fg=#34d2ef bg=reset
@@ -157,10 +151,10 @@
  | 56-56 fg=#a68ffa bg=reset
  | 57-57 fg=#a78dfa bg=reset
  | 58-58 fg=#a78bfa bg=reset
- | 59-59 fg=reset bg=reset
+ | 59-59 fg=#f2f9fc bg=reset
 @15
  ● Gemini 2.5 Pro · ◐ auto · ▰ ctx <0.1%                    
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-1 fg=#22d3ee bg=reset
  | 2-2 fg=#a2a9b0 bg=reset
  | 3-16 fg=#f2f9fc bg=reset
@@ -171,18 +165,14 @@
  | 26-28 fg=#2e343f bg=reset
  | 29-29 fg=#22d3ee bg=reset
  | 30-30 fg=#a2a9b0 bg=reset
- | 31-58 fg=#f2f9fc bg=reset
- | 59-59 fg=reset bg=reset
+ | 31-59 fg=#f2f9fc bg=reset
 @16
  ❯ Retry with a smaller scope.                              
- | 0-0 fg=reset bg=reset
+ | 0-0 fg=#f2f9fc bg=reset
  | 1-2 fg=#67dbf1 bg=reset bold
- | 3-58 fg=#f2f9fc bg=reset
- | 59-59 fg=reset bg=reset
+ | 3-59 fg=#f2f9fc bg=reset
 @17
    Keep the checklist concise.                              
- | 0-0 fg=reset bg=reset
- | 1-29 fg=#f2f9fc bg=reset
+ | 0-29 fg=#f2f9fc bg=reset
  | 30-30 fg=#f8fafc bg=#0b0f19 bold
- | 31-58 fg=#f2f9fc bg=reset
- | 59-59 fg=reset bg=reset
+ | 31-59 fg=#f2f9fc bg=reset

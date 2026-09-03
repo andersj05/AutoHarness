@@ -1,0 +1,17 @@
+{
+  "name": "autoharness-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "gui:build": "pnpm --filter @autoharness/gui build",
+    "gui:desktop": "tauri dev --config crates/autoharness-app/tauri.conf.json --features gui -- -- --gui",
+    "gui:dev": "pnpm --filter @autoharness/gui dev",
+    "gui:themes": "cargo run -p autoharness-presentation --bin generate_gui_themes --locked",
+    "gui:themes:check": "cargo run -p autoharness-presentation --bin generate_gui_themes --locked -- --check",
+    "gui:test": "pnpm --filter @autoharness/gui test",
+    "gui:typecheck": "pnpm --filter @autoharness/gui typecheck"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}
