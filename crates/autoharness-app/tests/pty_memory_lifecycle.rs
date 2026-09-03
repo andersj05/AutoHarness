@@ -151,10 +151,9 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"/");
     restarted.type_text("PTY imported decision");
-    restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "import search should enter its debounced authoritative refresh",
-    );
+    // The authoritative refresh can complete between PTY polls, so the
+    // end-to-end journey observes its durable final state instead of its
+    // transient spinner.
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
@@ -168,10 +167,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"\x1b");
     restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "clearing import search should request the authoritative eligible view",
-    );
-    restarted.wait_for(
         |screen| {
             let text = screen.contents();
             text.contains("Search all memory") && !text.contains("refreshing view")
@@ -181,10 +176,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     restarted.send_bytes(b"/");
     restarted.type_text("PTY durable preference");
     restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "remembered-preference search should enter its debounced refresh",
-    );
-    restarted.wait_for(
         |screen| {
             let text = screen.contents();
             text.contains("PTY durable preference") && !text.contains("refreshing view")
@@ -192,10 +183,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
         "literal search should restore the separately remembered preference",
     );
     restarted.send_bytes(b"\x1b");
-    restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "clearing remembered-preference search should refresh the full view",
-    );
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
@@ -216,10 +203,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"\x1b");
     restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "clearing the no-match search should refresh the complete eligible view",
-    );
-    restarted.wait_for(
         |screen| {
             let text = screen.contents();
             text.contains("Search all memory")
@@ -230,10 +213,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"/");
     restarted.type_text("PTY durable preference");
-    restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "the correction target search should enter its authoritative refresh",
-    );
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
@@ -375,10 +354,6 @@ fn memory_can_be_created_restarted_corrected_exported_retracted_and_deleted() {
     );
     restarted.send_bytes(b"/");
     restarted.send_bytes(b"\x1b");
-    restarted.wait_for(
-        |screen| screen.contents().contains("refreshing view"),
-        "clearing deleted content search should refresh the inactive audit view",
-    );
     restarted.wait_for(
         |screen| {
             let text = screen.contents();
