@@ -401,7 +401,7 @@ fn renderer_settings_are_typed_resettable_and_versioned() {
     };
 
     let encoded = serde_json::to_value(&snapshot).expect("serialize settings projection");
-    assert_eq!(encoded["schema_version"], 3);
+    assert_eq!(encoded["schema_version"], 4);
     assert_eq!(encoded["settings"]["zoom_percent"]["value"], 200);
     assert_eq!(
         encoded["settings"]["theme_preset"]["source"],
@@ -916,4 +916,65 @@ fn notices_preserve_request_correlation() {
         .request_id(),
         None
     );
+}
+
+#[test]
+fn memory_commands_preserve_exact_revision_authority_and_redact_content() {
+    use autoharness_client::{DecimalU64, MemoryCommand, MemoryId, MemoryText};
+    let command = CommandEnvelope::new(ClientCommand::Memory {
+        command: MemoryCommand::Approve {
+            memory_id: MemoryId::new("memory-1").unwrap(),
+            expected_last_sequence: DecimalU64::new(9_007_199_254_740_993),
+            proposal_revision_id: MemoryId::new("proposal-1").unwrap(),
+        },
+    });
+    let encoded = serde_json::to_value(&command).unwrap();
+    assert_eq!(
+        encoded["command"]["payload"]["command"]["payload"]["expected_last_sequence"],
+        "9007199254740993"
+    );
+    assert_eq!(
+        serde_json::from_value::<CommandEnvelope>(encoded.clone()).unwrap(),
+        command
+    );
+    let mut forged = encoded;
+    forged["command"]["payload"]["command"]["payload"]["trust"] =
+        serde_json::json!("user_approved");
+    assert!(serde_json::from_value::<CommandEnvelope>(forged).is_err());
+    let text = MemoryText::new("private-memory-sentinel").unwrap();
+    assert!(!format!("{text:?}").contains("private-memory-sentinel"));
+    assert!(MemoryText::new("x".repeat(65_537)).is_err());
+}
+
+#[test]
+fn memory_snapshot_requires_bounded_unique_rows_and_prevents_session_only_delta() {
+    use autoharness_client::{
+        MemoryId, MemoryProjection, MemoryRow, MemoryScope, MemoryStatus, MemoryText, UnixMillis,
+    };
+    let row = MemoryRow {
+        memory_id: MemoryId::new("memory-1").unwrap(),
+        preview: MemoryText::new("inert <script>text</script>").unwrap(),
+        status: MemoryStatus::Proposed,
+        scope: MemoryScope::Workspace,
+        updated_at_ms: UnixMillis::new(1),
+        confidence_bps: None,
+        admission_count: 0,
+        detail: None,
+    };
+    let mut memory = MemoryProjection {
+        rows: vec![row.clone()],
+        total: 1,
+        ..Default::default()
+    };
+    let encoded = serde_json::to_value(&memory).unwrap();
+    assert_eq!(
+        serde_json::from_value::<MemoryProjection>(encoded).unwrap(),
+        memory
+    );
+    memory.rows.push(row.clone());
+    memory.total = 2;
+    assert!(memory.validate().is_err());
+    memory.rows = vec![row; 101];
+    memory.total = 101;
+    assert!(memory.validate().is_err());
 }

@@ -1,5 +1,7 @@
 //! Feature-gated Tauri carrier over the existing application coordinator ports.
 
+mod memory;
+
 use std::collections::{BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
@@ -304,6 +306,7 @@ struct BridgeActor {
     catalog: tokio::sync::watch::Receiver<Arc<TuiCatalogProjection>>,
     profiles: tokio::sync::watch::Receiver<Arc<TuiProfilesProjection>>,
     settings: tokio::sync::watch::Receiver<Arc<TuiSettingsProjection>>,
+    memories: tokio::sync::watch::Receiver<Arc<autoharness_tui::MemoryProjection>>,
     notices: mpsc::Receiver<UiNotice>,
     requests: mpsc::Receiver<HostRequest>,
     acknowledgements: mpsc::Receiver<FrameAcknowledgement>,
@@ -339,6 +342,7 @@ impl BridgeActor {
             catalog: ports.catalogs,
             profiles: ports.profiles,
             settings: ports.settings,
+            memories: ports.memories,
             notices: ports.notices,
             requests,
             acknowledgements,
@@ -424,6 +428,11 @@ impl BridgeActor {
                 result = self.profiles.changed(), if self.shutdown_started_at.is_none() => {
                     result.map_err(|_| AppError::WorkerStopped)?;
                     self.profiles.borrow_and_update();
+                    self.projection_dirty = true;
+                }
+                result = self.memories.changed(), if self.shutdown_started_at.is_none() => {
+                    result.map_err(|_| AppError::WorkerStopped)?;
+                    self.memories.borrow_and_update();
                     self.projection_dirty = true;
                 }
                 result = self.settings.changed(), if self.shutdown_started_at.is_none() => {
@@ -718,6 +727,14 @@ impl BridgeActor {
             self.settings.borrow_and_update();
             self.projection_dirty = true;
         }
+        if self
+            .memories
+            .has_changed()
+            .map_err(|_| AppError::WorkerStopped)?
+        {
+            self.memories.borrow_and_update();
+            self.projection_dirty = true;
+        }
         Ok(())
     }
 
@@ -900,7 +917,9 @@ impl BridgeActor {
                 catalog_generation: self.catalog_generation,
                 shutting_down: self.shutdown.is_cancelled(),
             },
-        )
+        )?
+        .with_memory(memory::map_projection(&self.memories.borrow())?)
+        .map_err(|_| GuiIpcError::invalid_projection())
     }
 
     fn send_snapshot(
@@ -966,6 +985,9 @@ fn map_command(
 ) -> Result<CommandAction, GuiIpcError> {
     let request_id = TuiRequestId::new(request_id.get());
     let action = match command {
+        ClientCommand::Memory { command } => {
+            CommandAction::Intent(memory::map_command(command, request_id)?)
+        }
         ClientCommand::CreateSession => {
             CommandAction::Intent(UiIntent::CreateSession { request_id })
         }

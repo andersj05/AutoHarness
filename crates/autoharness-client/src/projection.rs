@@ -821,6 +821,7 @@ pub enum ClientLifecycle {
 /// Complete authoritative GUI baseline at the current protocol schema.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ClientSnapshot {
+    pub memory: crate::MemoryProjection,
     pub schema_version: u16,
     pub lifecycle: ClientLifecycle,
     pub active_session_id: Option<SessionId>,
@@ -833,6 +834,12 @@ pub struct ClientSnapshot {
 }
 
 impl ClientSnapshot {
+    pub fn with_memory(mut self, memory: crate::MemoryProjection) -> Result<Self, ValidationError> {
+        memory.validate()?;
+        self.memory = memory;
+        Ok(self)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         lifecycle: ClientLifecycle,
@@ -881,6 +888,7 @@ impl ClientSnapshot {
 
         Ok(Self {
             schema_version: CLIENT_SCHEMA_VERSION,
+            memory: crate::MemoryProjection::default(),
             lifecycle,
             active_session_id,
             sessions,
@@ -901,6 +909,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct WireSnapshot {
+            memory: crate::MemoryProjection,
             schema_version: u16,
             lifecycle: ClientLifecycle,
             active_session_id: Option<SessionId>,
@@ -927,6 +936,7 @@ impl<'de> Deserialize<'de> for ClientSnapshot {
             wire.settings,
             wire.provider_recovery_pending.get(),
         )
+        .and_then(|snapshot| snapshot.with_memory(wire.memory))
         .map_err(D::Error::custom)
     }
 }

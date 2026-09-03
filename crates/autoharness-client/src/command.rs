@@ -40,6 +40,9 @@ pub enum PermissionDecision {
     content = "payload"
 )]
 pub enum ClientCommand {
+    Memory {
+        command: crate::MemoryCommand,
+    },
     CreateSession,
     OpenSession {
         session_id: SessionId,

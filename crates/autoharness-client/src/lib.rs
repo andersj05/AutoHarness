@@ -13,6 +13,7 @@ mod error;
 mod failure;
 mod frame;
 mod id;
+mod memory;
 mod profile;
 mod projection;
 mod settings;
@@ -25,9 +26,10 @@ pub use error::*;
 pub use failure::*;
 pub use frame::*;
 pub use id::*;
+pub use memory::*;
 pub use profile::*;
 pub use projection::*;
 pub use settings::*;
 
 /// Exact schema version implemented by this client contract.
-pub const CLIENT_SCHEMA_VERSION: u16 = 3;
+pub const CLIENT_SCHEMA_VERSION: u16 = 4;
