@@ -2,7 +2,7 @@
 
 **Status:** Accepted migration target
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-03
 
 ## Purpose
 
@@ -75,8 +75,9 @@ React never imports a Rust runtime implementation and never receives a provider,
 
 ## Client protocol
 
-The protocol is currently at schema version 2.
-Schema version 2 adds typed provider profiles, non-secret connection configuration, profile scope, credential state, model defaults, reasoning effort, and native Codex authentication commands without adding secret material to serializable frames.
+The protocol is currently at schema version 3.
+Schema version 2 added typed provider profiles, non-secret connection configuration, profile scope, credential state, model defaults, reasoning effort, and native Codex authentication commands without adding secret material to serializable frames.
+Schema version 3 adds the authoritative renderer-relevant settings projection and typed user-layer preference changes.
 All numeric identities that can exceed JavaScript's safe integer range cross the boundary as strings.
 Secret inputs use dedicated one-way commands and never appear in snapshots, frames, notices, frontend storage, or diagnostics.
 
@@ -98,6 +99,7 @@ The current command set covers:
 - Create or edit, duplicate, activate, test, disconnect, or delete an exact named provider profile.
 - Save model and reasoning defaults together for the active provider profile.
 - Start or cancel one request-correlated native Codex subscription authentication flow.
+- Change or clear one renderer-relevant user preference through the Rust settings authority.
 
 ### Frames
 
@@ -109,6 +111,7 @@ The first carrier sends:
 - Correlated commit, rejection, and authentication notices.
 - An explicit resynchronization snapshot when the client detects a gap.
 - Bounded provider projections that distinguish named profiles from a temporary session default and expose only safe connection, credential-source, default, health, and recovery metadata.
+- Effective GUI settings with values, provenance, and explicit user-override presence.
 
 Each frame carries a monotonic transport revision.
 Durable session revisions remain visible inside session data and are not replaced by the transport revision.
@@ -117,6 +120,14 @@ An active-session delta carries the exact session identity, updated session summ
 The splice retains the unchanged prefix and suffix and serializes only inserted or replaced transcript rows.
 The client rejects a delta whose identity or splice range does not match its authoritative baseline.
 Ordinary streaming therefore scales with the changed transcript item, while a complete snapshot remains the recovery and cross-session baseline.
+
+### Settings authority
+
+The renderer consumes effective theme, color mode, zoom, font size, reduced motion, density, timestamp, and composer-submission values from the snapshot.
+It may apply those values to presentation immediately, but it does not read or write settings files.
+Each Settings control sends one typed preference change to Rust, and clearing a value removes only the user-file override.
+Rust persists and resolves the change before a replacement projection becomes authoritative.
+Source and user-override fields let the UI explain defaults, inherited workspace or environment values, explicit overrides, and overrides hidden by higher-precedence layers.
 
 ### Ordering and recovery
 

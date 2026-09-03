@@ -129,6 +129,7 @@ impl ActiveSessionDelta {
             || previous.active_session_id != next.active_session_id
             || previous.catalog != next.catalog
             || previous.providers != next.providers
+            || previous.settings != next.settings
             || previous.sessions.len() != next.sessions.len()
         {
             return None;
@@ -235,6 +236,7 @@ impl ActiveSessionDelta {
             Some(active_session),
             snapshot.catalog.clone(),
             snapshot.providers.clone(),
+            snapshot.settings.clone(),
             snapshot.provider_recovery_pending.get(),
         )
     }

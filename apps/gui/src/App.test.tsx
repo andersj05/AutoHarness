@@ -226,8 +226,8 @@ describe("AutoHarness GUI", () => {
     expect(screen.queryByText("Rust-owned authority")).not.toBeInTheDocument();
   });
 
-  it("opens the keyboard command palette and applies presentation-only appearance treatments", async () => {
-    const { user } = renderScenario("ready");
+  it("opens the keyboard command palette and persists authoritative appearance settings", async () => {
+    const { transport, user } = renderScenario("ready");
     await screen.findByRole("heading", { name: "Design the GUI migration" });
     await user.keyboard("{Control>}k{/Control}");
     expect(screen.getByRole("dialog", { name: "Go anywhere" })).toBeInTheDocument();
@@ -235,13 +235,15 @@ describe("AutoHarness GUI", () => {
     await user.click(screen.getByRole("menuitem", { name: /Open settings/ }));
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Theme identity" }), "rose");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Color treatment" }), "no-color");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
     await user.click(screen.getByRole("checkbox", { name: /Reduce motion/ }));
 
     const app = document.querySelector(".app");
-    expect(app).toHaveAttribute("data-theme", "rose");
+    await waitFor(() => expect(app).toHaveAttribute("data-theme", "rose"));
     expect(app).toHaveAttribute("data-color-mode", "no-color");
     expect(app).toHaveAttribute("data-reduce-motion", "true");
+    expect(transport.commands.filter((command) => command.type === "update_client_preference")).toHaveLength(3);
+    expect(screen.getAllByText("your settings").length).toBeGreaterThanOrEqual(3);
   });
 
   it("exposes a keyboard-resizable context split pane on wide workspaces", async () => {
@@ -278,6 +280,102 @@ describe("AutoHarness GUI", () => {
     expect(screen.getByRole("heading", { name: "Model and reasoning" })).toBeInTheDocument();
   });
 
+  it("navigates primary routes by keyboard and restores focus to each main landmark", async () => {
+    renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+
+    fireEvent.keyDown(window, { key: "3", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Providers" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "4", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Memory" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "1", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Design the GUI migration" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "2", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Sessions" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "5", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(screen.getByText("Settings workspace opened.")).toHaveAttribute("role", "status");
+    expect(screen.getByRole("complementary", { name: "Application navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
+  });
+
+  it("follows operating-system theme and reduced-motion preferences", async () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: query.includes("prefers-color-scheme") || query.includes("prefers-reduced-motion"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    expect(document.querySelector(".app")).toHaveAttribute("data-theme", "system");
+    expect(document.querySelector(".app")).toHaveAttribute("data-theme-preference", "system");
+    expect(document.querySelector(".app")).toHaveAttribute("data-reduce-motion", "true");
+  });
+
+  it("applies 200 percent zoom while preserving the settings route and its actions", async () => {
+    const { user } = renderScenario("ready");
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface zoom" }), "200");
+
+    const app = document.querySelector<HTMLElement>(".app");
+    await waitFor(() => expect(app).toHaveAttribute("data-zoom", "200"));
+    expect(app?.style.getPropertyValue("--app-zoom")).toBe("2");
+    expect(app?.style.getPropertyValue("--app-zoom-inverse")).toBe("50%");
+    expect(screen.getByRole("button", { name: "Reset Interface zoom to its inherited value" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Submit prompts with" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(screen.queryByRole("complementary", { name: "Context inspector" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open context inspector" })).toBeVisible();
+  });
+
+  it("uses Ctrl or Cmd plus S for multiline submission after resetting the fixture override", async () => {
+    const { transport, user } = renderScenario("ready");
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "Reset Submit prompts with to its inherited value" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Submit prompts with" })).toHaveValue("control_s"));
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+
+    const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });
+    await user.type(composer, "first line");
+    await user.keyboard("{Enter}");
+    await user.type(composer, "second line");
+    expect(transport.commands.some((command) => command.type === "submit_prompt")).toBe(false);
+    await user.keyboard("{Control>}s{/Control}");
+
+    await waitFor(() => expect(transport.commands.some((command) => command.type === "submit_prompt")).toBe(true));
+    expect(transport.commands.find((command) => command.type === "submit_prompt")).toMatchObject({
+      prompt: "first line\nsecond line",
+    });
+  });
+
+  it("applies density, conversation font, and timestamp preferences to primary surfaces", async () => {
+    const { user } = renderScenario("ready");
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Interface density" }), "compact");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Conversation font size" }), "extra_large");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Timestamps" }), "hidden");
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+
+    const app = document.querySelector(".app");
+    await waitFor(() => expect(app).toHaveAttribute("data-density", "compact"));
+    expect(app).toHaveAttribute("data-font-size", "extra_large");
+    expect(document.querySelector(".messageTurn time")).not.toBeInTheDocument();
+  });
+
   it("preserves exact prompt whitespace and clears only after mailbox acceptance", async () => {
     const { transport, user } = renderScenario("ready");
     const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });
@@ -293,6 +391,9 @@ describe("AutoHarness GUI", () => {
     const { transport, user } = renderScenario("permission");
     const dialog = await screen.findByRole("dialog", { name: "Write one workspace file" });
     expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAccessibleDescription("Review the exact frozen operation. Your answer applies to this call only.");
+    expect(dialog.textContent?.indexOf("workspace.write")).toBeLessThan(dialog.textContent?.indexOf("Deny operation") ?? 0);
+    expect(dialog.textContent?.indexOf("apps/gui/src/App.tsx")).toBeLessThan(dialog.textContent?.indexOf("Allow once") ?? 0);
     const shell = document.querySelector<HTMLElement>(".appShell");
     expect(shell).toHaveAttribute("inert");
     expect(shell).not.toContainElement(dialog);
@@ -452,6 +553,8 @@ describe("AutoHarness GUI", () => {
     const shell = document.querySelector<HTMLElement>(".appShell");
     expect(shell).toHaveAttribute("inert");
     expect(shell).not.toContainElement(credentialDialog);
+    expect(credentialDialog).toHaveAccessibleDescription("The value crosses a dedicated one-way boundary and is immediately cleared from the page.");
+    expect(input.compareDocumentPosition(screen.getByRole("button", { name: "Connect provider" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(input).toHaveFocus();
     await store.dispatch({ type: "refresh_catalog" });
     expect(input).toHaveFocus();

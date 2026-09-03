@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for DisplayLabel {
     }
 }
 
-/// The named terminal appearance preset.
+/// The named cross-client appearance preset.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreset {
@@ -84,7 +84,7 @@ pub enum ThemePreset {
     Rose,
 }
 
-/// The terminal color treatment.
+/// The cross-client color treatment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorMode {
@@ -114,7 +114,7 @@ pub enum GlyphMode {
     Ascii,
 }
 
-/// Terminal information density.
+/// Cross-client information density.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Density {
@@ -136,10 +136,10 @@ pub enum Layout {
     SingleColumn,
 }
 
-/// How terminal timestamps are rendered.
+/// How renderer timestamps are displayed.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TerminalTimestampStyle {
+pub enum TimestampStyle {
     /// Render elapsed, relative timestamps.
     #[default]
     Relative,
@@ -148,6 +148,10 @@ pub enum TerminalTimestampStyle {
     /// Do not render timestamps.
     Hidden,
 }
+
+/// Compatibility name retained while the terminal renderer migrates to the
+/// cross-client timestamp preference.
+pub type TerminalTimestampStyle = TimestampStyle;
 
 /// The keyboard behavior used to submit a composer prompt.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -158,6 +162,63 @@ pub enum ComposerSubmitBehavior {
     ControlS,
     /// Submit with Enter.
     Enter,
+}
+
+/// Base prose size used by the desktop renderer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuiFontSize {
+    /// Use a compact 14-pixel conversation base.
+    Small,
+    /// Use the balanced 16-pixel conversation base.
+    #[default]
+    Standard,
+    /// Use an 18-pixel conversation base.
+    Large,
+    /// Use a 20-pixel conversation base.
+    ExtraLarge,
+}
+
+/// Validated whole-percent desktop zoom from 75 through 200 percent.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct GuiZoomPercent(u16);
+
+impl GuiZoomPercent {
+    /// Minimum supported desktop zoom.
+    pub const MIN: u16 = 75;
+    /// Maximum supported desktop zoom, matching the Stage 6 accessibility gate.
+    pub const MAX: u16 = 200;
+
+    /// Creates a supported whole-percent desktop zoom.
+    pub const fn new(value: u16) -> Result<Self, &'static str> {
+        if value < Self::MIN || value > Self::MAX {
+            return Err("GUI zoom must be between 75 and 200 percent");
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the whole-percent zoom value.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl Default for GuiZoomPercent {
+    fn default() -> Self {
+        Self(100)
+    }
+}
+
+impl<'de> Deserialize<'de> for GuiZoomPercent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u16::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Amount of trusted runtime context shown in the prompt status bar.
@@ -173,6 +234,69 @@ pub enum PromptStatusDetail {
     Detailed,
 }
 
+/// Cross-client preferences stored by one configuration layer.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme_preset: Option<ThemePreset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color_mode: Option<ColorMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reduced_motion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    density: Option<Density>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp_style: Option<TimestampStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    composer_submit_behavior: Option<ComposerSubmitBehavior>,
+}
+
+impl SharedPreferences {
+    const fn is_empty(&self) -> bool {
+        self.theme_preset.is_none()
+            && self.color_mode.is_none()
+            && self.reduced_motion.is_none()
+            && self.density.is_none()
+            && self.timestamp_style.is_none()
+            && self.composer_submit_behavior.is_none()
+    }
+}
+
+/// Desktop-only presentation preferences stored by one configuration layer.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuiPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    zoom_percent: Option<GuiZoomPercent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    font_size: Option<GuiFontSize>,
+}
+
+impl GuiPreferences {
+    const fn is_empty(&self) -> bool {
+        self.zoom_percent.is_none() && self.font_size.is_none()
+    }
+}
+
+/// Terminal-only presentation preferences stored by one configuration layer.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    glyph_mode: Option<GlyphMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<Layout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_status_detail: Option<PromptStatusDetail>,
+}
+
+impl TerminalPreferences {
+    const fn is_empty(&self) -> bool {
+        self.glyph_mode.is_none() && self.layout.is_none() && self.prompt_status_detail.is_none()
+    }
+}
+
 /// Optional local preferences stored by one configuration layer.
 ///
 /// An absent field intentionally means that the layer does not override that
@@ -181,24 +305,12 @@ pub enum PromptStatusDetail {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPreferences {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    theme_preset: Option<ThemePreset>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    color_mode: Option<ColorMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    glyph_mode: Option<GlyphMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    reduced_motion: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    density: Option<Density>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    layout: Option<Layout>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    terminal_timestamp_style: Option<TerminalTimestampStyle>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    composer_submit_behavior: Option<ComposerSubmitBehavior>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    prompt_status_detail: Option<PromptStatusDetail>,
+    #[serde(default, skip_serializing_if = "SharedPreferences::is_empty")]
+    shared: SharedPreferences,
+    #[serde(default, skip_serializing_if = "GuiPreferences::is_empty")]
+    gui: GuiPreferences,
+    #[serde(default, skip_serializing_if = "TerminalPreferences::is_empty")]
+    terminal: TerminalPreferences,
 }
 
 impl LocalPreferences {
@@ -206,41 +318,59 @@ impl LocalPreferences {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            theme_preset: None,
-            color_mode: None,
-            glyph_mode: None,
-            reduced_motion: None,
-            density: None,
-            layout: None,
-            terminal_timestamp_style: None,
-            composer_submit_behavior: None,
-            prompt_status_detail: None,
+            shared: SharedPreferences {
+                theme_preset: None,
+                color_mode: None,
+                reduced_motion: None,
+                density: None,
+                timestamp_style: None,
+                composer_submit_behavior: None,
+            },
+            gui: GuiPreferences {
+                zoom_percent: None,
+                font_size: None,
+            },
+            terminal: TerminalPreferences {
+                glyph_mode: None,
+                layout: None,
+                prompt_status_detail: None,
+            },
         }
     }
 
     /// Returns whether this layer overrides no preferences.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.theme_preset.is_none()
-            && self.color_mode.is_none()
-            && self.glyph_mode.is_none()
-            && self.reduced_motion.is_none()
-            && self.density.is_none()
-            && self.layout.is_none()
-            && self.terminal_timestamp_style.is_none()
-            && self.composer_submit_behavior.is_none()
-            && self.prompt_status_detail.is_none()
+        self.shared.is_empty() && self.gui.is_empty() && self.terminal.is_empty()
+    }
+
+    /// Returns the cross-client preference layer.
+    #[must_use]
+    pub const fn shared(&self) -> &SharedPreferences {
+        &self.shared
+    }
+
+    /// Returns the desktop-only preference layer.
+    #[must_use]
+    pub const fn gui(&self) -> &GuiPreferences {
+        &self.gui
+    }
+
+    /// Returns the terminal-only preference layer.
+    #[must_use]
+    pub const fn terminal(&self) -> &TerminalPreferences {
+        &self.terminal
     }
 
     /// Returns this layer's optional theme preset.
     #[must_use]
     pub const fn theme_preset(&self) -> Option<ThemePreset> {
-        self.theme_preset
+        self.shared.theme_preset
     }
 
     /// Sets this layer's theme preset, or clears it to inherit.
     pub fn set_theme_preset(&mut self, value: Option<ThemePreset>) {
-        self.theme_preset = value;
+        self.shared.theme_preset = value;
     }
 
     /// Returns this layer with a theme preset override.
@@ -253,12 +383,12 @@ impl LocalPreferences {
     /// Returns this layer's optional color mode.
     #[must_use]
     pub const fn color_mode(&self) -> Option<ColorMode> {
-        self.color_mode
+        self.shared.color_mode
     }
 
     /// Sets this layer's color mode, or clears it to inherit.
     pub fn set_color_mode(&mut self, value: Option<ColorMode>) {
-        self.color_mode = value;
+        self.shared.color_mode = value;
     }
 
     /// Returns this layer with a color mode override.
@@ -271,12 +401,12 @@ impl LocalPreferences {
     /// Returns this layer's optional glyph mode.
     #[must_use]
     pub const fn glyph_mode(&self) -> Option<GlyphMode> {
-        self.glyph_mode
+        self.terminal.glyph_mode
     }
 
     /// Sets this layer's glyph mode, or clears it to inherit.
     pub fn set_glyph_mode(&mut self, value: Option<GlyphMode>) {
-        self.glyph_mode = value;
+        self.terminal.glyph_mode = value;
     }
 
     /// Returns this layer with a glyph mode override.
@@ -289,12 +419,12 @@ impl LocalPreferences {
     /// Returns whether this layer asks for reduced motion.
     #[must_use]
     pub const fn reduced_motion(&self) -> Option<bool> {
-        self.reduced_motion
+        self.shared.reduced_motion
     }
 
     /// Sets reduced motion for this layer, or clears it to inherit.
     pub fn set_reduced_motion(&mut self, value: Option<bool>) {
-        self.reduced_motion = value;
+        self.shared.reduced_motion = value;
     }
 
     /// Returns this layer with a reduced-motion override.
@@ -307,12 +437,12 @@ impl LocalPreferences {
     /// Returns this layer's optional density.
     #[must_use]
     pub const fn density(&self) -> Option<Density> {
-        self.density
+        self.shared.density
     }
 
     /// Sets this layer's density, or clears it to inherit.
     pub fn set_density(&mut self, value: Option<Density>) {
-        self.density = value;
+        self.shared.density = value;
     }
 
     /// Returns this layer with a density override.
@@ -325,12 +455,12 @@ impl LocalPreferences {
     /// Returns this layer's optional layout.
     #[must_use]
     pub const fn layout(&self) -> Option<Layout> {
-        self.layout
+        self.terminal.layout
     }
 
     /// Sets this layer's layout, or clears it to inherit.
     pub fn set_layout(&mut self, value: Option<Layout>) {
-        self.layout = value;
+        self.terminal.layout = value;
     }
 
     /// Returns this layer with a layout override.
@@ -343,12 +473,12 @@ impl LocalPreferences {
     /// Returns this layer's optional terminal timestamp style.
     #[must_use]
     pub const fn terminal_timestamp_style(&self) -> Option<TerminalTimestampStyle> {
-        self.terminal_timestamp_style
+        self.shared.timestamp_style
     }
 
     /// Sets this layer's timestamp style, or clears it to inherit.
     pub fn set_terminal_timestamp_style(&mut self, value: Option<TerminalTimestampStyle>) {
-        self.terminal_timestamp_style = value;
+        self.shared.timestamp_style = value;
     }
 
     /// Returns this layer with a terminal timestamp style override.
@@ -361,12 +491,12 @@ impl LocalPreferences {
     /// Returns this layer's optional composer submit behavior.
     #[must_use]
     pub const fn composer_submit_behavior(&self) -> Option<ComposerSubmitBehavior> {
-        self.composer_submit_behavior
+        self.shared.composer_submit_behavior
     }
 
     /// Sets this layer's composer submit behavior, or clears it to inherit.
     pub fn set_composer_submit_behavior(&mut self, value: Option<ComposerSubmitBehavior>) {
-        self.composer_submit_behavior = value;
+        self.shared.composer_submit_behavior = value;
     }
 
     /// Returns this layer with a composer submit behavior override.
@@ -379,18 +509,54 @@ impl LocalPreferences {
     /// Returns the optional prompt status-bar detail level.
     #[must_use]
     pub const fn prompt_status_detail(&self) -> Option<PromptStatusDetail> {
-        self.prompt_status_detail
+        self.terminal.prompt_status_detail
     }
 
     /// Sets the prompt status-bar detail level, or clears it to inherit.
     pub fn set_prompt_status_detail(&mut self, value: Option<PromptStatusDetail>) {
-        self.prompt_status_detail = value;
+        self.terminal.prompt_status_detail = value;
     }
 
     /// Returns this layer with a prompt status-bar detail override.
     #[must_use]
     pub fn with_prompt_status_detail(mut self, value: PromptStatusDetail) -> Self {
         self.set_prompt_status_detail(Some(value));
+        self
+    }
+
+    /// Returns this layer's optional desktop zoom percentage.
+    #[must_use]
+    pub const fn gui_zoom_percent(&self) -> Option<GuiZoomPercent> {
+        self.gui.zoom_percent
+    }
+
+    /// Sets desktop zoom for this layer, or clears it to inherit.
+    pub fn set_gui_zoom_percent(&mut self, value: Option<GuiZoomPercent>) {
+        self.gui.zoom_percent = value;
+    }
+
+    /// Returns this layer with a desktop zoom override.
+    #[must_use]
+    pub fn with_gui_zoom_percent(mut self, value: GuiZoomPercent) -> Self {
+        self.set_gui_zoom_percent(Some(value));
+        self
+    }
+
+    /// Returns this layer's optional desktop font size.
+    #[must_use]
+    pub const fn gui_font_size(&self) -> Option<GuiFontSize> {
+        self.gui.font_size
+    }
+
+    /// Sets desktop font size for this layer, or clears it to inherit.
+    pub fn set_gui_font_size(&mut self, value: Option<GuiFontSize>) {
+        self.gui.font_size = value;
+    }
+
+    /// Returns this layer with a desktop font-size override.
+    #[must_use]
+    pub fn with_gui_font_size(mut self, value: GuiFontSize) -> Self {
+        self.set_gui_font_size(Some(value));
         self
     }
 }
@@ -495,6 +661,8 @@ pub struct EffectiveLocalPreferences {
     terminal_timestamp_style: EffectiveValue<TerminalTimestampStyle>,
     composer_submit_behavior: EffectiveValue<ComposerSubmitBehavior>,
     prompt_status_detail: EffectiveValue<PromptStatusDetail>,
+    gui_zoom_percent: EffectiveValue<GuiZoomPercent>,
+    gui_font_size: EffectiveValue<GuiFontSize>,
 }
 
 impl Default for EffectiveLocalPreferences {
@@ -518,6 +686,8 @@ impl Default for EffectiveLocalPreferences {
                 PromptStatusDetail::default(),
                 Source::Default,
             ),
+            gui_zoom_percent: EffectiveValue::new(GuiZoomPercent::default(), Source::Default),
+            gui_font_size: EffectiveValue::new(GuiFontSize::default(), Source::Default),
         }
     }
 }
@@ -563,6 +733,14 @@ impl EffectiveLocalPreferences {
 
     pub(crate) fn set_prompt_status_detail(&mut self, value: EffectiveValue<PromptStatusDetail>) {
         self.prompt_status_detail = value;
+    }
+
+    pub(crate) fn set_gui_zoom_percent(&mut self, value: EffectiveValue<GuiZoomPercent>) {
+        self.gui_zoom_percent = value;
+    }
+
+    pub(crate) fn set_gui_font_size(&mut self, value: EffectiveValue<GuiFontSize>) {
+        self.gui_font_size = value;
     }
 
     /// Returns the effective theme preset.
@@ -617,6 +795,18 @@ impl EffectiveLocalPreferences {
     #[must_use]
     pub const fn prompt_status_detail(&self) -> &EffectiveValue<PromptStatusDetail> {
         &self.prompt_status_detail
+    }
+
+    /// Returns the effective desktop zoom percentage.
+    #[must_use]
+    pub const fn gui_zoom_percent(&self) -> &EffectiveValue<GuiZoomPercent> {
+        &self.gui_zoom_percent
+    }
+
+    /// Returns the effective desktop font size.
+    #[must_use]
+    pub const fn gui_font_size(&self) -> &EffectiveValue<GuiFontSize> {
+        &self.gui_font_size
     }
 }
 

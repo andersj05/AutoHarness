@@ -180,15 +180,19 @@ It must remain explicit in code and memory until Stage 1 exits.
 
 ## Current slice evidence
 
-The current implementation completes the Stage 3 design-system slice, the Stage 4 session and workspace slice, and the Stage 5 provider-management slice locally.
-The schema-v2 client contract, Tauri carrier, React-free store, responsive desktop shell, deterministic fixtures, permission preemption, ordered recovery, complete locked Rust workspace gates, 94 GUI tests, and the Windows operating-system vault smoke are verified locally.
+The current implementation completes the Stage 3 design-system slice, the Stage 4 session and workspace slice, the Stage 5 provider-management slice, and the Stage 6 settings and accessibility slice locally.
+The schema-v3 client contract, settings schema-v5 migration, Tauri carrier, React-free store, responsive desktop shell, deterministic fixtures, permission preemption, ordered recovery, complete locked Rust workspace gates, complete GUI test suite, and the Windows operating-system vault smoke are verified locally.
 The Providers workspace creates and edits Gemini and router profiles, duplicates non-secret configuration, activates and tests exact connections, manages environment, vault, and session-only credential states, saves model and reasoning defaults atomically, runs request-correlated native Codex sign-in, and requires exact confirmation for deletion.
 Secret entry clears before transport, only a dedicated zeroizing native ingress accepts it, temporary session-default rows cannot write to the vault, environment overrides remain visibly authoritative, and diagnostics stay content free.
 Focused browser review covers the provider workspace at compact, mobile-resilience, and wide layouts, including navigation, action wrapping, credential actions, fallback messaging, and destructive controls.
+The Settings workspace exposes every renderer-relevant preference with effective provenance, hidden-override explanation, and reset, while the Rust host remains the only persistence authority.
+Keyboard integration covers all five primary routes with focus restoration, and semantic review covers the permission and credential dialogs in screen-reader order.
+Focused live browser review covers standard and mobile layouts, system appearance, high contrast, 200 percent zoom, responsive inspector behavior, and a clean browser console.
 Default pull-request CI now gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage without running the frozen TUI package or ignored PTY acceptance matrix.
 The terminal tests remain available for deliberate local migration-reference checks until final retirement.
 
 The current implementation does not complete Stage 1 because application orchestration still maps TUI-owned projections through a temporary adapter.
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.
 Stage 5's cross-platform exit evidence remains open because macOS and Linux GUI-host credential-vault smokes have not run on this Windows branch.
-Stages 6 through 8 remain planned migration work.
+Stage 6 is complete locally, while cross-platform system-webview accessibility review remains part of the release evidence.
+Stages 7 and 8 remain planned migration work.

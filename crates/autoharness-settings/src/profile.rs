@@ -3,10 +3,13 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::preferences::LocalProfile;
+use crate::preferences::{
+    ColorMode, ComposerSubmitBehavior, Density, DisplayLabel, GlyphMode, Layout, LocalPreferences,
+    LocalProfile, PromptStatusDetail, ThemePreset, TimestampStyle,
+};
 
 /// Supported settings schema version.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 5;
 
 /// Bounded profile-name value type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -444,7 +447,57 @@ struct SettingsDocumentWire {
     #[serde(default)]
     credential_recovery: Vec<CredentialRecoveryRecord>,
     #[serde(default)]
-    local_profile: LocalProfile,
+    local_profile: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyLocalProfile {
+    #[serde(default)]
+    display_label: Option<DisplayLabel>,
+    #[serde(default)]
+    preferences: LegacyLocalPreferences,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyLocalPreferences {
+    #[serde(default)]
+    theme_preset: Option<ThemePreset>,
+    #[serde(default)]
+    color_mode: Option<ColorMode>,
+    #[serde(default)]
+    glyph_mode: Option<GlyphMode>,
+    #[serde(default)]
+    reduced_motion: Option<bool>,
+    #[serde(default)]
+    density: Option<Density>,
+    #[serde(default)]
+    layout: Option<Layout>,
+    #[serde(default)]
+    terminal_timestamp_style: Option<TimestampStyle>,
+    #[serde(default)]
+    composer_submit_behavior: Option<ComposerSubmitBehavior>,
+    #[serde(default)]
+    prompt_status_detail: Option<PromptStatusDetail>,
+}
+
+fn migrate_legacy_local_profile(wire: LegacyLocalProfile) -> LocalProfile {
+    let legacy = wire.preferences;
+    let mut preferences = LocalPreferences::new();
+    preferences.set_theme_preset(legacy.theme_preset);
+    preferences.set_color_mode(legacy.color_mode);
+    preferences.set_glyph_mode(legacy.glyph_mode);
+    preferences.set_reduced_motion(legacy.reduced_motion);
+    preferences.set_density(legacy.density);
+    preferences.set_layout(legacy.layout);
+    preferences.set_terminal_timestamp_style(legacy.terminal_timestamp_style);
+    preferences.set_composer_submit_behavior(legacy.composer_submit_behavior);
+    preferences.set_prompt_status_detail(legacy.prompt_status_detail);
+    let mut profile = LocalProfile::new();
+    profile.set_display_label(wire.display_label);
+    profile.set_preferences(preferences);
+    profile
 }
 
 impl<'de> Deserialize<'de> for SettingsDocument {
@@ -459,13 +512,21 @@ impl<'de> Deserialize<'de> for SettingsDocument {
                 wire.schema_version
             )));
         }
+        let local_profile = match wire.local_profile {
+            None => LocalProfile::new(),
+            Some(value) if wire.schema_version < SETTINGS_SCHEMA_VERSION => {
+                let legacy = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                migrate_legacy_local_profile(legacy)
+            }
+            Some(value) => serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+        };
         Ok(Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             provider: wire.provider,
             profiles: wire.profiles,
             active_profile: wire.active_profile,
             credential_recovery: wire.credential_recovery,
-            local_profile: wire.local_profile,
+            local_profile,
         })
     }
 }

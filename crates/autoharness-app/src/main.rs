@@ -93,6 +93,7 @@ async fn run() -> Result<(), AppError> {
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
     let profile_store = ProfileStore::open(&paths.profiles()).map_err(|_| AppError::FileSystem)?;
+    let initial_user_local_profile = profile_store.local_profile().unwrap_or_default();
     let initial_local_profile = profile_store
         .resolved_settings()
         .map(|settings| settings.local_profile().clone())
@@ -120,7 +121,11 @@ async fn run() -> Result<(), AppError> {
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
-    let initial_settings = Arc::new(settings_projection(&resolved, initial_local_profile));
+    let initial_settings = Arc::new(settings_projection(
+        &resolved,
+        initial_local_profile,
+        initial_user_local_profile,
+    ));
     let (ui_ports, app_ports) = bounded_ports(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
@@ -376,6 +381,7 @@ fn environment_launch() -> LaunchResolution {
 fn settings_projection(
     resolved: &LaunchResolution,
     local_profile: autoharness_settings::EffectiveLocalProfile,
+    user_local_profile: autoharness_settings::LocalProfile,
 ) -> SettingsProjection {
     SettingsProjection {
         provider_status: ProviderStatusProjection {
@@ -393,6 +399,7 @@ fn settings_projection(
             credential_connected: !resolved.credential.is_empty(),
         },
         local_profile,
+        user_local_profile,
         git_branch: None,
     }
 }

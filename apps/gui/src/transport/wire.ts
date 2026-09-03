@@ -1,6 +1,35 @@
-/* Exact schema-v2 JSON surface from crates/autoharness-client. */
+/* Exact schema-v3 JSON surface from crates/autoharness-client. */
 
-export const WIRE_SCHEMA_VERSION = 2 as const;
+export const WIRE_SCHEMA_VERSION = 3 as const;
+
+export type WirePreferenceSource = "default" | "user_file" | "workspace_file" | "environment" | "command_line";
+
+export interface WireEffectiveSetting<T> {
+  value: T;
+  source: WirePreferenceSource;
+  user_override: boolean;
+}
+
+export interface WireClientSettingsProjection {
+  theme_preset: WireEffectiveSetting<"system" | "light" | "dark" | "aurora" | "ember" | "midnight" | "ocean" | "forest" | "rose">;
+  color_mode: WireEffectiveSetting<"color" | "soft" | "vivid" | "no_color" | "high_contrast">;
+  zoom_percent: WireEffectiveSetting<number>;
+  font_size: WireEffectiveSetting<"small" | "standard" | "large" | "extra_large">;
+  density: WireEffectiveSetting<"comfortable" | "compact">;
+  reduced_motion: WireEffectiveSetting<boolean>;
+  timestamp_style: WireEffectiveSetting<"relative" | "absolute" | "hidden">;
+  composer_submit_behavior: WireEffectiveSetting<"control_s" | "enter">;
+}
+
+export type WireClientPreferenceChange =
+  | { kind: "theme_preset"; payload: { value: WireClientSettingsProjection["theme_preset"]["value"] | null } }
+  | { kind: "color_mode"; payload: { value: WireClientSettingsProjection["color_mode"]["value"] | null } }
+  | { kind: "zoom_percent"; payload: { value: number | null } }
+  | { kind: "font_size"; payload: { value: WireClientSettingsProjection["font_size"]["value"] | null } }
+  | { kind: "density"; payload: { value: WireClientSettingsProjection["density"]["value"] | null } }
+  | { kind: "reduced_motion"; payload: { value: boolean | null } }
+  | { kind: "timestamp_style"; payload: { value: WireClientSettingsProjection["timestamp_style"]["value"] | null } }
+  | { kind: "composer_submit_behavior"; payload: { value: WireClientSettingsProjection["composer_submit_behavior"]["value"] | null } };
 
 export interface WireModelRef {
   provider_id: string;
@@ -171,6 +200,7 @@ export interface WireClientSnapshot {
   active_session: WireSessionProjection | null;
   catalog: WireCatalogProjection;
   providers: readonly WireProviderProjection[];
+  settings: WireClientSettingsProjection;
   provider_recovery_pending: string;
 }
 
@@ -225,6 +255,7 @@ export type WireClientCommand =
     }
   | { kind: "disconnect_provider_profile"; payload: { connection_id: string } }
   | { kind: "delete_provider_profile"; payload: { connection_id: string } }
+  | { kind: "update_client_preference"; payload: { change: WireClientPreferenceChange } }
   | { kind: "start_codex_authentication" }
   | {
       kind: "cancel_codex_authentication";

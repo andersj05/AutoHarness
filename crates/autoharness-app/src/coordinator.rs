@@ -1376,6 +1376,14 @@ impl Coordinator {
                 preferences.set_prompt_status_detail(value);
                 local_profile.display_label().cloned()
             }
+            LocalPreferenceChange::GuiZoomPercent(value) => {
+                preferences.set_gui_zoom_percent(value);
+                local_profile.display_label().cloned()
+            }
+            LocalPreferenceChange::GuiFontSize(value) => {
+                preferences.set_gui_font_size(value);
+                local_profile.display_label().cloned()
+            }
         };
         local_profile.set_display_label(display_label);
         local_profile.set_preferences(preferences);
@@ -1398,6 +1406,7 @@ impl Coordinator {
         let Ok(snapshot) = runtime.manager.snapshot() else {
             return;
         };
+        let user_local_profile = runtime.manager.local_profile().unwrap_or_default();
         let local_profile = runtime
             .manager
             .resolved_settings()
@@ -1509,6 +1518,7 @@ impl Coordinator {
                     credential_connected,
                 },
                 local_profile,
+                user_local_profile,
                 git_branch: runtime.git_branch.clone(),
             }));
     }

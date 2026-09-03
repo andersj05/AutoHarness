@@ -97,7 +97,7 @@ export function AppRail({
   return (
     <aside
       aria-hidden={mobileViewport && !mobileOpen ? true : undefined}
-      aria-label={mobileViewport ? "Navigation drawer" : undefined}
+      aria-label={mobileViewport ? "Navigation drawer" : "Application navigation"}
       aria-modal={mobileViewport && mobileOpen ? true : undefined}
       className="appRail"
       data-collapsed={collapsed}

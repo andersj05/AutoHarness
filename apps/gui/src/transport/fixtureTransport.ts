@@ -2,6 +2,7 @@ import {
   CLIENT_SCHEMA_VERSION,
   type ActiveSessionProjection,
   type ClientCommand,
+  type ClientPreferenceChange,
   type ClientFrame,
   type ClientSnapshot,
   type ClientTransport,
@@ -224,6 +225,16 @@ export function createFixtureSnapshot(scenario: FixtureScenario = "ready"): Clie
       refreshedAt: "2026-08-30T13:40:00.000Z",
     },
     providers,
+    settings: {
+      themePreset: { value: "system", source: "default", userOverride: false },
+      colorMode: { value: "color", source: "default", userOverride: false },
+      zoomPercent: { value: 100, source: "default", userOverride: false },
+      fontSize: { value: "standard", source: "default", userOverride: false },
+      density: { value: "comfortable", source: "default", userOverride: false },
+      reducedMotion: { value: false, source: "default", userOverride: false },
+      timestampStyle: { value: "relative", source: "default", userOverride: false },
+      composerSubmitBehavior: { value: "enter", source: "user_file", userOverride: true },
+    },
     providerRecoveryPending: "0",
     activeSession,
     activity: [
@@ -335,6 +346,9 @@ export class FixtureTransport implements ClientTransport {
       case "delete_provider_profile":
         this.deleteProviderProfile(command.connectionId);
         break;
+      case "update_client_preference":
+        this.updateClientPreference(command.change);
+        break;
       case "start_codex_authentication":
         this.startCodexAuthentication(receipt.requestId);
         return receipt;
@@ -393,6 +407,87 @@ export class FixtureTransport implements ClientTransport {
     this.closed = true;
     this.listener = undefined;
     this.clearTimers();
+  }
+
+  private updateClientPreference(change: ClientPreferenceChange): void {
+    const source = change.value === null ? "default" as const : "user_file" as const;
+    const userOverride = change.value !== null;
+    const settings = this.current.settings;
+    switch (change.kind) {
+      case "theme_preset":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            themePreset: { value: change.value ?? "system", source, userOverride },
+          },
+        };
+        break;
+      case "color_mode":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            colorMode: { value: change.value ?? "color", source, userOverride },
+          },
+        };
+        break;
+      case "zoom_percent":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            zoomPercent: { value: change.value ?? 100, source, userOverride },
+          },
+        };
+        break;
+      case "font_size":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            fontSize: { value: change.value ?? "standard", source, userOverride },
+          },
+        };
+        break;
+      case "density":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            density: { value: change.value ?? "comfortable", source, userOverride },
+          },
+        };
+        break;
+      case "reduced_motion":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            reducedMotion: { value: change.value ?? false, source, userOverride },
+          },
+        };
+        break;
+      case "timestamp_style":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            timestampStyle: { value: change.value ?? "relative", source, userOverride },
+          },
+        };
+        break;
+      case "composer_submit_behavior":
+        this.current = {
+          ...this.current,
+          settings: {
+            ...settings,
+            composerSubmitBehavior: { value: change.value ?? "control_s", source, userOverride },
+          },
+        };
+        break;
+    }
+    this.emit();
   }
 
   private upsertProviderProfile(input: ProviderProfileInput): void {
