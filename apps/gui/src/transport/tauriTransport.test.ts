@@ -13,14 +13,14 @@ import { TauriTransport } from "./tauriTransport";
 
 function initialFrame() {
   return {
-    schema_version: 3,
+    schema_version: 4,
     revision: "1",
     payload: {
       kind: "snapshot",
       payload: {
         reason: "initial",
         snapshot: {
-          schema_version: 3,
+          schema_version: 4,
           lifecycle: { kind: "ready" },
           active_session_id: null,
           sessions: [],
@@ -65,7 +65,7 @@ describe("TauriTransport", () => {
     carrier.invoke.mockImplementation(async (command: string, arguments_: { onFrame?: { onmessage?: (frame: unknown) => void } }) => {
       if (command === "gui_connect") {
         queueMicrotask(() => arguments_.onFrame?.onmessage?.({
-          schema_version: 4,
+          schema_version: 999,
           revision: "1",
           payload: { kind: "notice", payload: { kind: "shutdown", payload: { state: "ready" } } },
         }));
@@ -148,7 +148,7 @@ describe("TauriTransport", () => {
         return;
       }
       if (command === "gui_dispatch") {
-        return { schema_version: 3, request_id: "1" };
+        return { schema_version: 4, request_id: "1" };
       }
     });
     const transport = new TauriTransport();
@@ -174,7 +174,7 @@ describe("TauriTransport", () => {
   });
 
   it("forwards the non-secret credential operation through the dedicated ingress", async () => {
-    carrier.invoke.mockResolvedValue({ schema_version: 3, request_id: "7" });
+    carrier.invoke.mockResolvedValue({ schema_version: 4, request_id: "7" });
     const transport = new TauriTransport();
 
     await expect(transport.submitCredential({

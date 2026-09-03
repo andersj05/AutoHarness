@@ -1,8 +1,10 @@
+import { InspectorSlot, type PresentationSlots } from "../features/workspace/slots";
 import type { ActivityItem, ActiveSessionProjection, ConnectionState, ModelDescriptor } from "../protocol";
 import { Icon } from "./Icon";
 import { Chip, Meter } from "./primitives";
 
 interface ContextInspectorProps {
+  slots?: Pick<PresentationSlots, "inspector">;
   activity: readonly ActivityItem[];
   connection: ConnectionState;
   mobileOpen: boolean;
@@ -18,7 +20,7 @@ function formatTokens(value: bigint): string {
   return value.toString();
 }
 
-export function ContextInspector({ activity, connection, mobileOpen, model, runtimeMode, session, onClose }: ContextInspectorProps) {
+export function ContextInspector({ slots, activity, connection, mobileOpen, model, runtimeMode, session, onClose }: ContextInspectorProps) {
   const runtimeOnline = connection.kind === "online";
   const latestUsage = session?.attempt.kind === "completed" &&
     session.attempt.inputTokens !== undefined &&
@@ -78,6 +80,8 @@ export function ContextInspector({ activity, connection, mobileOpen, model, runt
           ))}
         </ol>
       </section>
+
+      {slots?.inspector?.length ? <InspectorSlot surfaces={slots.inspector} /> : null}
 
       <section className="securityCard">
         <span className="securityCardIcon"><Icon name="shield" /></span>

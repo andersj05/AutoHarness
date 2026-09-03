@@ -1,4 +1,5 @@
-export const CLIENT_SCHEMA_VERSION = 3 as const;
+import type { MemoryProjection, MemoryCommand } from "./features/memory/model";
+export const CLIENT_SCHEMA_VERSION = 4 as const;
 export const MAX_PROMPT_UTF8_BYTES = 128 * 1024;
 export const MAX_SESSION_TITLE_UTF8_BYTES = 128;
 
@@ -168,6 +169,7 @@ export interface ProviderProfileInput {
 }
 
 export interface ClientSnapshot {
+  memory: MemoryProjection;
   schemaVersion: typeof CLIENT_SCHEMA_VERSION;
   transportRevision: Revision;
   runtimeMode: "native" | "fixture";
@@ -185,6 +187,7 @@ export interface ClientSnapshot {
 }
 
 export type ClientCommand =
+  | { type: "memory"; command: MemoryCommand }
   | { type: "create_session" }
   | { type: "open_session"; sessionId: SessionId }
   | { type: "rename_session"; sessionId: SessionId; title: string }

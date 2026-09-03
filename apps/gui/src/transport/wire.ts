@@ -1,6 +1,7 @@
-/* Exact schema-v3 JSON surface from crates/autoharness-client. */
+import type { MemoryProjection, MemoryCommand } from "../features/memory/model";
+/* Exact schema-v4 JSON surface from crates/autoharness-client. */
 
-export const WIRE_SCHEMA_VERSION = 3 as const;
+export const WIRE_SCHEMA_VERSION = 4 as const;
 
 export type WirePreferenceSource = "default" | "user_file" | "workspace_file" | "environment" | "command_line";
 
@@ -193,6 +194,7 @@ export type WireClientLifecycle =
   | { kind: "failed"; payload: { failure: WireSafeFailure } };
 
 export interface WireClientSnapshot {
+  memory: MemoryProjection;
   schema_version: typeof WIRE_SCHEMA_VERSION;
   lifecycle: WireClientLifecycle;
   active_session_id: string | null;
@@ -218,6 +220,7 @@ export interface WireActiveSessionDelta {
 }
 
 export type WireClientCommand =
+  | { kind: "memory"; payload: { command: MemoryCommand } }
   | { kind: "create_session" }
   | { kind: "open_session"; payload: { session_id: string } }
   | { kind: "rename_session"; payload: { session_id: string; title: string } }

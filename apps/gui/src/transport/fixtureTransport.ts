@@ -1,3 +1,4 @@
+import { FixtureMemory } from "../features/memory/fixtures";
 import {
   CLIENT_SCHEMA_VERSION,
   type ActiveSessionProjection,
@@ -194,6 +195,7 @@ export function createFixtureSnapshot(scenario: FixtureScenario = "ready"): Clie
       : { ...provider }
   ));
   const snapshot: ClientSnapshot = {
+    memory: new FixtureMemory().page(),
     schemaVersion: CLIENT_SCHEMA_VERSION,
     transportRevision: "1",
     runtimeMode: "fixture",
@@ -274,6 +276,7 @@ function cloneSnapshot(snapshot: ClientSnapshot): ClientSnapshot {
 
 export class FixtureTransport implements ClientTransport {
   private current: ClientSnapshot;
+  private memory = new FixtureMemory();
   private listener?: (frame: ClientFrame) => void;
   private revision = 1n;
   private requestSequence = 0;
@@ -305,6 +308,10 @@ export class FixtureTransport implements ClientTransport {
     };
 
     switch (command.type) {
+      case "memory":
+        this.current = { ...this.current, memory: this.memory.command(command.command) };
+        this.emit();
+        break;
       case "create_session":
         this.createSession();
         break;

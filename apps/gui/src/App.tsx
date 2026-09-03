@@ -1,3 +1,5 @@
+import { fixtureWorkspaceSurfaces, toolEvidenceSurfaces } from "./features/workspace/projections";
+import type { PresentationSlots } from "./features/workspace/slots";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { AppRail, type RouteId } from "./components/AppRail";
 import { ContextInspector } from "./components/ContextInspector";
@@ -7,7 +9,7 @@ import { Icon } from "./components/Icon";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
-import { MemoryWorkspace } from "./components/RouteWorkspaces";
+import { MemoryWorkspace } from "./features/memory/MemoryWorkspace";
 import { SessionsWorkspace } from "./components/SessionsWorkspace";
 import { SettingsWorkspace } from "./components/SettingsWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
@@ -37,6 +39,7 @@ function useMediaQuery(query: string): boolean {
 
 export function App({ store }: AppProps) {
   const client = useClientStore(store);
+  const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [railWidth, setRailWidth] = useState(248);
@@ -70,7 +73,7 @@ export function App({ store }: AppProps) {
         : undefined;
       if (!newSessionShortcut && !paletteShortcut && !routeShortcut) return;
       event.preventDefault();
-      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen) return;
+      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || memoryDialogOpen) return;
       if (routeShortcut) {
         setCommandPaletteOpen(false);
         setRoute(routeShortcut);
@@ -83,7 +86,7 @@ export function App({ store }: AppProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, store]);
+  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, memoryDialogOpen, store]);
 
   useEffect(() => {
     if (previousRouteRef.current === route) return;
@@ -102,7 +105,7 @@ export function App({ store }: AppProps) {
     : undefined;
   const permissionAnswering = pendingPermissionIdentity !== undefined
     && answeringPermissionIdentity === pendingPermissionIdentity;
-  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen;
+  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen || memoryDialogOpen;
   const activeDraft = activeSessionId ? sessionDrafts[activeSessionId] ?? "" : "";
   const setActiveDraft = (next: SetStateAction<string>) => {
     if (!activeSessionId) return;
@@ -240,7 +243,7 @@ export function App({ store }: AppProps) {
     }
   };
 
-  const routeWorkspace =
+  const routeWorkspace: PresentationSlots["route"] =
     route === "chat" ? (
       <Conversation
         catalog={projection.catalog}
@@ -291,7 +294,7 @@ export function App({ store }: AppProps) {
         snapshot={projection}
       />
     ) : route === "memory" ? (
-      <MemoryWorkspace onOpenNavigation={() => setMobileRailOpen(true)} />
+      <MemoryWorkspace memory={projection.memory} sessionId={activeSessionId} blocked={Boolean(projection.pendingPermission)} onCommand={(command) => store.dispatchAndWait(command)} onDialogChange={setMemoryDialogOpen} onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : (
       <SettingsWorkspace
         onCommand={(command) => store.dispatchAndWait(command)}
@@ -344,6 +347,7 @@ export function App({ store }: AppProps) {
               onValueChange={setInspectorPercent}
               secondary={
                 <ContextInspector
+                  slots={{ inspector: projection.runtimeMode === "fixture" ? fixtureWorkspaceSurfaces : toolEvidenceSurfaces(activeSession) }}
                   activity={projection.activity}
                   connection={projection.connection}
                   mobileOpen={inspectorOpen}

@@ -393,6 +393,7 @@ export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string)
     catalog,
     providers: snapshot.providers.map(providerFromWire),
     settings: settingsFromWire(snapshot.settings),
+    memory: snapshot.memory,
     providerRecoveryPending: snapshot.provider_recovery_pending,
     activeSession,
     pendingPermission: permissionFromWire(snapshot),
@@ -463,6 +464,7 @@ function activeSessionDeltaFromWire(
 export function commandToWire(command: ClientCommand): WireCommandEnvelope {
   let wire: WireClientCommand;
   switch (command.type) {
+    case "memory": wire = { kind: "memory", payload: { command: command.command } }; break;
     case "create_session": wire = { kind: "create_session" }; break;
     case "open_session": wire = { kind: "open_session", payload: { session_id: command.sessionId } }; break;
     case "rename_session": wire = { kind: "rename_session", payload: { session_id: command.sessionId, title: command.title } }; break;

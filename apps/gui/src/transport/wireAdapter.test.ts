@@ -1,10 +1,12 @@
+import { emptyMemory } from "../features/memory/model";
 import { describe, expect, it } from "vitest";
 import { commandToWire, frameFromWire, modelRefKey, receiptFromWire, snapshotFromWire } from "./wireAdapter";
 import type { WireClientSnapshot, WireServerFrame } from "./wire";
 
 function wireSnapshot(): WireClientSnapshot {
   return {
-    schema_version: 3,
+    schema_version: 4,
+    memory: emptyMemory(),
     lifecycle: { kind: "ready" },
     active_session_id: "session-1",
     sessions: [
@@ -96,7 +98,7 @@ describe("wire adapter", () => {
   it("emits the exact Rust command envelope and model identity", () => {
     const modelId = modelRefKey({ provider_id: "gemini", model_id: "gemini-2.5-pro" });
     expect(commandToWire({ type: "select_model", sessionId: "session-1", modelId })).toEqual({
-      schema_version: 3,
+      schema_version: 4,
       command: {
         kind: "select_model",
         payload: {
@@ -109,7 +111,7 @@ describe("wire adapter", () => {
 
   it("maps the complete session lifecycle without losing exact scope", () => {
     expect(commandToWire({ type: "rename_session", sessionId: "session-1", title: "Exact title" })).toEqual({
-      schema_version: 3,
+      schema_version: 4,
       command: {
         kind: "rename_session",
         payload: { session_id: "session-1", title: "Exact title" },
@@ -211,7 +213,7 @@ describe("wire adapter", () => {
       type: "update_client_preference",
       change: { kind: "color_mode", value: "no-color" },
     })).toEqual({
-      schema_version: 3,
+      schema_version: 4,
       command: {
         kind: "update_client_preference",
         payload: { change: { kind: "color_mode", payload: { value: "no_color" } } },
@@ -241,9 +243,9 @@ describe("wire adapter", () => {
   });
 
   it("rejects noncanonical, zero, and out-of-range wire identities", () => {
-    expect(() => receiptFromWire({ schema_version: 3, request_id: "01" })).toThrow(/request|decimal/i);
-    expect(() => receiptFromWire({ schema_version: 3, request_id: "0" })).toThrow(/zero/i);
-    expect(() => receiptFromWire({ schema_version: 3, request_id: "18446744073709551616" })).toThrow(/u64/i);
+    expect(() => receiptFromWire({ schema_version: 4, request_id: "01" })).toThrow(/request|decimal/i);
+    expect(() => receiptFromWire({ schema_version: 4, request_id: "0" })).toThrow(/zero/i);
+    expect(() => receiptFromWire({ schema_version: 4, request_id: "18446744073709551616" })).toThrow(/u64/i);
   });
 
   it("prefers an exact provider identity label before an unrelated active connection", () => {
@@ -345,7 +347,7 @@ describe("wire adapter", () => {
 
   it("preserves resynchronization reason on a server frame", () => {
     const frame: WireServerFrame = {
-      schema_version: 3,
+      schema_version: 4,
       revision: "22",
       payload: {
         kind: "snapshot",
@@ -358,7 +360,7 @@ describe("wire adapter", () => {
   it("maps only the changed active-session transcript rows", () => {
     const snapshot = wireSnapshot();
     const frame: WireServerFrame = {
-      schema_version: 3,
+      schema_version: 4,
       revision: "5",
       payload: {
         kind: "active_session_delta",
