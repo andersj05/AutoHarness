@@ -291,6 +291,7 @@ describe("AutoHarness GUI", () => {
     fireEvent.keyDown(window, { key: "5", altKey: true });
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(screen.getByText("Settings workspace opened.")).toHaveAttribute("role", "status");
     expect(screen.getByRole("complementary", { name: "Application navigation" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
@@ -375,6 +376,9 @@ describe("AutoHarness GUI", () => {
     const { transport, user } = renderScenario("permission");
     const dialog = await screen.findByRole("dialog", { name: "Write one workspace file" });
     expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAccessibleDescription("Review the exact frozen operation. Your answer applies to this call only.");
+    expect(dialog.textContent?.indexOf("workspace.write")).toBeLessThan(dialog.textContent?.indexOf("Deny operation") ?? 0);
+    expect(dialog.textContent?.indexOf("apps/gui/src/App.tsx")).toBeLessThan(dialog.textContent?.indexOf("Allow once") ?? 0);
     const shell = document.querySelector<HTMLElement>(".appShell");
     expect(shell).toHaveAttribute("inert");
     expect(shell).not.toContainElement(dialog);
@@ -534,6 +538,8 @@ describe("AutoHarness GUI", () => {
     const shell = document.querySelector<HTMLElement>(".appShell");
     expect(shell).toHaveAttribute("inert");
     expect(shell).not.toContainElement(credentialDialog);
+    expect(credentialDialog).toHaveAccessibleDescription("The value crosses a dedicated one-way boundary and is immediately cleared from the page.");
+    expect(input.compareDocumentPosition(screen.getByRole("button", { name: "Connect provider" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(input).toHaveFocus();
     await store.dispatch({ type: "refresh_catalog" });
     expect(input).toHaveFocus();

@@ -432,6 +432,9 @@ export function App({ store }: AppProps) {
       <div aria-atomic="true" aria-live="polite" className="statusAnnouncer">
         {client.notice?.message}
       </div>
+      <div aria-atomic="true" aria-live="polite" className="srOnly" role="status">
+        {`${route === "chat" ? "Chat" : route === "sessions" ? "Sessions" : route === "providers" ? "Providers" : route === "memory" ? "Memory" : "Settings"} workspace opened.`}
+      </div>
       {client.commandError || client.notice?.level === "error" ? (
         <div className="toast" data-intent="error" role="alert"><Icon name="warning" size={16} /><span>{client.commandError ?? client.notice?.message}</span></div>
       ) : null}
