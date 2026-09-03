@@ -22,7 +22,7 @@ type AppTerminal = ratatui::DefaultTerminal;
 type AppTerminal = Terminal<CrosstermBackend<Ansi16Writer<io::Stdout>>>;
 
 #[cfg(any(not(windows), test))]
-struct Ansi16Writer<W> {
+pub(crate) struct Ansi16Writer<W> {
     inner: W,
     rewrite_colors: bool,
     pending: Vec<u8>,
