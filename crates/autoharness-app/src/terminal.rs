@@ -1,5 +1,8 @@
 use std::io;
 
+#[cfg(any(not(windows), test))]
+use std::io::Write;
+
 use crate::error::AppError;
 use crossterm::cursor::Show;
 use crossterm::event::{
@@ -9,9 +12,132 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::DefaultTerminal;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+
+#[cfg(windows)]
+type AppTerminal = ratatui::DefaultTerminal;
+
+#[cfg(not(windows))]
+type AppTerminal = Terminal<CrosstermBackend<Ansi16Writer<io::Stdout>>>;
+
+#[cfg(any(not(windows), test))]
+struct Ansi16Writer<W> {
+    inner: W,
+    rewrite_colors: bool,
+    pending: Vec<u8>,
+}
+
+#[cfg(any(not(windows), test))]
+impl<W> Ansi16Writer<W> {
+    fn new(inner: W, rewrite_colors: bool) -> Self {
+        Self {
+            inner,
+            rewrite_colors,
+            pending: Vec::new(),
+        }
+    }
+}
+
+#[cfg(any(not(windows), test))]
+impl<W: Write> Ansi16Writer<W> {
+    fn drain_complete_sequences(&mut self) -> io::Result<()> {
+        let mut consumed = 0;
+        while consumed < self.pending.len() {
+            let Some(relative_escape) = self.pending[consumed..]
+                .iter()
+                .position(|byte| *byte == b'\x1b')
+            else {
+                self.inner.write_all(&self.pending[consumed..])?;
+                consumed = self.pending.len();
+                break;
+            };
+            let escape = consumed + relative_escape;
+            self.inner.write_all(&self.pending[consumed..escape])?;
+            if self.pending.get(escape + 1) != Some(&b'[') {
+                if escape + 1 >= self.pending.len() {
+                    consumed = escape;
+                    break;
+                }
+                self.inner.write_all(&self.pending[escape..escape + 1])?;
+                consumed = escape + 1;
+                continue;
+            }
+            let Some(relative_final) = self.pending[escape + 2..]
+                .iter()
+                .position(|byte| (0x40..=0x7e).contains(byte))
+            else {
+                consumed = escape;
+                break;
+            };
+            let final_index = escape + 2 + relative_final;
+            let sequence = &self.pending[escape..=final_index];
+            if sequence.last() == Some(&b'm') {
+                self.inner.write_all(&rewrite_sgr_to_ansi16(sequence))?;
+            } else {
+                self.inner.write_all(sequence)?;
+            }
+            consumed = final_index + 1;
+        }
+        self.pending.drain(..consumed);
+        Ok(())
+    }
+}
+
+#[cfg(any(not(windows), test))]
+impl<W: Write> Write for Ansi16Writer<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if !self.rewrite_colors {
+            return self.inner.write(buffer);
+        }
+        self.pending.extend_from_slice(buffer);
+        self.drain_complete_sequences()?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            self.inner.write_all(&self.pending)?;
+            self.pending.clear();
+        }
+        self.inner.flush()
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn rewrite_sgr_to_ansi16(sequence: &[u8]) -> Vec<u8> {
+    let Ok(parameters) = std::str::from_utf8(&sequence[2..sequence.len() - 1]) else {
+        return sequence.to_vec();
+    };
+    let fields = parameters.split(';').collect::<Vec<_>>();
+    let mut rewritten = Vec::with_capacity(fields.len());
+    let mut index = 0;
+    while index < fields.len() {
+        let is_foreground = fields[index] == "38";
+        let is_background = fields[index] == "48";
+        if (is_foreground || is_background)
+            && fields.get(index + 1) == Some(&"5")
+            && let Some(value) = fields
+                .get(index + 2)
+                .and_then(|field| field.parse::<u8>().ok())
+            && value < 16
+        {
+            let base = if is_foreground {
+                if value < 8 { 30 } else { 90 }
+            } else if value < 8 {
+                40
+            } else {
+                100
+            };
+            rewritten.push((base + value % 8).to_string());
+            index += 3;
+            continue;
+        }
+        rewritten.push(fields[index].to_owned());
+        index += 1;
+    }
+    format!("\x1b[{}m", rewritten.join(";")).into_bytes()
+}
 
 trait LifecycleOps {
     fn initialize(&mut self) -> io::Result<()>;
@@ -82,7 +208,7 @@ impl<O: LifecycleOps> Drop for Lifecycle<O> {
 }
 
 struct RealOps {
-    terminal: Option<DefaultTerminal>,
+    terminal: Option<AppTerminal>,
     raw_mode: bool,
     alternate_screen: bool,
 }
@@ -109,7 +235,14 @@ impl LifecycleOps for RealOps {
             let _ = self.restore();
             return Err(error);
         }
-        match Terminal::new(CrosstermBackend::new(io::stdout())) {
+        #[cfg(windows)]
+        let backend = CrosstermBackend::new(io::stdout());
+        #[cfg(not(windows))]
+        let backend = CrosstermBackend::new(Ansi16Writer::new(
+            io::stdout(),
+            autoharness_tui::ColorDepth::detect() == autoharness_tui::ColorDepth::Basic16,
+        ));
+        match Terminal::new(backend) {
             Ok(terminal) => {
                 self.terminal = Some(terminal);
                 Ok(())
@@ -175,7 +308,7 @@ impl TerminalGuard {
     }
 
     /// Returns the Ratatui terminal owned by the guard.
-    pub fn terminal_mut(&mut self) -> &mut DefaultTerminal {
+    pub fn terminal_mut(&mut self) -> &mut AppTerminal {
         self.lifecycle
             .ops
             .terminal
@@ -207,9 +340,35 @@ fn restore_process_terminal() {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[test]
+    fn ansi16_writer_rewrites_split_named_color_sequences() {
+        let mut writer = Ansi16Writer::new(Vec::new(), true);
+
+        writer.write_all(b"prefix\x1b[38;").expect("first fragment");
+        writer
+            .write_all(b"5;9;48;5;4mtext\x1b[39m")
+            .expect("second fragment");
+        writer.flush().expect("flush output");
+
+        assert_eq!(writer.inner, b"prefix\x1b[91;44mtext\x1b[39m");
+    }
+
+    #[test]
+    fn ansi16_writer_preserves_extended_colors_outside_the_system_palette() {
+        let mut writer = Ansi16Writer::new(Vec::new(), true);
+
+        writer
+            .write_all(b"\x1b[38;5;45mindexed\x1b[48;2;1;2;3m")
+            .expect("write output");
+        writer.flush().expect("flush output");
+
+        assert_eq!(writer.inner, b"\x1b[38;5;45mindexed\x1b[48;2;1;2;3m");
+    }
 
     #[derive(Clone, Default)]
     struct FakeOps {
