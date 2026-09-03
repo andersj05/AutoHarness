@@ -8,19 +8,23 @@ use std::time::Duration;
 use autoharness_client::{
     ActiveSessionDelta, AttemptId as ClientAttemptId, AttemptState as ClientAttemptState,
     AuthenticationState, CapabilitySupport, CatalogProjection as ClientCatalogProjection,
-    ClientCommand, ClientLifecycle, ClientNotice, ClientSnapshot, CommandEnvelope, CommandReceipt,
-    ConnectionId as ClientConnectionId, CredentialOperation,
-    CredentialSource as ClientCredentialSource, DecimalU64, FailureClass, InputId as ClientInputId,
-    MAX_CATALOG_MODELS, MAX_DETAIL_BYTES, MAX_LABEL_BYTES, MAX_PROVIDERS, ModelId as ClientModelId,
+    ClientCommand, ClientLifecycle, ClientNotice, ClientPreferenceChange, ClientSettingsProjection,
+    ClientSnapshot, ColorMode as ClientColorMode, CommandEnvelope, CommandReceipt,
+    ComposerSubmitBehavior as ClientComposerSubmitBehavior, ConnectionId as ClientConnectionId,
+    CredentialOperation, CredentialSource as ClientCredentialSource, DecimalU64,
+    Density as ClientDensity, EffectiveSetting, FailureClass, GuiFontSize as ClientGuiFontSize,
+    GuiZoomPercent as ClientGuiZoomPercent, InputId as ClientInputId, MAX_CATALOG_MODELS,
+    MAX_DETAIL_BYTES, MAX_LABEL_BYTES, MAX_PROVIDERS, ModelId as ClientModelId,
     ModelRef as ClientModelRef, ModelSummary as ClientModelSummary, PermissionDecision,
-    PermissionDetail, PermissionRequest as ClientPermissionRequest,
+    PermissionDetail, PermissionRequest as ClientPermissionRequest, PreferenceSource,
     ProviderConfiguration as ClientProviderConfiguration,
     ProviderCredentialState as ClientProviderCredentialState, ProviderId as ClientProviderId,
     ProviderKind as ClientProviderKind, ProviderProjection as ClientProviderProjection,
     ProviderStatus as ClientProviderStatus, ReasoningEffort as ClientReasoningEffort,
     RequestId as ClientRequestId, RetryDirective, SafeFailure, SecretIngress, ServerFrame,
     SessionId as ClientSessionId, SessionProjection as ClientSessionProjection, SessionRevision,
-    SessionSummary, SessionTitle, ShutdownState, SnapshotReason, ToolCallId as ClientToolCallId,
+    SessionSummary, SessionTitle, ShutdownState, SnapshotReason, ThemePreset as ClientThemePreset,
+    TimestampStyle as ClientTimestampStyle, ToolCallId as ClientToolCallId,
     ToolCallProjection as ClientToolCallProjection, ToolCallState, TranscriptContent,
     TranscriptItem as ClientTranscriptItem, TransportRevision, UsageProjection,
 };
@@ -1055,8 +1059,11 @@ fn map_command(
                 profile_id: connection_id.into_inner(),
             })
         }
-        ClientCommand::UpdateClientPreference { .. } => {
-            return Err(GuiIpcError::invalid_command());
+        ClientCommand::UpdateClientPreference { change } => {
+            CommandAction::Intent(UiIntent::UpdateLocalPreference {
+                request_id,
+                change: tui_preference_change(change)?,
+            })
         }
         ClientCommand::StartCodexAuthentication => {
             CommandAction::Intent(UiIntent::StartCodexLogin { request_id })
@@ -1149,6 +1156,85 @@ fn domain_model_ref(model: ClientModelRef) -> Result<DomainModelRef, GuiIpcError
     let model = DomainModelId::new(model.model_id.into_inner())
         .map_err(|_| GuiIpcError::invalid_command())?;
     Ok(DomainModelRef::new(provider, model))
+}
+
+fn tui_preference_change(
+    change: ClientPreferenceChange,
+) -> Result<autoharness_tui::LocalPreferenceChange, GuiIpcError> {
+    let change = match change {
+        ClientPreferenceChange::ThemePreset { value } => {
+            autoharness_tui::LocalPreferenceChange::ThemePreset(value.map(|value| match value {
+                ClientThemePreset::System => autoharness_settings::ThemePreset::System,
+                ClientThemePreset::Light => autoharness_settings::ThemePreset::Light,
+                ClientThemePreset::Dark => autoharness_settings::ThemePreset::Dark,
+                ClientThemePreset::Aurora => autoharness_settings::ThemePreset::Aurora,
+                ClientThemePreset::Ember => autoharness_settings::ThemePreset::Ember,
+                ClientThemePreset::Midnight => autoharness_settings::ThemePreset::Midnight,
+                ClientThemePreset::Ocean => autoharness_settings::ThemePreset::Ocean,
+                ClientThemePreset::Forest => autoharness_settings::ThemePreset::Forest,
+                ClientThemePreset::Rose => autoharness_settings::ThemePreset::Rose,
+            }))
+        }
+        ClientPreferenceChange::ColorMode { value } => {
+            autoharness_tui::LocalPreferenceChange::ColorMode(value.map(|value| match value {
+                ClientColorMode::Color => autoharness_settings::ColorMode::Color,
+                ClientColorMode::Soft => autoharness_settings::ColorMode::Soft,
+                ClientColorMode::Vivid => autoharness_settings::ColorMode::Vivid,
+                ClientColorMode::NoColor => autoharness_settings::ColorMode::NoColor,
+                ClientColorMode::HighContrast => autoharness_settings::ColorMode::HighContrast,
+            }))
+        }
+        ClientPreferenceChange::ZoomPercent { value } => {
+            let value = value
+                .map(|value| autoharness_settings::GuiZoomPercent::new(value.get()))
+                .transpose()
+                .map_err(|_| GuiIpcError::invalid_command())?;
+            autoharness_tui::LocalPreferenceChange::GuiZoomPercent(value)
+        }
+        ClientPreferenceChange::FontSize { value } => {
+            autoharness_tui::LocalPreferenceChange::GuiFontSize(value.map(|value| match value {
+                ClientGuiFontSize::Small => autoharness_settings::GuiFontSize::Small,
+                ClientGuiFontSize::Standard => autoharness_settings::GuiFontSize::Standard,
+                ClientGuiFontSize::Large => autoharness_settings::GuiFontSize::Large,
+                ClientGuiFontSize::ExtraLarge => autoharness_settings::GuiFontSize::ExtraLarge,
+            }))
+        }
+        ClientPreferenceChange::Density { value } => {
+            autoharness_tui::LocalPreferenceChange::Density(value.map(|value| match value {
+                ClientDensity::Comfortable => autoharness_settings::Density::Comfortable,
+                ClientDensity::Compact => autoharness_settings::Density::Compact,
+            }))
+        }
+        ClientPreferenceChange::ReducedMotion { value } => {
+            autoharness_tui::LocalPreferenceChange::ReducedMotion(value)
+        }
+        ClientPreferenceChange::TimestampStyle { value } => {
+            autoharness_tui::LocalPreferenceChange::TerminalTimestampStyle(value.map(|value| {
+                match value {
+                    ClientTimestampStyle::Relative => {
+                        autoharness_settings::TimestampStyle::Relative
+                    }
+                    ClientTimestampStyle::Absolute => {
+                        autoharness_settings::TimestampStyle::Absolute
+                    }
+                    ClientTimestampStyle::Hidden => autoharness_settings::TimestampStyle::Hidden,
+                }
+            }))
+        }
+        ClientPreferenceChange::ComposerSubmitBehavior { value } => {
+            autoharness_tui::LocalPreferenceChange::ComposerSubmitBehavior(value.map(|value| {
+                match value {
+                    ClientComposerSubmitBehavior::ControlS => {
+                        autoharness_settings::ComposerSubmitBehavior::ControlS
+                    }
+                    ClientComposerSubmitBehavior::Enter => {
+                        autoharness_settings::ComposerSubmitBehavior::Enter
+                    }
+                }
+            }))
+        }
+    };
+    Ok(change)
 }
 
 const fn tui_provider_kind(kind: ClientProviderKind) -> ProviderKindLabel {
@@ -1259,10 +1345,105 @@ fn map_snapshot(
         Some(active_session),
         catalog,
         providers,
-        autoharness_client::ClientSettingsProjection::default(),
+        map_client_settings(settings)?,
         u64::try_from(profiles.pending_recovery).map_err(|_| GuiIpcError::invalid_projection())?,
     )
     .map_err(|_| GuiIpcError::invalid_projection())
+}
+
+fn map_client_settings(
+    settings: &TuiSettingsProjection,
+) -> Result<ClientSettingsProjection, GuiIpcError> {
+    let effective = settings.local_profile.preferences();
+    let user = settings.user_local_profile.preferences();
+    Ok(ClientSettingsProjection {
+        theme_preset: EffectiveSetting::new(
+            match effective.theme_preset().value() {
+                autoharness_settings::ThemePreset::System => ClientThemePreset::System,
+                autoharness_settings::ThemePreset::Light => ClientThemePreset::Light,
+                autoharness_settings::ThemePreset::Dark => ClientThemePreset::Dark,
+                autoharness_settings::ThemePreset::Aurora => ClientThemePreset::Aurora,
+                autoharness_settings::ThemePreset::Ember => ClientThemePreset::Ember,
+                autoharness_settings::ThemePreset::Midnight => ClientThemePreset::Midnight,
+                autoharness_settings::ThemePreset::Ocean => ClientThemePreset::Ocean,
+                autoharness_settings::ThemePreset::Forest => ClientThemePreset::Forest,
+                autoharness_settings::ThemePreset::Rose => ClientThemePreset::Rose,
+            },
+            preference_source(effective.theme_preset().source()),
+            user.theme_preset().is_some(),
+        ),
+        color_mode: EffectiveSetting::new(
+            match effective.color_mode().value() {
+                autoharness_settings::ColorMode::Color => ClientColorMode::Color,
+                autoharness_settings::ColorMode::Soft => ClientColorMode::Soft,
+                autoharness_settings::ColorMode::Vivid => ClientColorMode::Vivid,
+                autoharness_settings::ColorMode::NoColor => ClientColorMode::NoColor,
+                autoharness_settings::ColorMode::HighContrast => ClientColorMode::HighContrast,
+            },
+            preference_source(effective.color_mode().source()),
+            user.color_mode().is_some(),
+        ),
+        zoom_percent: EffectiveSetting::new(
+            ClientGuiZoomPercent::new(effective.gui_zoom_percent().value().get())
+                .map_err(|_| GuiIpcError::invalid_projection())?,
+            preference_source(effective.gui_zoom_percent().source()),
+            user.gui_zoom_percent().is_some(),
+        ),
+        font_size: EffectiveSetting::new(
+            match effective.gui_font_size().value() {
+                autoharness_settings::GuiFontSize::Small => ClientGuiFontSize::Small,
+                autoharness_settings::GuiFontSize::Standard => ClientGuiFontSize::Standard,
+                autoharness_settings::GuiFontSize::Large => ClientGuiFontSize::Large,
+                autoharness_settings::GuiFontSize::ExtraLarge => ClientGuiFontSize::ExtraLarge,
+            },
+            preference_source(effective.gui_font_size().source()),
+            user.gui_font_size().is_some(),
+        ),
+        density: EffectiveSetting::new(
+            match effective.density().value() {
+                autoharness_settings::Density::Comfortable => ClientDensity::Comfortable,
+                autoharness_settings::Density::Compact => ClientDensity::Compact,
+            },
+            preference_source(effective.density().source()),
+            user.density().is_some(),
+        ),
+        reduced_motion: EffectiveSetting::new(
+            *effective.reduced_motion().value(),
+            preference_source(effective.reduced_motion().source()),
+            user.reduced_motion().is_some(),
+        ),
+        timestamp_style: EffectiveSetting::new(
+            match effective.terminal_timestamp_style().value() {
+                autoharness_settings::TimestampStyle::Relative => ClientTimestampStyle::Relative,
+                autoharness_settings::TimestampStyle::Absolute => ClientTimestampStyle::Absolute,
+                autoharness_settings::TimestampStyle::Hidden => ClientTimestampStyle::Hidden,
+            },
+            preference_source(effective.terminal_timestamp_style().source()),
+            user.terminal_timestamp_style().is_some(),
+        ),
+        composer_submit_behavior: EffectiveSetting::new(
+            match effective.composer_submit_behavior().value() {
+                autoharness_settings::ComposerSubmitBehavior::ControlS => {
+                    ClientComposerSubmitBehavior::ControlS
+                }
+                autoharness_settings::ComposerSubmitBehavior::Enter => {
+                    ClientComposerSubmitBehavior::Enter
+                }
+            },
+            preference_source(effective.composer_submit_behavior().source()),
+            user.composer_submit_behavior().is_some(),
+        ),
+    })
+}
+
+const fn preference_source(source: autoharness_settings::Source) -> PreferenceSource {
+    match source {
+        autoharness_settings::Source::Default => PreferenceSource::Default,
+        autoharness_settings::Source::UserFile => PreferenceSource::UserFile,
+        autoharness_settings::Source::WorkspaceFile => PreferenceSource::WorkspaceFile,
+        autoharness_settings::Source::Environment => PreferenceSource::Environment,
+        autoharness_settings::Source::CommandLine => PreferenceSource::CommandLine,
+    }
 }
 
 fn map_session(active: &TuiSessionProjection) -> Result<ClientSessionProjection, GuiIpcError> {
@@ -3501,6 +3682,68 @@ mod tests {
             )
             .expect("authentication cancellation"),
             CommandAction::CancelAuthentication(request_id) if request_id == authentication_request_id
+        ));
+    }
+
+    #[test]
+    fn settings_mapping_preserves_provenance_reset_state_and_typed_intent() {
+        let json = r#"{
+            "schema_version": 5,
+            "local_profile": {
+                "preferences": {
+                    "shared": {
+                        "theme_preset": "rose",
+                        "color_mode": "high_contrast",
+                        "reduced_motion": true,
+                        "density": "compact",
+                        "timestamp_style": "absolute",
+                        "composer_submit_behavior": "enter"
+                    },
+                    "gui": {"zoom_percent": 175, "font_size": "large"}
+                }
+            }
+        }"#;
+        let resolved = autoharness_settings::SettingsBuilder::new()
+            .with_layer(autoharness_settings::LayerKind::UserFile, json)
+            .resolve()
+            .expect("resolved settings");
+        let persisted = serde_json::from_str::<autoharness_settings::SettingsDocument>(json)
+            .expect("persisted settings");
+        let projection = map_client_settings(&TuiSettingsProjection {
+            local_profile: resolved.local_profile().clone(),
+            user_local_profile: persisted.local_profile().clone(),
+            ..TuiSettingsProjection::default()
+        })
+        .expect("client settings");
+
+        assert_eq!(projection.theme_preset.value, ClientThemePreset::Rose);
+        assert_eq!(projection.theme_preset.source, PreferenceSource::UserFile);
+        assert!(projection.theme_preset.user_override);
+        assert_eq!(projection.zoom_percent.value.get(), 175);
+        assert_eq!(projection.font_size.value, ClientGuiFontSize::Large);
+        assert_eq!(projection.density.value, ClientDensity::Compact);
+        assert!(projection.reduced_motion.value);
+        assert_eq!(
+            projection.timestamp_style.value,
+            ClientTimestampStyle::Absolute
+        );
+
+        let action = map_command(
+            ClientCommand::UpdateClientPreference {
+                change: ClientPreferenceChange::ZoomPercent {
+                    value: Some(ClientGuiZoomPercent::new(150).expect("valid zoom")),
+                },
+            },
+            ClientRequestId::new(21).expect("request identity"),
+            &active_session(),
+        )
+        .expect("settings command mapping");
+        assert!(matches!(
+            action,
+            CommandAction::Intent(UiIntent::UpdateLocalPreference {
+                change: autoharness_tui::LocalPreferenceChange::GuiZoomPercent(Some(value)),
+                ..
+            }) if value.get() == 150
         ));
     }
 

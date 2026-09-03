@@ -833,6 +833,7 @@ pub struct ClientSnapshot {
 }
 
 impl ClientSnapshot {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lifecycle: ClientLifecycle,
         active_session_id: Option<SessionId>,
