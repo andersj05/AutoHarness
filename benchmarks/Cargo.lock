@@ -31,6 +31,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoharness-memory"
+version = "0.1.0"
+dependencies = [
+ "autoharness-domain",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "autoharness-phase1-benchmarks"
 version = "0.1.0"
 dependencies = [
@@ -56,8 +65,10 @@ name = "autoharness-store-sqlite"
 version = "0.1.0"
 dependencies = [
  "autoharness-domain",
+ "autoharness-memory",
  "autoharness-store",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
 ]
