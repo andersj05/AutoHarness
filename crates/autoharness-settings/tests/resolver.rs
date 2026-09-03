@@ -1,7 +1,7 @@
 use autoharness_settings::{
-    ColorMode, Density, GlyphMode, LayerKind, Layout, ProfileId, PromptStatusDetail, ProviderKind,
-    SETTINGS_SCHEMA_VERSION, SettingsBuilder, SettingsDocument, SettingsError, Source,
-    TerminalTimestampStyle, ThemePreset,
+    ColorMode, ComposerSubmitBehavior, Density, GlyphMode, GuiFontSize, GuiZoomPercent, LayerKind,
+    Layout, ProfileId, PromptStatusDetail, ProviderKind, SETTINGS_SCHEMA_VERSION, SettingsBuilder,
+    SettingsDocument, SettingsError, Source, TerminalTimestampStyle, ThemePreset,
 };
 
 const USER_JSON: &str = r#"{
@@ -34,7 +34,7 @@ fn defaults_resolve_without_any_file() {
     assert_eq!(
         resolved
             .provenance()
-            .get("local_profile.preferences.theme_preset"),
+            .get("local_profile.preferences.shared.theme_preset"),
         Some(&Source::Default)
     );
 }
@@ -68,6 +68,118 @@ fn v2_document_migrates_to_current_schema_with_default_local_preferences() {
         &TerminalTimestampStyle::Relative
     );
     assert_eq!(preferences.theme_preset().source(), Source::Default);
+}
+
+#[test]
+fn v4_flat_preferences_migrate_into_separated_schema_five_groups() {
+    let document: SettingsDocument = serde_json::from_str(
+        r#"{
+            "schema_version": 4,
+            "local_profile": {
+                "display_label": "Ada",
+                "preferences": {
+                    "theme_preset": "rose",
+                    "color_mode": "vivid",
+                    "glyph_mode": "ascii",
+                    "reduced_motion": true,
+                    "density": "compact",
+                    "layout": "single_column",
+                    "terminal_timestamp_style": "absolute",
+                    "composer_submit_behavior": "enter",
+                    "prompt_status_detail": "detailed"
+                }
+            }
+        }"#,
+    )
+    .expect("v4 document remains readable");
+
+    let mut preferences = document.local_profile().preferences().clone();
+    preferences.set_gui_zoom_percent(Some(GuiZoomPercent::new(150).expect("valid zoom")));
+    preferences.set_gui_font_size(Some(GuiFontSize::Large));
+    let mut local_profile = document.local_profile().clone();
+    local_profile.set_preferences(preferences);
+    let migrated = serde_json::to_value(SettingsDocument::new().with_local_profile(local_profile))
+        .expect("schema five serializes");
+
+    assert_eq!(migrated["schema_version"], 5);
+    assert_eq!(
+        migrated["local_profile"]["preferences"]["shared"]["theme_preset"],
+        "rose"
+    );
+    assert_eq!(
+        migrated["local_profile"]["preferences"]["shared"]["timestamp_style"],
+        "absolute"
+    );
+    assert_eq!(
+        migrated["local_profile"]["preferences"]["gui"]["zoom_percent"],
+        150
+    );
+    assert_eq!(
+        migrated["local_profile"]["preferences"]["terminal"]["glyph_mode"],
+        "ascii"
+    );
+    assert!(
+        migrated["local_profile"]["preferences"]
+            .get("terminal_timestamp_style")
+            .is_none()
+    );
+}
+
+#[test]
+fn schema_five_resolves_shared_gui_and_terminal_preferences() {
+    let resolved = user_layer(
+        r#"{
+            "schema_version": 5,
+            "local_profile": {
+                "preferences": {
+                    "shared": {
+                        "theme_preset": "light",
+                        "color_mode": "high_contrast",
+                        "reduced_motion": true,
+                        "density": "compact",
+                        "timestamp_style": "hidden",
+                        "composer_submit_behavior": "enter"
+                    },
+                    "gui": {
+                        "zoom_percent": 175,
+                        "font_size": "extra_large"
+                    },
+                    "terminal": {
+                        "glyph_mode": "nerd_font",
+                        "layout": "single_column",
+                        "prompt_status_detail": "essential"
+                    }
+                }
+            }
+        }"#,
+    )
+    .resolve()
+    .expect("schema five preferences resolve");
+    let preferences = resolved.local_profile().preferences();
+
+    assert_eq!(preferences.theme_preset().value(), &ThemePreset::Light);
+    assert_eq!(preferences.color_mode().value(), &ColorMode::HighContrast);
+    assert!(*preferences.reduced_motion().value());
+    assert_eq!(preferences.density().value(), &Density::Compact);
+    assert_eq!(
+        preferences.terminal_timestamp_style().value(),
+        &TerminalTimestampStyle::Hidden
+    );
+    assert_eq!(
+        preferences.composer_submit_behavior().value(),
+        &ComposerSubmitBehavior::Enter
+    );
+    assert_eq!(preferences.gui_zoom_percent().value().get(), 175);
+    assert_eq!(
+        preferences.gui_font_size().value(),
+        &GuiFontSize::ExtraLarge
+    );
+    assert_eq!(preferences.glyph_mode().value(), &GlyphMode::NerdFont);
+    assert_eq!(preferences.layout().value(), &Layout::SingleColumn);
+    assert_eq!(
+        preferences.prompt_status_detail().value(),
+        &PromptStatusDetail::Essential
+    );
 }
 
 #[test]
@@ -157,7 +269,7 @@ fn user_preferences_override_defaults_with_leaf_provenance() {
     assert_eq!(
         resolved
             .provenance()
-            .get("local_profile.preferences.color_mode"),
+            .get("local_profile.preferences.shared.color_mode"),
         Some(&Source::UserFile)
     );
 }
@@ -238,6 +350,72 @@ fn permitted_workspace_preferences_override_user_preferences() {
         preferences.terminal_timestamp_style().source(),
         Source::WorkspaceFile
     );
+}
+
+#[test]
+fn schema_five_workspace_preferences_preserve_protected_interaction_settings() {
+    let resolved = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::UserFile,
+            r#"{
+                "schema_version": 5,
+                "local_profile": {
+                    "preferences": {
+                        "shared": {"composer_submit_behavior": "enter"},
+                        "gui": {"zoom_percent": 100}
+                    }
+                }
+            }"#,
+        )
+        .with_layer(
+            LayerKind::WorkspaceFile,
+            r#"{
+                "schema_version": 5,
+                "local_profile": {
+                    "preferences": {
+                        "shared": {"theme_preset": "dark"},
+                        "gui": {"zoom_percent": 150, "font_size": "large"},
+                        "terminal": {"glyph_mode": "ascii"}
+                    }
+                }
+            }"#,
+        )
+        .resolve()
+        .expect("permitted schema five workspace values resolve");
+    let preferences = resolved.local_profile().preferences();
+
+    assert_eq!(preferences.theme_preset().source(), Source::WorkspaceFile);
+    assert_eq!(preferences.gui_zoom_percent().value().get(), 150);
+    assert_eq!(
+        preferences.gui_zoom_percent().source(),
+        Source::WorkspaceFile
+    );
+    assert_eq!(preferences.gui_font_size().value(), &GuiFontSize::Large);
+    assert_eq!(preferences.glyph_mode().source(), Source::WorkspaceFile);
+    assert_eq!(
+        preferences.composer_submit_behavior().source(),
+        Source::UserFile
+    );
+
+    let error = SettingsBuilder::new()
+        .with_layer(
+            LayerKind::WorkspaceFile,
+            r#"{
+                "schema_version": 5,
+                "local_profile": {
+                    "preferences": {
+                        "shared": {"composer_submit_behavior": "enter"}
+                    }
+                }
+            }"#,
+        )
+        .resolve()
+        .expect_err("submission behavior remains a user-only setting");
+    assert!(matches!(
+        error,
+        SettingsError::DisallowedWorkspaceKey { key }
+            if key == "local_profile.preferences.shared.composer_submit_behavior"
+    ));
 }
 
 #[test]

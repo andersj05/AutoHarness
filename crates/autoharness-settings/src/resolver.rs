@@ -4,8 +4,8 @@ use std::fmt;
 use crate::error::SettingsError;
 use crate::preferences::{
     ColorMode, ComposerSubmitBehavior, Density, DisplayLabel, EffectiveLocalPreferences,
-    EffectiveLocalProfile, EffectiveValue, GlyphMode, Layout, LocalProfile, PromptStatusDetail,
-    TerminalTimestampStyle, ThemePreset,
+    EffectiveLocalProfile, EffectiveValue, GlyphMode, GuiFontSize, GuiZoomPercent, Layout,
+    LocalProfile, PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
 use crate::profile::{
     ProfileId, ProviderKind, ProviderProfile, SETTINGS_SCHEMA_VERSION, SettingsDocument,
@@ -52,6 +52,8 @@ struct RawLocalProfile {
     terminal_timestamp_style: Option<(TerminalTimestampStyle, Source)>,
     composer_submit_behavior: Option<(ComposerSubmitBehavior, Source)>,
     prompt_status_detail: Option<(PromptStatusDetail, Source)>,
+    gui_zoom_percent: Option<(GuiZoomPercent, Source)>,
+    gui_font_size: Option<(GuiFontSize, Source)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -209,36 +211,48 @@ impl ResolvedSettings {
         );
         let preferences = local_profile.preferences();
         map.insert(
-            "local_profile.preferences.theme_preset".to_owned(),
+            "local_profile.preferences.shared.theme_preset".to_owned(),
             preferences.theme_preset().source(),
         );
         map.insert(
-            "local_profile.preferences.color_mode".to_owned(),
+            "local_profile.preferences.shared.color_mode".to_owned(),
             preferences.color_mode().source(),
         );
         map.insert(
-            "local_profile.preferences.glyph_mode".to_owned(),
+            "local_profile.preferences.terminal.glyph_mode".to_owned(),
             preferences.glyph_mode().source(),
         );
         map.insert(
-            "local_profile.preferences.reduced_motion".to_owned(),
+            "local_profile.preferences.shared.reduced_motion".to_owned(),
             preferences.reduced_motion().source(),
         );
         map.insert(
-            "local_profile.preferences.density".to_owned(),
+            "local_profile.preferences.shared.density".to_owned(),
             preferences.density().source(),
         );
         map.insert(
-            "local_profile.preferences.layout".to_owned(),
+            "local_profile.preferences.terminal.layout".to_owned(),
             preferences.layout().source(),
         );
         map.insert(
-            "local_profile.preferences.terminal_timestamp_style".to_owned(),
+            "local_profile.preferences.shared.timestamp_style".to_owned(),
             preferences.terminal_timestamp_style().source(),
         );
         map.insert(
-            "local_profile.preferences.composer_submit_behavior".to_owned(),
+            "local_profile.preferences.shared.composer_submit_behavior".to_owned(),
             preferences.composer_submit_behavior().source(),
+        );
+        map.insert(
+            "local_profile.preferences.terminal.prompt_status_detail".to_owned(),
+            preferences.prompt_status_detail().source(),
+        );
+        map.insert(
+            "local_profile.preferences.gui.zoom_percent".to_owned(),
+            preferences.gui_zoom_percent().source(),
+        );
+        map.insert(
+            "local_profile.preferences.gui.font_size".to_owned(),
+            preferences.gui_font_size().source(),
         );
         map
     }
@@ -309,7 +323,7 @@ fn parse_layer(kind: LayerKind, json: &str) -> Result<SettingsDocument, Settings
         });
     }
     if kind == LayerKind::WorkspaceFile {
-        validate_workspace_document(&value)?;
+        validate_workspace_document(&value, version)?;
     }
     serde_json::from_value(value).map_err(|_| SettingsError::MalformedLayer { layer })
 }
@@ -322,37 +336,83 @@ fn parse_provider_value(value: &str) -> Option<ProviderKind> {
     }
 }
 
-fn validate_workspace_document(value: &serde_json::Value) -> Result<(), SettingsError> {
+fn validate_workspace_document(
+    value: &serde_json::Value,
+    schema_version: u64,
+) -> Result<(), SettingsError> {
     let document = value
         .as_object()
         .expect("workspace documents are checked to be objects before validation");
     for (key, value) in document {
         match key.as_str() {
             "schema_version" => {}
-            "local_profile" => validate_workspace_local_profile(value)?,
+            "local_profile" => validate_workspace_local_profile(value, schema_version)?,
             _ => return Err(disallowed_workspace_key(key)),
         }
     }
     Ok(())
 }
 
-fn validate_workspace_local_profile(value: &serde_json::Value) -> Result<(), SettingsError> {
+fn validate_workspace_local_profile(
+    value: &serde_json::Value,
+    schema_version: u64,
+) -> Result<(), SettingsError> {
     let Some(profile) = value.as_object() else {
         return Ok(());
     };
     for (key, value) in profile {
         match key.as_str() {
-            "preferences" => validate_workspace_preferences(value)?,
+            "preferences" => validate_workspace_preferences(value, schema_version)?,
             _ => return Err(disallowed_workspace_key(&format!("local_profile.{key}"))),
         }
     }
     Ok(())
 }
 
-fn validate_workspace_preferences(value: &serde_json::Value) -> Result<(), SettingsError> {
+fn validate_workspace_preferences(
+    value: &serde_json::Value,
+    schema_version: u64,
+) -> Result<(), SettingsError> {
     let Some(preferences) = value.as_object() else {
         return Ok(());
     };
+    if schema_version < u64::from(SETTINGS_SCHEMA_VERSION) {
+        return validate_legacy_workspace_preferences(preferences);
+    }
+    for (key, value) in preferences {
+        match key.as_str() {
+            "shared" => validate_workspace_preference_group(
+                value,
+                "shared",
+                &[
+                    "theme_preset",
+                    "color_mode",
+                    "reduced_motion",
+                    "density",
+                    "timestamp_style",
+                ],
+            )?,
+            "gui" => {
+                validate_workspace_preference_group(value, "gui", &["zoom_percent", "font_size"])?
+            }
+            "terminal" => validate_workspace_preference_group(
+                value,
+                "terminal",
+                &["glyph_mode", "layout", "prompt_status_detail"],
+            )?,
+            _ => {
+                return Err(disallowed_workspace_key(&format!(
+                    "local_profile.preferences.{key}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_legacy_workspace_preferences(
+    preferences: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), SettingsError> {
     for key in preferences.keys() {
         match key.as_str() {
             "theme_preset"
@@ -368,6 +428,24 @@ fn validate_workspace_preferences(value: &serde_json::Value) -> Result<(), Setti
                     "local_profile.preferences.{key}"
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_preference_group(
+    value: &serde_json::Value,
+    group: &str,
+    permitted: &[&str],
+) -> Result<(), SettingsError> {
+    let Some(values) = value.as_object() else {
+        return Ok(());
+    };
+    for key in values.keys() {
+        if !permitted.contains(&key.as_str()) {
+            return Err(disallowed_workspace_key(&format!(
+                "local_profile.preferences.{group}.{key}"
+            )));
         }
     }
     Ok(())
@@ -424,6 +502,12 @@ fn merge_local_profile(merged: &mut RawLocalProfile, profile: LocalProfile, sour
     if let Some(value) = preferences.prompt_status_detail() {
         merged.prompt_status_detail = Some((value, source));
     }
+    if let Some(value) = preferences.gui_zoom_percent() {
+        merged.gui_zoom_percent = Some((value, source));
+    }
+    if let Some(value) = preferences.gui_font_size() {
+        merged.gui_font_size = Some((value, source));
+    }
 }
 
 fn effective_local_profile(raw: &RawLocalProfile) -> EffectiveLocalProfile {
@@ -437,6 +521,8 @@ fn effective_local_profile(raw: &RawLocalProfile) -> EffectiveLocalProfile {
     preferences.set_terminal_timestamp_style(effective_leaf(&raw.terminal_timestamp_style));
     preferences.set_composer_submit_behavior(effective_leaf(&raw.composer_submit_behavior));
     preferences.set_prompt_status_detail(effective_leaf(&raw.prompt_status_detail));
+    preferences.set_gui_zoom_percent(effective_leaf(&raw.gui_zoom_percent));
+    preferences.set_gui_font_size(effective_leaf(&raw.gui_font_size));
     EffectiveLocalProfile::new(effective_optional_leaf(&raw.display_label), preferences)
 }
 

@@ -429,7 +429,9 @@ impl ProfileStore {
     where
         F: FnOnce(&mut serde_json::Value) -> Result<(), ProfileStoreError>,
     {
-        let mut document = self.parsed()?;
+        let document = serde_json::from_str::<SettingsDocument>(&self.read_document()?)
+            .map_err(|_| ProfileStoreError::Io)?;
+        let mut document = serde_json::to_value(document).map_err(|_| ProfileStoreError::Io)?;
         mutate(&mut document)?;
 
         let object = document.as_object_mut().ok_or(ProfileStoreError::Io)?;
