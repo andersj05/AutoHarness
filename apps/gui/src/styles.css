@@ -82,7 +82,8 @@
     background:
       radial-gradient(circle at 38% -15%, rgb(34 211 238 / 6%), transparent 34%),
       linear-gradient(140deg, var(--base-deep), var(--base) 42%);
-    zoom: var(--app-zoom, 1);
+    transform: scale(var(--app-zoom, 1));
+    transform-origin: top left;
   }
   .appShell { display: contents; }
   .app[data-font-size="small"] { --conversation-font-size: 13px; --conversation-user-font-size: 12px; --composer-font-size: 12px; }
@@ -663,6 +664,20 @@
   .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .settingsLayout { grid-template-columns: minmax(0, 1fr); }
   .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .settingsNav { position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .settingsAuthority { grid-column: 1 / -1; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .routeWorkspace { padding: 0 20px 26px; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .routeWorkspaceHeader { grid-template-columns: minmax(0, 1fr); gap: 14px; padding-top: 28px; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .workspaceSurface > .dsSplitPane,
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .workspaceSurface > .dsSplitPane > .dsSplitPrimary,
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .workspaceSurface > .dsSplitPane > .dsSplitSecondary { display: contents; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .workspaceSurface > .dsSplitPane > .dsSplitHandle { display: none; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .contextInspector { position: fixed; top: 0; right: 0; width: min(300px, calc(100% - 72px)); box-shadow: -20px 0 55px rgb(0 0 0 / 34%); }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .conversationHeader { height: 66px; padding-inline: 12px; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .headerIdentity h1 { max-width: 220px; font-size: 13px; }
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .fixtureBanner,
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .connectionChip,
+  .app:is([data-zoom="150"], [data-zoom="175"], [data-zoom="200"]) .headerModelButton { display: none; }
+  .app:is([data-zoom="175"], [data-zoom="200"]) .conversationColumn { padding-inline: 16px; }
+  .app:is([data-zoom="175"], [data-zoom="200"]) .composerFootnote { align-items: flex-start; flex-direction: column; gap: 4px; }
   .app:is([data-zoom="175"], [data-zoom="200"]) .settingRow { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .app:is([data-zoom="175"], [data-zoom="200"]) .settingControl { justify-content: stretch; }
 

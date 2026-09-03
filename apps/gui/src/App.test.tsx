@@ -284,6 +284,18 @@ describe("AutoHarness GUI", () => {
     renderScenario("ready");
     await screen.findByRole("heading", { name: "Design the GUI migration" });
 
+    fireEvent.keyDown(window, { key: "3", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Providers" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "4", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Memory" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "1", altKey: true });
+    expect(await screen.findByRole("heading", { name: "Design the GUI migration" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
     fireEvent.keyDown(window, { key: "2", altKey: true });
     expect(await screen.findByRole("heading", { name: "Sessions" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
@@ -325,6 +337,9 @@ describe("AutoHarness GUI", () => {
     expect(app?.style.getPropertyValue("--app-zoom-inverse")).toBe("50%");
     expect(screen.getByRole("button", { name: "Reset Interface zoom to its inherited value" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Submit prompts with" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(screen.queryByRole("complementary", { name: "Context inspector" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open context inspector" })).toBeVisible();
   });
 
   it("uses Ctrl or Cmd plus S for multiline submission after resetting the fixture override", async () => {

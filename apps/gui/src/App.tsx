@@ -50,6 +50,7 @@ export function App({ store }: AppProps) {
   const [answeringPermissionIdentity, setAnsweringPermissionIdentity] = useState<string>();
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>({});
   const mobileViewport = useMediaQuery("(max-width: 680px)");
+  const compactInspectorViewport = useMediaQuery("(max-width: 1180px)");
   const systemDarkTheme = useMediaQuery("(prefers-color-scheme: dark)");
   const systemReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const shellRef = useRef<HTMLDivElement>(null);
@@ -148,6 +149,12 @@ export function App({ store }: AppProps) {
       workspaceRef.current?.removeAttribute("aria-hidden");
     }
   }, [mobileRailOpen, mobileViewport]);
+
+  useEffect(() => {
+    if (compactInspectorViewport || (client.projection?.settings.zoomPercent.value ?? 100) >= 150) {
+      setInspectorOpen(false);
+    }
+  }, [client.projection?.settings.zoomPercent.value, compactInspectorViewport]);
 
   if (client.lifecycle === "failed") {
     return (
