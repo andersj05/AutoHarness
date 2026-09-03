@@ -1,6 +1,8 @@
 //! Feature-gated Tauri carrier over the existing application coordinator ports.
 
 mod memory;
+#[cfg(test)]
+mod memory_tests;
 
 use std::collections::{BTreeSet, VecDeque};
 use std::mem;

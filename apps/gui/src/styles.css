@@ -72,6 +72,7 @@
   .skipLink:focus { transform: translate(-50%, 0); }
 
   .app {
+    color: var(--text);
     position: relative;
     isolation: isolate;
     display: grid;
@@ -855,20 +856,20 @@
 
 
 /* Stage 7: bounded knowledge ledger and inert workspace evidence. */
-.memoryWorkspace { overflow: auto; }
-.memoryHeader { flex-wrap: wrap; gap: 20px; }
+.memoryWorkspace { display: block; overflow: auto; color: var(--text); }
+.memoryHeader { display: flex; flex-wrap: wrap; gap: 20px; }
 .memoryHeader > div:first-of-type { flex: 1 1 280px; }
 .memoryActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.memoryFilters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0 32px 12px; }
+.memoryFilters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 20px 4px 12px; }
 .memoryFilters > :first-child { flex: 1 1 220px; }
 .memoryFilters > label { display: grid; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .memoryFilters select { color: var(--text); background: var(--surface-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); min-height: 38px; padding: 6px 28px 6px 10px; }
-.memoryStatus { padding: 4px 32px 12px; font-size: 12px; color: var(--text-muted); min-height: 28px; }
+.memoryStatus { padding: 4px 4px 12px; font-size: 12px; color: var(--text-muted); min-height: 28px; }
 .memoryColumns { display: grid; grid-template-columns: minmax(230px, .8fr) minmax(0, 1.6fr); align-items: start; flex: 1; min-height: 0; border-top: 1px solid var(--line); }
 .memoryList { min-width: 0; padding: 16px; position: sticky; top: 0; max-height: 70vh; overflow: auto; }
 .memoryRow { width: 100%; display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 9px; background: transparent; padding: 16px; border-radius: var(--radius-sm); border: 1px solid transparent; margin-bottom: 6px; }
 .memoryRow:hover { background: var(--surface-hover); }
-.memoryRow[aria-pressed="true"] { background: var(--surface-selected); border-color: var(--line-strong); box-shadow: inset 3px 0 var(--cyan); }
+.memoryRow[aria-pressed="true"] { background: color-mix(in srgb, var(--cyan) 12%, var(--base)); border-color: var(--line-strong); box-shadow: inset 3px 0 var(--cyan); }
 .memoryRow strong { font-size: 14px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .memoryRow small { font-family: var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
 .memoryRowMeta, .memoryRowFooter { display: flex; justify-content: space-between; gap: 10px; color: var(--text-muted); font-size: 11px; }
@@ -918,15 +919,15 @@
 @media (max-width: 1000px) {
   .memoryColumns { grid-template-columns: minmax(210px, .8fr) minmax(0, 1.2fr); }
   .memoryDetail { padding: 22px; }
-  .memoryFilters { padding-inline: 24px; }
+  .memoryFilters { padding-inline: 4px; }
 }
 @media (max-width: 760px) {
   .memoryColumns { grid-template-columns: minmax(0, 1fr); }
   .memoryList { position: static; max-height: 300px; }
   .memoryDetail { border-left: 0; border-top: 1px solid var(--line); padding: 20px; }
-  .memoryFilters { padding-inline: 20px; }
+  .memoryFilters { padding-inline: 4px; }
   .memoryFacts, .safeDiff { grid-template-columns: minmax(0, 1fr); }
-  .memoryStatus { padding-inline: 20px; }
+  .memoryStatus { padding-inline: 4px; }
 }
 .app[data-zoom="150"] .memoryColumns, .app[data-zoom="175"] .memoryColumns, .app[data-zoom="200"] .memoryColumns { grid-template-columns: minmax(0, 1fr); }
 .app[data-zoom="150"] .memoryList, .app[data-zoom="175"] .memoryList, .app[data-zoom="200"] .memoryList { position: static; max-height: 240px; }

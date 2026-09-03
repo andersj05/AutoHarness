@@ -124,7 +124,7 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
       <div className="memoryActions"><Button disabled={!ready || busy} onClick={() => open("import")}>Import document</Button><Button disabled={!ready || busy} onClick={() => open("remember")} variant="primary">Remember</Button></div>
     </header>
     <form className="memoryFilters" onSubmit={(event) => { event.preventDefault(); changeQuery({ literal: search }); }}>
-      <Field label="Search memory" maxLength={256} onChange={(event) => setSearch(event.target.value)} placeholder="Literal text or identity" type="search" value={search} />
+      <Field label="Search memory" maxLength={256} onChange={(event) => setSearch(event.target.value)} placeholder="Search literal memory text" type="search" value={search} />
       <label>Status<select aria-label="Memory status" value={query.status} onChange={(event) => changeQuery({ status: event.target.value as typeof query.status })}>{["all", "eligible", "active", "proposed", "inactive"].map((value) => <option key={value} value={value}>{label(value)}</option>)}</select></label>
       <label>Scope<select aria-label="Memory scope" value={query.scope} onChange={(event) => changeQuery({ scope: event.target.value as typeof query.scope })}>{["all", "user", "workspace", "session", "agent"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       <Button disabled={blocked || busy} type="submit" icon="search">Search</Button><Button disabled={blocked || busy} onClick={() => setRefresh((value) => value + 1)} icon="refresh">Refresh</Button>

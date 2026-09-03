@@ -364,7 +364,7 @@ impl MemoryProjection {
                 if let Some(context) = &detail.revision_context {
                     validate_count("memory_evidence", context.evidence.len(), 64)?;
                     validate_count("memory_relations", context.relations.len(), 64)?;
-                    validate_count("memory_findings", context.findings.len(), 256)?;
+                    validate_count("memory_findings", context.findings.len(), 352)?;
                 }
             }
         }
