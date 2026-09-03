@@ -18,7 +18,7 @@ const DOWN: [u8; 3] = [0x1b, b'[', b'B'];
 
 #[cfg(windows)]
 #[test]
-#[ignore = "runs in the Windows terminal PTY CI gate"]
+#[ignore = "legacy Windows terminal migration reference; run deliberately"]
 fn saved_codex_profile_without_login_keeps_recovery_ui_open() {
     let environment = ScenarioEnvironment::prepare();
     let store = ProfileStore::open(&environment.profiles_document()).expect("profile store");
@@ -60,7 +60,7 @@ fn saved_codex_profile_without_login_keeps_recovery_ui_open() {
 }
 
 #[test]
-#[ignore = "runs in the cross-platform terminal PTY CI gate"]
+#[ignore = "legacy terminal migration reference; run deliberately"]
 fn providers_open_the_official_codex_subscription_authentication_page() {
     let environment = ScenarioEnvironment::prepare();
     #[cfg(windows)]

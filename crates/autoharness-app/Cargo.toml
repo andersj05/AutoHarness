@@ -22,6 +22,9 @@ path = "src/main.rs"
 [[bin]]
 name = "ah"
 path = "src/ah.rs"
+test = false
+bench = false
+doc = false
 
 [features]
 benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
@@ -58,10 +61,10 @@ uuid = { workspace = true, features = ["v4"] }
 zeroize.workspace = true
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", optional = true }
+tauri-build = { version = "2.6.3", optional = true , features = [] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-tauri = { version = "2.11.5", optional = true }
+tauri = { version = "2.11.5", optional = true , features = [] }
 
 [dev-dependencies]
 async-stream.workspace = true
