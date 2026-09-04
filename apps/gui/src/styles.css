@@ -79,7 +79,7 @@
     grid-template-columns: max-content minmax(0, 1fr);
     width: var(--app-zoom-inverse, 100%);
     height: var(--app-zoom-inverse, 100%);
-    overflow: hidden;
+    overflow: clip;
     background:
       radial-gradient(circle at 38% -15%, rgb(34 211 238 / 6%), transparent 34%),
       linear-gradient(140deg, var(--base-deep), var(--base) 42%);
@@ -931,3 +931,5 @@
 }
 .app[data-zoom="150"] .memoryColumns, .app[data-zoom="175"] .memoryColumns, .app[data-zoom="200"] .memoryColumns { grid-template-columns: minmax(0, 1fr); }
 .app[data-zoom="150"] .memoryList, .app[data-zoom="175"] .memoryList, .app[data-zoom="200"] .memoryList { position: static; max-height: 240px; }
+
+.memoryDetail > .inertContent { margin-top: 22px; }

@@ -971,10 +971,39 @@ fn memory_snapshot_requires_bounded_unique_rows_and_prevents_session_only_delta(
         serde_json::from_value::<MemoryProjection>(encoded).unwrap(),
         memory
     );
+    let previous = sample_snapshot();
+    let next = previous.clone().with_memory(memory.clone()).unwrap();
+    assert!(ActiveSessionDelta::between(&previous, &next).is_none());
     memory.rows.push(row.clone());
     memory.total = 2;
     assert!(memory.validate().is_err());
     memory.rows = vec![row; 101];
     memory.total = 101;
     assert!(memory.validate().is_err());
+}
+
+#[test]
+fn memory_page_enforces_an_aggregate_budget_without_allocating_serialized_output() {
+    use autoharness_client::{
+        MemoryId, MemoryProjection, MemoryRow, MemoryScope, MemoryStatus, MemoryText, UnixMillis,
+    };
+    let rows = (0..100)
+        .map(|index| MemoryRow {
+            memory_id: MemoryId::new(format!("memory-{index}")).unwrap(),
+            // JSON escaping is included in the wire budget.
+            preview: MemoryText::new("\0".repeat(65_536)).unwrap(),
+            status: MemoryStatus::Proposed,
+            scope: MemoryScope::Workspace,
+            updated_at_ms: UnixMillis::new(1),
+            confidence_bps: None,
+            admission_count: 0,
+            detail: None,
+        })
+        .collect();
+    let page = MemoryProjection {
+        rows,
+        total: 100,
+        ..Default::default()
+    };
+    assert!(page.validate().is_err());
 }

@@ -92,6 +92,7 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
     let command: MemoryCommand;
     if (action === "remember") command = { kind: "remember", payload: { content: draft } };
     else if (action === "import") command = { kind: "import", payload: { path: draft } };
+    else if (action === "export" && target) command = { kind: "export", payload: { memory_id: target.memory_id } };
     else {
       if (!target || !context) return;
       const identity = { memory_id: target.memory_id, expected_last_sequence: context.expected_last_sequence };
@@ -117,6 +118,10 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
 
   const detail = selected?.detail;
   const revision = detail?.revision_context;
+  const hasContent = detail?.content !== null && detail?.content !== undefined;
+  const reviewable = hasContent && revision?.proposal_revision_id && ["proposed", "conflicting"].includes(selected?.status ?? "");
+  const correctable = hasContent && revision && (selected?.status === "active" || selected?.status === "expired" || (selected?.status === "conflicting" && !revision.proposal_revision_id));
+  const retractable = revision && (correctable || selected?.status === "active");
   return <main className="routeWorkspace memoryWorkspace" id="main-content" tabIndex={-1} aria-label="Memory workspace">
     <header className="routeWorkspaceHeader memoryHeader">
       <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
@@ -150,9 +155,10 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
           {(detail.trust !== "user_approved" || selected.status === "proposed") && <div className="memoryWarning"><strong>Untrusted source</strong><p>{selected.status === "proposed" ? "This proposal cannot authorize itself. Approval commits a distinct user-approved revision before future admission." : "Source provenance does not grant authority. Eligibility remains subject to host validation."}</p></div>}
           <InertText text={detail.content ?? "Content erased. Only audit metadata remains."} />
           <div className="memoryActions">
-            {selected.status === "proposed" && revision?.proposal_revision_id ? <><Button disabled={busy} onClick={() => open("approve")} variant="primary">Review approval</Button><Button disabled={busy} onClick={() => open("reject")}>Reject</Button></> : null}
-            {selected.status === "active" ? <><Button disabled={busy || !revision} onClick={() => open("revise")}>Correct</Button><Button disabled={busy || !revision} onClick={() => open("retract")}>Retract</Button></> : null}
-            <Button disabled={busy || !revision} onClick={() => open("export")}>Export</Button>
+            {reviewable ? <><Button disabled={busy} onClick={() => open("approve")} variant="primary">Review approval</Button><Button disabled={busy} onClick={() => open("reject")}>Reject</Button></> : null}
+            {correctable ? <Button disabled={busy} onClick={() => open("revise")}>Correct</Button> : null}
+            {retractable ? <Button disabled={busy} onClick={() => open("retract")}>Retract</Button> : null}
+            <Button disabled={busy} onClick={() => open("export")}>Export</Button>
             {selected.status !== "deleted" ? <Button disabled={busy || !revision} onClick={() => open("delete")} variant="quiet" className="dangerText">Delete content</Button> : null}
           </div>
           <dl className="memoryFacts"><div><dt>Identity</dt><dd>{safe(selected.memory_id)}</dd></div><div><dt>Trust</dt><dd>{label(detail.trust)}</dd></div><div><dt>Source</dt><dd>{safe(detail.source)}</dd></div><div><dt>Scope identity</dt><dd>{safe(revision?.scope_identity ?? "Unavailable")}</dd></div><div><dt>Sensitivity</dt><dd>{revision?.sensitivity ?? "Unavailable"}</dd></div><div><dt>Expires</dt><dd>{date(detail.valid_until_ms)}</dd></div><div><dt>Confidence</dt><dd>{selected.confidence_bps === null ? "Not reported" : `${selected.confidence_bps / 100}% (not authority)`}</dd></div></dl>

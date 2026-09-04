@@ -1,3 +1,4 @@
+import { validateMemory } from "../features/memory/validation";
 import type {
   ActiveSessionProjection,
   AttemptProjection,
@@ -368,6 +369,7 @@ function permissionFromWire(snapshot: WireClientSnapshot): PermissionRequest | u
 export function snapshotFromWire(snapshot: WireClientSnapshot, revision: string): ClientSnapshot {
   if (snapshot.schema_version !== WIRE_SCHEMA_VERSION) throw new Error("Unsupported host snapshot schema");
   positiveDecimalU64(revision, "transport revision");
+  validateMemory(snapshot.memory);
   snapshot.sessions.forEach(sessionSummaryFromWire);
   if (snapshot.active_session) {
     decimalU64(snapshot.active_session.revision);

@@ -303,3 +303,28 @@ fn gui_memory_rejects_invalid_imports_and_query_bounds_before_admission() {
     };
     assert!(memory::map_command(MemoryCommand::Query(query), request).is_err());
 }
+
+#[test]
+fn unrepresentable_memory_is_a_recoverable_workspace_failure() {
+    let row = autoharness_tui::MemorySummary::new(
+        "界".repeat(512),
+        "safe preview",
+        autoharness_tui::MemoryStatus::Active,
+        autoharness_tui::MemoryScope::Workspace,
+        1,
+        None,
+        0,
+    )
+    .unwrap();
+    let source = autoharness_tui::MemoryProjection::ready(7, vec![row], vec![], 1, false)
+        .unwrap()
+        .with_view_page(9, None);
+    let page = memory::map_projection(&source).unwrap();
+    assert_eq!(page.view_generation.get(), 9);
+    assert!(matches!(
+        page.state,
+        autoharness_client::MemoryLoadState::Failed { .. }
+    ));
+    assert!(page.rows.is_empty());
+    page.validate().unwrap();
+}

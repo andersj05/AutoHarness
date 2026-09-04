@@ -11,10 +11,9 @@ publish.workspace = true
 [dependencies]
 autoharness-domain.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 zeroize.workspace = true
 
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

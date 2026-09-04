@@ -344,6 +344,25 @@ impl Default for MemoryProjection {
     }
 }
 
+/// Aggregate serialized memory page ceiling, independent of per-field bounds.
+pub const MAX_MEMORY_PAGE_BYTES: usize = 8 * 1024 * 1024;
+
+struct PageBudget(usize);
+impl std::io::Write for PageBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        if self.0 > MAX_MEMORY_PAGE_BYTES {
+            return Err(std::io::Error::other(
+                "memory page exceeds transport budget",
+            ));
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl MemoryProjection {
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_count("memory_rows", self.rows.len(), 100)?;
@@ -368,6 +387,11 @@ impl MemoryProjection {
                 }
             }
         }
+        serde_json::to_writer(PageBudget(0), self).map_err(|_| ValidationError::TooLong {
+            field: "memory_page",
+            max_bytes: MAX_MEMORY_PAGE_BYTES,
+            actual_bytes: MAX_MEMORY_PAGE_BYTES + 1,
+        })?;
         Ok(())
     }
 }

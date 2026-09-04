@@ -100,6 +100,22 @@ fn id(value: &str) -> Result<client::MemoryId, GuiIpcError> {
 pub(super) fn map_projection(
     source: &tui::MemoryProjection,
 ) -> Result<client::MemoryProjection, GuiIpcError> {
+    match try_map_projection(source) {
+        Ok(page) => Ok(page),
+        Err(_) => Ok(client::MemoryProjection {
+            view_generation: source.view_generation().into(), generation: source.generation().into(),
+            state: client::MemoryLoadState::Failed { failure: client::SafeFailure::new(
+                client::FailureClass::Unavailable, "memory_page_unrepresentable",
+                "This memory page exceeds display limits. Narrow the search or scope and try again.",
+                client::RetryDirective::Immediate).map_err(|_| GuiIpcError::invalid_projection())? },
+            ..Default::default()
+        }),
+    }
+}
+
+fn try_map_projection(
+    source: &tui::MemoryProjection,
+) -> Result<client::MemoryProjection, GuiIpcError> {
     let page = client::MemoryProjection {
         view_generation: source.view_generation().into(),
         generation: source.generation().into(),

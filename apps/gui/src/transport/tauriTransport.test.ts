@@ -1,3 +1,4 @@
+import { emptyMemory } from "../features/memory/model";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const carrier = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -21,6 +22,7 @@ function initialFrame() {
         reason: "initial",
         snapshot: {
           schema_version: 4,
+          memory: emptyMemory(),
           lifecycle: { kind: "ready" },
           active_session_id: null,
           sessions: [],
