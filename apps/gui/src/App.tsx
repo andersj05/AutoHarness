@@ -204,6 +204,7 @@ export function App({ store }: AppProps) {
   const appStyle = {
     "--app-zoom": zoomFactor,
     "--app-zoom-inverse": `${100 / zoomFactor}%`,
+    "--app-viewport-height": `${100 / zoomFactor}vh`,
   } as CSSProperties;
 
   const openSession = (sessionId: string) => {

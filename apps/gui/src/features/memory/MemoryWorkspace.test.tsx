@@ -101,6 +101,18 @@ describe("Memory workspace", () => {
     expect(commands.at(-1)).toMatchObject({ command: { payload: { scope: "session", before: null, direction: "first" } } });
   });
 
+  it.each(["conflicting", "expired"] as const)("preserves correction and retraction for %s records", async (status) => {
+    const row = fixtureMemoryRow(1);
+    row.status = status;
+    const memory = { ...emptyMemory(), rows: [row], total: 1, view_generation: "0" };
+    const props = { blocked: false, onOpenNavigation: vi.fn(), onDialogChange: vi.fn(), onCommand: vi.fn(async () => "committed" as const) };
+    const view = render(<MemoryWorkspace {...props} memory={memory} />);
+    view.rerender(<MemoryWorkspace {...props} memory={{ ...memory, view_generation: "1" }} />);
+    expect(screen.getByRole("button", { name: "Correct" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Retract" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Review approval" })).not.toBeInTheDocument();
+  });
+
   it("invalidates a stale review and yields immediately to permissions", async () => {
     const row = fixtureMemoryRow(1);
     const memory = { ...emptyMemory(), rows: [row], total: 1, view_generation: "1" };

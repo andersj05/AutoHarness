@@ -4,7 +4,7 @@ import type { ClientCommand, CommandOutcome } from "../../protocol";
 import { Icon } from "../../components/Icon";
 import { Button, Chip, Dialog, Field } from "../../components/primitives";
 import { securityDisplaySafe as safe } from "../../securityText";
-import { InertText, SafeDiff } from "../workspace/slots";
+import { InertText, SafeDiff } from "../../components/primitives/Content";
 import type { MemoryCommand, MemoryProjection, MemoryQuery, MemoryRow } from "./model";
 
 interface Props {

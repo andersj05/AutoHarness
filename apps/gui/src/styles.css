@@ -386,7 +386,7 @@
 
   .dialogScrim { position: fixed; z-index: 100; top: 0; right: 0; bottom: 0; left: 0; display: grid; place-items: center; padding: 24px; background: var(--scrim); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); animation: scrimIn 150ms ease-out; }
   .dialogScrim[data-authority="permission"] { z-index: var(--z-permission); }
-  .dialogPanel { position: relative; display: flex; width: min(100%, 590px); max-height: min(760px, calc(100vh - 48px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface-1); box-shadow: var(--shadow-lg), inset 0 1px rgb(255 255 255 / 5%); animation: dialogIn 190ms var(--ease); }
+  .dialogPanel { position: relative; display: flex; width: min(100%, 590px); max-height: min(760px, calc(var(--app-viewport-height, 100vh) - 48px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface-1); box-shadow: var(--shadow-lg), inset 0 1px rgb(255 255 255 / 5%); animation: dialogIn 190ms var(--ease); }
   .dialogGlow { position: absolute; top: 0; right: 50px; left: 50px; height: 1px; background: linear-gradient(90deg, transparent, var(--cyan), var(--violet), transparent); }
   .dialogHeader { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 23px 24px 18px; border-bottom: 1px solid var(--line); }
   .dialogHeader h2 { margin-top: 4px; color: var(--text-strong); font-size: 19px; font-weight: 660; letter-spacing: -.025em; }
@@ -776,7 +776,7 @@
     .settingControl { grid-template-columns: minmax(0, 1fr) 66px; }
     .themePreview { grid-template-columns: repeat(3, 24px) 1fr; }
     .dialogScrim { padding: 12px; }
-    .dialogPanel { max-height: calc(100vh - 24px); border-radius: 16px; }
+    .dialogPanel { max-height: calc(var(--app-viewport-height, 100vh) - 24px); border-radius: 16px; }
     .dialogHeader { padding: 19px 18px 15px; }
     .dialogBody { padding: 15px 18px; }
     .dialogFooter { padding: 13px 18px 16px; }
@@ -933,3 +933,5 @@
 .app[data-zoom="150"] .memoryList, .app[data-zoom="175"] .memoryList, .app[data-zoom="200"] .memoryList { position: static; max-height: 240px; }
 
 .memoryDetail > .inertContent { margin-top: 22px; }
+
+.memoryDetail > .memoryFacts { margin-top: 22px; }
