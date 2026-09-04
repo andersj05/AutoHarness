@@ -170,6 +170,18 @@ The application exposes named navigation and main landmarks, a skip link, route 
 Alt+1 through Alt+5 opens each primary route and restores focus to its main landmark.
 Permission and credential dialogs retain labelled descriptions, logical screen-reader order, focus containment, and focus restoration.
 
+## Implemented Stage 7 Memory workspace
+
+Memory uses a bounded master-detail list with explicit search submission, scope and lifecycle filters, stable cursor navigation, and a clear displayed-page count.
+The detail surface groups exact identity, trust, sensitivity, current provenance timeline, retained or erased evidence, typed relations, validation findings, and bounded admission history.
+Proposed content carries an explicit untrusted-source warning and a separate exact-revision approval dialog.
+Correction presents inert before and after text, and content deletion requires typing the complete memory identity.
+Permissions preempt Memory dialogs, stale revisions disable submission, and focus returns without scrolling the application root.
+
+Plan, artifact, file, diff, terminal-output, and evaluation slots render data through trusted semantic components.
+Commands and paths remain selectable inert text.
+The responsive list stacks above details at narrow widths and high zoom, while dialog sizing uses the effective scaled viewport to keep confirmation controls visible.
+
 ## Visual validation
 
 Review at these initial viewport classes:

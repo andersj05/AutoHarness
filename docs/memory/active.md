@@ -2,9 +2,9 @@
 
 **Last reviewed:** 2026-09-03
 
-**Phase:** Native GUI migration Stage 6 settings, accessibility, and personalization
+**Phase:** Native GUI migration Stage 7 Memory and advanced workspaces
 
-**Status:** Stage 6 renderer settings and accessibility parity is implemented and locally validated, while cross-platform migration release evidence remains open
+**Status:** Stage 7 Memory lifecycle and typed advanced surfaces are implemented and locally validated, while cross-platform migration release evidence remains open
 
 ## Current objective
 
@@ -15,7 +15,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 ## Current repository state
 
 - [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md) selects Tauri 2, React, TypeScript, and Vite for the native desktop client.
-- [`autoharness-client`](../../crates/autoharness-client/src/lib.rs) defines schema-v3 renderer-neutral commands, snapshots, bounded active-session deltas, notices, bounded permission, provider, and settings projections, request correlation, monotonic transport revisions, typed secret ingress operations, and resynchronization.
+- [`autoharness-client`](../../crates/autoharness-client/src/lib.rs) defines schema-v4 renderer-neutral commands, snapshots, bounded active-session deltas, notices, bounded permission, provider, and settings projections, request correlation, monotonic transport revisions, typed secret ingress operations, and resynchronization.
 - [`autoharness-app::gui`](../../crates/autoharness-app/src/gui.rs) embeds the authoritative runtime in the Tauri process and exposes only narrow client commands, ordered frames, acknowledgements, and one-way credential ingress.
 - The bridge keeps one bounded frame in flight, coalesces projections, gives acknowledgements a dedicated mailbox, requires a process restart after an unacknowledged renderer replacement, and publishes shutdown lifecycle before terminal notices.
 - The React workspace under [`apps/gui`](../../apps/gui/package.json) owns presentation state only and uses a React-free client store between components and the native or fixture transport.
@@ -47,14 +47,21 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - Browser fixture review covers ready, streaming, offline, credential, permission, failure, empty, compact, standard, wide, resilience, no-color, and high-contrast states.
 - A real Windows Tauri development window launched against the Rust host, rendered the shared desktop shell and keyboard command palette in WebView2, and exited cleanly.
 - Rust formatting, strict workspace Clippy, the complete locked Rust suite, frontend type checking, the complete GUI suite, the Windows Credential Manager smoke, and focused responsive browser review pass locally through Stage 6.
-- The final independent client, bridge, coordinator, frontend, Tauri, package, and CI audit reports no remaining actionable P0 through P2 findings.
+- The Stage 6 independent client, bridge, coordinator, frontend, Tauri, package, and CI audit reported no remaining actionable P0 through P2 findings.
 - Default CI gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage on the relevant platforms without running the frozen TUI package or ignored PTY acceptance matrix.
+
+- The [Stage 7 validation record](../release/GUI_STAGE7_VALIDATION.md) verifies authoritative Memory search, filters, paging, creation, import, exact proposal review, correction, retraction, export, deletion, provenance, evidence, relations, and admission history.
+- Native GUI commands and ordered frames pass a real coordinator and SQLite lifecycle with replay-equivalent approval and deletion across two restart boundaries.
+- Memory pages have an aggregate 8 MiB wire bound, safe recoverable overflow state, and query-generation and exact-sequence stale-review protection.
+- Closed typed slots render plans, artifacts, files, comparisons, terminal output, and evaluation data inertly without expanding renderer authority.
+- Stage 7 passes 113 GUI tests, 27 client-contract tests, native memory tests, frontend type checking and build, complete local Rust gates, and browser review through 200 percent zoom.
 
 ## Open migration work
 
 - `autoharness-app` still maps temporary TUI-owned projections into the renderer-neutral contract.
 - Stage 1 exits only after application orchestration no longer imports renderer-owned types and both clients consume the shared contract directly.
-- The GUI does not yet provide complete Help, Memory lifecycle, or document-import parity.
+- The GUI does not yet provide complete Help parity.
+- Native planning and evaluation producers remain future runtime work; the six advanced surface contracts are implemented with fixtures and the native inspector currently exposes bounded tool evidence.
 - Renderer restart recovery currently requires restarting the desktop process when an earlier native frame remains unacknowledged.
 - Packaging, signing, updates, installers, macOS and Linux system-webview screenshot matrices, and Windows, macOS, and Linux packaged-app tests remain open.
 - Windows WebView2 received a live wide-shell and command-palette review, while the exact compact, standard, and wide viewport matrix is currently browser-fixture evidence only.
@@ -64,6 +71,6 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 
 ## Immediate next actions
 
-1. Collect exact compact, standard, and wide native screenshot evidence, accessibility review, and GUI-host vault journeys on Windows, macOS, and Linux for Stages 3 through 6.
-2. Implement Stage 7 Memory and advanced workspace parity without widening webview authority.
+1. Collect exact compact, standard, and wide native screenshot evidence, accessibility review, and GUI-host vault journeys on Windows, macOS, and Linux for Stages 3 through 7.
+2. Prepare Stage 8 packaging and release gates after the remaining migration cleanup.
 3. Continue Stage 1 and Stage 2 migration cleanup by removing the temporary TUI projection adapter and extending native runtime restart journeys.

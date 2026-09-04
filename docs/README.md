@@ -49,6 +49,8 @@ Terminal documentation remains the compatibility and behavioral reference during
 - [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
 - [TUI redesign validation](release/TUI_REDESIGN_VALIDATION.md): Phase 3.10 step 10 candidate evidence, local results, and outstanding promotion gates.
 
+- [GUI Stage 7 validation](release/GUI_STAGE7_VALIDATION.md): Memory lifecycle, native replay, inert workspace surfaces, responsive review, and remaining desktop release evidence.
+
 ## Validation
 
 - [`scripts/check_docs_links.py`](../scripts/check_docs_links.py): verifies that every relative link in every Markdown file resolves and that every ADR is indexed; runs in CI and locally from the repository root.

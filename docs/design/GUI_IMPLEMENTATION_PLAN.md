@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-03
 
 **Decision:** [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md)
 
@@ -180,8 +180,8 @@ It must remain explicit in code and memory until Stage 1 exits.
 
 ## Current slice evidence
 
-The current implementation completes the Stage 3 design-system slice, the Stage 4 session and workspace slice, the Stage 5 provider-management slice, and the Stage 6 settings and accessibility slice locally.
-The schema-v3 client contract, settings schema-v5 migration, Tauri carrier, React-free store, responsive desktop shell, deterministic fixtures, permission preemption, ordered recovery, complete locked Rust workspace gates, complete GUI test suite, and the Windows operating-system vault smoke are verified locally.
+The current implementation completes the Stage 3 design-system slice, the Stage 4 session and workspace slice, the Stage 5 provider-management slice, the Stage 6 settings and accessibility slice, and the Stage 7 Memory and advanced workspace slice locally.
+The schema-v4 client contract, settings schema-v5 migration, Tauri carrier, React-free store, responsive desktop shell, deterministic fixtures, permission preemption, ordered recovery, complete locked Rust workspace gates, complete GUI test suite, and the Windows operating-system vault smoke are verified locally.
 The Providers workspace creates and edits Gemini and router profiles, duplicates non-secret configuration, activates and tests exact connections, manages environment, vault, and session-only credential states, saves model and reasoning defaults atomically, runs request-correlated native Codex sign-in, and requires exact confirmation for deletion.
 Secret entry clears before transport, only a dedicated zeroizing native ingress accepts it, temporary session-default rows cannot write to the vault, environment overrides remain visibly authoritative, and diagnostics stay content free.
 Focused browser review covers the provider workspace at compact, mobile-resilience, and wide layouts, including navigation, action wrapping, credential actions, fallback messaging, and destructive controls.
@@ -195,4 +195,6 @@ The current implementation does not complete Stage 1 because application orchest
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.
 Stage 5's cross-platform exit evidence remains open because macOS and Linux GUI-host credential-vault smokes have not run on this Windows branch.
 Stage 6 is complete locally, while cross-platform system-webview accessibility review remains part of the release evidence.
-Stages 7 and 8 remain planned migration work.
+Stage 7 is implemented locally with the existing Rust memory authority, replay-equivalent native command and storage journeys, explicit proposal review, inert typed workspace surfaces, and responsive browser review.
+The [Stage 7 validation record](../release/GUI_STAGE7_VALIDATION.md) distinguishes native protocol and replay evidence from fixture-only presentation contracts and the remaining system-webview matrix.
+Stage 8 remains planned migration work.
