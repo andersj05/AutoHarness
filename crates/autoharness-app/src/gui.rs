@@ -796,6 +796,9 @@ impl BridgeActor {
             self.in_flight = Some(in_flight);
             return Err(GuiIpcError::invalid_command());
         }
+        if revision == TransportRevision::INITIAL {
+            crate::telemetry::gui_renderer_ready();
+        }
         if let InFlightPayload::Notice(queued) = in_flight.payload {
             if let Some(request_id) = queued.terminal_request_id {
                 self.pending_requests.remove(&request_id);

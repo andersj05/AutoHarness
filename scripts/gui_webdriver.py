@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import signal
 import tempfile
 import time
 import sys
@@ -52,7 +53,7 @@ class Driver:
                 result = predicate()
                 if result:
                     return result
-            except (HTTPError, URLError, RuntimeError):
+            except (HTTPError, URLError, RuntimeError, ConnectionError, TimeoutError):
                 pass
             time.sleep(0.15)
         raise RuntimeError("native GUI condition timed out")
@@ -65,6 +66,7 @@ class Driver:
 
     def click(self, label):
         element = self.element(f"//button[@aria-label='{label}' or normalize-space(.)='{label}']")
+        self.wait(lambda: self.request("GET", f"/element/{element}/enabled"))
         self.request("POST", f"/element/{element}/click", {})
 
     def fill(self, label, text):
@@ -83,7 +85,7 @@ class Driver:
             self.request("POST", "/window/rect", {"width": width + width - actual[0], "height": height + height - actual[1]})
             self.wait(lambda: self.script("return [innerWidth, innerHeight]") == [width, height])
             self.wait(lambda: self.script("return document.documentElement.scrollWidth <= innerWidth"))
-            time.sleep(0.2)
+            self.wait(lambda: self.script("return document.fonts.status === 'loaded' && !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
             (output / f"{route}-{name}.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
             if route == "sessions" and name == "compact":
                 self.wait(lambda: self.script("return getComputedStyle(document.querySelector('.sessionDetailPane')).display !== 'none'"))
@@ -137,6 +139,8 @@ def journey(driver, binary, output, data):
     driver.wait(lambda: driver.script("return document.querySelector('.sessionActionMessage')?.textContent.includes('Restored')"))
     # Deleting the only open session is deliberately forbidden by the runtime.
     driver.click("Create new session")
+    driver.click("Sessions")
+    driver.wait(lambda: driver.script("return document.querySelectorAll('.sessionWorkspaceRow').length === 2 && document.querySelector('.sessionWorkspaceRow[data-active=true] strong')?.textContent !== " + json.dumps(title)))
     driver.clean_close(data)
     driver.start(binary)
     driver.click("Sessions")
@@ -175,11 +179,14 @@ def main():
         data = Path(temporary)
         environment = {key: value for key, value in os.environ.items()
                        if not key.upper().startswith(("AUTOHARNESS_", "GEMINI_", "OPENAI_", "CODEX_"))}
-        environment.update(AUTOHARNESS_DATA_DIR=str(data), AUTOHARNESS_WORKSPACE=str(data))
+        environment.update(AUTOHARNESS_DATA_DIR=str(data), AUTOHARNESS_WORKSPACE=str(data),
+                           WEBVIEW2_USER_DATA_FOLDER=str(data / "webview"),
+                           XDG_DATA_HOME=str(data / "xdg-data"), XDG_CACHE_HOME=str(data / "xdg-cache"))
         # Never capture native driver logs: they can contain DOM and IPC payloads.
         process = subprocess.Popen([str(args.driver.resolve(strict=True)), "--port", str(args.port),
                                     "--native-driver", str(args.native_driver.resolve(strict=True))],
-                                   env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=sys.platform != "win32")
         driver = Driver(args.port)
         try:
             driver.wait(lambda: driver.request("GET", "/status", session=False))
@@ -203,7 +210,7 @@ def main():
                     subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 else:
-                    process.terminate()
+                    os.killpg(process.pid, signal.SIGTERM)
                 process.wait(timeout=10)
 
 

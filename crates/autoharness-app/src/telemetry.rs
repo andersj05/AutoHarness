@@ -10,6 +10,12 @@ pub fn app_stopped() {
     tracing::info!(event = "app_stopped");
 }
 
+/// Records a validated acknowledgement of the first native renderer baseline.
+#[cfg(feature = "gui")]
+pub fn gui_renderer_ready() {
+    tracing::info!(event = "gui_renderer_ready");
+}
+
 /// Emits safe provider initialization state.
 pub fn provider_ready() {
     tracing::info!(event = "provider_ready");

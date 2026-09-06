@@ -66,12 +66,21 @@ jobs:
           xvfb-run --auto-servernum --server-args='-screen 0 1920x1200x24' python scripts/gui_webdriver.py --binary /usr/bin/autoharness --driver target/gui-tools/bin/tauri-driver --native-driver /usr/bin/WebKitWebDriver --output target/gui-evidence/linux
       - name: Linux uninstall
         if: always() && runner.os == 'Linux'
-        run: sudo dpkg --remove autoharness || test ! -e /usr/bin/autoharness
-      - name: macOS package structure
+        run: |
+          for package in target/release/bundle/deb/*.deb; do
+            test -f "$package" || continue
+            sudo dpkg --remove "$(dpkg-deb --field "$package" Package)"
+          done
+          test ! -e /usr/bin/autoharness
+      - name: macOS install and native startup replay
         if: runner.os == 'macOS'
         run: |
-          test -x target/release/bundle/macos/AutoHarness.app/Contents/MacOS/autoharness
-          plutil -lint target/release/bundle/macos/AutoHarness.app/Contents/Info.plist
+          mkdir -p "$RUNNER_TEMP/gui-dmg" "$RUNNER_TEMP/gui-installed"
+          hdiutil attach target/release/bundle/dmg/*.dmg -readonly -nobrowse -mountpoint "$RUNNER_TEMP/gui-dmg"
+          trap 'hdiutil detach "$RUNNER_TEMP/gui-dmg"' EXIT
+          ditto "$RUNNER_TEMP/gui-dmg/AutoHarness.app" "$RUNNER_TEMP/gui-installed/AutoHarness.app"
+          plutil -lint "$RUNNER_TEMP/gui-installed/AutoHarness.app/Contents/Info.plist"
+          python scripts/gui_process_smoke.py --binary "$RUNNER_TEMP/gui-installed/AutoHarness.app/Contents/MacOS/autoharness" --output target/gui-evidence/macos
       - name: Retain packages and synthetic screenshot evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
