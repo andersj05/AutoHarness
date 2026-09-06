@@ -50,6 +50,9 @@ Terminal documentation remains the compatibility and behavioral reference during
 - [TUI redesign validation](release/TUI_REDESIGN_VALIDATION.md): Phase 3.10 step 10 candidate evidence, local results, and outstanding promotion gates.
 
 - [GUI Stage 7 validation](release/GUI_STAGE7_VALIDATION.md): Memory lifecycle, native replay, inert workspace surfaces, responsive review, and remaining desktop release evidence.
+- [GUI release checklist](release/GUI_RELEASE_CHECKLIST.md): immutable candidate evidence, signing, approval, default cutover, and retirement gates.
+- [GUI update policy](release/GUI_UPDATE_POLICY.md): candidate installers, signing prerequisites, deliberate updates, and rollback.
+- [GUI Stage 8 validation](release/GUI_STAGE8_VALIDATION.md): package and native lifecycle evidence, scope limits, and remaining release blockers.
 
 ## Validation
 

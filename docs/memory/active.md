@@ -1,10 +1,10 @@
 # Active memory
 
-**Last reviewed:** 2026-09-03
+**Last reviewed:** 2026-09-06
 
-**Phase:** Native GUI migration Stage 7 Memory and advanced workspaces
+**Phase:** Native GUI migration Stage 8 release preparation
 
-**Status:** Stage 7 Memory lifecycle and typed advanced surfaces are implemented and locally validated, while cross-platform migration release evidence remains open
+**Status:** Stage 8 candidate packaging and release tooling are implemented; signing, complete release evidence, default cutover, and TUI retirement remain gated
 
 ## Current objective
 
@@ -56,6 +56,10 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - Closed typed slots render plans, artifacts, files, comparisons, terminal output, and evaluation data inertly without expanding renderer authority.
 - Stage 7 passes 113 GUI tests, 27 client-contract tests, native memory tests, frontend type checking and build, complete local Rust gates, and browser review through 200 percent zoom.
 
+- The [Stage 8 validation record](../release/GUI_STAGE8_VALIDATION.md) records unsigned installer tooling, immutable evidence validation, Windows installed native lifecycle and viewport checks, and macOS native startup and idle replay.
+- Native Quit returns through the Rust runtime shutdown joins, compact Sessions retains lifecycle actions, and pending exports cannot invalidate destructive confirmation state.
+- The 116-test GUI suite, 12-test Python tooling suite, frontend type checking and build, and full local Rust formatting, Clippy, and locked workspace gates pass.
+
 ## Open migration work
 
 - `autoharness-app` still maps temporary TUI-owned projections into the renderer-neutral contract.
@@ -63,8 +67,9 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 - The GUI does not yet provide complete Help parity.
 - Native planning and evaluation producers remain future runtime work; the six advanced surface contracts are implemented with fixtures and the native inspector currently exposes bounded tool evidence.
 - Renderer restart recovery currently requires restarting the desktop process when an earlier native frame remains unacknowledged.
-- Packaging, signing, updates, installers, macOS and Linux system-webview screenshot matrices, and Windows, macOS, and Linux packaged-app tests remain open.
-- Windows WebView2 received a live wide-shell and command-palette review, while the exact compact, standard, and wide viewport matrix is currently browser-fixture evidence only.
+- Signing identities are not provisioned; signed distribution and the complete same-candidate platform release matrix remain open.
+- Unsigned candidate installers and deliberate update policy are implemented, with native CI evidence tracked in the Stage 8 validation record.
+- Windows installed WebView2 has exact compact, standard, and wide route screenshots and local assistant review; all-platform human visual and screen-reader approval remains open.
 - Stage 5 macOS and Linux GUI-host credential-vault smokes remain open; the Windows vault primitive passed its opt-in save, load, replace, and delete smoke on this branch.
 - The GUI is not the default application and `bundle.active` remains false.
 - Existing Phase 3.9, Phase 3.10, and Phase 4 terminal release evidence gaps remain recorded as historical evidence rather than default GUI-migration CI blockers, including cross-platform vault smokes, live router evidence, approved reference-machine reports, human review, rollback, checklist, approval, and promotion.
@@ -72,5 +77,5 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 ## Immediate next actions
 
 1. Collect exact compact, standard, and wide native screenshot evidence, accessibility review, and GUI-host vault journeys on Windows, macOS, and Linux for Stages 3 through 7.
-2. Prepare Stage 8 packaging and release gates after the remaining migration cleanup.
+2. Provision protected signing environments and complete the immutable Stage 8 checklist before approving default cutover; retain the TUI throughout the approved rollback window.
 3. Continue Stage 1 and Stage 2 migration cleanup by removing the temporary TUI projection adapter and extending native runtime restart journeys.

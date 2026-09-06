@@ -65,4 +65,5 @@ The [release validator](../../scripts/check_gui_release.py) checks those conditi
 
 The packaging configuration follows Tauri's [Windows installer](https://v2.tauri.app/distribute/windows-installer/), [Windows signing](https://v2.tauri.app/distribute/sign/windows/), and [macOS signing](https://v2.tauri.app/distribute/sign/macos/) guidance.
 Native Windows and Linux testing uses the documented [external WebDriver setup](https://v2.tauri.app/develop/tests/webdriver/manual-setup/).
-External `tauri-driver` does not support WKWebView on macOS, so package-structure CI cannot replace the required macOS native review.
+External `tauri-driver` does not support WKWebView on macOS.
+The macOS process smoke verifies native baseline acknowledgement, graceful shutdown, and idle database replay from the mounted DMG's installed application; it does not replace native interaction, screenshot, or accessibility review.

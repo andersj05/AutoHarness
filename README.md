@@ -34,6 +34,8 @@ pnpm gui:dev
 
 The browser fixture exercises presentation, interaction, recovery, and responsive states without connecting to the authoritative Rust runtime or writing real sessions and credentials.
 Use the native preview when validating the Tauri carrier and engine integration.
+Unsigned candidate installers and native lifecycle checks are available through the [GUI update policy](docs/release/GUI_UPDATE_POLICY.md).
+Candidates are for validation; signed public distribution and default-interface promotion require the [GUI release checklist](docs/release/GUI_RELEASE_CHECKLIST.md).
 The macOS preview requires macOS 11.3 or later so its system WebView provides the layout and protocol features used by the interface.
 This preview intentionally permits one renderer connection per process while native frame delivery is outstanding.
 If the development renderer reloads before acknowledging its last native frame, restart AutoHarness to establish a fresh bounded channel.
