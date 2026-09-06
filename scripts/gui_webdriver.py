@@ -76,8 +76,9 @@ class Driver:
                 result = predicate()
                 if result:
                     return result
-            except (HTTPError, URLError, RuntimeError, ConnectionError, TimeoutError):
-                pass
+            except (HTTPError, URLError, RuntimeError, ConnectionError, TimeoutError) as failure:
+                if isinstance(failure, HTTPError):
+                    failure.close()
             time.sleep(0.15)
         raise RuntimeError("native GUI condition timed out")
 
@@ -144,6 +145,7 @@ class Driver:
                 except HTTPError as error:
                     if error.code != 404:
                         raise
+                    error.close()
                 finally:
                     self.session = ""
         finally:
@@ -269,6 +271,8 @@ def main():
                          "timed out", "user data", "pipe") if category in message]
                 except (ValueError, AttributeError, OSError):
                     pass
+                finally:
+                    failure.close()
             (args.output / "failure.json").write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
             if driver.session:
                 try:

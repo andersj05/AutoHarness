@@ -17,7 +17,9 @@ class NativeToolTests(unittest.TestCase):
         application = Mock(pid=4321)
         application.poll.return_value = None
         driver.application = application
-        driver.request = Mock(side_effect=HTTPError("http://127.0.0.1", 500, "failure", {}, None))
+        failure = HTTPError("http://127.0.0.1", 500, "failure", {}, None)
+        self.addCleanup(failure.close)
+        driver.request = Mock(side_effect=failure)
         with patch("gui_webdriver.subprocess.run") as terminate, self.assertRaises(HTTPError):
             driver.close()
         self.assertEqual(terminate.call_args.args[0], ["taskkill", "/PID", "4321", "/T", "/F"])
