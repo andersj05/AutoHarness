@@ -1,6 +1,6 @@
 """Exercise an installed GUI through native WebDriver, with isolated synthetic data.
 
-Requires tauri-driver and a matching native driver on Windows or Linux.
+Requires tauri-driver plus EdgeDriver on Windows, or WebKitWebDriver on Linux.
 No frontend fixture, test IPC, provider credential, or production data is used.
 """
 
@@ -39,8 +39,9 @@ class Driver:
         return result
 
     def start(self, binary):
-        result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": {
-            "tauri:options": {"application": str(binary)}}}}, session=False)
+        capabilities = ({"webkitgtk:browserOptions": {"binary": str(binary), "args": []}}
+                        if sys.platform == "linux" else {"tauri:options": {"application": str(binary)}})
+        result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": capabilities}}, session=False)
         self.session = result["sessionId"]
         self.wait(lambda: self.script("return Boolean(window.__TAURI_INTERNALS__) && "
                                      "Boolean(document.querySelector('button[aria-label=\"Sessions\"]'))"))
@@ -178,11 +179,13 @@ def journey(driver, binary, output, data):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--driver", type=Path, required=True)
+    parser.add_argument("--driver", type=Path, help="tauri-driver executable; required on Windows")
     parser.add_argument("--native-driver", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=4444)
     args = parser.parse_args()
+    if sys.platform == "win32" and not args.driver:
+        parser.error("Windows requires --driver")
     binary = args.binary.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="autoharness-gui-e2e-", ignore_cleanup_errors=True) as temporary:
@@ -191,10 +194,14 @@ def main():
                        if not key.upper().startswith(("AUTOHARNESS_", "GEMINI_", "OPENAI_", "CODEX_"))}
         environment.update(AUTOHARNESS_DATA_DIR=str(data), AUTOHARNESS_WORKSPACE=str(data),
                            WEBVIEW2_USER_DATA_FOLDER=str(data / "webview"),
+                           TAURI_WEBVIEW_AUTOMATION="true",
                            XDG_DATA_HOME=str(data / "xdg-data"), XDG_CACHE_HOME=str(data / "xdg-cache"))
         # Never capture native driver logs: they can contain DOM and IPC payloads.
-        process = subprocess.Popen([str(args.driver.resolve(strict=True)), "--port", str(args.port),
-                                    "--native-driver", str(args.native_driver.resolve(strict=True))],
+        carrier = ([str(args.native_driver.resolve(strict=True)), f"--port={args.port}"]
+                   if sys.platform == "linux" else
+                   [str(args.driver.resolve(strict=True)), "--port", str(args.port),
+                    "--native-driver", str(args.native_driver.resolve(strict=True))])
+        process = subprocess.Popen(carrier,
                                    env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=sys.platform != "win32")
         driver = Driver(args.port)
