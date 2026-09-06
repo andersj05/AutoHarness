@@ -29,6 +29,8 @@ doc = false
 [features]
 benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
 gui = ["dep:autoharness-client", "dep:tauri", "dep:tauri-build"]
+# Explicit installer builds only; ordinary builds keep the migration reference default.
+gui-package = ["gui", "tauri/custom-protocol"]
 
 [dependencies]
 async-trait.workspace = true

@@ -212,7 +212,15 @@ fn client_mode_from(arguments: impl IntoIterator<Item = String>) -> Result<Clien
             return Err(AppError::Configuration);
         }
     }
-    Ok(requested.unwrap_or(ClientMode::Tui))
+    Ok(requested.unwrap_or_else(default_client_mode))
+}
+
+fn default_client_mode() -> ClientMode {
+    #[cfg(feature = "gui-package")]
+    if env!("CARGO_BIN_NAME") == "autoharness" {
+        return ClientMode::Gui;
+    }
+    ClientMode::Tui
 }
 
 async fn run_terminal(
@@ -702,10 +710,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_client_remains_the_default_and_explicit_migration_path() {
+    fn client_default_respects_the_explicit_packaging_boundary() {
         assert_eq!(
             client_mode_from(Vec::<String>::new()).expect("default mode"),
-            ClientMode::Tui
+            default_client_mode()
         );
         assert_eq!(
             client_mode_from(["--tui".to_owned()]).expect("terminal mode"),
@@ -725,6 +733,19 @@ mod tests {
             client_mode_from(["--gui".to_owned()]).expect("GUI mode"),
             ClientMode::Gui
         );
+    }
+
+    #[test]
+    fn only_the_packaged_primary_binary_defaults_to_gui() {
+        #[cfg(feature = "gui-package")]
+        let expected = if env!("CARGO_BIN_NAME") == "autoharness" {
+            ClientMode::Gui
+        } else {
+            ClientMode::Tui
+        };
+        #[cfg(not(feature = "gui-package"))]
+        let expected = ClientMode::Tui;
+        assert_eq!(default_client_mode(), expected);
     }
 
     #[test]
