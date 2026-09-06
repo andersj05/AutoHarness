@@ -45,6 +45,13 @@ def run(arguments, **kwargs):
     return subprocess.run(arguments, check=True, **kwargs)
 
 
+def candidate_identity():
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT):
+        raise ValueError("commit or stash working changes before building a candidate")
+    return commit
+
+
 def verify_signature(path, platform, environment):
     if platform == "win32":
         # Pass the path through the environment, never shell interpolation.
@@ -75,9 +82,7 @@ def main():
         parser.error("unsupported desktop platform")
     environment = dict(os.environ)
     config = {} if args.unsigned else signing_config(platform, environment)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT):
-        parser.error("commit or stash working changes before building a candidate")
+    commit = candidate_identity()
     bundle, extension = FORMATS[platform]
     # Reuse dependency compilation, but accept only artifacts written by this build.
     target = ROOT / "target"
@@ -102,18 +107,27 @@ def main():
     artifact = artifacts[0]
     if not args.unsigned:
         verify_signature(artifact, platform, environment)
+    if candidate_identity() != commit:
+        raise ValueError("candidate changed during the build; no manifest will be issued")
     output = target / "gui-packages" / commit / platform / profile
     output.mkdir(parents=True, exist_ok=True)
     files = [artifact]
     if platform == "linux" and not args.unsigned:
         files.append(Path(str(artifact) + ".asc"))
     manifest = {"schema_version": 1, "commit": commit, "platform": platform,
-                "profile": profile, "signature_verified": not args.unsigned, "artifacts": []}
+                "profile": profile, "signature_verified": not args.unsigned,
+                "rust_toolchain": subprocess.check_output(["rustc", "--version"], text=True).strip(),
+                "node_version": subprocess.check_output(["node", "--version"], text=True).strip(),
+                "artifacts": []}
+    executable = target / profile / ("autoharness.exe" if platform == "win32" else "autoharness")
+    with executable.open("rb") as source:
+        manifest["binary_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
     for source in files:
         destination = output / source.name
         shutil.copy2(source, destination)
-        manifest["artifacts"].append({"name": source.name,
-            "sha256": hashlib.file_digest(destination.open("rb"), "sha256").hexdigest()})
+        with destination.open("rb") as content:
+            manifest["artifacts"].append({"name": source.name,
+                "sha256": hashlib.file_digest(content, "sha256").hexdigest()})
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Candidate packages: {output.relative_to(ROOT)}")
 
