@@ -23,9 +23,10 @@ OPENER = build_opener(ProxyHandler({}))
 
 
 class Driver:
-    def __init__(self, port):
+    def __init__(self, port, webview_options=None):
         self.url = f"http://127.0.0.1:{port}"
         self.session = ""
+        self.webview_options = webview_options or {}
 
     def request(self, method, path, data=None, session=True):
         prefix = f"/session/{self.session}" if session else ""
@@ -41,7 +42,7 @@ class Driver:
     def start(self, binary):
         capabilities = ({"webkitgtk:browserOptions": {"binary": str(binary), "args": []}}
                         if sys.platform == "linux" else {"browserName": "webview2", "ms:edgeChromium": True,
-                        "ms:edgeOptions": {"binary": str(binary), "args": []}})
+                        "ms:edgeOptions": {"binary": str(binary), "args": [], "webviewOptions": self.webview_options}})
         result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": capabilities}}, session=False)
         self.session = result["sessionId"]
         self.wait(lambda: self.script("return Boolean(window.__TAURI_INTERNALS__) && "
@@ -213,7 +214,12 @@ def main():
         process = subprocess.Popen(carrier,
                                    env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=sys.platform != "win32")
-        driver = Driver(args.port)
+        # EdgeDriver otherwise searches its own temporary profile while the app
+        # uses our isolated environment override, which breaks older carriers.
+        webview_options = {"userDataFolder": environment["WEBVIEW2_USER_DATA_FOLDER"]}
+        if args.browser_runtime:
+            webview_options["browserExecutableFolder"] = environment["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"]
+        driver = Driver(args.port, webview_options)
         try:
             driver.wait(lambda: driver.request("GET", "/status", session=False))
             journey(driver, binary, args.output, data)
@@ -231,6 +237,15 @@ def main():
                            "app_started": markers.count('event="app_started"'),
                            "renderer_ready": markers.count('event="gui_renderer_ready"'),
                            "app_stopped": markers.count('event="app_stopped"')}
+            if isinstance(failure, HTTPError):
+                diagnostics["http_status"] = failure.code
+                try:
+                    message = json.load(failure).get("value", {}).get("message", "").lower()
+                    diagnostics["driver_error_categories"] = [category for category in
+                        ("devtoolsactiveport", "cannot find", "version", "disconnected", "not reachable",
+                         "timed out", "user data", "pipe") if category in message]
+                except (ValueError, AttributeError, OSError):
+                    pass
             (args.output / "failure.json").write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
             if driver.session:
                 try:

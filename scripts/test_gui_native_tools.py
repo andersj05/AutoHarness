@@ -3,13 +3,22 @@ from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from gui_process_smoke import database_digest
 from gui_webdriver import Driver
 
 
 class NativeToolTests(unittest.TestCase):
+    def test_edge_attachment_uses_the_applications_isolated_profile_and_runtime(self):
+        options = {"userDataFolder": "C:/fixture/profile", "browserExecutableFolder": "C:/fixture/runtime"}
+        driver = Driver(4444, options)
+        driver.request = Mock(side_effect=[{"sessionId": "fixture"}, True])
+        with patch("gui_webdriver.sys.platform", "win32"):
+            driver.start(Path("C:/fixture/app.exe"))
+        capabilities = driver.request.call_args_list[0].args[2]["capabilities"]["alwaysMatch"]
+        self.assertEqual(capabilities["ms:edgeOptions"]["webviewOptions"], options)
+
     def test_readiness_poll_tolerates_native_driver_startup_disconnect(self):
         readiness = Mock(side_effect=[ConnectionResetError(), True])
         self.assertTrue(Driver.wait(readiness, seconds=1))
