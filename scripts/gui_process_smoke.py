@@ -4,6 +4,7 @@ This is real native renderer/host evidence, not an interaction or visual review.
 """
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -17,7 +18,7 @@ import time
 
 
 def database_digest(path):
-    with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as connection:
         if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
             raise RuntimeError("packaged database integrity check failed")
         return hashlib.sha256("\n".join(connection.iterdump()).encode()).hexdigest()
