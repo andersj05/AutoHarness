@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -89,8 +90,18 @@ class Driver:
         if self.session:
             try:
                 self.request("DELETE", "", session=True)
+            except HTTPError as error:
+                if error.code != 404:
+                    raise
             finally:
                 self.session = ""
+
+    def clean_close(self, data):
+        log = data / "autoharness.log"
+        before = log.read_text(encoding="utf-8").count("app_stopped")
+        self.request("DELETE", "/window")
+        self.wait(lambda: log.read_text(encoding="utf-8").count("app_stopped") > before)
+        self.close()
 
 
 def journey(driver, binary, output, data):
@@ -112,7 +123,9 @@ def journey(driver, binary, output, data):
     driver.title(title)
     driver.click("Restore session")
     driver.wait(lambda: driver.script("return document.querySelector('.sessionActionMessage')?.textContent.includes('Restored')"))
-    driver.close()  # driver termination is a conservative process-interruption boundary.
+    # Deleting the only open session is deliberately forbidden by the runtime.
+    driver.click("Create new session")
+    driver.clean_close(data)
     driver.start(binary)
     driver.click("Sessions")
     row = driver.element("//button[contains(@class, 'sessionWorkspaceRow')][.//strong[text()='" + title + "']]")
@@ -146,7 +159,7 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="autoharness-gui-e2e-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="autoharness-gui-e2e-", ignore_cleanup_errors=True) as temporary:
         data = Path(temporary)
         environment = {key: value for key, value in os.environ.items()
                        if not key.upper().startswith(("AUTOHARNESS_", "GEMINI_", "OPENAI_", "CODEX_"))}
@@ -161,13 +174,24 @@ def main():
             journey(driver, binary, args.output, data)
             report = {"schema_version": 1, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                       "journey": "offline-session-lifecycle", "status": "passed",
-                      "restart_boundaries": 2, "visual_review": "pending"}
+                      "restart_boundaries": 2, "clean_shutdown_verified": True, "visual_review": "pending"}
             (args.output / "lifecycle.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            if driver.session:
+                try:
+                    (args.output / "failure.png").write_bytes(base64.b64decode(driver.request("GET", "/screenshot")))
+                except (HTTPError, URLError, RuntimeError):
+                    pass
+            raise
         finally:
             try:
                 driver.close()
             finally:
-                process.terminate()
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                else:
+                    process.terminate()
                 process.wait(timeout=10)
 
 

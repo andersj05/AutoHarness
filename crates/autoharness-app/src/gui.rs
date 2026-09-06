@@ -257,7 +257,9 @@ pub(crate) async fn run(ui_ports: UiPorts, shutdown: CancellationToken) -> Resul
         handle.exit(0);
     });
     let event_shutdown = shutdown.clone();
-    app.run(move |_handle, event| match event {
+    // `run` exits the entire process before the coordinator and engine joins in
+    // main can finish. Returning preserves the authoritative shutdown boundary.
+    app.run_return(move |_handle, event| match event {
         tauri::RunEvent::WindowEvent {
             event: tauri::WindowEvent::CloseRequested { api, .. },
             ..
