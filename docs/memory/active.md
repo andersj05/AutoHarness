@@ -58,7 +58,7 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 
 - The [Stage 8 validation record](../release/GUI_STAGE8_VALIDATION.md) records unsigned installer tooling, immutable evidence validation, Windows installed native lifecycle and viewport checks, and macOS native startup and idle replay.
 - Native Quit returns through the Rust runtime shutdown joins, compact Sessions retains lifecycle actions, and pending exports cannot invalidate destructive confirmation state.
-- The 116-test GUI suite, 13-test Python tooling suite, frontend type checking and build, and full local Rust formatting, Clippy, and locked workspace gates pass.
+- The 116-test GUI suite, 14-test Python tooling suite, frontend type checking and build, and full local Rust formatting, Clippy, and locked workspace gates pass.
 
 ## Open migration work
 

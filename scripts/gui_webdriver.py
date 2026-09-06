@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import signal
+import socket
 import tempfile
 import time
 import sys
@@ -23,10 +24,12 @@ OPENER = build_opener(ProxyHandler({}))
 
 
 class Driver:
-    def __init__(self, port, webview_options=None):
+    def __init__(self, port, application_environment=None, application_directory=None):
         self.url = f"http://127.0.0.1:{port}"
         self.session = ""
-        self.webview_options = webview_options or {}
+        self.application = None
+        self.application_environment = application_environment
+        self.application_directory = application_directory
 
     def request(self, method, path, data=None, session=True):
         prefix = f"/session/{self.session}" if session else ""
@@ -40,13 +43,30 @@ class Driver:
         return result
 
     def start(self, binary):
-        capabilities = ({"webkitgtk:browserOptions": {"binary": str(binary), "args": []}}
-                        if sys.platform == "linux" else {"browserName": "webview2", "ms:edgeChromium": True,
-                        "ms:edgeOptions": {"binary": str(binary), "args": [], "webviewOptions": self.webview_options}})
+        if sys.platform == "win32":
+            with socket.socket() as reservation:
+                reservation.bind(("127.0.0.1", 0))
+                debugger_port = reservation.getsockname()[1]
+            # An explicit test-only loopback connection avoids version-dependent
+            # DevToolsActivePort discovery. Production launch has no debug port.
+            environment = {**self.application_environment, "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS":
+                           f"--remote-debugging-port={debugger_port} --remote-debugging-address=127.0.0.1"}
+            self.application = subprocess.Popen([str(binary)], cwd=self.application_directory, env=environment,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.wait(lambda: self.debugger_ready(debugger_port))
+            capabilities = {"browserName": "webview2", "ms:edgeChromium": True,
+                            "ms:edgeOptions": {"debuggerAddress": f"127.0.0.1:{debugger_port}"}}
+        else:
+            capabilities = {"webkitgtk:browserOptions": {"binary": str(binary), "args": []}}
         result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": capabilities}}, session=False)
         self.session = result["sessionId"]
         self.wait(lambda: self.script("return Boolean(window.__TAURI_INTERNALS__) && "
                                      "Boolean(document.querySelector('button[aria-label=\"Sessions\"]'))"))
+
+    @staticmethod
+    def debugger_ready(port):
+        with OPENER.open(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+            return bool(json.load(response).get("webSocketDebuggerUrl"))
 
     @staticmethod
     def wait(predicate, seconds=30):
@@ -117,14 +137,22 @@ class Driver:
                 self.click("Cancel")
 
     def close(self):
-        if self.session:
-            try:
-                self.request("DELETE", "", session=True)
-            except HTTPError as error:
-                if error.code != 404:
-                    raise
-            finally:
-                self.session = ""
+        try:
+            if self.session:
+                try:
+                    self.request("DELETE", "", session=True)
+                except HTTPError as error:
+                    if error.code != 404:
+                        raise
+                finally:
+                    self.session = ""
+        finally:
+            if self.application is not None:
+                if self.application.poll() is None:
+                    subprocess.run(["taskkill", "/PID", str(self.application.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    self.application.wait(timeout=10)
+                self.application = None
 
     def clean_close(self, data):
         log = data / "autoharness.log"
@@ -214,12 +242,7 @@ def main():
         process = subprocess.Popen(carrier,
                                    env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=sys.platform != "win32")
-        # EdgeDriver otherwise searches its own temporary profile while the app
-        # uses our isolated environment override, which breaks older carriers.
-        webview_options = {"userDataFolder": environment["WEBVIEW2_USER_DATA_FOLDER"]}
-        if args.browser_runtime:
-            webview_options["browserExecutableFolder"] = environment["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"]
-        driver = Driver(args.port, webview_options)
+        driver = Driver(args.port, environment, data)
         try:
             driver.wait(lambda: driver.request("GET", "/status", session=False))
             journey(driver, binary, args.output, data)
