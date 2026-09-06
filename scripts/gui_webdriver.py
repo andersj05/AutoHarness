@@ -1,6 +1,6 @@
 """Exercise an installed GUI through native WebDriver, with isolated synthetic data.
 
-Requires tauri-driver plus EdgeDriver on Windows, or WebKitWebDriver on Linux.
+Requires EdgeDriver on Windows, or WebKitWebDriver on Linux.
 No frontend fixture, test IPC, provider credential, or production data is used.
 """
 
@@ -32,7 +32,7 @@ class Driver:
         request = Request(self.url + prefix + path,
                           data=json.dumps(data).encode() if data is not None else None,
                           method=method, headers={"Content-Type": "application/json"})
-        with OPENER.open(request, timeout=45) as response:
+        with OPENER.open(request, timeout=120 if not session and path == "/session" else 45) as response:
             result = json.load(response).get("value")
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError("native WebDriver command failed")
@@ -40,7 +40,8 @@ class Driver:
 
     def start(self, binary):
         capabilities = ({"webkitgtk:browserOptions": {"binary": str(binary), "args": []}}
-                        if sys.platform == "linux" else {"tauri:options": {"application": str(binary)}})
+                        if sys.platform == "linux" else {"browserName": "webview2", "ms:edgeChromium": True,
+                        "ms:edgeOptions": {"binary": str(binary), "args": []}})
         result = self.request("POST", "/session", {"capabilities": {"alwaysMatch": capabilities}}, session=False)
         self.session = result["sessionId"]
         self.wait(lambda: self.script("return Boolean(window.__TAURI_INTERNALS__) && "
@@ -87,6 +88,14 @@ class Driver:
     def title(self, title):
         self.wait(lambda: self.script("return document.querySelector('.sessionDetailPane h2')?.textContent === " + json.dumps(title)))
 
+    def painted(self):
+        self.wait(lambda: self.script("return document.fonts.status === 'loaded' && !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
+        # GTK resize acknowledgement precedes compositor presentation. Two frame
+        # callbacks plus a short presentation interval avoid stale backing pixels.
+        self.request("POST", "/execute/async", {"script":
+                     "const done = arguments[arguments.length - 1]; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => done(true), 300)));",
+                     "args": []})
+
     def screenshot_matrix(self, output, route):
         for name, width, height in (("compact", 900, 640), ("standard", 1280, 800), ("wide", 1600, 1000)):
             self.request("POST", "/window/rect", {"width": width, "height": height})
@@ -95,13 +104,14 @@ class Driver:
             self.request("POST", "/window/rect", {"width": width + width - actual[0], "height": height + height - actual[1]})
             self.wait(lambda: self.script("return [innerWidth, innerHeight]") == [width, height])
             self.wait(lambda: self.script("return document.documentElement.scrollWidth <= innerWidth"))
-            self.wait(lambda: self.script("return document.fonts.status === 'loaded' && !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
+            self.painted()
             (output / f"{route}-{name}.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
             if route == "sessions" and name == "compact":
                 self.wait(lambda: self.script("return getComputedStyle(document.querySelector('.sessionDetailPane')).display !== 'none'"))
                 self.click("Rename")
                 self.element("//input[@id=//label[normalize-space(.)='New title']/@for]")
-                self.wait(lambda: self.script("return !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
+                self.painted()
+                self.wait(lambda: self.script("const r = document.querySelector('[role=dialog]').getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight"))
                 (output / "sessions-compact-rename.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
                 self.click("Cancel")
 
@@ -179,13 +189,13 @@ def journey(driver, binary, output, data):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--driver", type=Path, help="tauri-driver executable; required on Windows")
+    parser.add_argument("--browser-runtime", type=Path, help="exact Windows WebView2 runtime directory matched to EdgeDriver")
     parser.add_argument("--native-driver", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=4444)
     args = parser.parse_args()
-    if sys.platform == "win32" and not args.driver:
-        parser.error("Windows requires --driver")
+    if sys.platform not in ("win32", "linux"):
+        parser.error("native WebDriver is supported only on Windows and Linux")
     binary = args.binary.resolve(strict=True)
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="autoharness-gui-e2e-", ignore_cleanup_errors=True) as temporary:
@@ -197,10 +207,9 @@ def main():
                            TAURI_WEBVIEW_AUTOMATION="true",
                            XDG_DATA_HOME=str(data / "xdg-data"), XDG_CACHE_HOME=str(data / "xdg-cache"))
         # Never capture native driver logs: they can contain DOM and IPC payloads.
-        carrier = ([str(args.native_driver.resolve(strict=True)), f"--port={args.port}"]
-                   if sys.platform == "linux" else
-                   [str(args.driver.resolve(strict=True)), "--port", str(args.port),
-                    "--native-driver", str(args.native_driver.resolve(strict=True))])
+        if args.browser_runtime:
+            environment["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"] = str(args.browser_runtime.resolve(strict=True))
+        carrier = [str(args.native_driver.resolve(strict=True)), f"--port={args.port}"]
         process = subprocess.Popen(carrier,
                                    env=environment, cwd=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=sys.platform != "win32")
@@ -210,9 +219,19 @@ def main():
             journey(driver, binary, args.output, data)
             report = {"schema_version": 1, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                       "journey": "offline-session-lifecycle", "status": "passed",
+                      "graphics_mode": ("software-no-compositing" if sys.platform == "linux" and
+                                        environment.get("WEBKIT_DISABLE_COMPOSITING_MODE") == "1" else "system-default"),
                       "restart_boundaries": 2, "clean_shutdown_verified": True, "visual_review": "pending"}
             (args.output / "lifecycle.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        except Exception:
+        except Exception as failure:
+            log = data / "autoharness.log"
+            markers = log.read_text(encoding="utf-8") if log.exists() else ""
+            diagnostics = {"schema_version": 1, "status": "failed", "failure_type": type(failure).__name__,
+                           "carrier_exit_code": process.poll(), "session_created": bool(driver.session),
+                           "app_started": markers.count('event="app_started"'),
+                           "renderer_ready": markers.count('event="gui_renderer_ready"'),
+                           "app_stopped": markers.count('event="app_stopped"')}
+            (args.output / "failure.json").write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
             if driver.session:
                 try:
                     (args.output / "failure.png").write_bytes(base64.b64decode(driver.request("GET", "/screenshot")))

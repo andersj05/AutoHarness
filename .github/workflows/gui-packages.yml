@@ -45,9 +45,6 @@ jobs:
         run: python -m unittest discover -s scripts -p "test_*.py"
       - name: Build unsigned candidate (never promotion evidence)
         run: python scripts/package_gui.py --unsigned
-      - name: Install pinned native test carrier
-        if: runner.os == 'Windows'
-        run: cargo install tauri-driver --version 2.0.6 --locked --root target/gui-tools
       - name: Match Microsoft native driver to WebView2
         if: runner.os == 'Windows'
         shell: pwsh

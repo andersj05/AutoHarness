@@ -1,4 +1,4 @@
-"""Verify Unix packaged webview startup, graceful shutdown, and idle replay.
+"""Verify packaged webview startup, graceful shutdown, and idle replay.
 
 This is real native renderer/host evidence, not an interaction or visual review.
 """
@@ -28,32 +28,43 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--browser-runtime", type=Path)
     args = parser.parse_args()
-    if sys.platform not in ("darwin", "linux"):
-        parser.error("this signal-based smoke is for macOS and Linux")
+    if sys.platform not in ("win32", "darwin", "linux"):
+        parser.error("unsupported desktop platform")
     binary = args.binary.resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix="autoharness-native-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="autoharness-native-", ignore_cleanup_errors=True) as temporary:
         data = Path(temporary)
         environment = {key: value for key, value in os.environ.items()
                        if not key.upper().startswith(("AUTOHARNESS_", "GEMINI_", "OPENAI_", "CODEX_"))}
         environment.update(AUTOHARNESS_DATA_DIR=str(data), AUTOHARNESS_WORKSPACE=str(data),
+                           WEBVIEW2_USER_DATA_FOLDER=str(data / "webview"),
                            XDG_DATA_HOME=str(data / "xdg-data"), XDG_CACHE_HOME=str(data / "xdg-cache"))
+        if args.browser_runtime:
+            environment["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"] = str(args.browser_runtime.resolve(strict=True))
         digests = []
         log = data / "autoharness.log"
         for launch in (1, 2):
-            process = subprocess.Popen([str(binary)], cwd=data, env=environment, start_new_session=True,
+            process = subprocess.Popen([str(binary)], cwd=data, env=environment, start_new_session=sys.platform != "win32",
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 deadline = time.monotonic() + 45
                 while time.monotonic() < deadline:
                     if process.poll() is not None:
-                        raise RuntimeError("native application exited before renderer readiness")
+                        raise RuntimeError(f"native application exited before renderer readiness: {process.returncode}")
                     if log.exists() and log.read_text(encoding="utf-8").count("gui_renderer_ready") == launch:
                         break
                     time.sleep(0.1)
                 else:
                     raise RuntimeError("native renderer did not acknowledge its baseline")
-                process.send_signal(signal.SIGINT)
+                if sys.platform == "win32":
+                    # Ask the exact child window to close through the OS, not IPC.
+                    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                    "$p = Get-Process -Id $env:AUTOHARNESS_SMOKE_PID; "
+                                    "if (-not $p.CloseMainWindow()) { exit 1 }"],
+                                   env={**environment, "AUTOHARNESS_SMOKE_PID": str(process.pid)}, check=True)
+                else:
+                    process.send_signal(signal.SIGINT)
                 if process.wait(timeout=15) != 0:
                     raise RuntimeError("native shutdown failed")
                 if log.read_text(encoding="utf-8").count("app_stopped") != launch:
@@ -61,7 +72,11 @@ def main():
                 digests.append(database_digest(data / "autoharness.sqlite3"))
             finally:
                 if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    else:
+                        os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=10)
         if digests[0] != digests[1]:
             raise RuntimeError("idle native replay changed durable data")

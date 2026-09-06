@@ -37,10 +37,16 @@ Screenshots deliberately retain pending human review status.
 The optimized Windows candidate at `2d7612d5e15ada17c951978d61949a8741d2ade3` passes the same installed-app journey, with reports under `target/gui-evidence/windows-release`.
 Its installer SHA-256 is `574ee5c757a2769e4ef40ca392cc3b1f764dd1b5d38c60d99845a89d19682442` and installed executable SHA-256 is `1da5f5d19579c2cf580fe3d146bd278ee01c7bbb0e2fb86f71313dde5a8d7619`.
 The build-output executable can differ from the installed executable because Tauri patches bundle metadata, so installed evidence identifies its own executable bytes.
+The Windows installed process smoke also verifies two real OS-window close requests, complete runtime shutdown, and equivalent idle replay without WebDriver or test IPC.
+The Windows installer produced by the cross-platform CI run passes the full installed journey when downloaded and exercised locally; hosted WebDriver startup evidence is tracked separately in the pull request.
 
 The [macOS candidate run](https://github.com/andersj05/AutoHarness/actions/runs/34053878881/job/101542138991) mounted the actual DMG, installed its application, validated the property list, acknowledged two native renderer baselines, completed two graceful shutdowns, and preserved the idle durable database digest.
 This establishes native startup and idle replay only, not the complete macOS interaction matrix.
 The [pull request](https://github.com/andersj05/AutoHarness/pull/24) records subsequent candidate workflow and baseline results.
+The [Linux installed journey](https://github.com/andersj05/AutoHarness/actions/runs/34055422907/job/101546349030) passes native session mutations, restart, graceful shutdown, and uninstall through WebKitGTK's native WebDriver endpoint.
+The proxy transport had dropped responses; direct WebDriver removes that test-only failure boundary.
+Review of its captures exposed stale compositor pixels under Xvfb, so subsequent virtual-desktop captures explicitly use software rendering without compositing, wait for paint, and assert visible dialog bounds.
+This CI configuration is isolated to the test launcher and is recorded in the lifecycle report; hardware-composited X11 and Wayland review remains a release prerequisite.
 
 ## Remaining release blockers
 

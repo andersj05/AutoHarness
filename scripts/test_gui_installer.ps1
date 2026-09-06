@@ -29,8 +29,12 @@ try {
     if ((Get-FileHash -LiteralPath (Join-Path $installRoot 'autoharness.exe') -Algorithm SHA256).Hash -ne $original) {
         throw 'Reinstallation changed candidate executable bytes'
     }
+    $runtimePath = (Get-Content -LiteralPath (Join-Path $taskRoot 'target/gui-tools/edge/runtime-path.txt') -Raw).Trim()
+    python (Join-Path $PSScriptRoot 'gui_process_smoke.py') --binary (Join-Path $installRoot 'autoharness.exe') `
+        --browser-runtime $runtimePath --output $Output
+    if ($LASTEXITCODE -ne 0) { throw 'Installed native window startup or close failed' }
     python (Join-Path $PSScriptRoot 'gui_webdriver.py') --binary (Join-Path $installRoot 'autoharness.exe') `
-        --driver (Join-Path $taskRoot 'target/gui-tools/bin/tauri-driver.exe') `
+        --browser-runtime $runtimePath `
         --native-driver (Join-Path $taskRoot 'target/gui-tools/edge/msedgedriver.exe') --output $Output
     if ($LASTEXITCODE -ne 0) { throw 'Installed GUI lifecycle failed' }
 } finally {
