@@ -40,7 +40,7 @@ Run each row on Windows WebView2, macOS WKWebView, and Linux WebKitGTK with the 
 Record exact OS, architecture, webview version, package hash, outcome, and evidence reference.
 The Windows and Linux [native driver journey](../../scripts/gui_webdriver.py) automates the offline session subset against an installed binary without test IPC or fixture transport.
 Its native screenshots still require visual review.
-macOS package-structure CI is not WKWebView lifecycle evidence; its native journeys remain a required review on a macOS host.
+The macOS process smoke establishes native baseline acknowledgement, graceful shutdown, and idle replay; the full interactive WKWebView journeys remain a required review on a macOS host.
 
 | Gate | Required journey |
 | --- | --- |
@@ -89,7 +89,7 @@ Only the release maintainers can approve review evidence.
 ## TUI retirement
 
 Default cutover and terminal retirement are separate actions.
-The packaged `ah` executable, source TUI, projection adapter, and deliberate PTY checks remain available during the rollback window.
+The packaged `ah` executable, source TUI, terminal renderer adapter, and deliberate PTY checks remain available during the rollback window.
 
 - [ ] The approved rollback window has closed without unresolved GUI release regressions.
 - [ ] Record a distinct TUI-retirement approval for the candidate.
