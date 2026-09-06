@@ -42,5 +42,7 @@ try {
         if (Test-Path -LiteralPath (Join-Path $installRoot 'autoharness.exe')) { throw 'Uninstall retained the GUI executable' }
     }
 }
-@{ schema_version = 1; status = 'passed'; scenarios = @('install', 'same-version-reinstall', 'uninstall') } |
+@{ schema_version = 1; status = 'passed'; scenarios = @('install', 'same-version-reinstall', 'uninstall');
+    installer_sha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant();
+    binary_sha256 = $original.ToLowerInvariant() } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Output 'installer.json') -Encoding utf8

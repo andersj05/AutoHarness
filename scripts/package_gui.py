@@ -121,7 +121,8 @@ def main():
                 "artifacts": []}
     executable = target / profile / ("autoharness.exe" if platform == "win32" else "autoharness")
     with executable.open("rb") as source:
-        manifest["binary_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
+        # Bundlers may patch or sign the installed executable independently.
+        manifest["build_binary_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
     for source in files:
         destination = output / source.name
         shutil.copy2(source, destination)

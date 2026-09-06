@@ -91,6 +91,7 @@ class Driver:
                 self.wait(lambda: self.script("return getComputedStyle(document.querySelector('.sessionDetailPane')).display !== 'none'"))
                 self.click("Rename")
                 self.element("//input[@id=//label[normalize-space(.)='New title']/@for]")
+                self.wait(lambda: self.script("return !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
                 (output / "sessions-compact-rename.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
                 self.click("Cancel")
 
