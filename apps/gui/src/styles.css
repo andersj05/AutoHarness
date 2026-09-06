@@ -697,8 +697,9 @@
     .appRail .routeButton { justify-content: center; padding-inline: 8px; }
     .conversationColumn { padding-inline: 30px; }
     .routeWorkspace { padding-inline: 26px; }
-    .sessionsWorkspaceGrid { grid-template-columns: minmax(0, 1fr); }
-    .sessionDetailPane { display: none; }
+    .sessionRouteWorkspace { overflow: auto; }
+    .sessionsWorkspaceGrid { flex: none; grid-template-columns: minmax(0, 1fr); }
+    .sessionDetailPane { min-height: 0; }
     .providersWorkspaceGrid { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); }
     .providerDefaultsForm { grid-template-columns: 1fr 1fr; }
     .providerDefaultsForm .dsButton { grid-column: 1 / -1; justify-self: end; }

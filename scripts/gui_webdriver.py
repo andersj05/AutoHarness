@@ -85,6 +85,12 @@ class Driver:
             self.wait(lambda: self.script("return document.documentElement.scrollWidth <= innerWidth"))
             time.sleep(0.2)
             (output / f"{route}-{name}.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
+            if route == "sessions" and name == "compact":
+                self.wait(lambda: self.script("return getComputedStyle(document.querySelector('.sessionDetailPane')).display !== 'none'"))
+                self.click("Rename")
+                self.element("//input[@id=//label[normalize-space(.)='New title']/@for]")
+                (output / "sessions-compact-rename.png").write_bytes(base64.b64decode(self.request("GET", "/screenshot")))
+                self.click("Cancel")
 
     def close(self):
         if self.session:

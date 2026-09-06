@@ -138,7 +138,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
           {visibleSessions.length > 0 ? (
             <VirtualList
               ariaLabel="All sessions"
-              height={listHeight}
+              height={Math.min(listHeight, visibleSessions.length * 68)}
               itemKey={(session) => session.id}
               items={visibleSessions}
               renderItem={(session) => (
