@@ -71,8 +71,17 @@ class Driver:
 
     def fill(self, label, text):
         element = self.element(f"//input[@id=//label[normalize-space(.)='{label}']/@for]")
-        self.request("POST", f"/element/{element}/clear", {})
-        self.request("POST", f"/element/{element}/value", {"text": text})
+        self.wait(lambda: self.script("return !document.getAnimations().some(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))"))
+        self.request("POST", f"/element/{element}/click", {})
+        # Use the same keyboard events as a user so controlled React inputs see
+        # selection and deletion consistently in WebKitGTK and WebView2.
+        actions = [{"type": "keyDown", "value": "\ue009"}, {"type": "keyDown", "value": "a"},
+                   {"type": "keyUp", "value": "a"}, {"type": "keyUp", "value": "\ue009"},
+                   {"type": "keyDown", "value": "\ue003"}, {"type": "keyUp", "value": "\ue003"}]
+        actions.extend(action for character in text for action in
+                       ({"type": "keyDown", "value": character}, {"type": "keyUp", "value": character}))
+        self.request("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": actions}]})
+        self.wait(lambda: self.request("GET", f"/element/{element}/property/value") == text)
 
     def title(self, title):
         self.wait(lambda: self.script("return document.querySelector('.sessionDetailPane h2')?.textContent === " + json.dumps(title)))
@@ -200,7 +209,7 @@ def main():
             if driver.session:
                 try:
                     (args.output / "failure.png").write_bytes(base64.b64decode(driver.request("GET", "/screenshot")))
-                except (HTTPError, URLError, RuntimeError):
+                except (HTTPError, URLError, RuntimeError, ConnectionError, TimeoutError):
                     pass
             raise
         finally:

@@ -38,7 +38,7 @@ jobs:
         run: >-
           sudo apt-get update && sudo apt-get install -y
           libayatana-appindicator3-dev libdbus-1-dev librsvg2-dev libssl-dev
-          libwebkit2gtk-4.1-dev libxdo-dev pkg-config webkit2gtk-driver xvfb
+          libwebkit2gtk-4.1-dev libxdo-dev pkg-config webkit2gtk-driver xvfb openbox
       - name: Install frontend
         run: pnpm install --frozen-lockfile
       - name: Validate release tooling
@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y ./target/release/bundle/deb/*.deb
-          xvfb-run --auto-servernum --server-args='-screen 0 1920x1200x24' python scripts/gui_webdriver.py --binary /usr/bin/autoharness --driver target/gui-tools/bin/tauri-driver --native-driver /usr/bin/WebKitWebDriver --output target/gui-evidence/linux
+          xvfb-run --auto-servernum --server-args='-screen 0 1920x1200x24' bash scripts/gui_linux_webdriver.sh
       - name: Linux uninstall
         if: always() && runner.os == 'Linux'
         run: |
