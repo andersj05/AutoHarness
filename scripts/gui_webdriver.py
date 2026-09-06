@@ -99,7 +99,13 @@ class Driver:
     def clean_close(self, data):
         log = data / "autoharness.log"
         before = log.read_text(encoding="utf-8").count("app_stopped")
-        self.request("DELETE", "/window")
+        # WebDriver's close-window endpoint destroys the webview instead of
+        # delivering the native window-manager close request on Windows.
+        self.request("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
+            {"type": "keyDown", "value": "\ue009"}, {"type": "keyDown", "value": "k"},
+            {"type": "keyUp", "value": "k"}, {"type": "keyUp", "value": "\ue009"}]}]})
+        element = self.element("//button[@role='menuitem'][.//strong[text()='Quit AutoHarness']]")
+        self.request("POST", f"/element/{element}/click", {})
         self.wait(lambda: log.read_text(encoding="utf-8").count("app_stopped") > before)
         self.close()
 

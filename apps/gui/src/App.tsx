@@ -39,6 +39,7 @@ function useMediaQuery(query: string): boolean {
 
 export function App({ store }: AppProps) {
   const client = useClientStore(store);
+  const [closing, setClosing] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -159,6 +160,10 @@ export function App({ store }: AppProps) {
     }
   }, [client.projection?.settings.zoomPercent.value, compactInspectorViewport]);
 
+  if (closing) {
+    return <main aria-busy="true" className="bootSurface"><h1>Closing AutoHarness</h1><p>The local runtime is settling work and closing durable storage.</p></main>;
+  }
+
   if (client.lifecycle === "failed") {
     return (
       <main className="fatalSurface">
@@ -223,10 +228,14 @@ export function App({ store }: AppProps) {
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
     { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
+    ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Settle runtime work and close the application", keywords: "exit shutdown close" }] : []),
   ];
 
   const runCommand = (command: string) => {
-    if (command === "new-session") {
+    if (command === "quit") {
+      setClosing(true);
+      void store.close();
+    } else if (command === "new-session") {
       void store.dispatch({ type: "create_session" });
       setRoute("chat");
     } else if (command === "choose-model") {

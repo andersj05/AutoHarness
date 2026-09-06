@@ -12,7 +12,7 @@ if (-not $installRoot.StartsWith($taskRoot + [IO.Path]::DirectorySeparatorChar))
 $existing = Get-ItemProperty 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*' -ErrorAction SilentlyContinue |
     Where-Object DisplayName -EQ 'AutoHarness'
 foreach ($entry in $existing) {
-    if ($entry.InstallLocation.TrimEnd('\') -ne $installRoot.TrimEnd('\')) {
+    if ($entry.InstallLocation.Trim('"').TrimEnd('\') -ne $installRoot.TrimEnd('\')) {
         throw 'An existing AutoHarness installation must not be replaced by this test'
     }
 }

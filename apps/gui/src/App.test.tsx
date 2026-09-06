@@ -215,6 +215,28 @@ afterEach(async () => {
 });
 
 describe("AutoHarness GUI", () => {
+  it("offers native shutdown through the palette and stops accepting commands", async () => {
+    const snapshot = createFixtureSnapshot("ready");
+    snapshot.runtimeMode = "native";
+    const transport = new ManualProjectionTransport(snapshot);
+    const close = vi.spyOn(transport, "close");
+    const { user, store } = renderTransport(transport);
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.keyboard("{Control>}k{/Control}");
+    await user.click(screen.getByRole("menuitem", { name: /Quit AutoHarness/ }));
+    expect(await screen.findByRole("heading", { name: "Closing AutoHarness" })).toBeInTheDocument();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(await store.dispatch({ type: "create_session" })).toBeUndefined();
+    expect(transport.commands).toHaveLength(0);
+  });
+
+  it("does not offer application shutdown in browser fixtures", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("menuitem", { name: /Quit AutoHarness/ })).not.toBeInTheDocument();
+  });
+
   it("renders the fixture shell with semantic navigation and an open conversation flow", async () => {
     renderScenario("ready");
     expect(await screen.findByRole("heading", { name: "Design the GUI migration" })).toBeInTheDocument();
