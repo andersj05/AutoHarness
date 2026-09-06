@@ -244,7 +244,8 @@ They do not gate ordinary GUI migration pull requests.
 ## Candidate packaging
 
 The opt-in `gui-package` feature embeds production frontend assets and makes the packaged `autoharness` executable open the GUI without arguments.
-The `ah` executable and ordinary source builds retain the terminal default, and explicit client switches remain available.
+The `ah` executable and ordinary source builds retain the terminal default.
+On Windows, use `ah` for terminal operation because the packaged desktop executable has the native window subsystem rather than a console.
 The packaging overlay is separate from the inactive preview bundle configuration.
 Candidate behavior does not authorize the repository-wide default cutover.
 The [update policy](../release/GUI_UPDATE_POLICY.md) owns distribution and rollback rules, and the [release checklist](../release/GUI_RELEASE_CHECKLIST.md) owns promotion evidence.

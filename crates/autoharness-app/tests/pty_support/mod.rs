@@ -368,7 +368,13 @@ fn spawn_pty(environment: &ScenarioEnvironment, rows: u16, columns: u16) -> Spaw
     // Drain output before process creation. Synchronous ConPTY startup can
     // otherwise deadlock while the pseudo-console establishes its pipes.
     let output = OutputFeed::spawn(reader);
-    let executable = env!("CARGO_BIN_EXE_autoharness");
+    // Installer builds give the GUI executable the native window subsystem.
+    // Keep deliberate terminal reference checks on the console companion.
+    let executable = if cfg!(feature = "gui-package") {
+        env!("CARGO_BIN_EXE_ah")
+    } else {
+        env!("CARGO_BIN_EXE_autoharness")
+    };
     let child = pair
         .slave
         .spawn_command(environment.command(Path::new(executable)))

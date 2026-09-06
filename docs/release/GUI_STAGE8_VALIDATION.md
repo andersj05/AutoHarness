@@ -25,6 +25,7 @@ Session actions remain reachable in compact windows, and a pending export cannot
 
 Frontend type checking, the 116-test GUI suite, production frontend build, and the 12-test Python tooling suite pass locally.
 Workspace formatting, strict all-target and all-feature Clippy, and the complete locked all-target and all-feature Rust workspace suite pass locally.
+The deliberate Windows first-run PTY journey also passes with all features, using the packaged-mode console companion to verify terminal rendering, Settings navigation, and clean restoration on exit.
 The tooling tests cover tampered evidence, candidate mismatch, unsigned packages, signing prerequisites, retirement boundaries, transient driver readiness, and database replay digest behavior.
 
 The Windows installed debug candidate at `bedef639f3bfde2be419d46150605114c0195f6d` passed installation, same-version reinstallation, native launch, rename, archive, restore, export, exact-title deletion, two restart boundaries, clean shutdown, and uninstallation.

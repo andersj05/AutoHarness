@@ -51,6 +51,7 @@ An installer must not erase user data, exports, or vault credentials during upgr
 ## Rollback
 
 Keep the TUI compatibility path and the prior signed package for the entire maintainer-approved rollback window.
+Use the packaged `ah` executable for terminal operation, especially on Windows where the desktop executable does not attach a console.
 Record the window's closing date in the candidate evidence; elapsed time alone never authorizes retirement.
 If the candidate fails, stop all clients, preserve its data directory for diagnosis, restore the untouched cold backup to a separate location, and launch the previous signed version against that backup.
 Do not attempt a database downgrade or overwrite the only copy of migrated data.
