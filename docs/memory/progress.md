@@ -31,7 +31,7 @@
 
 - [Stage 8 GUI validation](../release/GUI_STAGE8_VALIDATION.md) records unsigned platform package tooling, installed Windows session lifecycle and clean shutdown, macOS installed native startup and idle replay, release and rollback policy, and fail-closed candidate evidence checks.
 - Source defaults and terminal compatibility remain intact pending release approval and the separate retirement gate.
-- Stage 8 passes 116 GUI tests, 12 release-tooling tests, frontend type checking and build, workspace formatting, strict Clippy, and the complete locked Rust workspace suite locally.
+- Stage 8 passes 116 GUI tests, 13 release-tooling tests, frontend type checking and build, workspace formatting, strict Clippy, and the complete locked Rust workspace suite locally.
 
 - [Stage 7 GUI validation](../release/GUI_STAGE7_VALIDATION.md) covers authoritative Memory search, filters, bounded paging, import, deliberate proposal review, correction, retraction, export, identity-confirmed deletion, provenance, evidence, relations, and admissions.
 - Serialized GUI commands and ordered native frames exercise the real coordinator and SQLite across two restart boundaries with replay-equivalent projections, distinct approval revisions, stale approval rejection, and durable content erasure.

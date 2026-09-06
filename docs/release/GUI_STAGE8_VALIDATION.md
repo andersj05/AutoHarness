@@ -23,7 +23,7 @@ Session actions remain reachable in compact windows, and a pending export cannot
 
 ## Automated and native evidence
 
-Frontend type checking, the 116-test GUI suite, production frontend build, and the 12-test Python tooling suite pass locally.
+Frontend type checking, the 116-test GUI suite, production frontend build, and the 13-test Python tooling suite pass locally.
 Workspace formatting, strict all-target and all-feature Clippy, and the complete locked all-target and all-feature Rust workspace suite pass locally.
 The deliberate Windows first-run PTY journey also passes with all features, using the packaged-mode console companion to verify terminal rendering, Settings navigation, and clean restoration on exit.
 The tooling tests cover tampered evidence, candidate mismatch, unsigned packages, signing prerequisites, retirement boundaries, transient driver readiness, and database replay digest behavior.
@@ -47,6 +47,9 @@ The [Linux installed journey](https://github.com/andersj05/AutoHarness/actions/r
 The proxy transport had dropped responses; direct WebDriver removes that test-only failure boundary.
 Review of its captures exposed stale compositor pixels under Xvfb, so subsequent virtual-desktop captures explicitly use software rendering without compositing, wait for paint, and assert visible dialog bounds.
 This CI configuration is isolated to the test launcher and is recorded in the lifecycle report; hardware-composited X11 and Wayland review remains a release prerequisite.
+The [software-rendered Linux run](https://github.com/andersj05/AutoHarness/actions/runs/34056492325/job/101549241641) passes the full journey and dialog-bound assertions; assistant review verifies corrected compact dialog and wide route captures.
+The same run's [Windows installed process smoke](https://github.com/andersj05/AutoHarness/actions/runs/34056492325/job/101549241773) passes two native baselines, OS-window closes, and replay, while its separate EdgeDriver attachment failed.
+The driver now receives the same explicit profile and runtime directories as the application, with a focused regression test and content-free failure diagnostics.
 
 ## Remaining release blockers
 
