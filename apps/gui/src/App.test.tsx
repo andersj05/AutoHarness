@@ -811,7 +811,7 @@ describe("AutoHarness GUI", () => {
   });
 
   it.each([
-    ["offline", "Fixture provider offline"],
+    ["offline", "You’re offline"],
     ["empty", "No compatible models"],
     ["failed", "Response interrupted"],
   ] as const)("exposes a concrete recovery action for the %s fixture", async (scenario, label) => {

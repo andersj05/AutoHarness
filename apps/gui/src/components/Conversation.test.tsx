@@ -145,10 +145,12 @@ describe("Conversation tail following", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Copy transcript" }));
+    await user.click(screen.getByRole("button", { name: "Session actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy transcript" }));
     expect(writeText).toHaveBeenCalledWith("AutoHarness:\nCopy this exact response");
     expect(screen.getByText("Transcript copied to the clipboard.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Export transcript" }));
+    await user.click(screen.getByRole("button", { name: "Session actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export transcript" }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,7 +7,6 @@ interface ComposerProps {
   draft: string;
   disabledReason?: string;
   model?: ModelDescriptor;
-  runtimeMode: "native" | "fixture";
   submissionBehavior: ComposerSubmitBehavior;
   onCancel: (attemptId: string) => void;
   onDraftChange: Dispatch<SetStateAction<string>>;
@@ -15,7 +14,7 @@ interface ComposerProps {
   onSubmit: (prompt: string) => Promise<CommandOutcome>;
 }
 
-export function Composer({ attempt, draft, disabledReason, model, runtimeMode, submissionBehavior, onCancel, onDraftChange, onOpenModelPicker, onSubmit }: ComposerProps) {
+export function Composer({ attempt, draft, disabledReason, model, submissionBehavior, onCancel, onDraftChange, onOpenModelPicker, onSubmit }: ComposerProps) {
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isStreaming = attempt.kind === "streaming" || attempt.kind === "cancelling";
@@ -45,10 +44,8 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, s
 
   return (
     <div className="composerRegion">
-      <div className="composerGlow" />
       <div className="composer" data-streaming={isStreaming}>
         <label className="composerInput">
-          <span className="promptGlyph" aria-hidden="true">›</span>
           <span className="srOnly">Message AutoHarness</span>
           <textarea
             aria-describedby={disabledReason ? "composer-disabled-reason" : "composer-help"}
@@ -65,7 +62,7 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, s
                 void submit();
               }
             }}
-            placeholder={isStreaming ? "Response in progress" : "Ask AutoHarness anything"}
+            placeholder={isStreaming ? "Write your next message…" : "Message AutoHarness…"}
             ref={textareaRef}
             rows={1}
             spellCheck
@@ -79,9 +76,6 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, s
               <span>{model?.displayName ?? "Choose model"}</span>
               <span className="tinyChevron">⌄</span>
             </button>
-            {model?.supportsReasoning === true ? (
-              <span className="reasoningPill"><Icon name="spark" size={14} /> reasoning: auto</span>
-            ) : null}
           </div>
           {isStreaming && "id" in attempt ? (
             <button
@@ -106,7 +100,6 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, s
         <span id={disabledReason ? "composer-disabled-reason" : "composer-help"}>
           {disabledReason ?? (submissionBehavior === "enter" ? "Enter to send, Shift Enter for a new line" : "Ctrl/Cmd + S to send, Enter for a new line")}
         </span>
-        <span className="composerSecurity"><Icon name="shield" size={12} /> {runtimeMode === "fixture" ? "simulated, not persisted" : "local and replayable"}</span>
       </div>
     </div>
   );

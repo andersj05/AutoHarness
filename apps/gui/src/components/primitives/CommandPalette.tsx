@@ -29,12 +29,12 @@ export function CommandPalette({ items, onClose, onSelect }: CommandPaletteProps
   };
 
   return (
-    <Dialog description="Search every available client action." eyebrow="Command palette" labelledBy="command-palette-title" onClose={onClose} title="Go anywhere">
+    <Dialog labelledBy="command-palette-title" onClose={onClose} title="Go anywhere">
       <div className="dsCommandPalette">
         <label className="dsCommandSearch">
           <Icon name="search" size={17} />
           <span className="srOnly">Search commands</span>
-          <input aria-label="Search commands" autoComplete="off" autoFocus data-initial-focus onChange={(event) => setQuery(event.target.value)} onKeyDown={focusFirstAction} placeholder="Type a command" type="search" value={query} />
+          <input aria-label="Search commands" autoComplete="off" autoFocus data-initial-focus onChange={(event) => setQuery(event.target.value)} onKeyDown={focusFirstAction} placeholder="Search sessions and commands…" type="search" value={query} />
           <kbd>Esc</kbd>
         </label>
         <Menu

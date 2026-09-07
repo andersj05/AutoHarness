@@ -16,6 +16,7 @@ export type IconName =
   | "memory"
   | "menu"
   | "model"
+  | "more"
   | "new"
   | "panel-left"
   | "panel-right"
@@ -47,6 +48,7 @@ const paths: Record<IconName, JSX.Element> = {
   memory: <path d="M9 4V2m6 2V2M9 22v-2m6 2v-2M4 9H2m2 6H2m20-6h-2m2 6h-2M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm3 5h6v6H9z" />,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   model: <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 0v9m8-4.5-8 4.5-8-4.5M12 12v9" />,
+  more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
   new: <path d="M12 5v14M5 12h14" />,
   "panel-left": <path d="M4 4h16v16H4zM9 4v16" />,
   "panel-right": <path d="M4 4h16v16H4zM15 4v16" />,

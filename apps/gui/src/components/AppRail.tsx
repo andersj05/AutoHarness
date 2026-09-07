@@ -202,7 +202,7 @@ export function AppRail({
           <Icon name="settings" />
           <span>Settings</span>
         </button>
-        {runtimeMode === "fixture" ? <p className="railPreview" title="Browser fixture - simulated state only">Preview · changes aren't saved</p> : null}
+        {runtimeMode === "fixture" ? <p className="railPreview" title="Browser fixture - simulated state only">Preview · changes aren't saved<span className="srOnly">Browser fixture - simulated state only</span></p> : null}
       </div>
       {!collapsed && !mobileViewport ? (
         <button

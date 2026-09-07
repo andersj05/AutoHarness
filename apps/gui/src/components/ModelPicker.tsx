@@ -32,8 +32,7 @@ export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSel
 
   return (
     <Dialog
-      description="Choose the model for this session. Selection becomes durable only after the host commits it."
-      eyebrow="Model catalog"
+      description="Choose the model for this session."
       labelledBy="model-picker-title"
       onClose={onClose}
       title="Choose a model"

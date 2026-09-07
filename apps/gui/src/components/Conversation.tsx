@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   ActiveSessionProjection,
   CatalogProjection,
@@ -14,6 +14,8 @@ import type { OptimisticPrompt } from "../store/clientStore";
 import { Composer } from "./Composer";
 import { Icon } from "./Icon";
 import { Button, Callout, ToolCard } from "./primitives";
+import { MessageContent } from "./MessageContent";
+import { ActionMenu } from "./primitives/ActionMenu";
 import { VirtualTranscript } from "./VirtualTranscript";
 
 interface ConversationProps {
@@ -38,23 +40,6 @@ interface ConversationProps {
   onRetry: (attemptId: string) => void;
   onExport: () => Promise<CommandOutcome>;
   onSubmit: (prompt: string) => Promise<CommandOutcome>;
-}
-
-function highlightedText(value: string, query: string): ReactNode {
-  if (!query) return value;
-  const lower = value.toLocaleLowerCase();
-  const needle = query.toLocaleLowerCase();
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  let match = lower.indexOf(needle);
-  while (match >= 0) {
-    if (match > cursor) parts.push(value.slice(cursor, match));
-    parts.push(<mark key={`${match}-${cursor}`}>{value.slice(match, match + query.length)}</mark>);
-    cursor = match + query.length;
-    match = lower.indexOf(needle, cursor);
-  }
-  if (cursor < value.length) parts.push(value.slice(cursor));
-  return parts;
 }
 
 function transcriptSearchText(item: TranscriptItem): string {
@@ -88,6 +73,8 @@ function messageTimestamp(date: Date, style: TimestampStyle): string {
 }
 
 function MessageTurn({ highlight, message, optimistic = false, timestampStyle }: { highlight?: string; message: TextMessage; optimistic?: boolean; timestampStyle: TimestampStyle }) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const timestamp = message.createdAt ? new Date(message.createdAt) : undefined;
   const hasValidTimestamp = timestamp && Number.isFinite(timestamp.getTime());
   return (
@@ -104,18 +91,25 @@ function MessageTurn({ highlight, message, optimistic = false, timestampStyle }:
             </time>
           ) : null}
         </div>
-        {message.role === "agent" ? <span className="agentLabel">agent</span> : optimistic ? <span className="optimisticLabel">sending</span> : null}
+        {optimistic ? <span className="optimisticLabel">Sending…</span> : null}
       </header>
       <div className="messageContent">
-        {message.content.split("\n").map((line, index) =>
-          line.length > 0 ? <p key={`${message.id}-${index}`}>{highlightedText(line, highlight ?? "")}</p> : <span aria-hidden="true" className="messageSpacer" key={`${message.id}-${index}`} />,
-        )}
+        <MessageContent text={message.content} highlight={highlight} plain={message.role === "user"} />
         {message.streaming ? (
           <span aria-label="Response streaming" className="streamTrace" role="status">
             <i /><i /><i /><i />
           </span>
         ) : null}
       </div>
+      {message.role === "agent" && !message.streaming ? <div className="messageActions">
+        <button aria-label="Copy response" className="quietIconButton" title="Copy response" onClick={() => {
+          void (async () => {
+            try { await navigator.clipboard.writeText(message.content); setCopied(true); setCopyFailed(false); }
+            catch { setCopyFailed(true); }
+          })();
+        }} type="button"><Icon name={copied ? "check" : "copy"} size={14} /></button>
+        <span role="status">{copyFailed ? "Could not copy" : copied ? "Copied" : ""}</span>
+      </div> : null}
     </article>
   );
 }
@@ -141,7 +135,6 @@ export function Conversation({
   onRetry,
   onExport,
   onSubmit,
-  runtimeMode,
 }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
@@ -152,6 +145,7 @@ export function Conversation({
   const [matchCursor, setMatchCursor] = useState(0);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [exporting, setExporting] = useState(false);
+  const [awayFromTail, setAwayFromTail] = useState(false);
   const offline = connection.kind === "offline";
   const credentialRequired = catalog.status === "credential_required" || connection.kind === "credential_required";
   const attempt = session?.attempt ?? { kind: "idle" as const };
@@ -189,6 +183,7 @@ export function Conversation({
     setSearchQuery("");
     setMatchCursor(0);
     setCopyState("idle");
+    setAwayFromTail(false);
   }, [session?.id]);
 
   useEffect(() => {
@@ -258,39 +253,23 @@ export function Conversation({
             <Icon name="menu" />
           </button>
           <div>
-            <div className="breadcrumb"><span>workspace</span><i>/</i><span>chat</span></div>
             <h1>{session?.title ?? "Chat"}</h1>
           </div>
         </div>
         <div className="headerActions">
-          {runtimeMode === "fixture" ? (
-            <span className="fixtureBanner" role="status" title="Browser fixture - simulated state only">
-              <Icon name="warning" size={13} />
-              <span aria-hidden="true">Fixture</span>
-              <span className="srOnly">Browser fixture - simulated state only</span>
-            </span>
-          ) : null}
-          <span className="connectionChip" data-state={connection.kind}>
-            <span />
-            {connection.kind === "online" ? "connected" : connection.kind === "connecting" ? "connecting" : connection.kind === "credential_required" ? "credential" : "offline"}
-          </span>
-          <button aria-label={`Change model, current ${model?.displayName ?? "none"}`} className="headerModelButton" onClick={onOpenModelPicker} type="button">
-            <Icon name="model" size={15} />
-            <span>{model?.displayName ?? "Select model"}</span>
-            <span className="tinyChevron">⌄</span>
-          </button>
           <button aria-label="Search transcript" className="iconButton" onClick={() => { setSearchOpen(true); queueMicrotask(() => searchInputRef.current?.focus()); }} title="Search transcript (Ctrl F)" type="button">
             <Icon name="search" />
-          </button>
-          <button aria-label="Copy transcript" className="iconButton" onClick={() => void copyTranscript()} title="Copy transcript" type="button">
-            <Icon name={copyState === "copied" ? "check" : "copy"} />
-          </button>
-          <button aria-label="Export transcript" className="iconButton" disabled={exporting} onClick={() => { setExporting(true); void onExport().finally(() => setExporting(false)); }} title="Export transcript as Markdown" type="button">
-            <Icon name="download" />
           </button>
           <button aria-label="Open context inspector" className="iconButton" onClick={onOpenInspector} type="button">
             <Icon name="panel-right" />
           </button>
+          <ActionMenu label="Session actions" blocked={interactionBlocked} items={[
+            { id: "copy", label: "Copy transcript", icon: "copy", disabled: transcript.length === 0 },
+            { id: "export", label: exporting ? "Exporting…" : "Export transcript", icon: "download", disabled: exporting || transcript.length === 0 },
+          ]} onAction={(id) => {
+            if (id === "copy") void copyTranscript();
+            else { setExporting(true); void onExport().finally(() => setExporting(false)); }
+          }} />
         </div>
       </header>
 
@@ -326,6 +305,7 @@ export function Conversation({
         onScroll={(event) => {
           const container = event.currentTarget;
           followTailRef.current = container.scrollHeight - container.scrollTop - container.clientHeight <= 96;
+          setAwayFromTail(!followTailRef.current);
         }}
         ref={scrollRef}
       >
@@ -336,13 +316,13 @@ export function Conversation({
               detail={connection.reason}
               icon="warning"
               intent="warning"
-              title={runtimeMode === "fixture" ? "Fixture provider offline" : "Working offline from durable replay"}
+              title="You’re offline"
             />
           ) : null}
           {credentialRequired ? (
             <Callout
               action={<Button onClick={onOpenCredential}>Enter credential</Button>}
-              detail={connection.kind === "credential_required" ? connection.reason : "The active provider needs a credential. It will cross a dedicated one-way secret boundary."}
+              detail={connection.kind === "credential_required" ? connection.reason : "Add an API key to connect your provider."}
               icon="warning"
               intent="warning"
               title="Connect the active provider"
@@ -388,10 +368,7 @@ export function Conversation({
           ) : (
             <section aria-label="Conversation transcript" className="transcript" tabIndex={-1}>
               <div className="emptyConversation">
-                <span className="emptyConversationIcon"><Icon name="spark" size={25} /></span>
-                <p className="eyebrow">{runtimeMode === "fixture" ? "Fixture conversation" : "New durable session"}</p>
-                <h2>What should we build?</h2>
-                <p>{runtimeMode === "fixture" ? "Prompts and responses are simulated for visual review and are not persisted." : "Prompts and responses become replayable events. Tools still require exact capability authority."}</p>
+                <h2>What would you like to work on?</h2>
               </div>
             </section>
           )}
@@ -412,6 +389,11 @@ export function Conversation({
             </section>
           ) : null}
 
+          {awayFromTail ? <button className="jumpToLatest" onClick={() => {
+            followTailRef.current = true;
+            if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            setAwayFromTail(false);
+          }} type="button"><Icon name="arrow-up" size={14} />Jump to latest</button> : null}
           <Composer
             attempt={attempt}
             draft={draft}
@@ -422,7 +404,6 @@ export function Conversation({
             onDraftChange={onDraftChange}
             onOpenModelPicker={onOpenModelPicker}
             onSubmit={onSubmit}
-            runtimeMode={runtimeMode}
             submissionBehavior={submissionBehavior}
           />
         </div>
