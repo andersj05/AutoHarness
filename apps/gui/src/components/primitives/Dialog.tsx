@@ -11,6 +11,7 @@ export interface DialogProps extends PropsWithChildren {
   onClose?: () => void;
   labelledBy?: string;
   authority?: "ordinary" | "permission";
+  variant?: "standard" | "search";
 }
 
 const FOCUSABLE = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
@@ -25,6 +26,7 @@ export function Dialog({
   children,
   labelledBy = "dialog-title",
   authority = "ordinary",
+  variant = "standard",
 }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -72,12 +74,13 @@ export function Dialog({
         aria-modal="true"
         className="dialogPanel"
         data-authority={authority}
+        data-variant={variant}
         ref={dialogRef}
         role="dialog"
       >
         <div className="dialogGlow" />
         <header className="dialogHeader">
-          <div>
+          <div className={variant === "search" ? "srOnly" : undefined}>
             {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
             <h2 id={labelledBy}>{title}</h2>
             {description ? <p id={`${labelledBy}-description`}>{description}</p> : null}

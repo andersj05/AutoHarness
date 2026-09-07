@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "../Icon";
 import { Dialog } from "./Dialog";
 import { Menu, type MenuItem } from "./Menu";
@@ -16,26 +16,33 @@ export interface CommandPaletteProps {
 
 export function CommandPalette({ items, onClose, onSelect }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
+  const root = useRef<HTMLDivElement>(null);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return items;
-    return items.filter((item) => `${item.label} ${item.description ?? ""} ${item.group ?? ""} ${item.keywords ?? ""}`.toLocaleLowerCase().includes(needle));
+    const matches = items.filter((item) => `${item.label} ${item.description ?? ""} ${item.group ?? ""} ${item.keywords ?? ""}`.toLocaleLowerCase().includes(needle));
+    const rank = (item: CommandItem) => item.label.toLocaleLowerCase().startsWith(needle) ? 0 : item.label.toLocaleLowerCase().includes(needle) ? 1 : 2;
+    return matches.sort((a, b) => rank(a) - rank(b));
   }, [items, query]);
 
   const focusFirstAction = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "ArrowDown") return;
-    event.preventDefault();
-    document.querySelector<HTMLButtonElement>(".dsCommandPalette .dsMenuItem:not(:disabled)")?.focus();
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      root.current?.querySelector<HTMLButtonElement>(".dsMenuItem:not(:disabled)")?.focus();
+    } else if (event.key === "Enter" && query.trim()) {
+      const first = filtered.find((item) => !item.disabled);
+      if (first) { event.preventDefault(); onSelect(first.id); onClose(); }
+    }
   };
 
   return (
-    <Dialog labelledBy="command-palette-title" onClose={onClose} title="Go anywhere">
-      <div className="dsCommandPalette">
+    <Dialog labelledBy="command-palette-title" onClose={onClose} title="Search" variant="search">
+      <div className="dsCommandPalette" ref={root}>
         <label className="dsCommandSearch">
           <Icon name="search" size={17} />
           <span className="srOnly">Search commands</span>
           <input aria-label="Search commands" autoComplete="off" autoFocus data-initial-focus onChange={(event) => setQuery(event.target.value)} onKeyDown={focusFirstAction} placeholder="Search sessions and commands…" type="search" value={query} />
-          <kbd>Esc</kbd>
         </label>
         <Menu
           ariaLabel="Commands"
@@ -47,6 +54,7 @@ export function CommandPalette({ items, onClose, onSelect }: CommandPaletteProps
           }}
           onEscape={onClose}
         />
+        <div aria-hidden="true" className="commandFooter"><span><kbd>↑ ↓</kbd> Navigate</span><span><kbd>Enter</kbd> Open</span><span><kbd>Esc</kbd> Close</span></div>
       </div>
     </Dialog>
   );

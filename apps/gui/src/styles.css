@@ -1116,3 +1116,17 @@
 .codeToolbar button:hover { color: var(--text); background: var(--surface-hover); }
 .messageContent .messageCodeBlock pre { margin: 0; padding: 16px; border: 0; border-radius: 0; background: transparent; }
 .codeCopyStatus:not(:empty) { display: block; padding: 0 16px 12px; color: var(--text-muted); font-size: 12px; }
+
+.dialogPanel[data-variant="search"] { width: min(100%, 620px); }
+.dialogPanel[data-variant="search"] .dialogHeader { position: absolute; z-index: 2; top: 12px; right: 10px; padding: 0; border: 0; }
+.dialogPanel[data-variant="search"] .dialogBody { padding: 0; }
+.dsCommandPalette { gap: 0; }
+.dsCommandPalette .dsCommandSearch { min-height: 60px; padding: 16px 58px 16px 20px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--base); box-shadow: none; }
+.dsCommandSearch input { font-size: 15px; border-radius: 3px; outline-offset: 4px; }
+.dsCommandPalette .dsMenu { padding: 8px; gap: 2px; }
+.dsCommandPalette .dsMenuItem { min-height: 40px; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; padding: 8px 10px; border-radius: 6px; }
+.dsCommandPalette .dsMenuCopy strong { font-size: 14px; font-weight: 500; }
+.dsCommandPalette .dsMenuIcon { color: var(--text-muted); }
+.commandFooter { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 10px 18px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 11px; }
+.commandFooter span { display: inline-flex; align-items: center; gap: 6px; }
+.commandFooter kbd { font-size: 11px; }

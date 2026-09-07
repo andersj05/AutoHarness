@@ -737,8 +737,8 @@ export class FixtureTransport implements ClientTransport {
             id: `${sessionId}-message`,
             role: "agent",
             content: summary.messageCount === undefined
-              ? "Durable replay restored this session."
-              : `Durable replay restored ${summary.messageCount} messages for this session.`,
+              ? "This conversation is simulated in the browser preview."
+              : `This is a preview of a session with ${summary.messageCount} messages. Its history is simulated in the browser.`,
             createdAt: summary.updatedAt,
           },
         ],

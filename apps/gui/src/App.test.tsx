@@ -286,7 +286,7 @@ describe("AutoHarness GUI", () => {
     const { transport, user } = renderScenario("ready");
     await screen.findByRole("heading", { name: "Design the GUI migration" });
     await user.keyboard("{Control>}k{/Control}");
-    expect(screen.getByRole("dialog", { name: "Go anywhere" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Search" })).toBeInTheDocument();
     expect(document.querySelector(".appShell")).toHaveAttribute("inert");
     await user.click(screen.getByRole("menuitem", { name: /Open settings/ }));
 
@@ -480,7 +480,7 @@ describe("AutoHarness GUI", () => {
     await user.keyboard("{Control>}n{/Control}");
     expect(transport.commands.some((command) => command.type === "create_session")).toBe(false);
     await user.keyboard("{Control>}k{/Control}");
-    expect(screen.queryByRole("dialog", { name: "Go anywhere" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deny operation" })).toHaveFocus();
     await user.dblClick(screen.getByRole("button", { name: "Allow once" }));
     expect(transport.commands.filter((command) => command.type === "answer_permission")).toHaveLength(1);

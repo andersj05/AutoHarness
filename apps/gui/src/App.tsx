@@ -217,19 +217,19 @@ export function App({ store }: AppProps) {
   };
 
   const commandItems: readonly CommandItem[] = [
-    { id: "new-session", label: "New session", description: "Start a conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
-    { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat", shortcut: "Alt 1" },
-    { id: "sessions", label: "Browse sessions", description: "Find a conversation", icon: "sessions", shortcut: "Alt 2" },
+    { id: "new-session", label: "New session", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
+    { id: "chat", label: "Open chat", icon: "chat", shortcut: "Alt 1" },
+    { id: "sessions", label: "Browse sessions", keywords: "find conversation", icon: "sessions", shortcut: "Alt 2" },
     { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers", shortcut: "Alt 3" },
-    { id: "memory", label: "Open memory", description: "Review saved knowledge", icon: "memory", shortcut: "Alt 4" },
-    { id: "settings", label: "Open settings", description: "Appearance and preferences", icon: "settings", shortcut: "Alt 5" },
-    { id: "help", label: "Open help", description: "Shortcuts, workflows, and recovery guidance", icon: "inspect", shortcut: "F1" },
-    { id: "choose-model", label: "Choose model", description: "Choose a model for this session", icon: "model" },
+    { id: "memory", label: "Open memory", keywords: "saved knowledge", icon: "memory", shortcut: "Alt 4" },
+    { id: "settings", label: "Open settings", keywords: "appearance preferences", icon: "settings", shortcut: "Alt 5" },
+    { id: "help", label: "Open help", keywords: "shortcuts workflows recovery guidance", icon: "inspect", shortcut: "F1" },
+    { id: "choose-model", label: "Choose model", icon: "model" },
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
     { id: "export-transcript", label: "Export active transcript", description: "Save the conversation as Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "View model, usage, and activity", icon: "inspect" },
     ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Close the application", keywords: "exit shutdown close" }] : []),
-    ...projection.sessions.filter((session) => !session.archived).map((session): CommandItem => ({ id: `session:${session.id}`, label: session.title, description: "Session", icon: "chat", keywords: "recent conversation" })),
+    ...projection.sessions.filter((session) => !session.archived).map((session): CommandItem => ({ id: `session:${session.id}`, label: session.title, group: "Sessions", icon: "chat", keywords: "recent conversation" })),
   ];
 
   const runCommand = (command: string) => {

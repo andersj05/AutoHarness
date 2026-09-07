@@ -101,6 +101,21 @@ describe("desktop design-system primitives", () => {
     expect(selected).toEqual(["settings"]);
   });
 
+  it("opens the best enabled label match with Enter and ignores an empty search", async () => {
+    const user = userEvent.setup();
+    const selected: string[] = [];
+    render(<CommandPalette items={[
+      { id: "metadata", label: "Other result", keywords: "audit" },
+      { id: "disabled", label: "Audit unavailable", disabled: true },
+      { id: "session", label: "Audit context manifests" },
+    ]} onClose={() => undefined} onSelect={(id) => selected.push(id)} />);
+    const search = screen.getByRole("searchbox", { name: "Search commands" });
+    await user.keyboard("{Enter}");
+    expect(selected).toEqual([]);
+    await user.type(search, "audit{Enter}");
+    expect(selected).toEqual(["session"]);
+  });
+
   it("resizes split panes through an accessible separator", () => {
     const changes: number[] = [];
     render(<SplitPane label="Resize inspector" onValueChange={(value) => changes.push(value)} secondary={<div>Inspector</div>} value={60}><div>Workspace</div></SplitPane>);
