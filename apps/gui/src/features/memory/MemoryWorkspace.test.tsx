@@ -30,7 +30,7 @@ describe("Memory workspace", () => {
     const { commands, user, onDialogChange } = setup();
     await user.click(await screen.findByRole("button", { name: /proposed workspace/ }));
     expect(screen.getByText("Untrusted source")).toBeInTheDocument();
-    expect(screen.getByText(/cannot authorize itself/)).toBeInTheDocument();
+    expect(screen.getByText(/Review this proposal before it can be used/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     const dialog = screen.getByRole("dialog", { name: "Approve proposal" });
     expect(within(dialog).getByText("memory-2-revision-1")).toBeInTheDocument();

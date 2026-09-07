@@ -19,17 +19,30 @@ function renderWorkspace(settings: ClientSettingsProjection = createFixtureSnaps
 }
 
 describe("SettingsWorkspace", () => {
+  it("finds option names across categories and returns to the selected category", async () => {
+    const { user } = renderWorkspace();
+    const search = screen.getByRole("searchbox", { name: "Search settings" });
+    await user.type(search, "200");
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(screen.getByRole("combobox", { name: "Zoom" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
+    expect(search).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Conversation" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("combobox", { name: "Send with" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Zoom" })).not.toBeInTheDocument();
+  });
+
   it("inspects and explains every renderer preference with its effective source", () => {
     const settings = structuredClone(createFixtureSnapshot("ready").settings);
     settings.themePreset = { value: "ocean", source: "workspace_file", userOverride: false };
     settings.colorMode = { value: "high-contrast", source: "environment", userOverride: true };
     renderWorkspace(settings);
 
-    expect(screen.getAllByRole("combobox")).toHaveLength(7);
-    expect(screen.getByRole("checkbox", { name: "Reduce motion" })).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")).toHaveLength(3);
+    expect(screen.queryByRole("checkbox", { name: "Reduce motion" })).not.toBeInTheDocument();
     expect(screen.getByText("workspace settings")).toBeInTheDocument();
-    expect(screen.getByText("The current workspace supplies this value.")).toBeInTheDocument();
-    expect(screen.getByText("An environment variable currently has precedence.")).toBeInTheDocument();
+    expect(screen.getByTitle("The current workspace supplies this value.")).toBeInTheDocument();
+    expect(screen.getByTitle("An environment variable currently has precedence.")).toBeInTheDocument();
     expect(screen.getByText("Your saved value is currently overridden.")).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
@@ -37,15 +50,17 @@ describe("SettingsWorkspace", () => {
   it("issues a typed host command for every setting and a null reset", async () => {
     const { commands, user } = renderWorkspace();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Theme identity" }), "rose");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Theme" }), "rose");
     await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Interface density" }), "compact");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Interface zoom" }), "150");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Conversation font size" }), "large");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Density" }), "compact");
+    await user.click(screen.getByRole("button", { name: "Accessibility" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Zoom" }), "150");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Text size" }), "large");
     await user.click(screen.getByRole("checkbox", { name: "Reduce motion" }));
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Timestamps" }), "absolute");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Submit prompts with" }), "control_s");
-    await user.click(screen.getByRole("button", { name: "Reset Submit prompts with to its inherited value" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Send with" }), "control_s");
+    await user.click(screen.getByRole("button", { name: "Reset Send with to its inherited value" }));
 
     await waitFor(() => expect(commands).toHaveLength(9));
     expect(commands).toEqual([
@@ -66,6 +81,8 @@ describe("SettingsWorkspace", () => {
     const { user } = renderWorkspace();
     await user.type(screen.getByRole("searchbox", { name: "Search settings" }), "zoom");
     expect(screen.getByRole("heading", { name: "Accessibility" })).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Appearance" })).not.toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
 

@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientCommand, ClientSnapshot } from "../protocol";
@@ -27,6 +27,7 @@ function renderWorkspace(value = snapshot()) {
   const user = userEvent.setup();
   render(
     <SessionsWorkspace
+      onCreate={() => undefined}
       onCommand={onCommand}
       onOpen={onOpen}
       onOpenNavigation={() => undefined}
@@ -38,11 +39,31 @@ function renderWorkspace(value = snapshot()) {
 }
 
 describe("SessionsWorkspace", () => {
+  it("sorts sessions and opens a result with Enter", async () => {
+    const { user, onOpen } = renderWorkspace();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sort sessions" }), "title");
+    const results = screen.getByRole("region", { name: "Session results" });
+    const rows = within(results).getAllByRole("button");
+    expect(rows[0]).toHaveTextContent("Audit context manifests");
+    rows[0]!.focus();
+    await user.keyboard("{Enter}");
+    expect(onOpen).toHaveBeenCalledWith("session-context");
+  });
+
+  it("keeps details within the visible results and clears them for no matches", async () => {
+    const { user } = renderWorkspace();
+    await user.click(screen.getByRole("button", { name: "Archived 1" }));
+    expect(screen.getByRole("heading", { name: "Provider recovery probes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Return to chat" })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search sessions" }), "no-such-session");
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
   it("waits for export settlement before opening a destructive review", async () => {
     let settle!: (outcome: "committed") => void;
     const onCommand = vi.fn(() => new Promise<"committed">((resolve) => { settle = resolve; }));
     const user = userEvent.setup();
-    render(<SessionsWorkspace snapshot={snapshot()} onCommand={onCommand} onOpen={() => undefined} onOpenNavigation={() => undefined} timestampStyle="relative" />);
+    render(<SessionsWorkspace onCreate={() => undefined} snapshot={snapshot()} onCommand={onCommand} onOpen={() => undefined} onOpenNavigation={() => undefined} timestampStyle="relative" />);
     await user.click(screen.getByRole("button", { name: "Export Markdown" }));
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Delete" }));

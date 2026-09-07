@@ -1,7 +1,7 @@
 import { InspectorSlot, type PresentationSlots } from "../features/workspace/slots";
 import type { ActivityItem, ActiveSessionProjection, ConnectionState, ModelDescriptor } from "../protocol";
 import { Icon } from "./Icon";
-import { Chip, Meter } from "./primitives";
+import { Meter } from "./primitives";
 
 interface ContextInspectorProps {
   slots?: Pick<PresentationSlots, "inspector">;
@@ -36,8 +36,7 @@ export function ContextInspector({ slots, activity, connection, mobileOpen, mode
     <aside aria-label="Context inspector" className="contextInspector" data-mobile-open={mobileOpen}>
       <header className="inspectorHeader">
         <div>
-          <p className="eyebrow">{runtimeMode === "fixture" ? "Fixture context" : "Live context"}</p>
-          <h2>Inspector</h2>
+          <h2>Session details</h2>
         </div>
         <button aria-label="Close inspector" className="iconButton inspectorClose" onClick={onClose} type="button">
           <Icon name="close" />
@@ -51,9 +50,6 @@ export function ContextInspector({ slots, activity, connection, mobileOpen, mode
           label="Latest turn context usage"
           value={validUsage && contextWindow ? contextPercent : undefined}
         />
-        <Chip icon={validUsage ? "check" : "warning"} intent={validUsage ? "success" : "warning"}>
-          {validUsage ? "provider reported" : "unavailable"}
-        </Chip>
       </section>
 
       <section className="inspectorSection" aria-labelledby="runtime-heading">
@@ -64,8 +60,8 @@ export function ContextInspector({ slots, activity, connection, mobileOpen, mode
         <dl className="inspectorFacts">
           <div><dt>Provider</dt><dd>{connection.kind === "offline" ? "Offline" : connection.providerLabel}</dd></div>
           <div><dt>Model</dt><dd>{model?.displayName ?? "Not selected"}</dd></div>
-          <div><dt>Reasoning</dt><dd>{model?.supportsReasoning === true ? "Auto" : model?.supportsReasoning === false ? "Unsupported" : "Unknown"}</dd></div>
-          <div><dt>Tools</dt><dd>{model?.supportsTools === true ? "Capability gated" : model?.supportsTools === false ? "Unsupported" : "Unknown"}</dd></div>
+          <div><dt>Reasoning</dt><dd>{model?.supportsReasoning === true ? "Supported" : model?.supportsReasoning === false ? "Unsupported" : "Unknown"}</dd></div>
+          <div><dt>Tools</dt><dd>{model?.supportsTools === true ? "Supported" : model?.supportsTools === false ? "Unsupported" : "Unknown"}</dd></div>
         </dl>
       </section>
 
@@ -83,14 +79,7 @@ export function ContextInspector({ slots, activity, connection, mobileOpen, mode
 
       {slots?.inspector?.length ? <InspectorSlot surfaces={slots.inspector} /> : null}
 
-      <section className="securityCard">
-        <span className="securityCardIcon"><Icon name="shield" /></span>
-        {runtimeMode === "fixture" ? (
-          <div><strong>Browser fixture</strong><p>Everything shown here is simulated. No Rust host, credential vault, or durable store is connected.</p></div>
-        ) : (
-          <div><strong>Rust-owned authority</strong><p>Execution and decisions stay in Rust. This pane receives bounded, secret-free projections only.</p></div>
-        )}
-      </section>
+      {runtimeMode === "fixture" ? <p className="inspectorPreview">Preview data. Changes are not saved.</p> : null}
     </aside>
   );
 }

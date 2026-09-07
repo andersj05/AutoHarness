@@ -19,12 +19,12 @@ export function HelpWorkspace({ onOpenNavigation }: { onOpenNavigation: () => vo
     <main aria-label="Help" className="routeWorkspace settingsRouteWorkspace" id="main-content" tabIndex={-1}>
       <header className="routeWorkspaceHeader settingsWorkspaceHeader">
         <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
-        <div><p className="eyebrow">Desktop guide</p><h1>Help</h1><p>Find your way, review authority, and recover safely.</p></div>
+        <div><h1>Help</h1></div>
         <label className="routeSearch"><Icon name="search" size={16} /><span className="srOnly">Search help</span><input onChange={(event) => setQuery(event.target.value.slice(0, 128))} placeholder="Search help" type="search" value={query} /></label>
       </header>
       <div className="helpContent">
         <section aria-labelledby="help-shortcuts" className="settingsWorkspace">
-          <header><p className="eyebrow">Keyboard</p><h2 id="help-shortcuts">Shortcuts</h2></header>
+          <header><h2 id="help-shortcuts">Keyboard shortcuts</h2></header>
           <dl className="helpShortcuts">
             <div><dt>Command palette</dt><dd><kbd>Ctrl/Cmd + K</kbd></dd></div>
             <div><dt>New session</dt><dd><kbd>Ctrl/Cmd + N</kbd></dd></div>
@@ -34,7 +34,7 @@ export function HelpWorkspace({ onOpenNavigation }: { onOpenNavigation: () => vo
           </dl>
         </section>
         <p aria-live="polite" className="helpResults">{visible.length ? `${visible.length} ${visible.length === 1 ? "topic" : "topics"}` : "No matching topics. Try credentials, recovery, or sessions."}</p>
-        {visible.map((topic) => <section className="settingsWorkspace" key={topic.title}><header><h2>{topic.title}</h2><p>{topic.text}</p></header></section>)}
+        {visible.map((topic) => <details className="helpTopic" key={`${topic.title}-${Boolean(query)}`} open={query.trim() ? true : undefined}><summary><h2>{topic.title}</h2><Icon name="chevron" size={16} /></summary><p>{topic.text}</p></details>)}
       </div>
     </main>
   );

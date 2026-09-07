@@ -290,8 +290,9 @@ describe("AutoHarness GUI", () => {
     expect(document.querySelector(".appShell")).toHaveAttribute("inert");
     await user.click(screen.getByRole("menuitem", { name: /Open settings/ }));
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Theme identity" }), "rose");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Theme" }), "rose");
     await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
+    await user.click(screen.getByRole("button", { name: "Accessibility" }));
     await user.click(screen.getByRole("checkbox", { name: /Reduce motion/ }));
 
     const app = document.querySelector(".app");
@@ -299,7 +300,7 @@ describe("AutoHarness GUI", () => {
     expect(app).toHaveAttribute("data-color-mode", "no-color");
     expect(app).toHaveAttribute("data-reduce-motion", "true");
     expect(transport.commands.filter((command) => command.type === "update_client_preference")).toHaveLength(3);
-    expect(screen.getAllByText("your settings").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByRole("checkbox", { name: /Reduce motion/ })).toBeChecked();
   });
 
   it("exposes a keyboard-resizable context split pane on wide workspaces", async () => {
@@ -326,6 +327,20 @@ describe("AutoHarness GUI", () => {
     await user.click(screen.getByRole("button", { name: "Chat" }));
     await user.click(screen.getByRole("button", { name: "Open context inspector" }));
     expect(screen.getByRole("separator", { name: "Resize context inspector" })).toHaveAttribute("aria-valuenow", "72");
+  });
+
+  it("keeps session dialogs outside the inert shell and blocks background shortcuts", async () => {
+    const { transport, user } = renderScenario("ready");
+    await user.click(await screen.findByRole("button", { name: "Sessions" }));
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const dialog = screen.getByRole("dialog", { name: /Rename/ });
+    expect(document.querySelector(".appShell")).toHaveAttribute("inert");
+    expect(dialog.closest("[inert]")).toBeNull();
+    await user.keyboard("{Control>}n{/Control}");
+    expect(transport.commands.some((command) => command.type === "create_session")).toBe(false);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector(".appShell")).not.toHaveAttribute("inert"));
   });
 
   it("opens provider management from the primary application rail", async () => {
@@ -387,14 +402,16 @@ describe("AutoHarness GUI", () => {
   it("applies 200 percent zoom while preserving the settings route and its actions", async () => {
     const { user } = renderScenario("ready");
     await user.click(await screen.findByRole("button", { name: "Settings" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Interface zoom" }), "200");
+    await user.click(screen.getByRole("button", { name: "Accessibility" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Zoom" }), "200");
 
     const app = document.querySelector<HTMLElement>(".app");
     await waitFor(() => expect(app).toHaveAttribute("data-zoom", "200"));
     expect(app?.style.getPropertyValue("--app-zoom")).toBe("2");
     expect(app?.style.getPropertyValue("--app-zoom-inverse")).toBe("50%");
-    expect(screen.getByRole("button", { name: "Reset Interface zoom to its inherited value" })).toBeEnabled();
-    expect(screen.getByRole("combobox", { name: "Submit prompts with" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reset Zoom to its inherited value" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
+    expect(screen.getByRole("combobox", { name: "Send with" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Chat" }));
     expect(screen.queryByRole("complementary", { name: "Context inspector" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open context inspector" })).toBeVisible();
@@ -403,8 +420,9 @@ describe("AutoHarness GUI", () => {
   it("uses Ctrl or Cmd plus S for multiline submission after resetting the fixture override", async () => {
     const { transport, user } = renderScenario("ready");
     await user.click(await screen.findByRole("button", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Reset Submit prompts with to its inherited value" }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Submit prompts with" })).toHaveValue("control_s"));
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
+    await user.click(screen.getByRole("button", { name: "Reset Send with to its inherited value" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Send with" })).toHaveValue("control_s"));
     await user.click(screen.getByRole("button", { name: "Chat" }));
 
     const composer = await screen.findByRole("textbox", { name: "Message AutoHarness" });
@@ -423,8 +441,10 @@ describe("AutoHarness GUI", () => {
   it("applies density, conversation font, and timestamp preferences to primary surfaces", async () => {
     const { user } = renderScenario("ready");
     await user.click(await screen.findByRole("button", { name: "Settings" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Interface density" }), "compact");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Conversation font size" }), "extra_large");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Density" }), "compact");
+    await user.click(screen.getByRole("button", { name: "Accessibility" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Text size" }), "extra_large");
+    await user.click(screen.getByRole("button", { name: "Conversation" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Timestamps" }), "hidden");
     await user.click(screen.getByRole("button", { name: "Chat" }));
 
@@ -611,7 +631,7 @@ describe("AutoHarness GUI", () => {
     const shell = document.querySelector<HTMLElement>(".appShell");
     expect(shell).toHaveAttribute("inert");
     expect(shell).not.toContainElement(credentialDialog);
-    expect(credentialDialog).toHaveAccessibleDescription("The value crosses a dedicated one-way boundary and is immediately cleared from the page.");
+    expect(credentialDialog).toHaveAccessibleDescription("Connect for this session. To save a credential, use Providers.");
     expect(input.compareDocumentPosition(screen.getByRole("button", { name: "Connect provider" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(input).toHaveFocus();
     await store.dispatch({ type: "refresh_catalog" });
@@ -639,7 +659,7 @@ describe("AutoHarness GUI", () => {
     await user.type(screen.getByLabelText("Provider credential"), "replacement-key");
     await user.click(screen.getByRole("button", { name: "Connect provider" }));
 
-    await waitFor(() => expect(screen.getByText("connected")).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Enter credential" })).not.toBeInTheDocument());
     expect(transport.credentials).toEqual([
       { connectionId: "connection-gemini", operation: "session_only", credential: "rejected-key" },
       { connectionId: "connection-gemini", operation: "session_only", credential: "replacement-key" },

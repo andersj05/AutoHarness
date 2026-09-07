@@ -41,7 +41,7 @@ function useMediaQuery(query: string): boolean {
 export function App({ store }: AppProps) {
   const client = useClientStore(store);
   const [closing, setClosing] = useState(false);
-  const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
+  const [routeDialogOpen, setRouteDialogOpen] = useState(false);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [railWidth, setRailWidth] = useState(248);
@@ -75,7 +75,7 @@ export function App({ store }: AppProps) {
         : event.key === "F1" ? "help" : undefined;
       if (!newSessionShortcut && !paletteShortcut && !routeShortcut) return;
       event.preventDefault();
-      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || memoryDialogOpen) return;
+      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || routeDialogOpen) return;
       if (routeShortcut) {
         setCommandPaletteOpen(false);
         setRoute(routeShortcut);
@@ -88,7 +88,7 @@ export function App({ store }: AppProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, memoryDialogOpen, store]);
+  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, routeDialogOpen, store]);
 
   useEffect(() => {
     if (previousRouteRef.current === route) return;
@@ -107,7 +107,7 @@ export function App({ store }: AppProps) {
     : undefined;
   const permissionAnswering = pendingPermissionIdentity !== undefined
     && answeringPermissionIdentity === pendingPermissionIdentity;
-  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen || memoryDialogOpen;
+  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen || routeDialogOpen;
   const activeDraft = activeSessionId ? sessionDrafts[activeSessionId] ?? "" : "";
   const setActiveDraft = (next: SetStateAction<string>) => {
     if (!activeSessionId) return;
@@ -217,18 +217,18 @@ export function App({ store }: AppProps) {
   };
 
   const commandItems: readonly CommandItem[] = [
-    { id: "new-session", label: "New session", description: "Create a durable conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
+    { id: "new-session", label: "New session", description: "Start a conversation", icon: "new", shortcut: "Ctrl N", keywords: "create chat" },
     { id: "chat", label: "Open chat", description: "Return to the active conversation", icon: "chat", shortcut: "Alt 1" },
-    { id: "sessions", label: "Browse sessions", description: "Search durable conversation history", icon: "sessions", shortcut: "Alt 2" },
+    { id: "sessions", label: "Browse sessions", description: "Find a conversation", icon: "sessions", shortcut: "Alt 2" },
     { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers", shortcut: "Alt 3" },
-    { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory", shortcut: "Alt 4" },
-    { id: "settings", label: "Open settings", description: "Inspect and change renderer preferences", icon: "settings", shortcut: "Alt 5" },
+    { id: "memory", label: "Open memory", description: "Review saved knowledge", icon: "memory", shortcut: "Alt 4" },
+    { id: "settings", label: "Open settings", description: "Appearance and preferences", icon: "settings", shortcut: "Alt 5" },
     { id: "help", label: "Open help", description: "Shortcuts, workflows, and recovery guidance", icon: "inspect", shortcut: "F1" },
-    { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
+    { id: "choose-model", label: "Choose model", description: "Choose a model for this session", icon: "model" },
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
-    { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
-    { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
-    ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Settle runtime work and close the application", keywords: "exit shutdown close" }] : []),
+    { id: "export-transcript", label: "Export active transcript", description: "Save the conversation as Markdown", icon: "download", keywords: "save markdown" },
+    { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "View model, usage, and activity", icon: "inspect" },
+    ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Close the application", keywords: "exit shutdown close" }] : []),
     ...projection.sessions.filter((session) => !session.archived).map((session): CommandItem => ({ id: `session:${session.id}`, label: session.title, description: "Session", icon: "chat", keywords: "recent conversation" })),
   ];
 
@@ -290,6 +290,8 @@ export function App({ store }: AppProps) {
       />
     ) : route === "sessions" ? (
       <SessionsWorkspace
+        onCreate={() => { void store.dispatch({ type: "create_session" }); setRoute("chat"); }}
+        onDialogChange={setRouteDialogOpen}
         onCommand={(command) => store.dispatchAndWait(command)}
         onOpen={openSession}
         onOpenNavigation={() => setMobileRailOpen(true)}
@@ -307,7 +309,7 @@ export function App({ store }: AppProps) {
         snapshot={projection}
       />
     ) : route === "memory" ? (
-      <MemoryWorkspace memory={projection.memory} sessionId={activeSessionId} blocked={Boolean(projection.pendingPermission)} onCommand={(command) => store.dispatchAndWait(command)} onDialogChange={setMemoryDialogOpen} onOpenNavigation={() => setMobileRailOpen(true)} />
+      <MemoryWorkspace memory={projection.memory} sessionId={activeSessionId} blocked={Boolean(projection.pendingPermission)} onCommand={(command) => store.dispatchAndWait(command)} onDialogChange={setRouteDialogOpen} onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : route === "help" ? (
       <HelpWorkspace onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : (

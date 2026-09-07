@@ -29,8 +29,7 @@ export function CredentialDialog({ connectionId, providerLabel, onClose, onSubmi
 
   return (
     <Dialog
-      description="The value crosses a dedicated one-way boundary and is immediately cleared from the page."
-      eyebrow="Ephemeral credential"
+      description="Connect for this session. To save a credential, use Providers."
       labelledBy="credential-dialog-title"
       onClose={onClose}
       title={`Connect ${providerLabel}`}
@@ -53,7 +52,7 @@ export function CredentialDialog({ connectionId, providerLabel, onClose, onSubmi
         />
         <div className="credentialBoundary">
           <Icon name="shield" size={16} />
-          <p><strong>Secret-safe ingress</strong><span>No browser storage, transcript, diagnostic, or host snapshot receives this value.</span></p>
+          <p><strong>Kept out of your conversations</strong><span>Your credential is cleared from this form after submission.</span></p>
         </div>
         <div className="credentialActions">
           <Button disabled={submitting} onClick={onClose}>Cancel</Button>

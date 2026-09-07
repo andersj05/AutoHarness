@@ -118,6 +118,7 @@ describe("ProvidersWorkspace", () => {
 
   it("clears credential input before transferring a save or session-only secret", async () => {
     const { credentials, user } = renderWorkspace();
+    if (!document.querySelector<HTMLDetailsElement>(".providerCredentialSection")?.open) await user.click(screen.getByText("Credential", { exact: true }));
     const input = screen.getByLabelText("New provider credential");
     await user.type(input, "vault-sentinel-123");
     await user.click(screen.getByRole("button", { name: "Replace saved credential" }));
@@ -154,6 +155,7 @@ describe("ProvidersWorkspace", () => {
     expect(screen.getByText("The environment credential currently wins.", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove saved fallback" })).toBeInTheDocument();
 
+    if (!document.querySelector<HTMLDetailsElement>(".providerCredentialSection")?.open) await user.click(screen.getByText("Credential", { exact: true }));
     const input = screen.getByLabelText("New provider credential");
     await user.type(input, "fallback-sentinel");
     await user.click(screen.getByRole("button", { name: "Replace saved fallback" }));
@@ -167,6 +169,7 @@ describe("ProvidersWorkspace", () => {
 
   it("erases an unsubmitted credential when a permission request preempts the workspace", async () => {
     const { rerender, snapshot, user } = renderWorkspace();
+    if (!document.querySelector<HTMLDetailsElement>(".providerCredentialSection")?.open) await user.click(screen.getByText("Credential", { exact: true }));
     const input = screen.getByLabelText("New provider credential");
     await user.type(input, "preemption-sentinel");
     expect(input).toHaveValue("preemption-sentinel");

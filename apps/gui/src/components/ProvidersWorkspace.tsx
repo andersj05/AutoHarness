@@ -286,8 +286,8 @@ export function ProvidersWorkspace({
     const accepted = await onCredential({ connectionId: selected.id, operation, credential: ownedCredential });
     setBusyAction(undefined);
     setActionMessage(accepted
-      ? "Credential transferred to the native host and cleared from this page."
-      : "The native host did not accept the credential transfer.");
+      ? "Credential submitted and cleared from this page."
+      : "Could not connect. Enter your credential to try again.");
   };
 
   const startAuthentication = async () => {
@@ -333,9 +333,7 @@ export function ProvidersWorkspace({
       <header className="routeWorkspaceHeader providerWorkspaceHeader">
         <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
         <div>
-          <p className="eyebrow">Runtime connections</p>
           <h1>Providers</h1>
-          <p>Manage named profiles, secret-safe credentials, model defaults, and content-free connection tests.</p>
         </div>
         <div className="providerHeaderActions">
           <Button icon="new" onClick={openCreate}>Add profile</Button>
@@ -359,8 +357,8 @@ export function ProvidersWorkspace({
         <Callout
           action={<Button loading={busyAction === "codex-cancel"} loadingLabel="Cancelling" onClick={() => void cancelAuthentication()} size="small">Cancel sign-in</Button>}
           detail={notice?.requestId === authenticationRequestId && notice.code === "authentication_browser_opened"
-            ? "The native host opened your browser. Finish authentication there, then return to AutoHarness."
-            : "Waiting for the native Codex authentication flow. No token passes through the webview."}
+            ? "Finish signing in in your browser, then return here."
+            : "Waiting for you to finish signing in."}
           icon="providers"
           intent="info"
           title="Codex sign-in in progress"
@@ -369,7 +367,7 @@ export function ProvidersWorkspace({
 
       <div className="providersWorkspaceGrid">
         <section aria-labelledby="provider-list-heading" className="providerListPane">
-          <header><div><p className="eyebrow">Profiles</p><h2 id="provider-list-heading">Connections</h2></div><Chip intent="neutral">{snapshot.providers.length}</Chip></header>
+          <header><div><h2 id="provider-list-heading">Connections</h2></div><Chip intent="neutral">{snapshot.providers.length}</Chip></header>
           <div aria-label="Provider profiles" className="providerProfileList">
             {snapshot.providers.map((profile) => (
               <button
@@ -388,7 +386,6 @@ export function ProvidersWorkspace({
             ))}
             {snapshot.providers.length === 0 ? <div className="providerListEmpty"><Icon name="providers" /><strong>No provider profiles</strong><p>Add Gemini or a router profile, or connect a Codex subscription.</p></div> : null}
           </div>
-          <Button className="providerListAdd" icon="new" onClick={openCreate} variant="quiet">New named profile</Button>
         </section>
 
         <section aria-label="Provider profile details" className="providerDetailPane">
@@ -446,22 +443,14 @@ export function ProvidersWorkspace({
             <>
               <header className="providerDetailHeader">
                 <span className="providerDetailIcon"><Icon name={selected.configuration.kind === "router" ? "branch" : selected.configuration.kind === "codex_subscription" ? "terminal" : "spark"} /></span>
-                <div><p className="eyebrow">{selected.scope === "session_default" ? "Temporary connection" : profileKindLabel(selected.configuration.kind)}</p><h2>{selected.displayName}</h2><code>{selected.id}</code></div>
+                <div><p className="eyebrow">{selected.scope === "session_default" ? "Temporary connection" : profileKindLabel(selected.configuration.kind)}</p><h2>{selected.displayName}</h2></div>
                 <Chip intent={statusIntent(selected.status)}>{STATUS_LABELS[selected.status]}</Chip>
               </header>
 
               {selected.safeError ? <Callout detail={selected.safeError} intent="danger" title="Connection test failed" /> : null}
               {selected.scope === "session_default" ? <Callout detail="This temporary row reflects process-level defaults. Create a named profile to save configuration, credentials, and model defaults." intent="info" title="Session default" /> : null}
 
-              <dl className="providerFacts">
-                <div><dt>Provider</dt><dd>{profileKindLabel(selected.configuration.kind)}</dd></div>
-                <div><dt>Endpoint</dt><dd><code>{providerEndpoint(selected)}</code></dd></div>
-                {selected.configuration.project ? <div><dt>Project</dt><dd><code>{selected.configuration.project}</code></dd></div> : null}
-                {selected.configuration.authHeader ? <div><dt>Auth header</dt><dd><code>{selected.configuration.authHeader}</code></dd></div> : null}
-                <div><dt>Credential source</dt><dd>{credentialSourceLabel(selected)}</dd></div>
-                <div><dt>Saved credential</dt><dd>{selected.credentialState === "stored" ? "Linked in the operating-system vault" : selected.credentialState === "recovery_pending" ? "Recovery pending" : "No vault linkage"}</dd></div>
-                <div><dt>Default model</dt><dd>{selected.defaultModelId ? <code>{snapshot.catalog.models.find((model) => model.id === selected.defaultModelId)?.displayName ?? selected.defaultModelId}</code> : "Provider default"}</dd></div>
-              </dl>
+
 
               {selected.scope === "named" ? (
                 <div className="providerPrimaryActions">
@@ -479,12 +468,27 @@ export function ProvidersWorkspace({
               ) : null}
               {responseActive && !selected.active ? <p className="providerActionHint">Finish or cancel the active response before switching profiles.</p> : null}
 
-              <section aria-labelledby="credential-heading" className="providerSection">
-                <div className="providerSectionHeading"><div><p className="eyebrow">Secret boundary</p><h3 id="credential-heading">Credential</h3></div><Chip icon="shield" intent={selected.credentialSource === "none" ? "warning" : "success"}>{credentialSourceLabel(selected)}</Chip></div>
+
+
+              {selected.scope === "named" ? (
+                <section aria-labelledby="defaults-heading" className="providerSection">
+                  <div className="providerSectionHeading"><div><h3 id="defaults-heading">Model and reasoning</h3></div>{!selected.active ? <Chip intent="neutral">Activate to edit</Chip> : null}</div>
+                  {selected.active ? (
+                    <form className="providerDefaultsForm" onSubmit={(event) => void saveDefaults(event)}>
+                      <label className="providerSelectField"><span>Default model</span><select aria-label="Default model" disabled={snapshot.catalog.status !== "ready" && snapshot.catalog.status !== "empty"} onChange={(event) => { setDefaultModelId(event.target.value); const model = snapshot.catalog.models.find((candidate) => candidate.id === event.target.value); if (model?.supportsReasoning === false) setReasoningEffort(""); }} value={defaultModelId}><option value="">Choose a model</option>{savedModelUnavailable ? <option value={defaultModelId}>Saved model unavailable in current catalog</option> : null}{snapshot.catalog.models.filter((model) => model.selectable).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</select><small>{snapshot.catalog.status === "loading" ? "The host is refreshing the active provider catalog." : snapshot.catalog.status === "failed" ? snapshot.catalog.safeError ?? "The catalog could not load." : "Models available from this provider."}</small></label>
+                      <label className="providerSelectField"><span>Reasoning effort</span><select aria-label="Reasoning effort" disabled={!defaultModelId || selectedModel?.supportsReasoning === false} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")} value={reasoningEffort}>{REASONING_EFFORTS.map(([value, label]) => <option key={value || "provider-default"} value={value}>{label}</option>)}</select><small>{selectedModel?.supportsReasoning === false ? "This model does not advertise reasoning control." : "Saved with your default model."}</small></label>
+                      <Button disabled={!defaultModelId || !defaultsDirty || interactionBlocked} loading={busyAction === "defaults"} loadingLabel="Saving defaults" type="submit" variant="primary">Save defaults</Button>
+                    </form>
+                  ) : <Callout detail="Activate this profile to choose its default model." icon="model" title="Activate to choose defaults" />}
+                </section>
+              ) : null}
+
+              <details aria-labelledby="credential-heading" className="providerSection providerCredentialSection" key={selected.id} open={selected.credentialSource === "none" || selected.credentialSource === "environment"} onToggle={(event) => { if (!event.currentTarget.open) { setCredential(""); if (credentialRef.current) credentialRef.current.value = ""; } }}>
+                <summary className="providerSectionHeading"><h3 id="credential-heading">Credential</h3><Chip icon="shield" intent={selected.credentialSource === "none" ? "warning" : "success"}>{credentialSourceLabel(selected)}</Chip><Icon name="chevron" size={16} /></summary>
                 {selected.credentialSource === "environment" ? <Callout detail={selected.credentialState === "stored" ? "The environment credential currently wins. The saved vault credential remains an encrypted fallback." : "The environment credential currently wins. You can save an encrypted fallback without exposing either value to the renderer."} icon="terminal" title="Environment override active" /> : null}
                 {selected.configuration.kind === "codex_subscription" ? (
                   <div className="codexCredentialPanel">
-                    <div><strong>Native browser authentication</strong><p>Rust opens and owns the sign-in flow. Tokens never pass through browser storage, frontend state, or diagnostics.</p></div>
+                    <div><strong>Browser sign-in</strong><p>Sign in to connect your Codex subscription.</p></div>
                     {authenticationRequestId ? <Button onClick={() => void cancelAuthentication()}>Cancel sign-in</Button> : <Button icon="providers" onClick={() => void startAuthentication()} variant="primary">{selected.credentialSource === "none" ? "Connect subscription" : "Reconnect subscription"}</Button>}
                   </div>
                 ) : (
@@ -504,7 +508,7 @@ export function ProvidersWorkspace({
                       type="password"
                       value={credential}
                     />
-                    <div className="providerCredentialBoundary"><Icon name="shield" size={16} /><p><strong>Immediate transfer and clear</strong><span>No snapshot, browser storage, transcript, diagnostic, or log receives this value.</span></p></div>
+                    <div className="providerCredentialBoundary"><Icon name="shield" size={16} /><p><strong>Kept out of your conversations</strong><span>Saved credentials use your system’s credential vault.</span></p></div>
                     <div className="providerCredentialActions">
                       {selected.active ? <Button disabled={!credential || Boolean(credentialError) || interactionBlocked} loading={busyAction === "credential-session_only"} loadingLabel="Transferring" onClick={() => void submitCredential("session_only")} variant="quiet">Use this session</Button> : null}
                       {selected.scope === "named" ? <Button disabled={!credential || Boolean(credentialError) || interactionBlocked} loading={busyAction === `credential-${selected.credentialState === "stored" ? "replace" : "save"}`} loadingLabel="Transferring" type="submit" variant="primary">{selected.credentialState === "stored" ? selected.credentialSource === "environment" ? "Replace saved fallback" : "Replace saved credential" : selected.credentialSource === "environment" ? "Save fallback" : "Save credential"}</Button> : null}
@@ -514,33 +518,31 @@ export function ProvidersWorkspace({
                 {(selected.credentialState === "stored" || selected.credentialSource === "session_only") && selected.scope === "named" ? (
                   <div className="providerDisconnectRow"><span>{selected.credentialSource === "environment" ? "Removing the saved fallback does not change the environment override." : "Disconnecting clears this profile's vault linkage and any session credential."}</span><Button loading={busyAction === "disconnect"} loadingLabel="Disconnecting" onClick={() => void run("disconnect", { type: "disconnect_provider_profile", connectionId: selected.id }, `Disconnected the saved credential for “${selected.displayName}”.`)} size="small" variant="quiet">{selected.credentialSource === "environment" ? "Remove saved fallback" : "Disconnect credential"}</Button></div>
                 ) : null}
-              </section>
-
-              {selected.scope === "named" ? (
-                <section aria-labelledby="defaults-heading" className="providerSection">
-                  <div className="providerSectionHeading"><div><p className="eyebrow">Agent defaults</p><h3 id="defaults-heading">Model and reasoning</h3></div>{selected.active ? <Chip icon="bolt" intent="info">Active catalog</Chip> : <Chip intent="neutral">Activate to edit</Chip>}</div>
-                  {selected.active ? (
-                    <form className="providerDefaultsForm" onSubmit={(event) => void saveDefaults(event)}>
-                      <label className="providerSelectField"><span>Default model</span><select aria-label="Default model" disabled={snapshot.catalog.status !== "ready" && snapshot.catalog.status !== "empty"} onChange={(event) => { setDefaultModelId(event.target.value); const model = snapshot.catalog.models.find((candidate) => candidate.id === event.target.value); if (model?.supportsReasoning === false) setReasoningEffort(""); }} value={defaultModelId}><option value="">Choose a model</option>{savedModelUnavailable ? <option value={defaultModelId}>Saved model unavailable in current catalog</option> : null}{snapshot.catalog.models.filter((model) => model.selectable).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</select><small>{snapshot.catalog.status === "loading" ? "The host is refreshing the active provider catalog." : snapshot.catalog.status === "failed" ? snapshot.catalog.safeError ?? "The catalog could not load." : "Only models from the active profile's authoritative catalog are offered."}</small></label>
-                      <label className="providerSelectField"><span>Reasoning effort</span><select aria-label="Reasoning effort" disabled={!defaultModelId || selectedModel?.supportsReasoning === false} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")} value={reasoningEffort}>{REASONING_EFFORTS.map(([value, label]) => <option key={value || "provider-default"} value={value}>{label}</option>)}</select><small>{selectedModel?.supportsReasoning === false ? "This model does not advertise reasoning control." : "Provider-native effort is saved atomically with the model."}</small></label>
-                      <Button disabled={!defaultModelId || !defaultsDirty || interactionBlocked} loading={busyAction === "defaults"} loadingLabel="Saving defaults" type="submit" variant="primary">Save defaults</Button>
-                    </form>
-                  ) : <Callout detail="Activate this profile to load its authoritative model catalog before assigning defaults." icon="model" title="Defaults follow the active catalog" />}
-                </section>
-              ) : null}
+              </details>
+              <details className="providerMetadata"><summary>Connection details</summary>
+              <dl className="providerFacts"><div><dt>Profile</dt><dd><code>{selected.id}</code></dd></div>
+                <div><dt>Provider</dt><dd>{profileKindLabel(selected.configuration.kind)}</dd></div>
+                <div><dt>Endpoint</dt><dd><code>{providerEndpoint(selected)}</code></dd></div>
+                {selected.configuration.project ? <div><dt>Project</dt><dd><code>{selected.configuration.project}</code></dd></div> : null}
+                {selected.configuration.authHeader ? <div><dt>Auth header</dt><dd><code>{selected.configuration.authHeader}</code></dd></div> : null}
+                <div><dt>Credential source</dt><dd>{credentialSourceLabel(selected)}</dd></div>
+                <div><dt>Saved credential</dt><dd>{selected.credentialState === "stored" ? "Linked in the operating-system vault" : selected.credentialState === "recovery_pending" ? "Recovery pending" : "No vault linkage"}</dd></div>
+                <div><dt>Default model</dt><dd>{selected.defaultModelId ? <code>{snapshot.catalog.models.find((model) => model.id === selected.defaultModelId)?.displayName ?? selected.defaultModelId}</code> : "Provider default"}</dd></div>
+              </dl>
+              </details>
 
               {selected.scope === "named" ? (
                 <section className="providerDangerZone">
                   {deleteTarget?.id === selected.id ? (
                     <div><p><strong>Delete “{selected.displayName}” permanently?</strong><span>The profile is removed and its saved vault entry is scheduled for safe cleanup.</span></p><Field autoComplete="off" hint={`Type “${selected.id}” to confirm this exact profile.`} label="Confirm profile name" onChange={(event) => setDeleteConfirmation(event.target.value)} value={deleteConfirmation} /><div><Button onClick={() => { setDeleteTargetId(undefined); setDeleteConfirmation(""); }} variant="quiet">Cancel</Button><Button disabled={deleteConfirmation !== selected.id || interactionBlocked} loading={busyAction === "delete"} loadingLabel="Deleting" onClick={() => void run("delete", { type: "delete_provider_profile", connectionId: selected.id }, `Deleted provider profile “${selected.displayName}”.`).then((outcome) => { if (outcome === "committed") { setDeleteTargetId(undefined); setDeleteConfirmation(""); } })} variant="danger">Delete permanently</Button></div></div>
-                  ) : <><span><strong>Delete profile</strong><small>Credential cleanup remains restart-safe if the vault is interrupted.</small></span><Button onClick={() => { setDeleteTargetId(selected.id); setDeleteConfirmation(""); }} size="small" variant="quiet">Delete</Button></>}
+                  ) : <><span><strong>Delete profile</strong><small>Remove this profile and its saved credential.</small></span><Button onClick={() => { setDeleteTargetId(selected.id); setDeleteConfirmation(""); }} size="small" variant="quiet">Delete</Button></>}
                 </section>
               ) : null}
 
               <p aria-live="polite" className="providerActionMessage">{actionMessage}</p>
             </>
           ) : (
-            <div className="providerDetailEmpty"><Icon name="providers" size={28} /><h2>Connect a provider</h2><p>Add a named Gemini or router profile, or use the native Codex subscription sign-in.</p><div><Button icon="new" onClick={openCreate}>Add profile</Button><Button icon="providers" onClick={() => void startAuthentication()} variant="primary">Connect Codex</Button></div></div>
+            <div className="providerDetailEmpty"><Icon name="providers" size={28} /><h2>Connect a provider</h2><p>Use an API key or sign in with Codex.</p><div><Button icon="new" onClick={openCreate}>Add profile</Button><Button icon="providers" onClick={() => void startAuthentication()} variant="primary">Connect Codex</Button></div></div>
           )}
         </section>
       </div>
