@@ -1,15 +1,23 @@
 name: GUI candidate packages
 
 on:
-  pull_request:
-    branches: [dev, main]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Native candidate platform (all only for deliberate release validation)
+        type: choice
+        default: ubuntu-24.04
+        options:
+          - ubuntu-24.04
+          - windows-2025
+          - macos-26
+          - all
 
 permissions:
   contents: read
 
 concurrency:
-  group: gui-packages-${{ github.ref }}
+  group: gui-packages-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: true
 
 jobs:
@@ -20,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04, macos-26]
+        os: ${{ inputs.platform == 'all' && fromJSON('["windows-2025", "ubuntu-24.04", "macos-26"]') || fromJSON(format('["{0}"]', inputs.platform)) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

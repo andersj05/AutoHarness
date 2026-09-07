@@ -1,6 +1,6 @@
 # GUI Stage 8 validation
 
-**Reviewed:** 2026-09-06
+**Reviewed:** 2026-09-07
 
 **Status:** Candidate packaging and release gates implemented; Stage 8 release, default cutover, and retirement remain incomplete.
 
@@ -56,9 +56,28 @@ This passes the complete local native journey, with focused attachment and failu
 ## Remaining release blockers
 
 - Provision authorized Windows code-signing, Apple Developer ID and notarization, and Linux signing identities; execute and verify all signed paths.
-- Finish Stage 1 renderer independence and Help parity.
+- Finish Stage 1 renderer independence and all-platform Help accessibility review.
 - Complete all-platform native provider, GUI vault, permission, memory, crash recovery, migration, and cold rollback journeys on one committed candidate.
 - Complete system-webview visual review, keyboard and screen-reader review, security review, and approved reference-machine performance evidence.
 - Preserve signed artifacts and immutable evidence beyond the CI retention window, obtain the required approvals, and close the agreed rollback window before separately approving retirement.
 
 No public release, default-interface promotion, Ratatui removal, PTY infrastructure removal, or retirement approval is claimed by this work.
+
+## Local validation and CI follow-up
+
+The [validation workflow](GUI_VALIDATION_WORKFLOW.md) makes candidate packaging manual and platform-selectable, removes duplicate branch-push baseline runs, and selects pull-request jobs from the complete tested diff.
+Cross-platform runtime coverage remains automatic for Rust changes; frontend changes run the fast complete GUI suite once.
+Documentation and Python tooling tests always run, and infrastructure changes conservatively select every baseline job.
+The complete local baseline is available through `python scripts/validate_gui.py` with per-check logs and a commit-labelled report.
+
+Searchable Help now covers shortcuts, conversations, session lifecycle, provider credentials, permissions, Memory trust, accessibility, restart recovery, updates, and rollback.
+F1, Alt+6, navigation, and the palette reach the same workspace, with focus restoration and permission-preemption regressions.
+The GUI suite passes 118 tests and Python tooling passes 22 tests locally.
+The complete local baseline also passes workspace formatting, strict all-feature Clippy, all-target workspace tests, warning-denied rustdoc, doctests, theme generation, and storage-benchmark gates.
+Browser review verifies compact 900x640, standard 1280x800, and minimum-width 390x740 Help layouts without console warnings or errors.
+This browser review is not native screen-reader approval.
+
+The existing Windows candidate again passes the installed native lifecycle locally on 2026-09-07, including repair, two restarts, OS-window close, replay, and uninstall, with evidence under `target/gui-evidence/windows-recheck`.
+Its installer SHA-256 is `04ebc79cf312a75e57a620a070491d99f2bfbc650fb8fecfe797255622c27791`.
+The latest hosted Windows candidate attempt still times out at test debugger readiness; this is an unresolved hosted automation limitation, not passing evidence.
+No hosted installer rerun was requested for the CI-cost follow-up.

@@ -210,7 +210,7 @@ def journey(driver, binary, output, data):
     driver.start(binary)
     driver.click("Sessions")
     driver.wait(lambda: driver.script("return !Array.from(document.querySelectorAll('.sessionWorkspaceRow strong')).some(e => e.textContent === " + json.dumps(title) + ")"))
-    for route in ("Providers", "Memory", "Settings"):
+    for route in ("Providers", "Memory", "Settings", "Help"):
         driver.click(route)
         driver.wait(lambda: driver.script("return document.querySelector('#main-content h1')?.textContent === " + json.dumps(route)))
         driver.screenshot_matrix(output, route.lower())

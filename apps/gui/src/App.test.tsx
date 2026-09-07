@@ -215,6 +215,28 @@ afterEach(async () => {
 });
 
 describe("AutoHarness GUI", () => {
+  it("opens searchable help with keyboard focus and exposes recovery guidance", async () => {
+    const { user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.keyboard("{F1}");
+    expect(await screen.findByRole("main", { name: "Help" })).toHaveFocus();
+    await user.type(screen.getByRole("searchbox", { name: "Search help" }), "unacknowledged");
+    expect(screen.getByRole("heading", { name: "Offline and restart recovery" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sessions and exports" })).not.toBeInTheDocument();
+    await user.keyboard("{Alt>}1{/Alt}");
+    await user.keyboard("{Control>}k{/Control}");
+    await user.click(screen.getByRole("menuitem", { name: /Open help/ }));
+    expect(await screen.findByRole("main", { name: "Help" })).toHaveFocus();
+  });
+
+  it("does not let help shortcuts bypass a permission review", async () => {
+    const { user } = renderScenario("permission");
+    await screen.findByRole("dialog");
+    await user.keyboard("{F1}{Alt>}6{/Alt}");
+    expect(screen.queryByRole("main", { name: "Help" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
   it("offers native shutdown through the palette and stops accepting commands", async () => {
     const snapshot = createFixtureSnapshot("ready");
     snapshot.runtimeMode = "native";

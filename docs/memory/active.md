@@ -1,6 +1,6 @@
 # Active memory
 
-**Last reviewed:** 2026-09-06
+**Last reviewed:** 2026-09-07
 
 **Phase:** Native GUI migration Stage 8 release preparation
 
@@ -64,7 +64,9 @@ Retain the TUI as the compatibility and behavioral reference until the GUI relea
 
 - `autoharness-app` still maps temporary TUI-owned projections into the renderer-neutral contract.
 - Stage 1 exits only after application orchestration no longer imports renderer-owned types and both clients consume the shared contract directly.
-- The GUI does not yet provide complete Help parity.
+- The GUI provides searchable Help for shortcuts, primary workflows, credentials, permissions, Memory, restart recovery, and updates through navigation, the command palette, F1, and Alt+6.
+- Help preserves route focus and permission preemption; all-platform native accessibility approval remains open.
+- [Change-scoped CI and local validation](../release/GUI_VALIDATION_WORKFLOW.md) keep complete relevant baseline coverage while making installer journeys manual and platform-selectable.
 - Native planning and evaluation producers remain future runtime work; the six advanced surface contracts are implemented with fixtures and the native inspector currently exposes bounded tool evidence.
 - Renderer restart recovery currently requires restarting the desktop process when an earlier native frame remains unacknowledged.
 - Signing identities are not provisioned; signed distribution and the complete same-candidate platform release matrix remain open.

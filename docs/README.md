@@ -56,6 +56,8 @@ Terminal documentation remains the compatibility and behavioral reference during
 
 ## Validation
 
+- [GUI validation workflow](release/GUI_VALIDATION_WORKFLOW.md): change-scoped pull-request checks, the complete local baseline, and deliberate native candidate runs.
+
 - [`scripts/check_docs_links.py`](../scripts/check_docs_links.py): verifies that every relative link in every Markdown file resolves and that every ADR is indexed; runs in CI and locally from the repository root.
 
 Install frontend dependencies once from the repository root with `pnpm install`.
