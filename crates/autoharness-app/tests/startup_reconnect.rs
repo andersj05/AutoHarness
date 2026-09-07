@@ -50,29 +50,29 @@ fn startup_resolution_publishes_provider_status_from_profile() {
     );
     assert!(!source.credential().is_empty());
 
-    // The projection the TUI receives names the same safe facts.
-    let status = autoharness_tui::ProviderStatusProjection {
+    // The projection the client receives names the same safe facts.
+    let status = autoharness_client::runtime::ProviderStatusProjection {
         active_profile: source.profile_id().map(str::to_owned),
         provider_kind: source.provider_kind().map(|kind| match kind {
             autoharness_settings::ProviderKind::Gemini => {
-                autoharness_tui::ProviderKindLabel::Gemini
+                autoharness_client::runtime::ProviderKindLabel::Gemini
             }
             autoharness_settings::ProviderKind::Router => {
-                autoharness_tui::ProviderKindLabel::Router
+                autoharness_client::runtime::ProviderKindLabel::Router
             }
             autoharness_settings::ProviderKind::CodexCli => {
-                autoharness_tui::ProviderKindLabel::CodexCli
+                autoharness_client::runtime::ProviderKindLabel::CodexCli
             }
         }),
         credential_source: match source.source_name() {
             autoharness_app::CredentialSourceName::Environment => {
-                autoharness_tui::CredentialSourceLabel::Environment
+                autoharness_client::runtime::CredentialSourceLabel::Environment
             }
             autoharness_app::CredentialSourceName::CredentialVault => {
-                autoharness_tui::CredentialSourceLabel::CredentialVault
+                autoharness_client::runtime::CredentialSourceLabel::CredentialVault
             }
             autoharness_app::CredentialSourceName::SessionOnly => {
-                autoharness_tui::CredentialSourceLabel::SessionOnly
+                autoharness_client::runtime::CredentialSourceLabel::SessionOnly
             }
         },
         credential_connected: !source.credential().is_empty(),

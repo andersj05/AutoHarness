@@ -81,22 +81,17 @@ jobs:
         run: >-
           cargo clippy --workspace
           --exclude autoharness-app
-          --exclude autoharness-tui
           --all-targets --all-features --locked --no-deps -- -D warnings
       - name: Run desktop host Clippy
         run: >-
           cargo clippy -p autoharness-app
-          --lib --bin autoharness
-          --test credential_resolver
-          --test profile_store
-          --test secret_sentinel
-          --test startup_reconnect
-          --test vault_fake
-          --features gui --locked --no-deps -- -D warnings
+          --all-targets --all-features --locked --no-deps -- -D warnings
+      - name: Check headless library composition
+        run: cargo check -p autoharness-app --lib --no-default-features --locked
       - name: Build documentation
-        run: cargo doc --workspace --exclude autoharness-tui --all-features --no-deps --locked
+        run: cargo doc --workspace --all-features --no-deps --locked
       - name: Test documentation
-        run: cargo test --workspace --exclude autoharness-tui --doc --all-features --locked
+        run: cargo test --workspace --doc --all-features --locked
 
   docs:
     name: Documentation links
@@ -202,18 +197,11 @@ jobs:
         run: >-
           cargo test --workspace
           --exclude autoharness-app
-          --exclude autoharness-tui
           --all-targets --all-features --locked --no-fail-fast
       - name: Run desktop host tests
         run: >-
           cargo test -p autoharness-app
-          --lib --bin autoharness
-          --test credential_resolver
-          --test profile_store
-          --test secret_sentinel
-          --test startup_reconnect
-          --test vault_fake
-          --features gui --locked --no-fail-fast
+          --all-targets --no-default-features --features gui --locked --no-fail-fast
 
   result:
     name: CI passed

@@ -1,5 +1,4 @@
 import copy
-from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -19,7 +18,7 @@ class ReleaseGateTests(unittest.TestCase):
         passed = {"status": "passed", "commit": self.commit, "evidence": proof}
         self.record = {"schema_version": 1, "commit": self.commit, "open_p0_p1": [], "blockers": [],
                        "gates": {name: copy.deepcopy(passed) for name in COMMON_GATES}, "platforms": {},
-                       "approvals": {name: copy.deepcopy(passed) for name in (*APPROVALS, "tui-retirement")},
+                       "approvals": {name: copy.deepcopy(passed) for name in APPROVALS},
                        "rollback": {"previous_commit": "b" * 40, "window_closes": "2026-09-20", "rehearsal": proof}}
         for platform in PLATFORMS:
             artifact = self.write(f"{platform}/fixture.bin", "synthetic artifact")
@@ -36,9 +35,8 @@ class ReleaseGateTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
-    def test_complete_candidate_and_closed_window(self):
+    def test_complete_distribution_candidate(self):
         check(self.record, self.root, self.commit)
-        check(self.record, self.root, self.commit, retire=True, today=date(2026, 9, 21))
 
     def test_template_is_not_release_evidence(self):
         with self.assertRaises(ValueError):
@@ -49,8 +47,6 @@ class ReleaseGateTests(unittest.TestCase):
         groups.extend(self.record["platforms"][p]["gates"] for p in PLATFORMS)
         for group in groups:
             for name in group:
-                if name == "tui-retirement":
-                    continue
                 with self.subTest(gate=name):
                     group[name]["commit"] = "c" * 40
                     with self.assertRaises(ValueError):
@@ -74,12 +70,11 @@ class ReleaseGateTests(unittest.TestCase):
                     check(self.record, self.root, self.commit)
                 self.record["platforms"]["linux"]["package"] = self.write("linux/manifest.json", original)
 
-    def test_retirement_requires_expired_window_and_separate_approval(self):
-        with self.assertRaisesRegex(ValueError, "window"):
-            check(self.record, self.root, self.commit, retire=True, today=date(2026, 9, 20))
-        self.record["approvals"].pop("tui-retirement")
+    def test_distribution_still_requires_a_valid_rollback_window(self):
+        self.record["rollback"]["window_closes"] = "invalid"
         with self.assertRaises(ValueError):
-            check(self.record, self.root, self.commit, retire=True, today=date(2026, 9, 21))
+            check(self.record, self.root, self.commit)
+        self.assertNotIn("tui-retirement", template()["approvals"])
 
     def test_path_escape_and_open_defects_are_rejected(self):
         self.record["gates"]["security-review"]["evidence"]["path"] = str(self.root / "proof.txt")

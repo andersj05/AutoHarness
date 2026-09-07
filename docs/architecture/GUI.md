@@ -2,7 +2,7 @@
 
 **Status:** Accepted migration target
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-07
 
 ## Purpose
 
@@ -238,14 +238,14 @@ The GUI adds these gates without weakening the Rust gates:
 - Credential sentinel, permission preemption, window-close recovery, and crash-interruption tests.
 - Keyboard-only and screen-reader smoke reviews.
 
-The frozen TUI and its PTY tests remain available as local migration references until the GUI release checklist explicitly retires them.
-They do not gate ordinary GUI migration pull requests.
+The terminal renderer and PTY tests are retired under [ADR-0020](../adr/0020-retire-terminal-client.md).
+Application messages, projections, and bounded in-process channels live in `autoharness-client::runtime`, while the crate root owns the versioned serializable carrier protocol.
+Neither contract imports a renderer.
 
 ## Candidate packaging
 
-The opt-in `gui-package` feature embeds production frontend assets and makes the packaged `autoharness` executable open the GUI without arguments.
-The `ah` executable and ordinary source builds retain the terminal default.
-On Windows, use `ah` for terminal operation because the packaged desktop executable has the native window subsystem rather than a console.
-The packaging overlay is separate from the inactive preview bundle configuration.
-Candidate behavior does not authorize the repository-wide default cutover.
-The [update policy](../release/GUI_UPDATE_POLICY.md) owns distribution and rollback rules, and the [release checklist](../release/GUI_RELEASE_CHECKLIST.md) owns promotion evidence.
+The default `gui-package` feature embeds production frontend assets and makes both `autoharness` and `ah` open the GUI without arguments.
+Both binary targets require the `gui` feature, so headless library consumers may disable default features without compiling a desktop binary.
+Native hot-reload development explicitly disables default features and selects `gui` through `pnpm gui:desktop`.
+The packaging overlay remains separate from the inactive development bundle configuration.
+The [update policy](../release/GUI_UPDATE_POLICY.md) owns distribution and rollback rules, and the [release checklist](../release/GUI_RELEASE_CHECKLIST.md) owns signed distribution evidence.

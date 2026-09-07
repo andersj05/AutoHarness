@@ -1,8 +1,8 @@
 # GUI update and rollback policy
 
-**Status:** Candidate distribution policy; public release and default cutover remain approval-gated.
+**Status:** Candidate distribution policy; public release remains approval-gated; GUI-only source cutover is authorized.
 
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-07
 
 ## Distribution
 
@@ -50,17 +50,15 @@ An installer must not erase user data, exports, or vault credentials during upgr
 
 ## Rollback
 
-Keep the TUI compatibility path and the prior signed package for the entire maintainer-approved rollback window.
-Use the packaged `ah` executable for terminal operation, especially on Windows where the desktop executable does not attach a console.
-Record the window's closing date in the candidate evidence; elapsed time alone never authorizes retirement.
+Keep the previous approved package and its compatible cold data backup for the maintainer-approved rollback window.
+Both `autoharness` and `ah` now open the desktop under [ADR-0020](../adr/0020-retire-terminal-client.md).
+Record the window's closing date in distribution evidence.
 If the candidate fails, stop all clients, preserve its data directory for diagnosis, restore the untouched cold backup to a separate location, and launch the previous signed version against that backup.
 Do not attempt a database downgrade or overwrite the only copy of migrated data.
 Vault state is outside the data-directory backup, so credential mutation rollback must follow the existing [credential recovery contract](../architecture/SETTINGS.md).
-Use the current package's `ah` binary only when its shared runtime and schemas remain compatible with the data being opened.
-
-Default-interface cutover requires release, rollback, and default-interface approval.
-TUI removal requires a closed rollback window plus separate retirement approval.
-The [release validator](../../scripts/check_gui_release.py) checks those conditions without performing either action.
+Signed distribution still requires release, rollback, and default-interface approval for the exact package candidate.
+The [release validator](../../scripts/check_gui_release.py) checks distribution evidence without performing publication.
+Source retirement is separately authorized by ADR-0020 and does not satisfy missing distribution evidence.
 
 ## Platform references
 

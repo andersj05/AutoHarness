@@ -25,8 +25,6 @@ pub enum AppError {
     CredentialRedactionUnavailable,
     /// A trusted memory lifecycle command was rejected.
     MemoryCommand(crate::memory_runtime::MemoryCommandError),
-    /// Terminal initialization, input, drawing, or restoration failed.
-    Terminal,
     /// A required application worker stopped unexpectedly.
     WorkerStopped,
     /// Process configuration could not satisfy a required invariant.
@@ -48,7 +46,6 @@ impl Display for AppError {
                 formatter.write_str("saved credentials are unavailable for redaction")
             }
             Self::MemoryCommand(source) => Display::fmt(source, formatter),
-            Self::Terminal => formatter.write_str("terminal operation failed"),
             Self::WorkerStopped => formatter.write_str("an application worker stopped"),
             Self::Configuration => formatter.write_str("application configuration is invalid"),
         }
@@ -66,7 +63,6 @@ impl Error for AppError {
             Self::FileSystem
             | Self::CredentialRedactionUnavailable
             | Self::WriterAlreadyRunning
-            | Self::Terminal
             | Self::WorkerStopped
             | Self::Configuration => None,
         }

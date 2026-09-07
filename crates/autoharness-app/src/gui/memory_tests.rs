@@ -15,7 +15,7 @@ impl Harness {
     fn start(database: std::path::PathBuf) -> Self {
         let (actor, session_id, session) =
             crate::engine_actor::EngineActor::start(database).unwrap();
-        let (ui, app) = autoharness_tui::bounded_ports(
+        let (ui, app) = autoharness_client::runtime::bounded_ports(
             Arc::new(crate::projection::session(&session)),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -306,19 +306,20 @@ fn gui_memory_rejects_invalid_imports_and_query_bounds_before_admission() {
 
 #[test]
 fn unrepresentable_memory_is_a_recoverable_workspace_failure() {
-    let row = autoharness_tui::MemorySummary::new(
+    let row = autoharness_client::runtime::MemorySummary::new(
         "界".repeat(512),
         "safe preview",
-        autoharness_tui::MemoryStatus::Active,
-        autoharness_tui::MemoryScope::Workspace,
+        autoharness_client::runtime::MemoryStatus::Active,
+        autoharness_client::runtime::MemoryScope::Workspace,
         1,
         None,
         0,
     )
     .unwrap();
-    let source = autoharness_tui::MemoryProjection::ready(7, vec![row], vec![], 1, false)
-        .unwrap()
-        .with_view_page(9, None);
+    let source =
+        autoharness_client::runtime::MemoryProjection::ready(7, vec![row], vec![], 1, false)
+            .unwrap()
+            .with_view_page(9, None);
     let page = memory::map_projection(&source).unwrap();
     assert_eq!(page.view_generation.get(), 9);
     assert!(matches!(

@@ -1,7 +1,7 @@
 """Fail closed unless one GUI candidate has all release evidence and approvals.
 
 This checks evidence completeness and byte identity, not the truth of human
-attestations. It never publishes, changes defaults, or retires the terminal.
+attestations. It never publishes or changes source defaults.
 """
 
 import argparse
@@ -43,7 +43,7 @@ def attestation(root, record, commit):
     evidence_file(root, record.get("evidence"))
 
 
-def check(record, root, commit, retire=False, today=None):
+def check(record, root, commit):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("candidate must be a full lowercase Git commit")
     if record.get("schema_version") != 1 or record.get("commit") != commit:
@@ -78,11 +78,7 @@ def check(record, root, commit, retire=False, today=None):
     if not re.fullmatch(r"[0-9a-f]{40}", rollback.get("previous_commit", "")) or rollback.get("previous_commit") == commit:
         raise ValueError("rollback requires a distinct previous candidate")
     evidence_file(root, rollback.get("rehearsal"))
-    closes = date.fromisoformat(rollback.get("window_closes", ""))
-    if retire:
-        if (today or date.today()) <= closes:
-            raise ValueError("rollback window has not closed")
-        attestation(root, record.get("approvals", {}).get("tui-retirement"), commit)
+    date.fromisoformat(rollback.get("window_closes", ""))
 
 
 def template():
@@ -91,7 +87,7 @@ def template():
             "gates": {name: pending for name in COMMON_GATES},
             "platforms": {platform: {"package": {"path": "", "sha256": ""},
                            "gates": {name: pending for name in PLATFORM_GATES}} for platform in PLATFORMS},
-            "approvals": {name: pending for name in (*APPROVALS, "tui-retirement")},
+            "approvals": {name: pending for name in APPROVALS},
             "rollback": {"previous_commit": "", "window_closes": "", "rehearsal": {"path": "", "sha256": ""}}}
 
 
@@ -99,7 +95,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("record", type=Path, nargs="?")
     parser.add_argument("--commit")
-    parser.add_argument("--retire-tui", action="store_true")
     parser.add_argument("--template", action="store_true")
     args = parser.parse_args()
     if args.template:
@@ -109,7 +104,7 @@ def main():
         parser.error("record and --commit are required")
     try:
         check(json.loads(args.record.read_text(encoding="utf-8")), args.record.parent,
-              args.commit, args.retire_tui)
+              args.commit)
     except (ValueError, OSError, TypeError, KeyError) as error:
         print(f"GUI promotion blocked: {error}", file=sys.stderr)
         sys.exit(1)

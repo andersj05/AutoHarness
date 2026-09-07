@@ -19,6 +19,28 @@ const THEMES = [
 const COLOR_MODES = ["color", "soft", "vivid", "no-color", "high-contrast"] as const;
 
 describe("desktop design-system contracts", () => {
+  it("keeps menu descriptions and shortcuts readable on every selected surface", () => {
+    const luminance = (hex: string) => {
+      const channels = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+      const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const contrast = (first: string, second: string) => {
+      const [dark, light] = [luminance(first), luminance(second)].sort((a, b) => a - b);
+      return (light + 0.05) / (dark + 0.05);
+    };
+    const themes = themesCss.split("}").filter((block) => block.includes("--color-surface-base:"));
+    expect(themes).toHaveLength(45);
+    for (const theme of themes) {
+      const tokens = Object.fromEntries([...theme.matchAll(/--color-([\w-]+): (#[\da-f]{6})/g)].map((match) => [match[1], match[2]]));
+      const selectedInk = theme.includes('data-color-mode="high-contrast"') ? tokens["text-on-accent"] : tokens["text-primary"];
+      expect(contrast(selectedInk, tokens["surface-selected-muted"])).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(tokens["text-secondary"], tokens["surface-raised"])).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(componentsCss).toContain('.dsMenuItem:is(:hover, :focus-visible, [data-active="true"]) :is(.dsMenuCopy small, .dsMenuIcon, kbd) { color: inherit; }');
+    expect(componentsCss).toContain('[data-color-mode="high-contrast"] .dsMenuItem:is(:hover, :focus-visible, [data-active="true"]) { color: var(--color-text-on-accent); }');
+  });
+
   it("ships every renderer-neutral theme and color treatment", () => {
     for (const theme of THEMES) {
       for (const mode of COLOR_MODES) {

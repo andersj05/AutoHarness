@@ -169,6 +169,35 @@ class Driver:
         self.wait(lambda: log.read_text(encoding="utf-8").count("app_stopped") > before)
         self.close()
 
+    def palette_contrast(self, output, mode):
+        self.request("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
+            {"type": "keyDown", "value": "\ue009"}, {"type": "keyDown", "value": "k"},
+            {"type": "keyUp", "value": "k"}, {"type": "keyUp", "value": "\ue009"}]}]})
+        self.element("//input[@aria-label='Search commands']")
+        self.request("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
+            {"type": "keyDown", "value": "\ue015"}, {"type": "keyUp", "value": "\ue015"}]}]})
+        self.wait(lambda: self.script("return Boolean(document.querySelector('.dsMenuItem:focus-visible'))"))
+        ratios = self.script(r"""
+            const item = document.querySelector('.dsMenuItem:focus-visible');
+            const luminance = color => {
+                const rgb = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(c => c / 255);
+                const linear = rgb.map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4);
+                return linear[0] * .2126 + linear[1] * .7152 + linear[2] * .0722;
+            };
+            const background = luminance(getComputedStyle(item).backgroundColor);
+            return ['strong', 'small', 'kbd'].map(selector => {
+                const ink = luminance(getComputedStyle(item.querySelector(selector)).color);
+                return (Math.max(ink, background) + .05) / (Math.min(ink, background) + .05);
+            });
+        """)
+        if min(ratios) < 4.5:
+            raise RuntimeError("native selected menu contrast is below 4.5:1")
+        self.screenshot_matrix(output, f"palette-{mode}")
+        self.request("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
+            {"type": "keyDown", "value": "\ue00c"}, {"type": "keyUp", "value": "\ue00c"}]}]})
+        self.wait(lambda: self.script("return !document.querySelector('[role=dialog]')"))
+        return {"mode": mode, "minimum_text_contrast": round(min(ratios), 2)}
+
 
 def journey(driver, binary, output, data):
     title = "Packaged lifecycle fixture"
@@ -214,7 +243,14 @@ def journey(driver, binary, output, data):
         driver.click(route)
         driver.wait(lambda: driver.script("return document.querySelector('#main-content h1')?.textContent === " + json.dumps(route)))
         driver.screenshot_matrix(output, route.lower())
-    driver.close()
+    menu_contrast = [driver.palette_contrast(output, "color")]
+    driver.click("Settings")
+    option = driver.element("//select[@id='color-mode']/option[@value='high-contrast']")
+    driver.request("POST", f"/element/{option}/click", {})
+    driver.wait(lambda: driver.script("return document.querySelector('.app').dataset.colorMode === 'high-contrast' && !document.querySelector('#color-mode').disabled"))
+    menu_contrast.append(driver.palette_contrast(output, "high-contrast"))
+    driver.clean_close(data)
+    return menu_contrast
 
 
 def main():
@@ -247,12 +283,13 @@ def main():
         driver = Driver(args.port, environment, data)
         try:
             driver.wait(lambda: driver.request("GET", "/status", session=False))
-            journey(driver, binary, args.output, data)
+            menu_contrast = journey(driver, binary, args.output, data)
             report = {"schema_version": 1, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                       "journey": "offline-session-lifecycle", "status": "passed",
                       "graphics_mode": ("software-no-compositing" if sys.platform == "linux" and
                                         environment.get("WEBKIT_DISABLE_COMPOSITING_MODE") == "1" else "system-default"),
-                      "restart_boundaries": 2, "clean_shutdown_verified": True, "visual_review": "pending"}
+                      "restart_boundaries": 2, "clean_shutdown_verified": True, "visual_review": "pending",
+                      "menu_contrast": menu_contrast}
             (args.output / "lifecycle.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         except Exception as failure:
             log = data / "autoharness.log"

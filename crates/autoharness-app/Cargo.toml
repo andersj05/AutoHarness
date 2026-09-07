@@ -1,6 +1,6 @@
 [package]
 name = "autoharness-app"
-description = "AutoHarness desktop and terminal application composition"
+description = "AutoHarness desktop application composition"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,24 +17,26 @@ path = "src/lib.rs"
 [[bin]]
 name = "autoharness"
 path = "src/main.rs"
+required-features = ["gui"]
 
 
 [[bin]]
 name = "ah"
 path = "src/ah.rs"
+required-features = ["gui"]
 test = false
 bench = false
 doc = false
 
 [features]
-benchmark-instrumentation = ["autoharness-tui/benchmark-instrumentation"]
-gui = ["dep:autoharness-client", "dep:tauri", "dep:tauri-build"]
-# Explicit installer builds only; ordinary builds keep the migration reference default.
+default = ["gui-package"]
+gui = ["dep:tauri", "dep:tauri-build"]
+# Embed local production assets for source and installer launches.
 gui-package = ["gui", "tauri/custom-protocol"]
 
 [dependencies]
 async-trait.workspace = true
-autoharness-client = { workspace = true, optional = true }
+autoharness-client.workspace = true
 autoharness-domain.workspace = true
 autoharness-engine.workspace = true
 autoharness-memory.workspace = true
@@ -45,12 +47,9 @@ autoharness-provider-openai.workspace = true
 autoharness-settings.workspace = true
 autoharness-store.workspace = true
 autoharness-store-sqlite.workspace = true
-autoharness-tui.workspace = true
 autoharness-tool.workspace = true
-crossterm.workspace = true
 futures-util.workspace = true
 keyring.workspace = true
-ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -71,10 +70,8 @@ tauri = { version = "2.11.5", optional = true , features = [] }
 [dev-dependencies]
 async-stream.workspace = true
 async-trait.workspace = true
-portable-pty = "0.9.0"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
-vt100 = "0.15.2"
 zeroize.workspace = true
 
 [lints]

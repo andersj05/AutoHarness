@@ -16,7 +16,6 @@ mod memory_runtime;
 mod projection;
 mod proposal_runtime;
 mod telemetry;
-mod terminal;
 
 use std::env;
 use std::fs::OpenOptions;
@@ -26,6 +25,11 @@ use std::sync::Arc;
 use autoharness_app::credential::CredentialSourceName;
 use autoharness_app::profiles::{ProfileManager, ProfileStore};
 use autoharness_app::vault::{KeyringVault, VaultPort};
+use autoharness_client::runtime::{
+    ApiCredential, CatalogProjection, CredentialSourceLabel, ProviderKindLabel,
+    ProviderStatusProjection, RetryPolicy, SessionsProjection, SettingsProjection, UiFailure,
+    bounded_ports,
+};
 use autoharness_domain::{ClassifiedError as _, RetryAdvice};
 use autoharness_provider::{
     CatalogCache, ManagedProvider, Provider, ProviderError, ProviderErrorKind, ProviderPolicy,
@@ -37,11 +41,6 @@ use autoharness_settings::{LayerKind, ProfileId, ProviderKind, ProviderProfile, 
 use autoharness_tool::{
     FileArtifactStore, LocalFilesystem, LocalHttp, LocalProcess, PermissionPolicy, ToolRuntime,
 };
-use autoharness_tui::{
-    ApiCredential, CatalogProjection, CredentialSourceLabel, Model, ProviderKindLabel,
-    ProviderStatusProjection, RetryPolicy, SessionsProjection, SettingsProjection, UiFailure,
-    UiPorts, bounded_ports,
-};
 use catalog_cache::SqliteCatalogCache;
 use config::{AppPaths, WriterLease};
 use coordinator::{
@@ -50,7 +49,6 @@ use coordinator::{
 };
 use engine_actor::EngineActor;
 use error::AppError;
-use terminal::TerminalGuard;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
@@ -63,7 +61,6 @@ struct ConfiguredProvider {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClientMode {
-    Tui,
     #[cfg(all(
         feature = "gui",
         any(target_os = "windows", target_os = "macos", target_os = "linux")
@@ -84,8 +81,6 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), AppError> {
     let client_mode = client_mode_from(env::args().skip(1))?;
-    #[cfg(feature = "benchmark-instrumentation")]
-    autoharness_tui::benchmark::initialize();
     let paths = AppPaths::prepare()?;
     let _writer_lease = WriterLease::acquire(&paths.writer_lock())?;
     let _trace_guard = initialize_tracing(&paths)?;
@@ -152,17 +147,6 @@ async fn run() -> Result<(), AppError> {
     let coordinator_task = tokio::spawn(coordinator.run());
     let signal_task = spawn_signal_handler(shutdown.clone());
     let client_result = match client_mode {
-        ClientMode::Tui => {
-            run_terminal(
-                ui_ports,
-                initial_session,
-                initial_sessions,
-                initial_catalog,
-                initial_settings,
-                shutdown.clone(),
-            )
-            .await
-        }
         #[cfg(all(
             feature = "gui",
             any(target_os = "windows", target_os = "macos", target_os = "linux")
@@ -189,7 +173,6 @@ fn client_mode_from(arguments: impl IntoIterator<Item = String>) -> Result<Clien
     let mut requested = None;
     for argument in arguments {
         let candidate = match argument.as_str() {
-            "--tui" => ClientMode::Tui,
             "--gui" => {
                 #[cfg(all(
                     feature = "gui",
@@ -216,27 +199,7 @@ fn client_mode_from(arguments: impl IntoIterator<Item = String>) -> Result<Clien
 }
 
 fn default_client_mode() -> ClientMode {
-    #[cfg(feature = "gui-package")]
-    if env!("CARGO_BIN_NAME") == "autoharness" {
-        return ClientMode::Gui;
-    }
-    ClientMode::Tui
-}
-
-async fn run_terminal(
-    ui_ports: UiPorts,
-    initial_session: Arc<autoharness_tui::SessionProjection>,
-    initial_sessions: Arc<SessionsProjection>,
-    initial_catalog: Arc<CatalogProjection>,
-    initial_settings: Arc<SettingsProjection>,
-    shutdown: CancellationToken,
-) -> Result<(), AppError> {
-    let mut model = Model::new(initial_session, initial_sessions, initial_catalog);
-    model.apply_settings(initial_settings);
-    let mut terminal = TerminalGuard::enter()?;
-    let result = autoharness_tui::run(terminal.terminal_mut(), model, ui_ports, shutdown).await;
-    terminal.restore();
-    result.map(|_| ()).map_err(|_| AppError::Terminal)
+    ClientMode::Gui
 }
 
 /// Everything resolved before any UI or provider construction begins.
@@ -710,42 +673,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_default_respects_the_explicit_packaging_boundary() {
+    fn desktop_is_the_only_application_mode() {
         assert_eq!(
-            client_mode_from(Vec::<String>::new()).expect("default mode"),
-            default_client_mode()
+            client_mode_from(Vec::<String>::new()).expect("default"),
+            ClientMode::Gui
         );
         assert_eq!(
-            client_mode_from(["--tui".to_owned()]).expect("terminal mode"),
-            ClientMode::Tui
+            client_mode_from(["--gui".to_owned()]).expect("explicit"),
+            ClientMode::Gui
         );
+        assert!(client_mode_from(["--tui".to_owned()]).is_err());
         assert!(client_mode_from(["--unknown".to_owned()]).is_err());
-        assert!(client_mode_from(["--tui".to_owned(), "--tui".to_owned()]).is_err());
-    }
-
-    #[cfg(all(
-        feature = "gui",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ))]
-    #[test]
-    fn gui_client_is_an_explicit_feature_gated_mode() {
-        assert_eq!(
-            client_mode_from(["--gui".to_owned()]).expect("GUI mode"),
-            ClientMode::Gui
-        );
-    }
-
-    #[test]
-    fn only_the_packaged_primary_binary_defaults_to_gui() {
-        #[cfg(feature = "gui-package")]
-        let expected = if env!("CARGO_BIN_NAME") == "autoharness" {
-            ClientMode::Gui
-        } else {
-            ClientMode::Tui
-        };
-        #[cfg(not(feature = "gui-package"))]
-        let expected = ClientMode::Tui;
-        assert_eq!(default_client_mode(), expected);
+        assert!(client_mode_from(["--gui".to_owned(), "--gui".to_owned()]).is_err());
     }
 
     #[test]
