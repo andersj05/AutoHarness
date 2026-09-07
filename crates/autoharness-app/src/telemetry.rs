@@ -132,10 +132,10 @@ mod tests {
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
+    use autoharness_client::runtime::ApiCredential;
     use autoharness_domain::{PromptText, ResponseText, RetryAdvice};
     use autoharness_provider::{ProviderError, ProviderErrorKind};
     use autoharness_provider_gemini::GeminiApiKey;
-    use autoharness_tui::ApiCredential;
     use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Clone, Default)]

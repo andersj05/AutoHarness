@@ -1,55 +1,55 @@
 //! Explicit temporary adapter from runtime memory projections to the public client.
 use super::GuiIpcError;
 use autoharness_client as client;
-use autoharness_tui as tui;
+use autoharness_client::runtime as host;
 
 pub(super) fn map_command(
     command: client::MemoryCommand,
-    request_id: tui::RequestId,
-) -> Result<tui::UiIntent, GuiIpcError> {
+    request_id: host::RequestId,
+) -> Result<host::UiIntent, GuiIpcError> {
     use client::MemoryCommand as C;
     let invalid = |_| GuiIpcError::invalid_command();
     Ok(match command {
-        C::Query(query) => tui::UiIntent::QueryMemory {
+        C::Query(query) => host::UiIntent::QueryMemory {
             request_id,
             view_generation: query.view_generation.get(),
-            query: tui::MemoryViewQuery::new(
+            query: host::MemoryViewQuery::new(
                 query.literal.as_str(),
                 map_memory_status_filter(query.status),
                 map_memory_scope_filter(query.scope),
                 map_memory_page_direction(query.direction),
                 query
                     .before
-                    .map(|value| tui::MemoryViewCursor::new(value.as_str()))
+                    .map(|value| host::MemoryViewCursor::new(value.as_str()))
                     .transpose()
                     .map_err(invalid)?,
-                tui::MEMORY_VIEW_PAGE_SIZE,
+                host::MEMORY_VIEW_PAGE_SIZE,
             )
             .map_err(invalid)?,
         },
-        C::Remember { content } => tui::UiIntent::RememberMemory {
+        C::Remember { content } => host::UiIntent::RememberMemory {
             request_id,
-            content: tui::MemoryContent::new(content.as_str()).map_err(invalid)?,
+            content: host::MemoryContent::new(content.as_str()).map_err(invalid)?,
         },
-        C::Import { path } => tui::UiIntent::ImportMemory {
+        C::Import { path } => host::UiIntent::ImportMemory {
             request_id,
-            path: tui::MemoryImportPath::new(path.as_str()).map_err(invalid)?,
+            path: host::MemoryImportPath::new(path.as_str()).map_err(invalid)?,
         },
         C::Revise {
             memory_id,
             expected_last_sequence,
             content,
-        } => tui::UiIntent::ReviseMemory {
+        } => host::UiIntent::ReviseMemory {
             request_id,
             memory_id: memory_id.into_inner(),
             expected_last_sequence: expected_last_sequence.get(),
-            content: tui::MemoryContent::new(content.as_str()).map_err(invalid)?,
+            content: host::MemoryContent::new(content.as_str()).map_err(invalid)?,
         },
         C::Approve {
             memory_id,
             expected_last_sequence,
             proposal_revision_id,
-        } => tui::UiIntent::ApproveMemoryProposal {
+        } => host::UiIntent::ApproveMemoryProposal {
             request_id,
             memory_id: memory_id.into_inner(),
             expected_last_sequence: expected_last_sequence.get(),
@@ -59,7 +59,7 @@ pub(super) fn map_command(
             memory_id,
             expected_last_sequence,
             proposal_revision_id,
-        } => tui::UiIntent::RejectMemoryProposal {
+        } => host::UiIntent::RejectMemoryProposal {
             request_id,
             memory_id: memory_id.into_inner(),
             expected_last_sequence: expected_last_sequence.get(),
@@ -69,7 +69,7 @@ pub(super) fn map_command(
             memory_id,
             expected_last_sequence,
             revision_id,
-        } => tui::UiIntent::RetractMemory {
+        } => host::UiIntent::RetractMemory {
             request_id,
             memory_id: memory_id.into_inner(),
             expected_last_sequence: expected_last_sequence.get(),
@@ -78,12 +78,12 @@ pub(super) fn map_command(
         C::Delete {
             memory_id,
             expected_last_sequence,
-        } => tui::UiIntent::DeleteMemory {
+        } => host::UiIntent::DeleteMemory {
             request_id,
             memory_id: memory_id.into_inner(),
             expected_last_sequence: expected_last_sequence.get(),
         },
-        C::Export { memory_id } => tui::UiIntent::ExportMemory {
+        C::Export { memory_id } => host::UiIntent::ExportMemory {
             request_id,
             memory_id: memory_id.into_inner(),
         },
@@ -98,7 +98,7 @@ fn id(value: &str) -> Result<client::MemoryId, GuiIpcError> {
 }
 
 pub(super) fn map_projection(
-    source: &tui::MemoryProjection,
+    source: &host::MemoryProjection,
 ) -> Result<client::MemoryProjection, GuiIpcError> {
     match try_map_projection(source) {
         Ok(page) => Ok(page),
@@ -114,15 +114,15 @@ pub(super) fn map_projection(
 }
 
 fn try_map_projection(
-    source: &tui::MemoryProjection,
+    source: &host::MemoryProjection,
 ) -> Result<client::MemoryProjection, GuiIpcError> {
     let page = client::MemoryProjection {
         view_generation: source.view_generation().into(),
         generation: source.generation().into(),
         state: match source.state() {
-            tui::MemoryLoadState::Ready => client::MemoryLoadState::Ready,
-            tui::MemoryLoadState::Loading => client::MemoryLoadState::Loading,
-            tui::MemoryLoadState::Failed(failure) => client::MemoryLoadState::Failed {
+            host::MemoryLoadState::Ready => client::MemoryLoadState::Ready,
+            host::MemoryLoadState::Loading => client::MemoryLoadState::Loading,
+            host::MemoryLoadState::Failed(failure) => client::MemoryLoadState::Failed {
                 failure: super::map_failure(failure)?,
             },
         },
@@ -154,7 +154,7 @@ fn try_map_projection(
     Ok(page)
 }
 
-fn map_detail(detail: &tui::MemoryDetail) -> Result<client::MemoryDetail, GuiIpcError> {
+fn map_detail(detail: &host::MemoryDetail) -> Result<client::MemoryDetail, GuiIpcError> {
     Ok(client::MemoryDetail {
         revision: detail.revision(),
         content: detail
@@ -245,114 +245,116 @@ fn map_detail(detail: &tui::MemoryDetail) -> Result<client::MemoryDetail, GuiIpc
     })
 }
 
-fn map_memory_status(value: tui::MemoryStatus) -> client::MemoryStatus {
+fn map_memory_status(value: host::MemoryStatus) -> client::MemoryStatus {
     match value {
-        tui::MemoryStatus::Active => client::MemoryStatus::Active,
-        tui::MemoryStatus::Proposed => client::MemoryStatus::Proposed,
-        tui::MemoryStatus::Conflicting => client::MemoryStatus::Conflicting,
-        tui::MemoryStatus::Superseded => client::MemoryStatus::Superseded,
-        tui::MemoryStatus::Rejected => client::MemoryStatus::Rejected,
-        tui::MemoryStatus::Retracted => client::MemoryStatus::Retracted,
-        tui::MemoryStatus::Expired => client::MemoryStatus::Expired,
-        tui::MemoryStatus::Deleted => client::MemoryStatus::Deleted,
+        host::MemoryStatus::Active => client::MemoryStatus::Active,
+        host::MemoryStatus::Proposed => client::MemoryStatus::Proposed,
+        host::MemoryStatus::Conflicting => client::MemoryStatus::Conflicting,
+        host::MemoryStatus::Superseded => client::MemoryStatus::Superseded,
+        host::MemoryStatus::Rejected => client::MemoryStatus::Rejected,
+        host::MemoryStatus::Retracted => client::MemoryStatus::Retracted,
+        host::MemoryStatus::Expired => client::MemoryStatus::Expired,
+        host::MemoryStatus::Deleted => client::MemoryStatus::Deleted,
     }
 }
 
-fn map_memory_scope(value: tui::MemoryScope) -> client::MemoryScope {
+fn map_memory_scope(value: host::MemoryScope) -> client::MemoryScope {
     match value {
-        tui::MemoryScope::User => client::MemoryScope::User,
-        tui::MemoryScope::Workspace => client::MemoryScope::Workspace,
-        tui::MemoryScope::Session => client::MemoryScope::Session,
-        tui::MemoryScope::Agent => client::MemoryScope::Agent,
+        host::MemoryScope::User => client::MemoryScope::User,
+        host::MemoryScope::Workspace => client::MemoryScope::Workspace,
+        host::MemoryScope::Session => client::MemoryScope::Session,
+        host::MemoryScope::Agent => client::MemoryScope::Agent,
     }
 }
 
-fn map_memory_trust(value: tui::MemoryTrust) -> client::MemoryTrust {
+fn map_memory_trust(value: host::MemoryTrust) -> client::MemoryTrust {
     match value {
-        tui::MemoryTrust::UserApproved => client::MemoryTrust::UserApproved,
-        tui::MemoryTrust::VerifiedObservation => client::MemoryTrust::VerifiedObservation,
-        tui::MemoryTrust::Imported => client::MemoryTrust::Imported,
-        tui::MemoryTrust::UntrustedProposal => client::MemoryTrust::UntrustedProposal,
+        host::MemoryTrust::UserApproved => client::MemoryTrust::UserApproved,
+        host::MemoryTrust::VerifiedObservation => client::MemoryTrust::VerifiedObservation,
+        host::MemoryTrust::Imported => client::MemoryTrust::Imported,
+        host::MemoryTrust::UntrustedProposal => client::MemoryTrust::UntrustedProposal,
     }
 }
 
-fn map_memory_origin(value: tui::MemoryOrigin) -> client::MemoryOrigin {
+fn map_memory_origin(value: host::MemoryOrigin) -> client::MemoryOrigin {
     match value {
-        tui::MemoryOrigin::ExplicitUser => client::MemoryOrigin::ExplicitUser,
-        tui::MemoryOrigin::VerifiedTool => client::MemoryOrigin::VerifiedTool,
-        tui::MemoryOrigin::ImportedDocument => client::MemoryOrigin::ImportedDocument,
-        tui::MemoryOrigin::ModelProposal => client::MemoryOrigin::ModelProposal,
-        tui::MemoryOrigin::Compaction => client::MemoryOrigin::Compaction,
+        host::MemoryOrigin::ExplicitUser => client::MemoryOrigin::ExplicitUser,
+        host::MemoryOrigin::VerifiedTool => client::MemoryOrigin::VerifiedTool,
+        host::MemoryOrigin::ImportedDocument => client::MemoryOrigin::ImportedDocument,
+        host::MemoryOrigin::ModelProposal => client::MemoryOrigin::ModelProposal,
+        host::MemoryOrigin::Compaction => client::MemoryOrigin::Compaction,
     }
 }
 
-fn map_memory_sensitivity(value: tui::MemorySensitivity) -> client::MemorySensitivity {
+fn map_memory_sensitivity(value: host::MemorySensitivity) -> client::MemorySensitivity {
     match value {
-        tui::MemorySensitivity::Public => client::MemorySensitivity::Public,
-        tui::MemorySensitivity::Internal => client::MemorySensitivity::Internal,
-        tui::MemorySensitivity::Sensitive => client::MemorySensitivity::Sensitive,
-        tui::MemorySensitivity::Secret => client::MemorySensitivity::Secret,
+        host::MemorySensitivity::Public => client::MemorySensitivity::Public,
+        host::MemorySensitivity::Internal => client::MemorySensitivity::Internal,
+        host::MemorySensitivity::Sensitive => client::MemorySensitivity::Sensitive,
+        host::MemorySensitivity::Secret => client::MemorySensitivity::Secret,
     }
 }
 
 fn map_memory_evidence_availability(
-    value: tui::MemoryEvidenceAvailability,
+    value: host::MemoryEvidenceAvailability,
 ) -> client::MemoryEvidenceAvailability {
     match value {
-        tui::MemoryEvidenceAvailability::Retained => client::MemoryEvidenceAvailability::Retained,
-        tui::MemoryEvidenceAvailability::Absent => client::MemoryEvidenceAvailability::Absent,
-        tui::MemoryEvidenceAvailability::Erased => client::MemoryEvidenceAvailability::Erased,
+        host::MemoryEvidenceAvailability::Retained => client::MemoryEvidenceAvailability::Retained,
+        host::MemoryEvidenceAvailability::Absent => client::MemoryEvidenceAvailability::Absent,
+        host::MemoryEvidenceAvailability::Erased => client::MemoryEvidenceAvailability::Erased,
     }
 }
 
-fn map_memory_relation_kind(value: tui::MemoryRelationKind) -> client::MemoryRelationKind {
+fn map_memory_relation_kind(value: host::MemoryRelationKind) -> client::MemoryRelationKind {
     match value {
-        tui::MemoryRelationKind::DuplicateOf => client::MemoryRelationKind::DuplicateOf,
-        tui::MemoryRelationKind::Contradicts => client::MemoryRelationKind::Contradicts,
-        tui::MemoryRelationKind::Refines => client::MemoryRelationKind::Refines,
-        tui::MemoryRelationKind::Supersedes => client::MemoryRelationKind::Supersedes,
-        tui::MemoryRelationKind::Related => client::MemoryRelationKind::Related,
-        tui::MemoryRelationKind::DerivedFrom => client::MemoryRelationKind::DerivedFrom,
+        host::MemoryRelationKind::DuplicateOf => client::MemoryRelationKind::DuplicateOf,
+        host::MemoryRelationKind::Contradicts => client::MemoryRelationKind::Contradicts,
+        host::MemoryRelationKind::Refines => client::MemoryRelationKind::Refines,
+        host::MemoryRelationKind::Supersedes => client::MemoryRelationKind::Supersedes,
+        host::MemoryRelationKind::Related => client::MemoryRelationKind::Related,
+        host::MemoryRelationKind::DerivedFrom => client::MemoryRelationKind::DerivedFrom,
     }
 }
 
-fn map_memory_finding_kind(value: tui::MemoryFindingKind) -> client::MemoryFindingKind {
+fn map_memory_finding_kind(value: host::MemoryFindingKind) -> client::MemoryFindingKind {
     match value {
-        tui::MemoryFindingKind::Duplicate => client::MemoryFindingKind::Duplicate,
-        tui::MemoryFindingKind::Contradiction => client::MemoryFindingKind::Contradiction,
-        tui::MemoryFindingKind::SecretDetected => client::MemoryFindingKind::SecretDetected,
-        tui::MemoryFindingKind::UnsupportedScope => client::MemoryFindingKind::UnsupportedScope,
-        tui::MemoryFindingKind::MalformedContent => client::MemoryFindingKind::MalformedContent,
-        tui::MemoryFindingKind::PolicyConflict => client::MemoryFindingKind::PolicyConflict,
-        tui::MemoryFindingKind::InjectionPattern => client::MemoryFindingKind::InjectionPattern,
-        tui::MemoryFindingKind::UngroundedEvidence => client::MemoryFindingKind::UngroundedEvidence,
+        host::MemoryFindingKind::Duplicate => client::MemoryFindingKind::Duplicate,
+        host::MemoryFindingKind::Contradiction => client::MemoryFindingKind::Contradiction,
+        host::MemoryFindingKind::SecretDetected => client::MemoryFindingKind::SecretDetected,
+        host::MemoryFindingKind::UnsupportedScope => client::MemoryFindingKind::UnsupportedScope,
+        host::MemoryFindingKind::MalformedContent => client::MemoryFindingKind::MalformedContent,
+        host::MemoryFindingKind::PolicyConflict => client::MemoryFindingKind::PolicyConflict,
+        host::MemoryFindingKind::InjectionPattern => client::MemoryFindingKind::InjectionPattern,
+        host::MemoryFindingKind::UngroundedEvidence => {
+            client::MemoryFindingKind::UngroundedEvidence
+        }
     }
 }
 
-fn map_memory_status_filter(value: client::MemoryStatusFilter) -> tui::MemoryStatusFilter {
+fn map_memory_status_filter(value: client::MemoryStatusFilter) -> host::MemoryStatusFilter {
     match value {
-        client::MemoryStatusFilter::Eligible => tui::MemoryStatusFilter::Eligible,
-        client::MemoryStatusFilter::All => tui::MemoryStatusFilter::All,
-        client::MemoryStatusFilter::Active => tui::MemoryStatusFilter::Active,
-        client::MemoryStatusFilter::Proposed => tui::MemoryStatusFilter::Proposed,
-        client::MemoryStatusFilter::Inactive => tui::MemoryStatusFilter::Inactive,
+        client::MemoryStatusFilter::Eligible => host::MemoryStatusFilter::Eligible,
+        client::MemoryStatusFilter::All => host::MemoryStatusFilter::All,
+        client::MemoryStatusFilter::Active => host::MemoryStatusFilter::Active,
+        client::MemoryStatusFilter::Proposed => host::MemoryStatusFilter::Proposed,
+        client::MemoryStatusFilter::Inactive => host::MemoryStatusFilter::Inactive,
     }
 }
 
-fn map_memory_scope_filter(value: client::MemoryScopeFilter) -> tui::MemoryScopeFilter {
+fn map_memory_scope_filter(value: client::MemoryScopeFilter) -> host::MemoryScopeFilter {
     match value {
-        client::MemoryScopeFilter::All => tui::MemoryScopeFilter::All,
-        client::MemoryScopeFilter::User => tui::MemoryScopeFilter::User,
-        client::MemoryScopeFilter::Workspace => tui::MemoryScopeFilter::Workspace,
-        client::MemoryScopeFilter::Session => tui::MemoryScopeFilter::Session,
-        client::MemoryScopeFilter::Agent => tui::MemoryScopeFilter::Agent,
+        client::MemoryScopeFilter::All => host::MemoryScopeFilter::All,
+        client::MemoryScopeFilter::User => host::MemoryScopeFilter::User,
+        client::MemoryScopeFilter::Workspace => host::MemoryScopeFilter::Workspace,
+        client::MemoryScopeFilter::Session => host::MemoryScopeFilter::Session,
+        client::MemoryScopeFilter::Agent => host::MemoryScopeFilter::Agent,
     }
 }
 
-fn map_memory_page_direction(value: client::MemoryPageDirection) -> tui::MemoryPageDirection {
+fn map_memory_page_direction(value: client::MemoryPageDirection) -> host::MemoryPageDirection {
     match value {
-        client::MemoryPageDirection::First => tui::MemoryPageDirection::First,
-        client::MemoryPageDirection::Next => tui::MemoryPageDirection::Next,
-        client::MemoryPageDirection::Previous => tui::MemoryPageDirection::Previous,
+        client::MemoryPageDirection::First => host::MemoryPageDirection::First,
+        client::MemoryPageDirection::Next => host::MemoryPageDirection::Next,
+        client::MemoryPageDirection::Previous => host::MemoryPageDirection::Previous,
     }
 }

@@ -13,7 +13,6 @@ members = [
     "crates/autoharness-settings",
     "crates/autoharness-store",
     "crates/autoharness-store-sqlite",
-    "crates/autoharness-tui",
     "crates/autoharness-tool",
 ]
 resolver = "3"
@@ -39,16 +38,13 @@ autoharness-settings = { path = "crates/autoharness-settings" }
 autoharness-provider-codex-cli = { path = "crates/autoharness-provider-codex-cli" }
 autoharness-store = { path = "crates/autoharness-store" }
 autoharness-store-sqlite = { path = "crates/autoharness-store-sqlite" }
-autoharness-tui = { path = "crates/autoharness-tui" }
 autoharness-tool = { path = "crates/autoharness-tool" }
 async-stream = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
 bytes = "1"
-crossterm = "0.29"
 futures-core = "0.3"
 futures-util = "0.3"
-ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

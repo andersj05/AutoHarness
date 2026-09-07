@@ -1,8 +1,8 @@
 # GUI release checklist
 
-**Status:** Required before default-interface promotion; no release approval recorded.
+**Status:** Required before signed distribution; source cutover authorized by ADR-0020.
 
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-07
 
 Use this checklist for Stage 8 of the [GUI implementation plan](../design/GUI_IMPLEMENTATION_PLAN.md).
 Every required gate must pass for one committed candidate and its exact signed package hashes.
@@ -15,7 +15,7 @@ Browser fixtures, native protocol tests, unsigned installers, debug builds, and 
 - [ ] Build and verify Windows Authenticode with SHA-256 and timestamp, macOS Developer ID with notarization and stapling, and Linux detached package signatures.
 - [ ] Preserve every installer, package manifest, signature, screenshot, and review record outside expiring CI storage.
 - [ ] Verify artifact hashes again after download and before installation.
-- [ ] Confirm the installer launches the GUI without command-line arguments and retains the `ah` terminal rollback executable.
+- [ ] Confirm the installer launches the GUI without command-line arguments and that the `ah` alias also opens the desktop.
 - [ ] Confirm release builds use local production assets, no development server, disabled devtools, strict capabilities, and no credential-bearing source maps or diagnostics.
 
 The [packaging script](../../scripts/package_gui.py) requires signing configuration by default and verifies platform signatures before recording a successful manifest.
@@ -24,7 +24,7 @@ The [candidate workflow](../../.github/workflows/gui-packages.yml) creates unsig
 
 ## Prerequisites and baseline
 
-- [ ] Stage 1 exits: orchestration has no renderer-owned type imports and both clients consume the renderer-neutral contract.
+- [ ] Stage 1 exits: orchestration has no renderer-owned type imports and the desktop carrier consumes the renderer-neutral contract.
 - [ ] Complete Help parity is available inside the GUI, including keyboard shortcuts and recovery guidance.
 - [ ] `cargo fmt --all -- --check` passes.
 - [ ] `cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings` passes.
@@ -83,16 +83,12 @@ Only the release maintainers can approve review evidence.
 - [ ] Record release approval, rollback approval, and default-interface approval separately.
 - [ ] Record the previous signed candidate, rollback rehearsal, and an approved rollback-window closing date.
 - [ ] Run `python scripts/check_gui_release.py <record.json> --commit <full-candidate-commit>` successfully.
-- [ ] Promote the reviewed GUI default only through the approved `dev` to `main` release PR.
+- [ ] Promote reviewed source only through the approved `dev` to `main` release PR.
 - [ ] Apply the [update and rollback policy](GUI_UPDATE_POLICY.md) to the exact approved artifacts.
 
-## TUI retirement
+## Source retirement
 
-Default cutover and terminal retirement are separate actions.
-The packaged `ah` executable, source TUI, terminal renderer adapter, and deliberate PTY checks remain available during the rollback window.
-
-- [ ] The approved rollback window has closed without unresolved GUI release regressions.
-- [ ] Record a distinct TUI-retirement approval for the candidate.
-- [ ] Run the release validator with `--retire-tui` successfully.
-- [ ] Remove Ratatui, Crossterm, TUI adapters, terminal binary, and PTY-specific infrastructure in a separately reviewed change after renderer independence is proven.
-- [ ] Re-run the remaining migrated baseline and packaged-app matrix before promoting the retirement change.
+[ADR-0020](../adr/0020-retire-terminal-client.md) authorizes the GUI-only source default and removes the previous TUI rollback-window dependency.
+The renderer, terminal entry mode, PTY journeys, and terminal latency runner are removed from the current source.
+This source decision does not mark any unchecked distribution gate complete.
+Rollback uses a previous revision or approved package with its compatible cold data backup.

@@ -1,3 +1,15 @@
+use autoharness_client::runtime::{
+    AttemptKey, AttemptStatus, CatalogProjection, ModelSummary, PermissionDetailView,
+    PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, ToolRowView,
+    TranscriptItem, UiFailure, UsageView,
+};
+use autoharness_client::runtime::{
+    MemoryAdmission, MemoryAdmissionContext, MemoryDetail, MemoryEvidence as UiMemoryEvidence,
+    MemoryFindingKind, MemoryOrigin as UiMemoryOrigin, MemoryProjection,
+    MemoryRelation as UiMemoryRelation, MemoryRelationKind as UiMemoryRelationKind,
+    MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus, MemorySummary,
+    MemoryTrust, MemoryValidationFinding,
+};
 use autoharness_domain::{
     ContextAdmissionFactor, ErrorClass, MemoryEvidenceRelation, MemoryEvidenceSource, MemoryOrigin,
     MemoryRevisionStatus, MemoryScope as DomainMemoryScope, MemoryValidationIssue, MemoryValidity,
@@ -5,22 +17,10 @@ use autoharness_domain::{
 };
 use autoharness_engine::{AttemptStatus as EngineAttemptStatus, SessionAggregate};
 use autoharness_provider::{CapabilitySupport, ModelDescriptor};
-use autoharness_tui::{
-    AttemptKey, AttemptStatus, CatalogProjection, ModelSummary, PermissionDetailView,
-    PermissionRequestView, RetryPolicy, SessionProjection, ToolCallKey, ToolRowView,
-    TranscriptItem, UiFailure, UsageView,
-};
-use autoharness_tui::{
-    MemoryAdmission, MemoryAdmissionContext, MemoryDetail, MemoryEvidence as UiMemoryEvidence,
-    MemoryFindingKind, MemoryOrigin as UiMemoryOrigin, MemoryProjection,
-    MemoryRelation as UiMemoryRelation, MemoryRelationKind as UiMemoryRelationKind,
-    MemoryRevisionContext, MemoryScope, MemorySensitivity, MemoryStatus, MemorySummary,
-    MemoryTrust, MemoryValidationFinding,
-};
 
 const MEMORY_ADMISSION_PAGE_SIZE: u32 = 64;
 
-/// Converts the authoritative aggregate into the complete visible TUI state.
+/// Converts the authoritative aggregate into the renderer-neutral session state.
 #[must_use]
 pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
     let mut transcript = Vec::new();
@@ -663,6 +663,7 @@ fn interrupted_failure() -> UiFailure {
 
 #[cfg(test)]
 mod tests {
+    use autoharness_client::runtime::MemoryEvidenceAvailability;
     use autoharness_domain::{
         Causation, CommandId, ConfidenceBasisPoints, ContextSourceKey, CorrelationId,
         EventEnvelope, EventId, EventPayload, InputId, MemoryContent as DomainMemoryContent,
@@ -677,7 +678,6 @@ mod tests {
     use autoharness_store::{
         MemoryEvidenceExcerptState, MemoryInspectionRecord, StoredMemoryEvidenceContent,
     };
-    use autoharness_tui::MemoryEvidenceAvailability;
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -920,7 +920,7 @@ mod tests {
             context
                 .relations()
                 .iter()
-                .map(autoharness_tui::MemoryRelation::kind)
+                .map(autoharness_client::runtime::MemoryRelation::kind)
                 .collect::<Vec<_>>(),
             vec![
                 UiMemoryRelationKind::DuplicateOf,

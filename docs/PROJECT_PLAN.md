@@ -547,7 +547,7 @@ Authoritative documents: [GUI architecture](architecture/GUI.md), [GUI design sy
 Deliverables:
 
 - A renderer-neutral `autoharness-client` contract with versioned commands, snapshots, ordered frames, request correlation, bounds, gap detection, and resynchronization.
-- A reusable application runtime lifecycle shared by the desktop GUI and transitional TUI.
+- A reusable renderer-neutral application runtime lifecycle consumed by the desktop GUI.
 - A Tauri 2 shell with local assets, strict capabilities, a content security policy, and no broad platform plugins.
 - A React, TypeScript, and Vite client with React-free state models, typed feature slots, fixture-mode development, and semantic accessibility.
 - A real startup, active-session, credential, catalog, model, prompt, committed stream, cancel, retry, permission, clean-shutdown, and restart vertical slice.
@@ -561,7 +561,7 @@ Exit criteria:
 - Rust remains the only authority for durable state, providers, credentials, permissions, capabilities, memory, and recovery.
 - Long-session rendering and stream delivery stay bounded by visible or changed data rather than total transcript length.
 - One committed release candidate passes Windows, macOS, and Linux packaged-app, accessibility, provider, vault, migration, rollback, recovery, performance, and security gates.
-- The GUI becomes the default only after its release checklist is approved, and Ratatui is removed only after the rollback window closes.
+- The GUI-only source default and TUI retirement are authorized by [ADR-0020](adr/0020-retire-terminal-client.md); signed distribution still requires the complete release checklist.
 
 ### Phase 5: Evaluation and self-improvement
 
@@ -589,7 +589,7 @@ Exit criteria:
 
 Deliverables:
 
-- Versioned daemon protocol and thin remote TUI client.
+- Versioned daemon protocol and thin remote clients.
 - Remote worker leases, heartbeats, cancellation, idempotency, and recovery.
 - PostgreSQL durable store and object storage for large artifacts.
 - Wasmtime component host with WIT-defined provider, tool, memory, and evaluator capabilities.
@@ -612,7 +612,7 @@ Proceed in this order:
 2. Complete the Phase 4.1 real desktop chat vertical slice through startup, permission, clean shutdown, and durable restart.
 3. Port session, provider, profile, model, settings, accessibility, and memory parity in independently testable GUI slices.
 4. Carry applicable provider, vault, migration, rollback, recovery, performance, and security evidence into the GUI release gate without claiming unfinished terminal-only evidence complete.
-5. Make the GUI the default only after one release candidate passes its cross-platform packaged-app checklist and approval.
+5. Improve the GUI-only source foundation authorized by ADR-0020; distribute signed packages only after one candidate passes its cross-platform release checklist and approval.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 

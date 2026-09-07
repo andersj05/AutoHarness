@@ -11,7 +11,7 @@ By contributing, you agree that your contributions are licensed under the [MIT L
 
 1. [`AGENTS.md`](AGENTS.md): repository conventions, guardrails, engineering standards, and the memory protocol.
 2. [`docs/README.md`](docs/README.md): routes each task to its smallest authoritative document.
-3. [`README.md`](README.md): running the GUI preview or terminal reference client and configuring the runtime.
+3. [`README.md`](README.md): running the desktop client and configuring the runtime.
 
 ## Branching
 
@@ -31,8 +31,8 @@ cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D w
 cargo test --workspace --all-targets --all-features --locked --no-fail-fast
 ```
 
-These commands remain the comprehensive local baseline while the terminal reference is present.
-The [CI workflow](.github/workflows/ci.yml) runs targeted renderer-neutral and desktop-host Rust lanes on Linux, Windows, and macOS without the frozen `autoharness-tui` tests or ignored PTY acceptance scenarios.
+Build frontend assets with `pnpm install` and `pnpm gui:build` before the all-feature Rust gates.
+The [CI workflow](.github/workflows/ci.yml) runs targeted renderer-neutral and desktop-host Rust lanes on Linux, Windows, and macOS over the current GUI-only workspace.
 Pull requests must keep those targeted Rust jobs green.
 Install the pinned frontend workspace dependencies before GUI development:
 
@@ -51,9 +51,9 @@ pnpm gui:build
 ## GUI preview development
 
 Run `pnpm gui:dev` for browser-only development against deterministic fixture state.
-The fixture is suitable for interface and recovery-state work, but it is not evidence of native integration, durable persistence, credential handling, packaging, or terminal parity.
+The fixture is suitable for interface and recovery-state work, but it is not evidence of native integration, durable persistence, credential handling, packaging, or signed distribution.
 Run `pnpm gui:desktop` to exercise the native Tauri development preview against the Rust host.
-The terminal application remains the compatibility and behavioral reference until the GUI satisfies its documented release gate.
+The desktop is the only product interface under [ADR-0020](docs/adr/0020-retire-terminal-client.md).
 
 ## Engineering expectations
 

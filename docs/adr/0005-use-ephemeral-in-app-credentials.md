@@ -63,7 +63,7 @@ Successful or failed values are never persisted, so an interactive credential mu
 
 ## Evidence
 
-- [`autoharness-tui` credential model and update tests](../../crates/autoharness-tui/tests/ui.rs)
+- [`autoharness-tui` credential model and update tests](https://github.com/andersj05/AutoHarness/blob/8242e93/crates/autoharness-tui/tests/ui.rs)
 - [`autoharness-app` composed credential test](../../crates/autoharness-app/src/coordinator.rs)
 - [`GeminiApiKey` redaction and zeroization boundary](../../crates/autoharness-provider-gemini/src/auth.rs)
 
