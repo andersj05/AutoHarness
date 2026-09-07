@@ -50,7 +50,7 @@ fn startup_resolution_publishes_provider_status_from_profile() {
     );
     assert!(!source.credential().is_empty());
 
-    // The projection the TUI receives names the same safe facts.
+    // The projection the client receives names the same safe facts.
     let status = autoharness_client::runtime::ProviderStatusProjection {
         active_profile: source.profile_id().map(str::to_owned),
         provider_kind: source.provider_kind().map(|kind| match kind {

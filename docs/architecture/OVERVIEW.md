@@ -7,12 +7,12 @@
 ## System shape
 
 AutoHarness is a modular monolith distributed as a native application.
-The desktop GUI, transitional terminal client, and headless commands compose the same engine in-process.
+The desktop GUI composes the headless engine in-process; the terminal client is retired under [ADR-0020](../adr/0020-retire-terminal-client.md).
 Stable client and engine contracts allow the runtime to move behind a local or remote daemon later without changing domain semantics.
 
 ```text
 ┌────────────────┐  commands     ┌──────────────────────┐
-│ GUI / TUI /    │ ────────────> │ Application engine   │
+│ GUI /           │ ────────────> │ Application engine   │
 │ headless       │ <──────────── │ sessions + scheduler │
 └────────────────┘   projections └───────┬──────┬───────┘
                                          │      │

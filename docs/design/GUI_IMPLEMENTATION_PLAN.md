@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-07
 
 **Decision:** [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md)
 
@@ -13,7 +13,7 @@
 Replace the terminal as AutoHarness's primary product interface with a beautiful, accessible, expandable desktop GUI while preserving every durable runtime, provider, credential, memory, permission, and recovery invariant.
 
 The migration ships in complete vertical slices.
-The TUI remains a frozen parity reference until the GUI passes its own release gate.
+The TUI is retired under [ADR-0020](../adr/0020-retire-terminal-client.md); historical terminal evidence remains available in Git.
 
 ## Reference patterns
 
@@ -56,7 +56,7 @@ Deliverables:
 Exit criteria:
 
 - `autoharness-app` orchestration no longer imports renderer or Ratatui types.
-- Both the TUI and GUI consume the same renderer-neutral contract.
+- The desktop carrier consumes the renderer-neutral application contract.
 - Schema, redaction, request-correlation, overflow, gap, and resync tests pass.
 
 ## Stage 2: Desktop shell and real chat vertical slice
@@ -156,8 +156,8 @@ Deliverables:
 - Add signed installers, update policy, packaged-app lifecycle tests, and a GUI release checklist.
 - Run system-webview screenshots and end-to-end journeys on Windows, macOS, and Linux.
 - Complete provider, vault, migration, rollback, recovery, security, performance, accessibility, and human visual review gates.
-- Make the GUI the default application after approval.
-- Remove Ratatui and PTY-specific infrastructure only after the rollback window closes.
+- Make the GUI the source default under the explicit ADR-0020 approval.
+- Remove Ratatui and PTY-specific infrastructure under ADR-0020; preserve independent signed-distribution and rollback evidence gates.
 
 Exit criteria:
 
@@ -175,8 +175,8 @@ The migration began with Stages 0 through 2 in a deliberately bounded scope:
 4. Prove active-session, catalog, model selection, prompt, stream, cancel, retry, permission, and restart behavior.
 5. Continue extracting the complete shared client contract until the coordinator no longer imports terminal-owned types.
 
-The compatibility adapter is migration scaffolding, not the final dependency direction.
-It must remain explicit in code and memory until Stage 1 exits.
+The original terminal-owned compatibility adapter has been replaced by renderer-neutral application contracts in `autoharness-client::runtime`.
+The desktop carrier translates these in-process messages to the separately versioned wire protocol.
 
 ## Current slice evidence
 
@@ -191,7 +191,7 @@ Focused live browser review covers standard and mobile layouts, system appearanc
 Default pull-request CI now gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage without running the frozen TUI package or ignored PTY acceptance matrix.
 The terminal tests remain available for deliberate local migration-reference checks until final retirement.
 
-The current implementation does not complete Stage 1 because application orchestration still maps TUI-owned projections through a temporary adapter.
+Stage 1 ownership is complete: application orchestration imports renderer-neutral messages, projections, and ports, and has no terminal dependency.
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.
 Stage 5's cross-platform exit evidence remains open because macOS and Linux GUI-host credential-vault smokes have not run on this Windows branch.
 Stage 6 is complete locally, while cross-platform system-webview accessibility review remains part of the release evidence.
@@ -199,3 +199,10 @@ Stage 7 is implemented locally with the existing Rust memory authority, replay-e
 The [Stage 7 validation record](../release/GUI_STAGE7_VALIDATION.md) distinguishes native protocol and replay evidence from fixture-only presentation contracts and the remaining system-webview matrix.
 The [Stage 8 validation record](../release/GUI_STAGE8_VALIDATION.md) records implemented candidate installers, native lifecycle automation, update policy, and immutable release gates.
 Stage 8 remains incomplete until signed same-candidate evidence and approvals satisfy the unchanged exit criteria above.
+
+## Desktop-only source foundation
+
+[ADR-0020](../adr/0020-retire-terminal-client.md) changes the source cutover sequence at the maintainer's request.
+Both executable names select the desktop, terminal rendering and PTY infrastructure are removed, and legacy settings remain readable for migration compatibility.
+The [foundation review](../release/GUI_FOUNDATION_REVIEW.md) records validation and remaining release evidence.
+Signed distribution and platform review gaps remain open independently of source integration.

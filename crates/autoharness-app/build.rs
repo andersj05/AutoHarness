@@ -1,10 +1,11 @@
 fn main() {
-    // Keep `ah` attached to a terminal, but prevent a console flashing behind
-    // installer-launched GUI windows. Rust's CRT entry remains authoritative.
+    // Both desktop entry points use the native window subsystem when packaged.
     #[cfg(feature = "gui-package")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        println!("cargo:rustc-link-arg-bin=autoharness=/SUBSYSTEM:WINDOWS");
-        println!("cargo:rustc-link-arg-bin=autoharness=/ENTRY:mainCRTStartup");
+        for binary in ["autoharness", "ah"] {
+            println!("cargo:rustc-link-arg-bin={binary}=/SUBSYSTEM:WINDOWS");
+            println!("cargo:rustc-link-arg-bin={binary}=/ENTRY:mainCRTStartup");
+        }
     }
     #[cfg(feature = "gui")]
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(

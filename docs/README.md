@@ -2,8 +2,8 @@
 
 This index routes humans and agents to the smallest authoritative document for a task.
 Do not load every document by default.
-The desktop GUI is currently a development preview, not the default client, a packaged release, or a parity claim.
-Terminal documentation remains the compatibility and behavioral reference during the migration.
+The desktop GUI is the source default and only product interface under [ADR-0020](adr/0020-retire-terminal-client.md).
+Signed distribution remains gated; terminal documentation records historical behavior and evidence.
 
 ## Planning
 
@@ -46,6 +46,8 @@ Terminal documentation remains the compatibility and behavioral reference during
 
 ## Release
 
+- [GUI foundation review](release/GUI_FOUNDATION_REVIEW.md): desktop-only source ownership, retirement validation, and remaining distribution evidence.
+
 - [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
 - [TUI redesign validation](release/TUI_REDESIGN_VALIDATION.md): Phase 3.10 step 10 candidate evidence, local results, and outstanding promotion gates.
 
@@ -63,7 +65,7 @@ Terminal documentation remains the compatibility and behavioral reference during
 Install frontend dependencies once from the repository root with `pnpm install`.
 Use `pnpm gui:dev` for browser-only fixture development and `pnpm gui:desktop` for the native Tauri development preview.
 The verified GUI gates are `pnpm gui:typecheck`, `pnpm gui:test`, and `pnpm gui:build`.
-The fixture validates renderer behavior only and does not establish native integration, persistence, credential safety, packaging, or terminal parity.
+The fixture validates renderer behavior only and does not establish native integration, persistence, credential safety, packaging, or signed distribution.
 
 ## Source-of-truth rule
 

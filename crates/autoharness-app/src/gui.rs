@@ -2087,7 +2087,7 @@ fn map_failure(failure: &UiFailure) -> Result<SafeFailure, GuiIpcError> {
     let retry = match failure.retry {
         TuiRetryPolicy::Never => RetryDirective::Never,
         TuiRetryPolicy::Now => RetryDirective::Immediate,
-        // `At` is a TUI-process monotonic deadline that cannot be transported
+        // `At` is a host-process monotonic deadline that cannot be transported
         // safely. Never retrying early is the conservative renderer-neutral
         // representation until the coordinator exposes a relative duration.
         TuiRetryPolicy::At(_) => RetryDirective::Never,

@@ -1,6 +1,6 @@
 # Project memory
 
-**Last reviewed:** 2026-08-30
+**Last reviewed:** 2026-09-07
 
 **Stability:** Durable; change only when product direction or accepted constraints change.
 
@@ -8,7 +8,7 @@
 
 - **Name:** AutoHarness
 - **Type:** Open-source agent runtime and experimentation platform
-- **Primary interface:** Native desktop GUI, followed by headless and remote clients, with the TUI retained temporarily as a migration reference
+- **Primary interface:** Native desktop GUI, followed by headless and remote clients, with the legacy TUI retired under ADR-0020
 
 ## Vision
 
@@ -26,7 +26,7 @@ The second provider outcome is the same experience through the user's configurab
 - Runtime performance, scalability, customization, safety, and observability are primary qualities.
 - Rust 2024 is the core implementation language; see [ADR-0001](../adr/0001-use-rust-modular-monolith.md).
 - Begin as a modular monolith and preserve a headless engine boundary.
-- Desktop, terminal, provider, storage, and plugin implementations are adapters around the engine.
+- Desktop, provider, storage, and plugin implementations are adapters around the engine.
 - The native desktop client uses Tauri 2 with React, TypeScript, and Vite under [ADR-0019](../adr/0019-use-tauri-web-rendered-desktop-client.md).
 - Rust remains authoritative for durable state, providers, tools, permissions, credentials, memory, and recovery.
 - Normalize provider streams into typed lifecycle events.
@@ -51,7 +51,7 @@ The second provider outcome is the same experience through the user's configurab
 
 - Rust 2024 and Tokio for the authoritative runtime.
 - Tauri 2, React, TypeScript, and Vite for the native desktop client.
-- Ratatui and Crossterm remain only for the temporary migration reference until GUI parity and release gates pass.
+- The TUI is retired and both executable names open the desktop under [ADR-0020](../adr/0020-retire-terminal-client.md).
 - SQLite in WAL mode for local durable state.
 - Serde-based domain serialization with explicit schema versions.
 - `tracing` and OpenTelemetry-compatible observability.

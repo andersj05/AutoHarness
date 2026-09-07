@@ -16,7 +16,7 @@ Frontend changes run type checking, the complete GUI unit and integration suite,
 Rust changes run formatting, generated-theme validation, strict Clippy, rustdoc, doctests, storage-benchmark validation, and the renderer-neutral and desktop-host tests on Linux, Windows, and macOS.
 Shared client and presentation changes also run the frontend checks.
 Unknown infrastructure and workflow changes conservatively select all checks.
-The frozen terminal and ignored PTY acceptance journeys remain deliberate local checks.
+The terminal renderer and PTY journeys are retired under [ADR-0020](../adr/0020-retire-terminal-client.md).
 
 ## Local baseline
 
@@ -30,7 +30,7 @@ The [runner](../../scripts/validate_gui.py) installs locked frontend dependencie
 It stops at the first failed check and writes its log and a structured report under `target/gui-evidence/local-baseline`.
 The report records the starting commit and whether the checkout is dirty.
 Logs remain local and are not uploaded by default.
-This baseline includes the terminal reference tests but does not opt into ignored live-provider, vault, or PTY journeys.
+This baseline covers the complete current workspace but does not opt into live-provider or vault journeys.
 It is not signed release evidence or a replacement for native accessibility review.
 
 ## Deliberate native candidates
@@ -45,4 +45,4 @@ Artifact retention is 14 days; archive release evidence separately before it exp
 The same packaging and lifecycle scripts remain available locally.
 The [Stage 8 record](GUI_STAGE8_VALIDATION.md) distinguishes installed native evidence from browser fixtures and records known platform limitations.
 Moving expensive checks out of automatic CI does not waive any requirement in the [GUI release checklist](GUI_RELEASE_CHECKLIST.md).
-Source integration into `main`, default-interface cutover, signed distribution, and eventual terminal retirement remain distinct events.
+GUI-only source integration into `main` and signed distribution remain distinct events.

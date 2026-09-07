@@ -212,7 +212,7 @@ pub struct EngineHandle {
     requests: mpsc::Sender<StorageRequest>,
 }
 
-#[allow(dead_code)] // Some audit/admin projections are intentionally not dispatched by this TUI yet.
+#[allow(dead_code)] // Some audit/admin projections are intentionally not dispatched by the desktop yet.
 impl EngineHandle {
     /// Executes one command and resolves only after its event batch is durable.
     pub async fn execute(

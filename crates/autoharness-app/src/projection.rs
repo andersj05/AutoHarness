@@ -20,7 +20,7 @@ use autoharness_provider::{CapabilitySupport, ModelDescriptor};
 
 const MEMORY_ADMISSION_PAGE_SIZE: u32 = 64;
 
-/// Converts the authoritative aggregate into the complete visible TUI state.
+/// Converts the authoritative aggregate into the renderer-neutral session state.
 #[must_use]
 pub fn session(aggregate: &SessionAggregate) -> SessionProjection {
     let mut transcript = Vec::new();

@@ -90,7 +90,7 @@ pub enum StoredCredentialState {
     RecoveryPending,
 }
 
-/// One provider profile projected for application and TUI consumers.
+/// One provider profile projected for application and desktop consumers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedProfile {
     /// Stable validated profile identity.
