@@ -7466,7 +7466,9 @@ mod tests {
     }
 
     async fn expect_commit(ui: &mut UiPorts, request_id: RequestId) {
-        let notice = tokio::time::timeout(Duration::from_secs(5), ui.notices.recv())
+        // Durable admission can scan credential and memory state and sync SQLite.
+        // This bounds a hung test, not production latency, on shared CI machines.
+        let notice = tokio::time::timeout(Duration::from_secs(30), ui.notices.recv())
             .await
             .expect("notice timeout")
             .expect("notice sender remains open");

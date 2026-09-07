@@ -20,7 +20,8 @@ Legacy terminal settings remain readable so existing profiles retain compatibili
 - The complete baseline on `af93bf6` passes 656 Rust tests, 118 GUI tests, 22 Python tooling tests, formatting, strict Clippy, warning-denied rustdoc, doctests, theme generation, documentation links, and three isolated storage benchmark tests.
 - Native review found low-contrast menu descriptions and shortcuts, including white-on-white high-contrast selection; the shared menu fix passes a 45-theme/treatment contrast check and the complete 119-test GUI suite.
 - Native alias review found that the default tracing filter omitted `ah` lifecycle events; both application namespaces now emit safe markers while dependency logging remains excluded.
-- After those fixes, strict workspace Clippy and all 327 application tests pass, including the new target-filter regression; the combined current Rust suite contains 657 passing tests and six opt-in ignored probes.
+- After those fixes, strict workspace Clippy and all 327 application tests pass, including the new target-filter regression; live-provider and platform-vault probes remain opt-in.
+- A Windows CI run exposed a five-second durable-commit wait flake in two credential-protection tests; the test-only guard now allows 30 seconds while preserving exact commit and safety assertions.
 - The headless application library compiles with `--no-default-features`, and actionlint accepts the CI workflow.
 - Windows WebView2 native session creation, switching, rename, archive, restore, export, confirmed deletion, clean shutdown, and durable replay pass across two restart boundaries.
 - The `ah` alias also passes the native journey, with content-free readiness and clean shutdown markers verified on all launches.
