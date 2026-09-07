@@ -840,9 +840,9 @@ export class FixtureTransport implements ClientTransport {
     this.emit();
 
     const chunks = [
-      "The desktop boundary is live. ",
-      "Your prompt was persisted before dispatch, and this response is arriving as an ordered projection. ",
-      "The same React surface can now follow either the browser fixture or the native Tauri carrier.",
+      "This is a simulated response. ",
+      "Use this preview to try conversations, model selection, and session navigation. ",
+      "Preview messages are not sent to a provider or saved.",
     ];
     chunks.forEach((chunk, index) => {
       this.schedule(() => {

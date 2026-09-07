@@ -77,6 +77,7 @@ function MessageTurn({ highlight, message, optimistic = false, timestampStyle }:
   const [copyFailed, setCopyFailed] = useState(false);
   const timestamp = message.createdAt ? new Date(message.createdAt) : undefined;
   const hasValidTimestamp = timestamp && Number.isFinite(timestamp.getTime());
+  if (!message.content && !message.streaming) return null;
   return (
     <article className="messageTurn" data-role={message.role}>
       <header>
@@ -233,6 +234,20 @@ export function Conversation({
     if (sessionChanged) followTailRef.current = true;
     if (followTailRef.current) container.scrollTop = container.scrollHeight;
   }, [attempt.kind, session?.id, tailVersion]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    const content = container?.firstElementChild;
+    if (!container || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (followTailRef.current) container.scrollTop = container.scrollHeight;
+      setAwayFromTail(container.scrollHeight - container.scrollTop - container.clientHeight > 96);
+    });
+    observer.observe(container);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
   const disabledReason = credentialRequired
     ? "Connect the active provider before sending."
     : offline
@@ -310,6 +325,32 @@ export function Conversation({
         ref={scrollRef}
       >
         <div className="conversationColumn">
+          {transcript.length ? (
+            <VirtualTranscript
+              activeIndex={activeMatch}
+              items={transcript}
+              renderItem={(item, index) =>
+                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} optimistic={item.id.startsWith("optimistic:")} timestampStyle={timestampStyle} /> : (
+                  <ToolCard forceOpen={index === activeMatch} name={item.name} resource={item.resource} status={item.status} summary={item.summary}>
+                    {item.failure ? (
+                      <>
+                        <div><span>Failure</span><p>{item.failure.message}</p></div>
+                        <div><span>Code</span><code>{item.failure.code}</code></div>
+                      </>
+                    ) : item.detail ? <div><span>Result</span><p>{item.detail}</p></div> : null}
+                  </ToolCard>
+                )}
+              scrollRef={scrollRef}
+              sessionId={session?.id}
+            />
+          ) : (
+            <section aria-label="Conversation transcript" className="transcript" tabIndex={-1}>
+              <div className="emptyConversation">
+                <h2>What would you like to work on?</h2>
+              </div>
+            </section>
+          )}
+
           {offline && !credentialRequired ? (
             <Callout
               action={<Button onClick={onRefresh}>Try reconnecting</Button>}
@@ -346,32 +387,6 @@ export function Conversation({
               title="Catalog refresh failed"
             />
           ) : null}
-
-          {transcript.length ? (
-            <VirtualTranscript
-              activeIndex={activeMatch}
-              items={transcript}
-              renderItem={(item, index) =>
-                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} optimistic={item.id.startsWith("optimistic:")} timestampStyle={timestampStyle} /> : (
-                  <ToolCard forceOpen={index === activeMatch} name={item.name} resource={item.resource} status={item.status} summary={item.summary}>
-                    {item.failure ? (
-                      <>
-                        <div><span>Failure</span><p>{item.failure.message}</p></div>
-                        <div><span>Code</span><code>{item.failure.code}</code></div>
-                      </>
-                    ) : item.detail ? <div><span>Result</span><p>{item.detail}</p></div> : null}
-                  </ToolCard>
-                )}
-              scrollRef={scrollRef}
-              sessionId={session?.id}
-            />
-          ) : (
-            <section aria-label="Conversation transcript" className="transcript" tabIndex={-1}>
-              <div className="emptyConversation">
-                <h2>What would you like to work on?</h2>
-              </div>
-            </section>
-          )}
 
           <div aria-live="polite" className="copyAnnouncer">{copyState === "copied" ? "Transcript copied to the clipboard." : copyState === "failed" ? "The transcript could not be copied." : ""}</div>
 

@@ -14,7 +14,7 @@ export function PermissionDialog({ busy = false, permission, onAllow, onDeny }: 
   return (
     <Dialog
       authority="permission"
-      description="Review the exact frozen operation. Your answer applies to this call only."
+      description="Review this operation. Your answer applies to this call only."
       dismissible={false}
       eyebrow="Permission required"
       footer={
@@ -42,10 +42,6 @@ export function PermissionDialog({ busy = false, permission, onAllow, onDeny }: 
           </div>
         ))}
       </dl>
-      <div className="securityNote">
-        <Icon name="shield" size={16} />
-        <span>The runtime will persist your answer before this capability can execute.</span>
-      </div>
     </Dialog>
   );
 }

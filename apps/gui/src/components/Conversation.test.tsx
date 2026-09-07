@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActiveSessionProjection, ModelDescriptor } from "../protocol";
@@ -43,9 +43,35 @@ const callbacks = {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Conversation tail following", () => {
+  it("keeps the latest content visible after resize without moving a reader away from older messages", () => {
+    let resize: () => void = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resize = callback; }
+      observe() {}
+      disconnect = disconnect;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1_000);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+    const view = render(<Conversation {...callbacks} catalog={{ status: "ready", source: "live", models: [model] }} connection={{ kind: "online", providerLabel: "Fixture", credentialSource: "Simulated" }} model={model} runtimeMode="fixture" session={session("A response with recovery controls below it")} />);
+    const scroller = view.container.querySelector<HTMLElement>(".conversationScroll")!;
+    height.mockReturnValue(1_400);
+    act(resize);
+    expect(scroller.scrollTop).toBe(1_400);
+    scroller.scrollTop = 100;
+    fireEvent.scroll(scroller);
+    height.mockReturnValue(1_800);
+    act(resize);
+    expect(scroller.scrollTop).toBe(100);
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+    view.unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
   it("starts at the tail, follows nearby updates, and respects manual upward scrolling", () => {
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1_000);
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);

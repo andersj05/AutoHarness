@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ModelDescriptor } from "../protocol";
 import { Dialog } from "./Dialog";
 import { Icon } from "./Icon";
@@ -22,6 +22,7 @@ function formatContext(tokens?: string): string {
 
 export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSelect }: ModelPickerProps) {
   const [query, setQuery] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return models;
@@ -46,14 +47,22 @@ export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSel
           autoFocus
           data-initial-focus
           onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              listRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+            } else if (event.key === "Enter") {
+              const match = filtered.find((model) => model.selectable);
+              if (query.trim() && match) { event.preventDefault(); onSelect(match.id); onClose(); }
+            }
+          }}
           placeholder="Search model or provider"
           type="search"
           value={query}
         />
-        <kbd aria-hidden="true">/</kbd>
       </label>
 
-      <div aria-label="Available models" className="modelList" role="radiogroup">
+      <div aria-label="Available models" className="modelList" ref={listRef} role="radiogroup">
         {filtered.map((model) => {
           const selected = model.id === selectedModelId;
           return (
@@ -66,6 +75,14 @@ export function ModelPicker({ models, selectedModelId, onClose, onRefresh, onSel
               onClick={() => {
                 onSelect(model.id);
                 onClose();
+              }}
+              onKeyDown={(event) => {
+                if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const buttons = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+                const index = buttons.indexOf(event.currentTarget);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+                buttons[next]?.focus();
               }}
               role="radio"
               type="button"

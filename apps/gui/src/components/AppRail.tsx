@@ -132,7 +132,7 @@ export function AppRail({
         ) : null}
       </div>
 
-      <button aria-label="Create new session" className="newSessionButton" onClick={onCreateSession} title="Create new session" type="button">
+      <button aria-label="Create new session" className="newSessionButton" onClick={() => { onCreateSession(); onCloseMobile(); }} title="Create new session" type="button">
         <Icon name="new" />
         <span>New session</span>
         <kbd>Ctrl N</kbd>

@@ -469,7 +469,7 @@ describe("AutoHarness GUI", () => {
     const { transport, user } = renderScenario("permission");
     const dialog = await screen.findByRole("dialog", { name: "Write one workspace file" });
     expect(dialog).toBeInTheDocument();
-    expect(dialog).toHaveAccessibleDescription("Review the exact frozen operation. Your answer applies to this call only.");
+    expect(dialog).toHaveAccessibleDescription("Review this operation. Your answer applies to this call only.");
     expect(dialog.textContent?.indexOf("workspace.write")).toBeLessThan(dialog.textContent?.indexOf("Deny operation") ?? 0);
     expect(dialog.textContent?.indexOf("apps/gui/src/App.tsx")).toBeLessThan(dialog.textContent?.indexOf("Allow once") ?? 0);
     const shell = document.querySelector<HTMLElement>(".appShell");
@@ -828,6 +828,10 @@ describe("AutoHarness GUI", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(rail).toHaveAttribute("aria-hidden", "true"));
     expect(openNavigation).toHaveFocus();
+    await user.click(openNavigation);
+    await user.click(screen.getByRole("button", { name: "Create new session" }));
+    await waitFor(() => expect(rail).toHaveAttribute("aria-hidden", "true"));
+    expect(screen.getByRole("textbox", { name: "Message AutoHarness" })).toBeVisible();
   });
 
   it.each([
