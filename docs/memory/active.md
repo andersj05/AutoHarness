@@ -2,11 +2,12 @@
 
 **Last reviewed:** 2026-09-07
 
-**Phase:** GUI-only foundation review and source integration
+**Phase:** GUI-only foundation
 
 ## Current objective
 
-Complete the desktop-only source foundation authorized by [ADR-0020](../adr/0020-retire-terminal-client.md), validate it, and integrate through feature-to-dev and dev-to-main pull requests.
+Improve the desktop GUI on the validated renderer-neutral foundation authorized by [ADR-0020](../adr/0020-retire-terminal-client.md).
+Source integration is tracked by [PR #26](https://github.com/andersj05/AutoHarness/pull/26) and the dedicated `dev` to `main` promotion.
 Keep Rust authoritative for durability, providers, credentials, permissions, tools, memory, and recovery.
 
 ## Current repository state
@@ -16,13 +17,12 @@ Keep Rust authoritative for durability, providers, credentials, permissions, too
 - The coordinator and carrier no longer depend on terminal-owned contracts.
 - The desktop provides Chat, Sessions, Providers, Memory, Settings, Help, exact permission review, ephemeral credentials, and inert typed advanced surfaces.
 - Legacy terminal settings remain readable for existing profile compatibility.
-- The [foundation review](../release/GUI_FOUNDATION_REVIEW.md) records current validation status.
+- The [foundation review](../release/GUI_FOUNDATION_REVIEW.md) records the passing local baseline, native Windows lifecycle, palette contrast fix, and alias diagnostics regression.
 
 ## Immediate next actions
 
-1. Finish full local baseline, native lifecycle, and focused visual review.
-2. Commit verified results, merge the feature PR into `dev`, and promote validated `dev` into `main`.
-3. Continue GUI improvements against the single desktop and renderer-neutral runtime foundation.
+1. Continue GUI improvements against the single desktop and renderer-neutral runtime foundation.
+2. Keep collecting the remaining signed-distribution and cross-platform release evidence independently.
 
 ## Remaining release work
 
