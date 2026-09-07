@@ -9,6 +9,15 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use autoharness_client::runtime::{
+    ApiCredential, AttemptStatus as TuiAttemptStatus, CatalogProjection as TuiCatalogProjection,
+    CredentialSourceLabel, ProfileConnectionState, ProfileCredentialStateLabel,
+    ProfilesProjection as TuiProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
+    RequestId as TuiRequestId, RetryPolicy as TuiRetryPolicy,
+    SessionProjection as TuiSessionProjection, SessionsProjection as TuiSessionsProjection,
+    SettingsProjection as TuiSettingsProjection, ToolCallKey, TranscriptItem as TuiTranscriptItem,
+    UiFailure, UiIntent, UiNotice, UiPorts,
+};
 use autoharness_client::{
     ActiveSessionDelta, AttemptId as ClientAttemptId, AttemptState as ClientAttemptState,
     AuthenticationState, CapabilitySupport, CatalogProjection as ClientCatalogProjection,
@@ -35,15 +44,6 @@ use autoharness_client::{
 use autoharness_domain::{
     ErrorClass, ModelId as DomainModelId, ModelRef as DomainModelRef,
     ProviderId as DomainProviderId, security_display_safe,
-};
-use autoharness_tui::{
-    ApiCredential, AttemptStatus as TuiAttemptStatus, CatalogProjection as TuiCatalogProjection,
-    CredentialSourceLabel, ProfileConnectionState, ProfileCredentialStateLabel,
-    ProfilesProjection as TuiProfilesProjection, ProviderKindLabel, ProviderProfileDraft,
-    RequestId as TuiRequestId, RetryPolicy as TuiRetryPolicy,
-    SessionProjection as TuiSessionProjection, SessionsProjection as TuiSessionsProjection,
-    SettingsProjection as TuiSettingsProjection, ToolCallKey, TranscriptItem as TuiTranscriptItem,
-    UiFailure, UiIntent, UiNotice, UiPorts,
 };
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -310,7 +310,7 @@ struct BridgeActor {
     catalog: tokio::sync::watch::Receiver<Arc<TuiCatalogProjection>>,
     profiles: tokio::sync::watch::Receiver<Arc<TuiProfilesProjection>>,
     settings: tokio::sync::watch::Receiver<Arc<TuiSettingsProjection>>,
-    memories: tokio::sync::watch::Receiver<Arc<autoharness_tui::MemoryProjection>>,
+    memories: tokio::sync::watch::Receiver<Arc<autoharness_client::runtime::MemoryProjection>>,
     notices: mpsc::Receiver<UiNotice>,
     requests: mpsc::Receiver<HostRequest>,
     acknowledgements: mpsc::Receiver<FrameAcknowledgement>,
@@ -1124,7 +1124,7 @@ fn map_command(
             require_active_session(&session_id, active_session)?;
             CommandAction::Intent(UiIntent::CancelAttempt {
                 request_id,
-                attempt_id: autoharness_tui::AttemptKey::new(attempt_id.into_inner())
+                attempt_id: autoharness_client::runtime::AttemptKey::new(attempt_id.into_inner())
                     .map_err(|_| GuiIpcError::invalid_command())?,
             })
         }
@@ -1135,7 +1135,7 @@ fn map_command(
             require_active_session(&session_id, active_session)?;
             CommandAction::Intent(UiIntent::RetryAttempt {
                 request_id,
-                attempt_id: autoharness_tui::AttemptKey::new(attempt_id.into_inner())
+                attempt_id: autoharness_client::runtime::AttemptKey::new(attempt_id.into_inner())
                     .map_err(|_| GuiIpcError::invalid_command())?,
             })
         }
@@ -1189,28 +1189,32 @@ fn domain_model_ref(model: ClientModelRef) -> Result<DomainModelRef, GuiIpcError
 
 fn tui_preference_change(
     change: ClientPreferenceChange,
-) -> Result<autoharness_tui::LocalPreferenceChange, GuiIpcError> {
+) -> Result<autoharness_client::runtime::LocalPreferenceChange, GuiIpcError> {
     let change = match change {
         ClientPreferenceChange::ThemePreset { value } => {
-            autoharness_tui::LocalPreferenceChange::ThemePreset(value.map(|value| match value {
-                ClientThemePreset::System => autoharness_settings::ThemePreset::System,
-                ClientThemePreset::Light => autoharness_settings::ThemePreset::Light,
-                ClientThemePreset::Dark => autoharness_settings::ThemePreset::Dark,
-                ClientThemePreset::Aurora => autoharness_settings::ThemePreset::Aurora,
-                ClientThemePreset::Ember => autoharness_settings::ThemePreset::Ember,
-                ClientThemePreset::Midnight => autoharness_settings::ThemePreset::Midnight,
-                ClientThemePreset::Ocean => autoharness_settings::ThemePreset::Ocean,
-                ClientThemePreset::Forest => autoharness_settings::ThemePreset::Forest,
-                ClientThemePreset::Rose => autoharness_settings::ThemePreset::Rose,
+            autoharness_client::runtime::LocalPreferenceChange::ThemePreset(value.map(|value| {
+                match value {
+                    ClientThemePreset::System => autoharness_settings::ThemePreset::System,
+                    ClientThemePreset::Light => autoharness_settings::ThemePreset::Light,
+                    ClientThemePreset::Dark => autoharness_settings::ThemePreset::Dark,
+                    ClientThemePreset::Aurora => autoharness_settings::ThemePreset::Aurora,
+                    ClientThemePreset::Ember => autoharness_settings::ThemePreset::Ember,
+                    ClientThemePreset::Midnight => autoharness_settings::ThemePreset::Midnight,
+                    ClientThemePreset::Ocean => autoharness_settings::ThemePreset::Ocean,
+                    ClientThemePreset::Forest => autoharness_settings::ThemePreset::Forest,
+                    ClientThemePreset::Rose => autoharness_settings::ThemePreset::Rose,
+                }
             }))
         }
         ClientPreferenceChange::ColorMode { value } => {
-            autoharness_tui::LocalPreferenceChange::ColorMode(value.map(|value| match value {
-                ClientColorMode::Color => autoharness_settings::ColorMode::Color,
-                ClientColorMode::Soft => autoharness_settings::ColorMode::Soft,
-                ClientColorMode::Vivid => autoharness_settings::ColorMode::Vivid,
-                ClientColorMode::NoColor => autoharness_settings::ColorMode::NoColor,
-                ClientColorMode::HighContrast => autoharness_settings::ColorMode::HighContrast,
+            autoharness_client::runtime::LocalPreferenceChange::ColorMode(value.map(|value| {
+                match value {
+                    ClientColorMode::Color => autoharness_settings::ColorMode::Color,
+                    ClientColorMode::Soft => autoharness_settings::ColorMode::Soft,
+                    ClientColorMode::Vivid => autoharness_settings::ColorMode::Vivid,
+                    ClientColorMode::NoColor => autoharness_settings::ColorMode::NoColor,
+                    ClientColorMode::HighContrast => autoharness_settings::ColorMode::HighContrast,
+                }
             }))
         }
         ClientPreferenceChange::ZoomPercent { value } => {
@@ -1218,28 +1222,32 @@ fn tui_preference_change(
                 .map(|value| autoharness_settings::GuiZoomPercent::new(value.get()))
                 .transpose()
                 .map_err(|_| GuiIpcError::invalid_command())?;
-            autoharness_tui::LocalPreferenceChange::GuiZoomPercent(value)
+            autoharness_client::runtime::LocalPreferenceChange::GuiZoomPercent(value)
         }
         ClientPreferenceChange::FontSize { value } => {
-            autoharness_tui::LocalPreferenceChange::GuiFontSize(value.map(|value| match value {
-                ClientGuiFontSize::Small => autoharness_settings::GuiFontSize::Small,
-                ClientGuiFontSize::Standard => autoharness_settings::GuiFontSize::Standard,
-                ClientGuiFontSize::Large => autoharness_settings::GuiFontSize::Large,
-                ClientGuiFontSize::ExtraLarge => autoharness_settings::GuiFontSize::ExtraLarge,
+            autoharness_client::runtime::LocalPreferenceChange::GuiFontSize(value.map(|value| {
+                match value {
+                    ClientGuiFontSize::Small => autoharness_settings::GuiFontSize::Small,
+                    ClientGuiFontSize::Standard => autoharness_settings::GuiFontSize::Standard,
+                    ClientGuiFontSize::Large => autoharness_settings::GuiFontSize::Large,
+                    ClientGuiFontSize::ExtraLarge => autoharness_settings::GuiFontSize::ExtraLarge,
+                }
             }))
         }
         ClientPreferenceChange::Density { value } => {
-            autoharness_tui::LocalPreferenceChange::Density(value.map(|value| match value {
-                ClientDensity::Comfortable => autoharness_settings::Density::Comfortable,
-                ClientDensity::Compact => autoharness_settings::Density::Compact,
+            autoharness_client::runtime::LocalPreferenceChange::Density(value.map(|value| {
+                match value {
+                    ClientDensity::Comfortable => autoharness_settings::Density::Comfortable,
+                    ClientDensity::Compact => autoharness_settings::Density::Compact,
+                }
             }))
         }
         ClientPreferenceChange::ReducedMotion { value } => {
-            autoharness_tui::LocalPreferenceChange::ReducedMotion(value)
+            autoharness_client::runtime::LocalPreferenceChange::ReducedMotion(value)
         }
         ClientPreferenceChange::TimestampStyle { value } => {
-            autoharness_tui::LocalPreferenceChange::TerminalTimestampStyle(value.map(|value| {
-                match value {
+            autoharness_client::runtime::LocalPreferenceChange::TerminalTimestampStyle(value.map(
+                |value| match value {
                     ClientTimestampStyle::Relative => {
                         autoharness_settings::TimestampStyle::Relative
                     }
@@ -1247,20 +1255,20 @@ fn tui_preference_change(
                         autoharness_settings::TimestampStyle::Absolute
                     }
                     ClientTimestampStyle::Hidden => autoharness_settings::TimestampStyle::Hidden,
-                }
-            }))
+                },
+            ))
         }
         ClientPreferenceChange::ComposerSubmitBehavior { value } => {
-            autoharness_tui::LocalPreferenceChange::ComposerSubmitBehavior(value.map(|value| {
-                match value {
+            autoharness_client::runtime::LocalPreferenceChange::ComposerSubmitBehavior(value.map(
+                |value| match value {
                     ClientComposerSubmitBehavior::ControlS => {
                         autoharness_settings::ComposerSubmitBehavior::ControlS
                     }
                     ClientComposerSubmitBehavior::Enter => {
                         autoharness_settings::ComposerSubmitBehavior::Enter
                     }
-                }
-            }))
+                },
+            ))
         }
     };
     Ok(change)
@@ -1607,7 +1615,7 @@ fn map_transcript_item(item: &TuiTranscriptItem) -> Result<ClientTranscriptItem,
 }
 
 fn map_session_summary(
-    summary: &autoharness_tui::SessionBrowserEntry,
+    summary: &autoharness_client::runtime::SessionBrowserEntry,
     active: &TuiSessionProjection,
 ) -> Result<SessionSummary, GuiIpcError> {
     let session_id = ClientSessionId::new(summary.session_id.clone())
@@ -1791,7 +1799,7 @@ fn map_providers(
 }
 
 fn provider_status(
-    profile: &autoharness_tui::ProviderProfileProjection,
+    profile: &autoharness_client::runtime::ProviderProfileProjection,
     catalog: &ClientCatalogProjection,
     credential_available: bool,
 ) -> Result<ClientProviderStatus, GuiIpcError> {
@@ -1834,7 +1842,7 @@ fn provider_status(
 }
 
 fn client_provider_configuration(
-    profile: &autoharness_tui::ProviderProfileProjection,
+    profile: &autoharness_client::runtime::ProviderProfileProjection,
 ) -> Result<ClientProviderConfiguration, GuiIpcError> {
     ClientProviderConfiguration::new(
         client_provider_kind(profile.kind),
@@ -1870,7 +1878,7 @@ const fn client_credential_state(
 }
 
 fn named_credential_source(
-    profile: &autoharness_tui::ProviderProfileProjection,
+    profile: &autoharness_client::runtime::ProviderProfileProjection,
     session_connected: bool,
 ) -> ClientCredentialSource {
     if session_connected {
@@ -1985,7 +1993,7 @@ const fn provider_kind_id(kind: ProviderKindLabel) -> &'static str {
 }
 
 fn profile_provider_id(
-    profile: &autoharness_tui::ProviderProfileProjection,
+    profile: &autoharness_client::runtime::ProviderProfileProjection,
     catalog: &ClientCatalogProjection,
 ) -> Result<ClientProviderId, GuiIpcError> {
     if profile.active
@@ -2110,8 +2118,8 @@ mod tests {
     fn provider_profile(
         id: impl Into<String>,
         active: bool,
-    ) -> autoharness_tui::ProviderProfileProjection {
-        autoharness_tui::ProviderProfileProjection {
+    ) -> autoharness_client::runtime::ProviderProfileProjection {
+        autoharness_client::runtime::ProviderProfileProjection {
             id: id.into(),
             kind: ProviderKindLabel::Gemini,
             active,
@@ -2227,16 +2235,16 @@ mod tests {
     fn permission_mapping_is_lossless_safe_and_answerable_at_tool_boundaries() {
         let mut session = active_session();
         let mut details = (0..256)
-            .map(|index| autoharness_tui::PermissionDetailView {
+            .map(|index| autoharness_client::runtime::PermissionDetailView {
                 label: "Argument".to_owned(),
                 value: format!("{}: value", index + 1),
             })
             .collect::<Vec<_>>();
-        details.push(autoharness_tui::PermissionDetailView {
+        details.push(autoharness_client::runtime::PermissionDetailView {
             label: "Program".to_owned(),
             value: "cargo".to_owned(),
         });
-        details.push(autoharness_tui::PermissionDetailView {
+        details.push(autoharness_client::runtime::PermissionDetailView {
             label: "Working directory".to_owned(),
             value: ".".to_owned(),
         });
@@ -2245,7 +2253,7 @@ mod tests {
         details[2].value = "3: safe\u{202e}txt.exe".to_owned();
         session
             .permission_requests
-            .push(autoharness_tui::PermissionRequestView {
+            .push(autoharness_client::runtime::PermissionRequestView {
                 tool_call_id: ToolCallKey::new("boundary-call").expect("tool call ID"),
                 tool_name: "process_run".to_owned(),
                 capability: "process_execute".to_owned(),
@@ -2331,7 +2339,7 @@ mod tests {
 
     #[tokio::test]
     async fn saturated_command_mailbox_cannot_starve_the_exact_frame_ack() {
-        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -2482,7 +2490,7 @@ mod tests {
             .map(|index| {
                 let model_id =
                     DomainModelId::new(format!("models/catalog-{index}")).expect("model ID");
-                autoharness_tui::ModelSummary {
+                autoharness_client::runtime::ModelSummary {
                     model: DomainModelRef::new(provider_id.clone(), model_id),
                     display_name: match index {
                         0 => "   ".to_owned(),
@@ -2522,7 +2530,7 @@ mod tests {
 
     #[test]
     fn inactive_session_summary_does_not_invent_a_durable_revision() {
-        let summary = autoharness_tui::SessionBrowserEntry {
+        let summary = autoharness_client::runtime::SessionBrowserEntry {
             session_id: "inactive-session".to_owned(),
             title: "Previous work".to_owned(),
             archived: false,
@@ -2631,7 +2639,7 @@ mod tests {
 
     #[test]
     fn inactive_ready_profile_preserves_its_content_free_test_result() {
-        let profile = autoharness_tui::ProviderProfileProjection {
+        let profile = autoharness_client::runtime::ProviderProfileProjection {
             id: "backup".to_owned(),
             kind: ProviderKindLabel::Gemini,
             active: false,
@@ -2675,7 +2683,7 @@ mod tests {
 
     #[test]
     fn inactive_saved_profiles_keep_the_connected_default_provider_active() {
-        let profile = autoharness_tui::ProviderProfileProjection {
+        let profile = autoharness_client::runtime::ProviderProfileProjection {
             id: "session:gemini".to_owned(),
             kind: ProviderKindLabel::Gemini,
             active: false,
@@ -2689,7 +2697,7 @@ mod tests {
             default_mode: "auto".to_owned(),
         };
         let settings = TuiSettingsProjection {
-            provider_status: autoharness_tui::ProviderStatusProjection {
+            provider_status: autoharness_client::runtime::ProviderStatusProjection {
                 active_profile: None,
                 provider_kind: Some(ProviderKindLabel::Gemini),
                 credential_source: CredentialSourceLabel::Environment,
@@ -2729,7 +2737,7 @@ mod tests {
 
     #[test]
     fn credential_failure_keeps_an_active_profile_reconnectable() {
-        let profile = autoharness_tui::ProviderProfileProjection {
+        let profile = autoharness_client::runtime::ProviderProfileProjection {
             id: "active-gemini".to_owned(),
             kind: ProviderKindLabel::Gemini,
             active: true,
@@ -2793,7 +2801,7 @@ mod tests {
 
     #[test]
     fn connect_and_resynchronization_share_one_ordered_channel() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -2865,7 +2873,7 @@ mod tests {
 
     #[test]
     fn acknowledgement_requires_the_exact_in_flight_revision() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -2908,7 +2916,7 @@ mod tests {
 
     #[test]
     fn repeated_connect_before_ack_preserves_one_carrier_send() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -2994,7 +3002,7 @@ mod tests {
 
     #[test]
     fn blocked_renderer_keeps_one_frame_and_coalesces_the_latest_projection() {
-        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3047,7 +3055,7 @@ mod tests {
 
     #[test]
     fn gap_resynchronization_queues_before_ack_and_commits_after_its_baseline() {
-        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3118,7 +3126,7 @@ mod tests {
 
     #[test]
     fn connect_reports_a_channel_that_cannot_accept_its_baseline() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3144,7 +3152,7 @@ mod tests {
 
     #[test]
     fn one_projection_precedes_terminal_notice_despite_continuous_churn() {
-        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3227,7 +3235,7 @@ mod tests {
 
     #[test]
     fn failed_terminal_delivery_replays_after_a_fresh_baseline() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3311,7 +3319,7 @@ mod tests {
 
     #[test]
     fn invalid_projection_holds_terminal_notice_until_state_is_representable() {
-        let (ui_ports, app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3388,7 +3396,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_shutdown_publishes_lifecycle_and_ready_before_host_exit() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3499,7 +3507,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_close_publishes_lifecycle_and_ready_before_host_exit() {
-        let (ui_ports, _app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, _app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3770,7 +3778,7 @@ mod tests {
         assert!(matches!(
             action,
             CommandAction::Intent(UiIntent::UpdateLocalPreference {
-                change: autoharness_tui::LocalPreferenceChange::GuiZoomPercent(Some(value)),
+                change: autoharness_client::runtime::LocalPreferenceChange::GuiZoomPercent(Some(value)),
                 ..
             }) if value.get() == 150
         ));
@@ -3860,7 +3868,7 @@ mod tests {
     #[test]
     fn authoritative_session_credential_projects_ready_on_the_exact_connection() {
         const SENTINEL: &str = "gui-session-credential-sentinel";
-        let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, mut app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3959,7 +3967,7 @@ mod tests {
     #[test]
     fn inactive_named_profile_accepts_saved_secret_ingress_without_serializing_it() {
         const SENTINEL: &str = "gui-vault-credential-sentinel";
-        let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, mut app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),
@@ -3999,7 +4007,7 @@ mod tests {
 
     #[test]
     fn stalled_terminal_notices_bound_forwarded_intents() {
-        let (ui_ports, mut app_ports) = autoharness_tui::bounded_ports(
+        let (ui_ports, mut app_ports) = autoharness_client::runtime::bounded_ports(
             Arc::new(active_session()),
             Arc::new(TuiSessionsProjection::default()),
             Arc::new(TuiCatalogProjection::CredentialRequired),

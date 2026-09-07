@@ -2,6 +2,15 @@ use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Arc;
 
+use autoharness_client::runtime::{
+    ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
+    LocalPreferenceChange, LocalUserProfileProjection, MEMORY_VIEW_PAGE_SIZE, MemoryPageDirection,
+    MemoryProjection, MemoryScopeFilter, MemoryStatusFilter, MemoryViewCursor, MemoryViewQuery,
+    ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
+    ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
+    RetryPolicy, SessionBrowserEntry, SessionsProjection, SettingsProjection, ToolCallKey,
+    UiFailure, UiIntent, UiNotice,
+};
 use autoharness_domain::{
     AttemptFailure, AttemptId, ClassifiedError, CommandId, CommandPayload, ConfidenceBasisPoints,
     ContextEpochId, ContextTokenBudget, CorrelationId, DeliveryMode, ErrorClass, ErrorCode,
@@ -39,15 +48,6 @@ use autoharness_store::{
 };
 use autoharness_tool::{
     IncomingToolCall, MemoryProposal, RunBudget, ToolError, ToolRuntime, definitions, plan, replan,
-};
-use autoharness_tui::{
-    ApiCredential, AppPorts, AttemptKey, CatalogProjection, CredentialSourceLabel,
-    LocalPreferenceChange, LocalUserProfileProjection, MEMORY_VIEW_PAGE_SIZE, MemoryPageDirection,
-    MemoryProjection, MemoryScopeFilter, MemoryStatusFilter, MemoryViewCursor, MemoryViewQuery,
-    ProfileConnectionState, ProfileCredentialStateLabel, ProfilesProjection, ProviderKindLabel,
-    ProviderProfileDraft, ProviderProfileProjection, ProviderStatusProjection, RequestId,
-    RetryPolicy, SessionBrowserEntry, SessionsProjection, SettingsProjection, ToolCallKey,
-    UiFailure, UiIntent, UiNotice,
 };
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
@@ -183,7 +183,6 @@ enum AsyncMessage {
     Stream {
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
-        benchmark_chunk_sequence: Option<u64>,
     },
     Tool {
         tool_call_id: ToolCallId,
@@ -1511,7 +1510,7 @@ impl Coordinator {
         self.ports
             .settings
             .send_replace(Arc::new(SettingsProjection {
-                provider_status: autoharness_tui::ProviderStatusProjection {
+                provider_status: autoharness_client::runtime::ProviderStatusProjection {
                     active_profile: active_id,
                     provider_kind,
                     credential_source,
@@ -2803,7 +2802,7 @@ impl Coordinator {
             self.publish_sessions().await?;
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(attempt_id, Some(request_id)).await {
+        if let Err(error) = self.start_attempt(attempt_id).await {
             tracing::warn!(
                 error = ?start_attempt_failure(&error),
                 "prompt was admitted durably but its provider attempt did not start"
@@ -2894,7 +2893,7 @@ impl Coordinator {
             return Ok(());
         }
         telemetry::attempt_prepared();
-        if let Err(error) = self.start_attempt(retry, None).await {
+        if let Err(error) = self.start_attempt(retry).await {
             tracing::warn!(
                 error = ?start_attempt_failure(&error),
                 "retry was prepared durably but its provider attempt did not start"
@@ -2989,11 +2988,7 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn start_attempt(
-        &mut self,
-        attempt_id: AttemptId,
-        benchmark_request_id: Option<RequestId>,
-    ) -> Result<(), StartAttemptError> {
+    async fn start_attempt(&mut self, attempt_id: AttemptId) -> Result<(), StartAttemptError> {
         let limits = RunLimits::default();
         let advertise_tools = self
             .session
@@ -3080,7 +3075,6 @@ impl Coordinator {
             attempt_id.clone(),
             prepared.request().clone(),
             cancellation.clone(),
-            benchmark_request_id,
         );
         self.active = Some(ActiveAttempt {
             attempt_id,
@@ -4058,13 +4052,8 @@ impl Coordinator {
                 request_id,
                 result,
             } => self.handle_catalog(generation, request_id, result).await,
-            AsyncMessage::Stream {
-                attempt_id,
-                result,
-                benchmark_chunk_sequence,
-            } => {
-                self.handle_stream(attempt_id, result, benchmark_chunk_sequence)
-                    .await
+            AsyncMessage::Stream { attempt_id, result } => {
+                self.handle_stream(attempt_id, result).await
             }
             AsyncMessage::Tool {
                 tool_call_id,
@@ -4379,7 +4368,7 @@ impl Coordinator {
             .sessions
             .send_replace(Arc::new(projection::session(&self.session)));
         let cancellation = self.shutdown.child_token();
-        self.spawn_stream(attempt_id.clone(), request, cancellation.clone(), None);
+        self.spawn_stream(attempt_id.clone(), request, cancellation.clone());
         self.active = Some(ActiveAttempt {
             attempt_id,
             cancellation,
@@ -4432,7 +4421,6 @@ impl Coordinator {
         &mut self,
         attempt_id: AttemptId,
         result: Result<ProviderStreamEvent, ProviderError>,
-        _benchmark_chunk_sequence: Option<u64>,
     ) -> Result<(), AppError> {
         if self
             .active
@@ -4464,15 +4452,12 @@ impl Coordinator {
                     self.fail_run_budget(attempt_id, error).await?;
                     return Ok(());
                 }
-                self.execute_and_publish(
-                    CommandPayload::AppendAttemptText {
-                        session_id: self.session_id.clone(),
-                        attempt_id: attempt_id.clone(),
-                        text: ResponseText::new(delta.as_str())
-                            .expect("provider contract excludes empty deltas"),
-                    },
-                    _benchmark_chunk_sequence.map(|sequence| (attempt_id, sequence)),
-                )
+                self.execute_and_publish(CommandPayload::AppendAttemptText {
+                    session_id: self.session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    text: ResponseText::new(delta.as_str())
+                        .expect("provider contract excludes empty deltas"),
+                })
                 .await?;
                 telemetry::response_segment_committed(bytes);
             }
@@ -5112,7 +5097,7 @@ impl Coordinator {
             .expect("active checked")
             .cancellation
             .clone();
-        self.spawn_stream(attempt_id, prepared.request().clone(), cancellation, None);
+        self.spawn_stream(attempt_id, prepared.request().clone(), cancellation);
         Ok(())
     }
 
@@ -5244,32 +5229,18 @@ impl Coordinator {
     }
 
     async fn execute(&mut self, payload: CommandPayload) -> Result<(), DurableEngineError> {
-        self.execute_and_publish(payload, None).await
+        self.execute_and_publish(payload).await
     }
 
     async fn execute_and_publish(
         &mut self,
         payload: CommandPayload,
-        _benchmark_chunk: Option<(AttemptId, u64)>,
     ) -> Result<(), DurableEngineError> {
         let reply = self.engine.execute(ids::command(payload)).await?;
         if reply.session.session_id() != &self.session_id {
             return Ok(());
         }
         self.session = reply.session;
-        #[cfg(feature = "benchmark-instrumentation")]
-        if let Some((attempt_id, chunk_sequence)) = _benchmark_chunk {
-            let revision = self
-                .session
-                .last_sequence()
-                .map_or(0, autoharness_domain::SessionSequence::get);
-            autoharness_tui::benchmark::projection_committed(
-                self.session_id.as_str(),
-                revision,
-                attempt_id.as_str(),
-                chunk_sequence,
-            );
-        }
         self.ports
             .sessions
             .send_replace(Arc::new(projection::session(&self.session)));
@@ -5327,7 +5298,6 @@ impl Coordinator {
         attempt_id: AttemptId,
         request: ChatRequest,
         cancellation: CancellationToken,
-        _benchmark_request_id: Option<RequestId>,
     ) {
         let provider = Arc::clone(
             self.provider
@@ -5336,28 +5306,9 @@ impl Coordinator {
         );
         let messages = self.messages.clone();
         tokio::spawn(async move {
-            #[cfg(feature = "benchmark-instrumentation")]
-            if let Some(request_id) = _benchmark_request_id {
-                autoharness_tui::benchmark::provider_dispatch_started(
-                    request_id,
-                    attempt_id.as_str(),
-                );
-            }
             match provider.stream_chat(request, cancellation).await {
                 Ok(mut stream) => {
                     while let Some(result) = stream.next().await {
-                        #[cfg(feature = "benchmark-instrumentation")]
-                        let benchmark_chunk_sequence = match &result {
-                            Ok(ProviderStreamEvent::TextDelta(delta)) => {
-                                autoharness_tui::benchmark::provider_chunk_received(
-                                    attempt_id.as_str(),
-                                    delta.as_str().len(),
-                                )
-                            }
-                            _ => None,
-                        };
-                        #[cfg(not(feature = "benchmark-instrumentation"))]
-                        let benchmark_chunk_sequence = None;
                         let terminal = match &result {
                             Err(_) => true,
                             Ok(event) => matches!(
@@ -5370,7 +5321,6 @@ impl Coordinator {
                             .send(AsyncMessage::Stream {
                                 attempt_id: attempt_id.clone(),
                                 result,
-                                benchmark_chunk_sequence,
                             })
                             .await
                             .is_err()
@@ -5388,7 +5338,6 @@ impl Coordinator {
                                 ProviderErrorKind::Protocol,
                                 RetryAdvice::Never,
                             )),
-                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -5397,7 +5346,6 @@ impl Coordinator {
                         .send(AsyncMessage::Stream {
                             attempt_id,
                             result: Err(error),
-                            benchmark_chunk_sequence: None,
                         })
                         .await;
                 }
@@ -6271,8 +6219,7 @@ fn context_failure(error: &AppError) -> UiFailure {
         | AppError::Provider(_)
         | AppError::MemoryCommand(_)
         | AppError::FileSystem
-        | AppError::WriterAlreadyRunning
-        | AppError::Terminal => (
+        | AppError::WriterAlreadyRunning => (
             ErrorClass::Unavailable,
             "The provider request could not be prepared safely",
             RetryPolicy::Now,
@@ -6466,14 +6413,12 @@ fn memory_failure(error: &AppError) -> UiFailure {
             RetryPolicy::Now,
         )
         .with_code("memory_storage"),
-        AppError::Provider(_) | AppError::Terminal | AppError::CredentialRedactionUnavailable => {
-            UiFailure::new(
-                ErrorClass::Unavailable,
-                "The durable memory operation is temporarily unavailable",
-                RetryPolicy::Now,
-            )
-            .with_code("memory_unavailable")
-        }
+        AppError::Provider(_) | AppError::CredentialRedactionUnavailable => UiFailure::new(
+            ErrorClass::Unavailable,
+            "The durable memory operation is temporarily unavailable",
+            RetryPolicy::Now,
+        )
+        .with_code("memory_unavailable"),
     }
 }
 
@@ -6486,6 +6431,7 @@ mod tests {
 
     use autoharness_app::profiles::ProfileStore;
     use autoharness_app::vault::{FakeVault, VaultPort};
+    use autoharness_client::runtime::{SessionProjection, TranscriptItem, UiPorts, bounded_ports};
     use autoharness_domain::{
         Causation, CommandId, CorrelationId, EventEnvelope, EventId, EventPayload, InputId,
         MemoryEvidenceSource, MemoryOperationPayload, ModelId, ModelRef, ProviderCallId,
@@ -6500,7 +6446,6 @@ mod tests {
     use autoharness_settings::CredentialReference;
     use autoharness_store::SessionStore as _;
     use autoharness_store_sqlite::SqliteStore;
-    use autoharness_tui::{SessionProjection, TranscriptItem, UiPorts, bounded_ports};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::watch;
@@ -7550,7 +7495,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Completed,
+                            status: autoharness_client::runtime::AttemptStatus::Completed,
                             ..
                         }
                     )
@@ -7884,7 +7829,8 @@ mod tests {
         let request_id = RequestId::new(91);
         let intent = UiIntent::RememberMemory {
             request_id,
-            content: autoharness_tui::MemoryContent::new(SENTINEL).expect("memory content"),
+            content: autoharness_client::runtime::MemoryContent::new(SENTINEL)
+                .expect("memory content"),
         };
         assert!(!format!("{intent:?}").contains(SENTINEL));
         ui.intents.send(intent).await.expect("remember intent");
@@ -8090,7 +8036,8 @@ mod tests {
         ui.intents
             .send(UiIntent::RememberMemory {
                 request_id: memory_request,
-                content: autoharness_tui::MemoryContent::new(SENTINEL).expect("memory content"),
+                content: autoharness_client::runtime::MemoryContent::new(SENTINEL)
+                    .expect("memory content"),
             })
             .await
             .expect("remember intent");
@@ -8116,7 +8063,7 @@ mod tests {
         ui.intents
             .send(UiIntent::ImportMemory {
                 request_id: import_request,
-                path: autoharness_tui::MemoryImportPath::new("credential-import.txt")
+                path: autoharness_client::runtime::MemoryImportPath::new("credential-import.txt")
                     .expect("import path"),
             })
             .await
@@ -8182,7 +8129,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if code == "context_not_committed"
                 )
@@ -8312,7 +8259,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         retry_of: None,
                         ..
                     } if code == "context_not_committed"
@@ -8326,7 +8273,8 @@ mod tests {
             .find_map(|item| match item {
                 TranscriptItem::Assistant {
                     attempt_id,
-                    status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                    status:
+                        autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                     retry_of: None,
                     ..
                 } if code == "context_not_committed" => Some(attempt_id.clone()),
@@ -8350,7 +8298,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         retry_of: Some(prior),
                         ..
                     } if code == "context_not_committed" && prior == &first_attempt
@@ -8479,7 +8427,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if text == PREFIX && code == "credential_in_provider_data"
                 )
@@ -8576,7 +8524,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if text == PREFIX && code == "credential_in_provider_data"
                 )
@@ -8688,7 +8636,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if code == "credential_in_provider_data"
                 )
@@ -8882,7 +8830,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         ..
                     } if text == "tool complete"
                 )
@@ -9095,7 +9043,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if text == PREFIX && code == "credential_in_provider_data"
                 )
@@ -9215,7 +9163,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Streaming,
+                        status: autoharness_client::runtime::AttemptStatus::Streaming,
                         ..
                     } if text == "partial"
                 )
@@ -9364,7 +9312,7 @@ mod tests {
         ui.intents
             .send(UiIntent::RememberMemory {
                 request_id: memory_request,
-                content: autoharness_tui::MemoryContent::new("ordinary safe memory")
+                content: autoharness_client::runtime::MemoryContent::new("ordinary safe memory")
                     .expect("memory content"),
             })
             .await
@@ -9726,7 +9674,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if text == expected_text && code == "credential_in_provider_data"
                 )
@@ -11170,7 +11118,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         ..
                     } if text == "router response"
                 )
@@ -11238,7 +11186,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         ..
                     } if text == "recovered after invalid tool call"
                 )
@@ -11336,7 +11284,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         ..
                     } if code == "tool_turn_limit"
                 )
@@ -11637,7 +11585,7 @@ mod tests {
             .await
             .expect("prepare prior attempt");
         assert!(
-            coordinator.start_attempt(prior_attempt, None).await.is_ok(),
+            coordinator.start_attempt(prior_attempt).await.is_ok(),
             "prior attempt starts"
         );
         while coordinator.active.is_some() {
@@ -11676,10 +11624,7 @@ mod tests {
             .expect("rounded byte count")
             / CONTEXT_SIZER_BYTES_PER_TOKEN;
         coordinator.catalog_models[0].input_token_limit = Some(exact_token_limit);
-        match coordinator
-            .start_attempt(current_attempt.clone(), None)
-            .await
-        {
+        match coordinator.start_attempt(current_attempt.clone()).await {
             Ok(()) => {}
             Err(StartAttemptError::Engine(error)) => panic!("engine start failure: {error}"),
             Err(StartAttemptError::Provider(error)) => panic!("provider start failure: {error}"),
@@ -12185,7 +12130,7 @@ mod tests {
                         matches!(
                             item,
                             TranscriptItem::Assistant {
-                                status: autoharness_tui::AttemptStatus::Completed,
+                                status: autoharness_client::runtime::AttemptStatus::Completed,
                                 ..
                             }
                         )
@@ -12460,7 +12405,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Completed,
+                            status: autoharness_client::runtime::AttemptStatus::Completed,
                             text,
                             ..
                         } if text == "tool complete"
@@ -12681,7 +12626,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Failed(UiFailure {
+                            status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure {
                                 code,
                                 ..
                             }),
@@ -12814,7 +12759,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         text,
                         ..
                     } if text == "proposal tools settled"
@@ -12959,7 +12904,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Completed,
+                            status: autoharness_client::runtime::AttemptStatus::Completed,
                             ..
                         }
                     )
@@ -13128,7 +13073,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure { code, .. }),
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure { code, .. }),
                         text,
                         ..
                     } if text.is_empty() && code == "credential_in_provider_data"
@@ -13304,7 +13249,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         text,
                         ..
                     } if text == "inline proposal settled"
@@ -13579,7 +13524,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         text,
                         ..
                     } if text == "verified proposal settled"
@@ -13770,7 +13715,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         ..
                     } if text == "tool complete"
                 )
@@ -13921,7 +13866,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Completed,
+                            status: autoharness_client::runtime::AttemptStatus::Completed,
                             ..
                         }
                     )
@@ -14009,7 +13954,7 @@ mod tests {
                     matches!(
                         item,
                         TranscriptItem::Assistant {
-                            status: autoharness_tui::AttemptStatus::Failed(_),
+                            status: autoharness_client::runtime::AttemptStatus::Failed(_),
                             ..
                         }
                     )
@@ -14131,7 +14076,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         ..
                     }
                 )
@@ -14217,7 +14162,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Streaming,
+                        status: autoharness_client::runtime::AttemptStatus::Streaming,
                         ..
                     } if text == "partial"
                 )
@@ -14248,7 +14193,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         attempt_id,
-                        status: autoharness_tui::AttemptStatus::Cancelled,
+                        status: autoharness_client::runtime::AttemptStatus::Cancelled,
                         ..
                     } if attempt_id == &first_attempt
                 )
@@ -14271,7 +14216,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         retry_of: Some(_),
                         ..
                     } if text == "recovered"
@@ -14381,7 +14326,7 @@ mod tests {
                 matches!(
                     item,
                     TranscriptItem::Assistant {
-                        status: autoharness_tui::AttemptStatus::Failed(UiFailure {
+                        status: autoharness_client::runtime::AttemptStatus::Failed(UiFailure {
                             class: ErrorClass::Cancelled,
                             retry: RetryPolicy::Now,
                             ..
@@ -14416,7 +14361,7 @@ mod tests {
                     item,
                     TranscriptItem::Assistant {
                         text,
-                        status: autoharness_tui::AttemptStatus::Completed,
+                        status: autoharness_client::runtime::AttemptStatus::Completed,
                         retry_of: Some(_),
                         ..
                     } if text == "recovered"

@@ -81,7 +81,6 @@ jobs:
         run: >-
           cargo clippy --workspace
           --exclude autoharness-app
-          --exclude autoharness-tui
           --all-targets --all-features --locked --no-deps -- -D warnings
       - name: Run desktop host Clippy
         run: >-
@@ -94,9 +93,9 @@ jobs:
           --test vault_fake
           --features gui --locked --no-deps -- -D warnings
       - name: Build documentation
-        run: cargo doc --workspace --exclude autoharness-tui --all-features --no-deps --locked
+        run: cargo doc --workspace --all-features --no-deps --locked
       - name: Test documentation
-        run: cargo test --workspace --exclude autoharness-tui --doc --all-features --locked
+        run: cargo test --workspace --doc --all-features --locked
 
   docs:
     name: Documentation links
@@ -202,7 +201,6 @@ jobs:
         run: >-
           cargo test --workspace
           --exclude autoharness-app
-          --exclude autoharness-tui
           --all-targets --all-features --locked --no-fail-fast
       - name: Run desktop host tests
         run: >-
