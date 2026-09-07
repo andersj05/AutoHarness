@@ -41,8 +41,12 @@ pub struct AppPaths {
 /// Builds a target-restricted tracing directive from the optional log-level setting.
 pub fn log_filter_directive() -> Result<String, AppError> {
     let configured = env::var(LOG_LEVEL_ENV).ok();
-    normalize_log_level(configured.as_deref())
-        .map(|level| format!("autoharness={level}"))
+    log_filter_from(configured.as_deref())
+}
+
+fn log_filter_from(configured: Option<&str>) -> Result<String, AppError> {
+    normalize_log_level(configured)
+        .map(|level| format!("autoharness={level},ah={level}"))
         .ok_or(AppError::Configuration)
 }
 
@@ -311,5 +315,42 @@ mod tests {
         assert_eq!(normalize_log_level(None), Some("info"));
         assert_eq!(normalize_log_level(Some(" DEBUG ")), Some("debug"));
         assert_eq!(normalize_log_level(Some("reqwest=trace")), None);
+    }
+
+    #[test]
+    fn both_desktop_names_emit_lifecycle_markers_without_dependency_logs() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        struct Targets(Arc<Mutex<Vec<&'static str>>>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Targets {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                self.0
+                    .lock()
+                    .expect("capture")
+                    .push(event.metadata().target());
+            }
+        }
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(
+                log_filter_from(None).expect("default filter"),
+            ))
+            .with(Targets(Arc::clone(&targets)));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "autoharness::telemetry", event = "app_started");
+            tracing::info!(target: "ah::telemetry", event = "app_started");
+            tracing::info!(target: "reqwest", event = "dependency_payload");
+            tracing::debug!(target: "ah::telemetry", event = "debug_only");
+        });
+        assert_eq!(
+            *targets.lock().expect("capture"),
+            ["autoharness::telemetry", "ah::telemetry"]
+        );
+        assert!(log_filter_from(Some("reqwest=trace")).is_err());
     }
 }
