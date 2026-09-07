@@ -44,6 +44,7 @@ AutoHarness uses a compact Markdown ADR format based on MADR conventions.
 | [0017](0017-use-auditable-provider-turn-context.md) | Proposed | Use auditable provider-turn context manifests |
 | [0018](0018-use-a-separate-revisioned-memory-ledger.md) | Proposed | Use a separate revisioned memory ledger |
 | [0019](0019-use-tauri-web-rendered-desktop-client.md) | Accepted | Use a Tauri web-rendered desktop client |
+| [0020](0020-retire-terminal-client.md) | Accepted | Retire the terminal client and make desktop the source default |
 
 ## When an ADR is not needed
 
