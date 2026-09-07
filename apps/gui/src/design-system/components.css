@@ -48,7 +48,10 @@
 .dsMenuIcon { display: inline-grid; place-items: center; color: var(--color-accent-on-surface); }
 .dsMenuCopy { display: grid; min-width: 0; gap: 0.125rem; }
 .dsMenuCopy strong, .dsMenuCopy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsMenuCopy small { color: var(--color-text-muted); font-size: var(--type-meta); font-weight: 400; }
+.dsMenuCopy small { color: var(--color-text-secondary); font-size: var(--type-meta); font-weight: 400; }
+.dsMenuItem kbd { color: var(--color-text-secondary); }
+.dsMenuItem:is(:hover, :focus-visible, [data-active="true"]) :is(.dsMenuCopy small, .dsMenuIcon, kbd) { color: inherit; }
+[data-color-mode="high-contrast"] .dsMenuItem:is(:hover, :focus-visible, [data-active="true"]) { color: var(--color-text-on-accent); }
 .dsMenuEmpty { padding: var(--space-8) var(--space-4); color: var(--color-text-muted); text-align: center; }
 
 .dsCommandPalette { display: grid; gap: var(--space-3); }
