@@ -9,12 +9,12 @@ import type {
   EffectiveSetting,
   GuiFontSize,
   PreferenceSource,
-  ThemePreset,
   TimestampStyle,
 } from "../protocol";
 import { COLOR_MODES, THEME_PRESETS } from "../design-system/appearance";
 import { Icon } from "./Icon";
 import { Button } from "./primitives";
+import { ThemePicker } from "./ThemePicker";
 
 interface SettingsWorkspaceProps {
   settings: ClientSettingsProjection;
@@ -72,7 +72,7 @@ function SettingShell<T>({ children, description, id, label, setting, busy, onRe
   return (
     <div className="settingRow" data-setting={id}>
       <div className="settingCopy">
-        <label htmlFor={id}>{label}</label>
+        <label htmlFor={id} id={`${id}-label`}>{label}</label>
         <p id={`${id}-description`}>{description}</p>
         {setting.source !== "default" && setting.source !== "user_file" ? <p className="settingProvenance" id={`${id}-source`}>
           <span title={SOURCE_EXPLANATIONS[setting.source]}>{sourceLabel}</span>
@@ -151,7 +151,7 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
             <section aria-labelledby="settings-appearance-heading" className="settingsWorkspace" id="settings-appearance">
               <header><h2 id="settings-appearance-heading">Appearance</h2></header>
               <SettingShell visible={visible("theme-preset")} busy={busy === "theme_preset"} description="Choose a theme, or follow your system." id="theme-preset" label="Theme" onReset={() => reset("theme_preset", "Theme")} setting={settings.themePreset}>
-                <select aria-describedby={describedBy("theme-preset")} disabled={Boolean(busy)} id="theme-preset" onChange={(event) => void update({ kind: "theme_preset", value: event.target.value as ThemePreset }, "Theme")} value={settings.themePreset.value}>{THEME_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                <ThemePicker colorMode={settings.colorMode.value} describedBy={describedBy("theme-preset")} disabled={Boolean(busy)} onChange={(value) => void update({ kind: "theme_preset", value }, "Theme")} value={settings.themePreset.value} />
               </SettingShell>
               <SettingShell visible={visible("color-mode")} busy={busy === "color_mode"} description="Adjust color saturation and contrast." id="color-mode" label="Color and contrast" onReset={() => reset("color_mode", "Color and contrast")} setting={settings.colorMode}>
                 <select aria-describedby={describedBy("color-mode")} disabled={Boolean(busy)} id="color-mode" onChange={(event) => void update({ kind: "color_mode", value: event.target.value as ColorMode }, "Color and contrast")} value={settings.colorMode.value}>{COLOR_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>

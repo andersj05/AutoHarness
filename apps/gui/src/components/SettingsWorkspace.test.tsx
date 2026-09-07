@@ -38,7 +38,9 @@ describe("SettingsWorkspace", () => {
     settings.colorMode = { value: "high-contrast", source: "environment", userOverride: true };
     renderWorkspace(settings);
 
-    expect(screen.getAllByRole("combobox")).toHaveLength(2);
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "Ocean" })).toBeChecked();
     expect(screen.queryByRole("checkbox", { name: "Reduce motion" })).not.toBeInTheDocument();
     expect(screen.getByText("workspace settings")).toBeInTheDocument();
     expect(screen.getByTitle("The current workspace supplies this value.")).toBeInTheDocument();
@@ -50,7 +52,7 @@ describe("SettingsWorkspace", () => {
   it("issues a typed host command for every setting and a null reset", async () => {
     const { commands, user } = renderWorkspace();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Theme" }), "rose");
+    await user.click(screen.getByRole("radio", { name: "Rose" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
     await user.click(screen.getByRole("button", { name: "Accessibility" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Zoom" }), "150");

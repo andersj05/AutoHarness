@@ -290,7 +290,7 @@ describe("AutoHarness GUI", () => {
     expect(document.querySelector(".appShell")).toHaveAttribute("inert");
     await user.click(screen.getByRole("menuitem", { name: /Open settings/ }));
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Theme" }), "rose");
+    await user.click(screen.getByRole("radio", { name: "Rose" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
     await user.click(screen.getByRole("button", { name: "Accessibility" }));
     await user.click(screen.getByRole("checkbox", { name: /Reduce motion/ }));
