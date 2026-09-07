@@ -195,6 +195,9 @@ The permission view cannot be hidden behind another modal, route, pane, or anima
 
 Window close requests cancellation but does not fabricate settlement.
 The existing durable recovery rules decide the result after restart.
+The native command palette exposes the same shutdown request through Quit AutoHarness.
+The Tauri event loop returns to the application entry point so coordinator and engine joins complete before process exit.
+The host emits a content-free renderer-ready marker only after validating acknowledgement of the initial baseline frame.
 
 ## Feature composition
 
@@ -237,3 +240,12 @@ The GUI adds these gates without weakening the Rust gates:
 
 The frozen TUI and its PTY tests remain available as local migration references until the GUI release checklist explicitly retires them.
 They do not gate ordinary GUI migration pull requests.
+
+## Candidate packaging
+
+The opt-in `gui-package` feature embeds production frontend assets and makes the packaged `autoharness` executable open the GUI without arguments.
+The `ah` executable and ordinary source builds retain the terminal default.
+On Windows, use `ah` for terminal operation because the packaged desktop executable has the native window subsystem rather than a console.
+The packaging overlay is separate from the inactive preview bundle configuration.
+Candidate behavior does not authorize the repository-wide default cutover.
+The [update policy](../release/GUI_UPDATE_POLICY.md) owns distribution and rollback rules, and the [release checklist](../release/GUI_RELEASE_CHECKLIST.md) owns promotion evidence.

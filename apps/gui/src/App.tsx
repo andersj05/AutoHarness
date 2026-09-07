@@ -12,6 +12,7 @@ import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
 import { MemoryWorkspace } from "./features/memory/MemoryWorkspace";
 import { SessionsWorkspace } from "./components/SessionsWorkspace";
 import { SettingsWorkspace } from "./components/SettingsWorkspace";
+import { HelpWorkspace } from "./components/HelpWorkspace";
 import { Button, CommandPalette, SplitPane, type CommandItem } from "./components/primitives";
 import { useClientStore } from "./store/react";
 import type { ClientStore } from "./store/clientStore";
@@ -39,6 +40,7 @@ function useMediaQuery(query: string): boolean {
 
 export function App({ store }: AppProps) {
   const client = useClientStore(store);
+  const [closing, setClosing] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -69,8 +71,8 @@ export function App({ store }: AppProps) {
       const newSessionShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "n";
       const paletteShortcut = (event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k";
       const routeShortcut = event.altKey && !event.ctrlKey && !event.metaKey
-        ? ({ "1": "chat", "2": "sessions", "3": "providers", "4": "memory", "5": "settings" } as const)[event.key]
-        : undefined;
+        ? ({ "1": "chat", "2": "sessions", "3": "providers", "4": "memory", "5": "settings", "6": "help" } as const)[event.key]
+        : event.key === "F1" ? "help" : undefined;
       if (!newSessionShortcut && !paletteShortcut && !routeShortcut) return;
       event.preventDefault();
       if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || memoryDialogOpen) return;
@@ -159,6 +161,10 @@ export function App({ store }: AppProps) {
     }
   }, [client.projection?.settings.zoomPercent.value, compactInspectorViewport]);
 
+  if (closing) {
+    return <main aria-busy="true" className="bootSurface"><h1>Closing AutoHarness</h1><p>The local runtime is settling work and closing durable storage.</p></main>;
+  }
+
   if (client.lifecycle === "failed") {
     return (
       <main className="fatalSurface">
@@ -219,14 +225,19 @@ export function App({ store }: AppProps) {
     { id: "providers", label: "Manage providers", description: "Configure profiles, credentials, and model defaults", icon: "providers", shortcut: "Alt 3" },
     { id: "memory", label: "Open memory", description: "Inspect the knowledge workspace preview", icon: "memory", shortcut: "Alt 4" },
     { id: "settings", label: "Open settings", description: "Inspect and change renderer preferences", icon: "settings", shortcut: "Alt 5" },
+    { id: "help", label: "Open help", description: "Shortcuts, workflows, and recovery guidance", icon: "inspect", shortcut: "F1" },
     { id: "choose-model", label: "Choose model", description: "Open the compatible model catalog", icon: "model" },
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
     { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
+    ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Settle runtime work and close the application", keywords: "exit shutdown close" }] : []),
   ];
 
   const runCommand = (command: string) => {
-    if (command === "new-session") {
+    if (command === "quit") {
+      setClosing(true);
+      void store.close();
+    } else if (command === "new-session") {
       void store.dispatch({ type: "create_session" });
       setRoute("chat");
     } else if (command === "choose-model") {
@@ -239,7 +250,7 @@ export function App({ store }: AppProps) {
       setTranscriptSearchRequest((value) => value + 1);
     } else if (command === "export-transcript") {
       if (activeSession) void store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id });
-    } else if (command === "chat" || command === "sessions" || command === "providers" || command === "memory" || command === "settings") {
+    } else if (command === "chat" || command === "sessions" || command === "providers" || command === "memory" || command === "settings" || command === "help") {
       setRoute(command);
     }
   };
@@ -296,6 +307,8 @@ export function App({ store }: AppProps) {
       />
     ) : route === "memory" ? (
       <MemoryWorkspace memory={projection.memory} sessionId={activeSessionId} blocked={Boolean(projection.pendingPermission)} onCommand={(command) => store.dispatchAndWait(command)} onDialogChange={setMemoryDialogOpen} onOpenNavigation={() => setMobileRailOpen(true)} />
+    ) : route === "help" ? (
+      <HelpWorkspace onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : (
       <SettingsWorkspace
         onCommand={(command) => store.dispatchAndWait(command)}
@@ -445,7 +458,7 @@ export function App({ store }: AppProps) {
         {client.notice?.message}
       </div>
       <div aria-atomic="true" aria-live="polite" className="srOnly" role="status">
-        {`${route === "chat" ? "Chat" : route === "sessions" ? "Sessions" : route === "providers" ? "Providers" : route === "memory" ? "Memory" : "Settings"} workspace opened.`}
+        {`${route === "chat" ? "Chat" : route === "sessions" ? "Sessions" : route === "providers" ? "Providers" : route === "memory" ? "Memory" : route === "help" ? "Help" : "Settings"} workspace opened.`}
       </div>
       {client.commandError || client.notice?.level === "error" ? (
         <div className="toast" data-intent="error" role="alert"><Icon name="warning" size={16} /><span>{client.commandError ?? client.notice?.message}</span></div>

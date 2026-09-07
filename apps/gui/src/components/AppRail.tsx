@@ -2,7 +2,7 @@ import { useEffect, useRef, type CSSProperties } from "react";
 import type { SessionSummary } from "../protocol";
 import { Icon, type IconName } from "./Icon";
 
-export type RouteId = "chat" | "sessions" | "providers" | "memory" | "settings";
+export type RouteId = "chat" | "sessions" | "providers" | "memory" | "settings" | "help";
 
 interface AppRailProps {
   activeRoute: RouteId;
@@ -26,6 +26,7 @@ const routes: readonly { id: RouteId; label: string; icon: IconName }[] = [
   { id: "sessions", label: "Sessions", icon: "sessions" },
   { id: "providers", label: "Providers", icon: "providers" },
   { id: "memory", label: "Memory", icon: "memory" },
+  { id: "help", label: "Help", icon: "inspect" },
 ];
 
 export function AppRail({

@@ -197,4 +197,5 @@ Stage 5's cross-platform exit evidence remains open because macOS and Linux GUI-
 Stage 6 is complete locally, while cross-platform system-webview accessibility review remains part of the release evidence.
 Stage 7 is implemented locally with the existing Rust memory authority, replay-equivalent native command and storage journeys, explicit proposal review, inert typed workspace surfaces, and responsive browser review.
 The [Stage 7 validation record](../release/GUI_STAGE7_VALIDATION.md) distinguishes native protocol and replay evidence from fixture-only presentation contracts and the remaining system-webview matrix.
-Stage 8 remains planned migration work.
+The [Stage 8 validation record](../release/GUI_STAGE8_VALIDATION.md) records implemented candidate installers, native lifecycle automation, update policy, and immutable release gates.
+Stage 8 remains incomplete until signed same-candidate evidence and approvals satisfy the unchanged exit criteria above.

@@ -104,12 +104,15 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
     setBusyAction(undefined);
     if (outcome === "committed") {
       setActionMessage(success);
-      if (closeDialog) setDialog(undefined);
-      setDeleteConfirmation("");
+      if (closeDialog) {
+        setDialog(undefined);
+        setDeleteConfirmation("");
+      }
     }
   };
 
   const openDialog = (next: SessionDialog) => {
+    if (busyAction) return;
     setDialog(next);
     setRenameTitle(next.session.title);
     setDeleteConfirmation("");
@@ -138,7 +141,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
           {visibleSessions.length > 0 ? (
             <VirtualList
               ariaLabel="All sessions"
-              height={listHeight}
+              height={Math.min(listHeight, visibleSessions.length * 68)}
               itemKey={(session) => session.id}
               items={visibleSessions}
               renderItem={(session) => (
@@ -190,9 +193,9 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
                 <Button icon="copy" onClick={() => void run("export", { type: "export_transcript", sessionId: selected.id }, `Exported “${selected.title}”.`, false)} loading={busyAction === "export"} loadingLabel="Exporting">Export Markdown</Button>
               </div>
               <div className="sessionSecondaryActions">
-                <Button onClick={() => openDialog({ kind: "rename", session: selected })} size="small" variant="quiet">Rename</Button>
-                {!selected.archived ? <Button onClick={() => openDialog({ kind: "archive", session: selected })} size="small" variant="quiet">Archive</Button> : null}
-                <Button className="dangerText" onClick={() => openDialog({ kind: "delete", session: selected })} size="small" variant="quiet">Delete</Button>
+                <Button disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "rename", session: selected })} size="small" variant="quiet">Rename</Button>
+                {!selected.archived ? <Button disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "archive", session: selected })} size="small" variant="quiet">Archive</Button> : null}
+                <Button className="dangerText" disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "delete", session: selected })} size="small" variant="quiet">Delete</Button>
               </div>
               <p aria-live="polite" className="sessionActionMessage">{actionMessage}</p>
             </>

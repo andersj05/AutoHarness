@@ -257,7 +257,9 @@ pub(crate) async fn run(ui_ports: UiPorts, shutdown: CancellationToken) -> Resul
         handle.exit(0);
     });
     let event_shutdown = shutdown.clone();
-    app.run(move |_handle, event| match event {
+    // `run` exits the entire process before the coordinator and engine joins in
+    // main can finish. Returning preserves the authoritative shutdown boundary.
+    app.run_return(move |_handle, event| match event {
         tauri::RunEvent::WindowEvent {
             event: tauri::WindowEvent::CloseRequested { api, .. },
             ..
@@ -793,6 +795,9 @@ impl BridgeActor {
         if in_flight.revision != revision {
             self.in_flight = Some(in_flight);
             return Err(GuiIpcError::invalid_command());
+        }
+        if revision == TransportRevision::INITIAL {
+            crate::telemetry::gui_renderer_ready();
         }
         if let InFlightPayload::Notice(queued) = in_flight.payload {
             if let Some(request_id) = queued.terminal_request_id {

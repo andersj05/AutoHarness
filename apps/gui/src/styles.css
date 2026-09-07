@@ -563,6 +563,14 @@
   .futurePreview i { width: 13px; border-radius: 4px 4px 0 0; background: linear-gradient(var(--cyan), var(--violet)); }
   .futurePreview i:nth-child(1) { height: 34%; }.futurePreview i:nth-child(2) { height: 76%; }.futurePreview i:nth-child(3) { height: 51%; }.futurePreview i:nth-child(4) { height: 90%; }
   .settingsRouteWorkspace { scroll-behavior: smooth; }
+  .helpContent { display: grid; gap: 18px; max-width: 960px; margin-top: 24px; padding-bottom: 24px; }
+  .helpContent .settingsWorkspace > header { padding-bottom: 0; }
+  .helpContent .settingsWorkspace p { max-width: 80ch; font-size: 13px; }
+  .helpShortcuts { display: grid; gap: 12px; margin: 18px 0 0; }
+  .helpShortcuts > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .helpShortcuts dt { color: var(--text-muted); font-size: 13px; }
+  .helpShortcuts dd { margin: 0; color: var(--text); font-size: 12px; }
+  .helpResults { color: var(--text-muted); font-size: 12px; }
   .settingsLayout { display: grid; grid-template-columns: 178px minmax(0, 820px); align-items: start; gap: 24px; margin-top: 24px; }
   .settingsNav { position: sticky; top: 18px; display: grid; gap: 4px; padding: 9px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface-1) 88%, transparent); }
   .settingsNav > a { padding: 9px 10px; border-radius: 8px; color: var(--text-muted); font-size: 11px; font-weight: 650; text-decoration: none; }
@@ -697,8 +705,9 @@
     .appRail .routeButton { justify-content: center; padding-inline: 8px; }
     .conversationColumn { padding-inline: 30px; }
     .routeWorkspace { padding-inline: 26px; }
-    .sessionsWorkspaceGrid { grid-template-columns: minmax(0, 1fr); }
-    .sessionDetailPane { display: none; }
+    .sessionRouteWorkspace { overflow: auto; }
+    .sessionsWorkspaceGrid { flex: none; grid-template-columns: minmax(0, 1fr); }
+    .sessionDetailPane { min-height: 0; }
     .providersWorkspaceGrid { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); }
     .providerDefaultsForm { grid-template-columns: 1fr 1fr; }
     .providerDefaultsForm .dsButton { grid-column: 1 / -1; justify-self: end; }
