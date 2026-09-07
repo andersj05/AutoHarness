@@ -18,7 +18,7 @@ It uses native semantic controls, fluid layout, readable proportional text where
 ## Principles
 
 1. Keep the conversation calm and the controls quiet until they are needed.
-2. Use whitespace, hierarchy, and translucency before borders.
+2. Use whitespace and hierarchy before borders or decorative containers.
 3. Reserve accent color for meaningful state and focus, with neutral navigation and primary controls.
 4. Render code, commands, paths, identifiers, and metrics in monospace, while ordinary prose uses a highly legible system sans-serif stack.
 5. Express state with text, shape, icon, and contrast rather than color alone.
@@ -30,27 +30,30 @@ It uses native semantic controls, fluid layout, readable proportional text where
 
 The wide shell has three regions:
 
-- A 248-pixel navigation rail for identity, routes, recent sessions, and the active workspace.
+- A 248-pixel navigation rail for identity, search, routes, and recent sessions.
 - A flexible primary workspace with a readable conversation measure.
 - An optional 320-pixel inspector for context, activity, permissions, and details.
 
 The rail and inspector are independently collapsible, and the inspector starts closed.
 Sidebar Search opens commands and unarchived sessions through one keyboard-accessible picker.
 Collapsed panes retain selection and scroll state.
-The center workspace never shifts while text is being selected or a response is streaming.
+Streaming and resize follow the conversation tail only while the reader remains near it.
+Reading older messages must not pull the viewport back to the tail, and Jump to latest restores following.
 
 At narrower widths, the inspector becomes a drawer and the rail becomes a compact icon bar.
 At phone-like widths used only for resilience testing, navigation becomes a modal sheet and the composer remains fully usable.
 
 ## Surfaces
 
-The default dark theme derives from the existing System seed:
+The System theme follows the operating system.
+Its dark palette derives from the existing seed:
 
 - Base: `#080c18`.
 - Cyan accent: `#22d3ee`.
 - Violet accent: `#a78bfa`.
 
 Surfaces use subtle Oklab lightness steps instead of unrelated hex tables.
+Navigation, primary controls, and selected rows use neutral contrast, while semantic states retain their generated colors.
 Raised panels may use translucency only when the underlying layer remains predictable and contrast floors still hold.
 Body content should not be surrounded by decorative boxes.
 
@@ -63,7 +66,7 @@ The default prose stack uses the operating-system UI font.
 The technical stack uses `ui-monospace`, `SFMono-Regular`, `Cascadia Code`, `Consolas`, and sensible fallbacks.
 
 Conversation prose targets 15 to 16 pixels with a relaxed line height.
-Labels and metadata use 11 to 13 pixels with careful contrast rather than extreme letter spacing.
+Labels and metadata generally use 12 to 14 pixels with careful contrast rather than extreme letter spacing.
 Code blocks, tool details, paths, and token metrics use the technical stack.
 
 ## Conversation
@@ -74,9 +77,17 @@ Agent turns remain open on the base surface with a compact identity line, option
 Tool activity appears as structured cards that can disclose trusted details without overwhelming the transcript.
 
 The composer is a rounded command surface anchored to the visible conversation tail.
-It grows within a bounded height, preserves a single scrollport, and exposes model, reasoning, attachment, command, and submission controls without turning into a toolbar wall.
+It grows within a bounded height, preserves a single scrollport, and exposes the selected model plus Send or Stop.
+Only implemented controls appear in the composer.
+Recovery and connection actions sit above the composer so they remain discoverable at the conversation tail.
+The header contains the session title, transcript search, optional details, and a menu for transcript copy and export.
 
-Streaming uses a small gradient activity trace and incremental content.
+Agent responses render headings, lists, tables, inline code, and code blocks through a Markdown parser.
+HTML remains inert, image references never fetch remote content, and links display their targets without navigation.
+Literal transcript search highlights the complete source, including Markdown syntax.
+Each completed agent response has a Copy action.
+
+Streaming uses a small activity trace and incremental content.
 Reduced-motion mode replaces movement with a stable progress state.
 
 ## Interaction states
@@ -140,7 +151,8 @@ They do not receive the transport, Rust application handle, or global coordinato
 ## Implemented Stage 3 contract
 
 The renderer-neutral `autoharness-presentation` crate is the source of truth for the nine theme seeds, five color treatments, semantic color ramps, and contrast floors.
-Its checked generator produces the complete GUI custom-property matrix, while the TUI consumes the same resolved ramps through its renderer adapter.
+Its checked generator produces the complete GUI custom-property matrix.
+The terminal renderer is retired under [ADR-0020](../adr/0020-retire-terminal-client.md).
 
 The GUI token layer adds semantic typography, spacing, elevation, radii, focus, motion, responsive dimensions, control sizes, and stacking levels.
 The shared primitive catalog includes `Button`, `Field`, `Chip`, `Menu`, `Dialog`, `CommandPalette`, `SplitPane`, `VirtualList`, `Callout`, `ToolCard`, `Meter`, and `StatusSurface`.
@@ -155,7 +167,10 @@ Reduced-motion preference is accepted from the operating system and can also be 
 The Providers workspace uses a master-detail layout with a bounded profile list, one selected detail surface, and compact status, scope, credential-source, and active-state labels.
 Named profiles expose grouped connection and configuration actions, while the temporary session-default row is visibly distinct and omits durable edit, test, default, and deletion controls.
 Environment overrides use a prominent explanatory callout and describe saved vault material only as a fallback.
-Credential controls keep the masked field next to the immediate-transfer boundary, stack at narrow widths, and clear before native transfer.
+Model defaults and daily actions precede credential maintenance.
+Saved credentials live in a collapsed disclosure; missing credentials and environment overrides remain immediately visible.
+Masked credential fields stack at narrow widths and clear before native transfer or when their disclosure closes.
+Connection identifiers and metadata remain available in a separate disclosure.
 Model and reasoning defaults form one atomic action against the active authoritative catalog.
 Codex authentication presents one native-browser action and a correlated cancellation state without rendering tokens.
 Permanent profile deletion moves into a separate danger zone and remains disabled until the exact profile identity is typed.
@@ -163,7 +178,9 @@ Permanent profile deletion moves into a separate danger zone and remains disable
 ## Implemented Stage 6 personalization and accessibility
 
 The Settings workspace groups all eight renderer-relevant preferences into Appearance, Accessibility, and Conversation sections with searchable labels and descriptions.
-Every row presents the effective value, its authoritative source, an explanation, and a Reset action when a user-file override exists.
+One selected category is visible at a time; search matches individual settings and option labels across every category.
+Every row presents the effective value, a concise explanation, and a Reset action when a user-file override exists.
+Ordinary default and saved-value sources remain accessible to assistive technology, while higher-precedence sources are visibly explained.
 An override hidden by a higher-precedence layer remains visible as a warning so reset never appears ineffective or ambiguous.
 
 System theme and motion preferences follow operating-system media queries until the user selects an explicit value.
@@ -177,7 +194,9 @@ Permission and credential dialogs retain labelled descriptions, logical screen-r
 ## Implemented Stage 7 Memory workspace
 
 Memory uses a bounded master-detail list with explicit search submission, scope and lifecycle filters, stable cursor navigation, and a clear displayed-page count.
-The detail surface groups exact identity, trust, sensitivity, current provenance timeline, retained or erased evidence, typed relations, validation findings, and bounded admission history.
+The detail surface leads with the selected memory content.
+A Details and history disclosure groups exact identity, trust, sensitivity, current provenance timeline, retained or erased evidence, typed relations, validation findings, and bounded admission history.
+Approval warnings and review actions remain visible outside that disclosure.
 Proposed content carries an explicit untrusted-source warning and a separate exact-revision approval dialog.
 Correction presents inert before and after text, and content deletion requires typing the complete memory identity.
 Permissions preempt Memory dialogs, stale revisions disable submission, and focus returns without scrolling the application root.
@@ -185,6 +204,16 @@ Permissions preempt Memory dialogs, stale revisions disable submission, and focu
 Plan, artifact, file, diff, terminal-output, and evaluation slots render data through trusted semantic components.
 Commands and paths remain selectable inert text.
 The responsive list stacks above details at narrow widths and high zoom, while dialog sizing uses the effective scaled viewport to keep confirmation controls visible.
+
+## Sessions and Help
+
+Sessions provides search, open and archived filters, recent-activity or title sorting, and a visible New session action.
+Enter or double-click opens an unarchived result.
+The detail panel always belongs to a visible search result and clears when no result matches.
+Rename and deletion dialogs make the rest of the application inert and yield to permission review.
+
+Help leads with searchable shortcuts and expandable task guidance.
+Search opens matching guidance without flooding the default view.
 
 ## Visual validation
 
@@ -201,3 +230,5 @@ The matrix includes dark and light bases, high contrast, reduced motion, 200 per
 Automated checks enforce all 45 theme and treatment combinations, generated-file freshness, documented contrast floors, two-layer focus visibility, reduced-motion overrides, and semantic-state redundancy.
 Local browser review covers the compact, standard, wide, and resilience viewport classes.
 Native system-webview review is recorded per operating system and remains a release-gate requirement where the target host is unavailable locally.
+
+The [2026-09-07 UX validation](../release/GUI_UX_REDESIGN_VALIDATION.md) records this redesign's automated and browser evidence, including its native-review limits.

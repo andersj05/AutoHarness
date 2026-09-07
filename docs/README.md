@@ -46,6 +46,7 @@ Signed distribution remains gated; terminal documentation records historical beh
 
 ## Release
 
+- [Desktop UX redesign validation](release/GUI_UX_REDESIGN_VALIDATION.md): simplified desktop workflows, interaction regressions, browser review, and local validation.
 - [GUI foundation review](release/GUI_FOUNDATION_REVIEW.md): desktop-only source ownership, retirement validation, and remaining distribution evidence.
 
 - [Terminal release checklist](release/TERMINAL_RELEASE_CHECKLIST.md): Phase 3.x cross-platform, security, usability, recovery, benchmark, and rollback promotion gate.
