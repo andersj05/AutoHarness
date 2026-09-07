@@ -324,7 +324,7 @@ export function App({ store }: AppProps) {
     <div
       className="app"
       data-color-mode={colorMode}
-      data-density={settings.density.value}
+      data-density="compact"
       data-font-size={settings.fontSize.value}
       data-high-contrast={colorMode === "high-contrast"}
       data-reduce-motion={reduceMotion}

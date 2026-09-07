@@ -60,6 +60,9 @@ Body content should not be surrounded by decorative boxes.
 The nine existing theme identities remain recognizable.
 CSS custom properties are generated from the same renderer-neutral seed and semantic-token source used by the legacy client.
 
+The desktop always uses compact spacing.
+The legacy density field remains readable for profile and protocol compatibility, but it does not change desktop layout and has no Settings control.
+
 ## Typography
 
 The default prose stack uses the operating-system UI font.
@@ -177,14 +180,14 @@ Permanent profile deletion moves into a separate danger zone and remains disable
 
 ## Implemented Stage 6 personalization and accessibility
 
-The Settings workspace groups all eight renderer-relevant preferences into Appearance, Accessibility, and Conversation sections with searchable labels and descriptions.
+The Settings workspace groups seven user-facing preferences into Appearance, Accessibility, and Conversation sections with searchable labels and descriptions.
 One selected category is visible at a time; search matches individual settings and option labels across every category.
 Every row presents the effective value, a concise explanation, and a Reset action when a user-file override exists.
 Ordinary default and saved-value sources remain accessible to assistive technology, while higher-precedence sources are visibly explained.
 An override hidden by a higher-precedence layer remains visible as a warning so reset never appears ineffective or ambiguous.
 
 System theme and motion preferences follow operating-system media queries until the user selects an explicit value.
-Zoom from 75 through 200 percent, four font sizes, comfortable and compact density, timestamp visibility, color treatment, and composer submission all update the live shell from the host projection.
+Zoom from 75 through 200 percent, four font sizes, timestamp visibility, color treatment, and composer submission all update the live shell from the host projection.
 At high zoom the rail compacts, route workspaces reflow, and the inspector becomes an overlay while every primary and security-critical action remains reachable.
 
 The application exposes named navigation and main landmarks, a skip link, route headings, icon labels, polite status announcements, and deterministic document order.

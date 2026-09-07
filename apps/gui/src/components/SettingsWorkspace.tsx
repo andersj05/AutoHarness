@@ -6,7 +6,6 @@ import type {
   ColorMode,
   CommandOutcome,
   ComposerSubmitBehavior,
-  Density,
   EffectiveSetting,
   GuiFontSize,
   PreferenceSource,
@@ -45,10 +44,6 @@ const FONT_SIZES: readonly [GuiFontSize, string][] = [
   ["standard", "Standard"],
   ["large", "Large"],
   ["extra_large", "Extra large"],
-];
-const DENSITIES: readonly [Density, string][] = [
-  ["comfortable", "Comfortable"],
-  ["compact", "Compact"],
 ];
 const TIMESTAMPS: readonly [TimestampStyle, string][] = [
   ["relative", "Relative"],
@@ -109,7 +104,6 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
   const rows = [
     { id: "theme-preset", section: "appearance", terms: "theme identity palette system " + THEME_PRESETS.flat().join(" ") },
     { id: "color-mode", section: "appearance", terms: "color contrast saturation " + COLOR_MODES.flat().join(" ") },
-    { id: "density", section: "appearance", terms: "interface density spacing comfortable compact" },
     { id: "zoom-percent", section: "accessibility", terms: "interface zoom scale 75 90 100 110 125 150 175 200" },
     { id: "font-size", section: "accessibility", terms: "conversation font text size small standard large extra large" },
     { id: "reduced-motion", section: "accessibility", terms: "reduce motion animation transitions on off" },
@@ -161,9 +155,6 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
               </SettingShell>
               <SettingShell visible={visible("color-mode")} busy={busy === "color_mode"} description="Adjust color saturation and contrast." id="color-mode" label="Color and contrast" onReset={() => reset("color_mode", "Color and contrast")} setting={settings.colorMode}>
                 <select aria-describedby={describedBy("color-mode")} disabled={Boolean(busy)} id="color-mode" onChange={(event) => void update({ kind: "color_mode", value: event.target.value as ColorMode }, "Color and contrast")} value={settings.colorMode.value}>{COLOR_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-              </SettingShell>
-              <SettingShell visible={visible("density")} busy={busy === "density"} description="Use comfortable spacing or fit more information on screen." id="density" label="Density" onReset={() => reset("density", "Density")} setting={settings.density}>
-                <select aria-describedby={describedBy("density")} disabled={Boolean(busy)} id="density" onChange={(event) => void update({ kind: "density", value: event.target.value as Density }, "Density")} value={settings.density.value}>{DENSITIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
               </SettingShell>
             </section>
           ) : null}

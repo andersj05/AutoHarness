@@ -38,7 +38,7 @@ describe("SettingsWorkspace", () => {
     settings.colorMode = { value: "high-contrast", source: "environment", userOverride: true };
     renderWorkspace(settings);
 
-    expect(screen.getAllByRole("combobox")).toHaveLength(3);
+    expect(screen.getAllByRole("combobox")).toHaveLength(2);
     expect(screen.queryByRole("checkbox", { name: "Reduce motion" })).not.toBeInTheDocument();
     expect(screen.getByText("workspace settings")).toBeInTheDocument();
     expect(screen.getByTitle("The current workspace supplies this value.")).toBeInTheDocument();
@@ -52,7 +52,6 @@ describe("SettingsWorkspace", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Theme" }), "rose");
     await user.selectOptions(screen.getByRole("combobox", { name: "Color and contrast" }), "no-color");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Density" }), "compact");
     await user.click(screen.getByRole("button", { name: "Accessibility" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Zoom" }), "150");
     await user.selectOptions(screen.getByRole("combobox", { name: "Text size" }), "large");
@@ -62,11 +61,10 @@ describe("SettingsWorkspace", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Send with" }), "control_s");
     await user.click(screen.getByRole("button", { name: "Reset Send with to its inherited value" }));
 
-    await waitFor(() => expect(commands).toHaveLength(9));
+    await waitFor(() => expect(commands).toHaveLength(8));
     expect(commands).toEqual([
       { type: "update_client_preference", change: { kind: "theme_preset", value: "rose" } },
       { type: "update_client_preference", change: { kind: "color_mode", value: "no-color" } },
-      { type: "update_client_preference", change: { kind: "density", value: "compact" } },
       { type: "update_client_preference", change: { kind: "zoom_percent", value: 150 } },
       { type: "update_client_preference", change: { kind: "font_size", value: "large" } },
       { type: "update_client_preference", change: { kind: "reduced_motion", value: true } },

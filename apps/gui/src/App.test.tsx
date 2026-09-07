@@ -438,10 +438,11 @@ describe("AutoHarness GUI", () => {
     });
   });
 
-  it("applies density, conversation font, and timestamp preferences to primary surfaces", async () => {
+  it("keeps legacy comfortable profiles compact while applying text and timestamp preferences", async () => {
     const { user } = renderScenario("ready");
     await user.click(await screen.findByRole("button", { name: "Settings" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Density" }), "compact");
+    expect(screen.queryByRole("combobox", { name: "Density" })).not.toBeInTheDocument();
+    expect(document.querySelector(".app")).toHaveAttribute("data-density", "compact");
     await user.click(screen.getByRole("button", { name: "Accessibility" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Text size" }), "extra_large");
     await user.click(screen.getByRole("button", { name: "Conversation" }));
