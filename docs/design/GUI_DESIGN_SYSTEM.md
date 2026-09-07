@@ -36,11 +36,14 @@ The wide shell has three regions:
 
 The rail and inspector are independently collapsible, and the inspector starts closed.
 Sidebar Search opens commands and unarchived sessions through one keyboard-accessible picker.
+The search field leads the dialog; its accessible title is not repeated as visible decoration.
+Label matches rank above description and keyword matches, and Enter opens the first enabled result for a non-empty query.
 Collapsed panes retain selection and scroll state.
 Streaming and resize follow the conversation tail only while the reader remains near it.
 Reading older messages must not pull the viewport back to the tail, and Jump to latest restores following.
 
 At narrower widths, the inspector becomes a drawer and the rail becomes a compact icon bar.
+Library columns also respond to the available workspace width, including a resized navigation rail, rather than relying only on window breakpoints.
 At phone-like widths used only for resilience testing, navigation becomes a modal sheet and the composer remains fully usable.
 
 ## Surfaces
@@ -89,6 +92,8 @@ Agent responses render headings, lists, tables, inline code, and code blocks thr
 HTML remains inert, image references never fetch remote content, and links display their targets without navigation.
 Literal transcript search highlights the complete source, including Markdown syntax.
 Each completed agent response has a Copy action.
+Fenced code blocks have a compact language bar and their own Copy action that preserves code whitespace.
+Clipboard failure leaves the code selectable and explains the manual fallback.
 
 Streaming uses a small activity trace and incremental content.
 Reduced-motion mode replaces movement with a stable progress state.
@@ -184,6 +189,8 @@ The Settings workspace groups seven user-facing preferences into Appearance, Acc
 One selected category is visible at a time; search matches individual settings and option labels across every category.
 Every row presents the effective value, a concise explanation, and a Reset action when a user-file override exists.
 Ordinary default and saved-value sources remain accessible to assistive technology, while higher-precedence sources are visibly explained.
+Theme selection uses native radio inputs with visual System, Light, and Dark previews plus the six color themes.
+Preview colors come from the generated semantic tokens, and the selected theme has both an outline and a checkmark.
 An override hidden by a higher-precedence layer remains visible as a warning so reset never appears ineffective or ambiguous.
 
 System theme and motion preferences follow operating-system media queries until the user selects an explicit value.
@@ -196,7 +203,9 @@ Permission and credential dialogs retain labelled descriptions, logical screen-r
 
 ## Implemented Stage 7 Memory workspace
 
-Memory uses a bounded master-detail list with explicit search submission, scope and lifecycle filters, stable cursor navigation, and a clear displayed-page count.
+Memory uses a bounded master-detail list with explicit search submission, scope and lifecycle filters, and stable cursor navigation.
+Paging controls remain outside the scrolling record list and appear only when there is another page or paging history.
+Refresh is a named icon action beside the primary workspace actions.
 The detail surface leads with the selected memory content.
 A Details and history disclosure groups exact identity, trust, sensitivity, current provenance timeline, retained or erased evidence, typed relations, validation findings, and bounded admission history.
 Approval warnings and review actions remain visible outside that disclosure.
@@ -213,6 +222,7 @@ The responsive list stacks above details at narrow widths and high zoom, while d
 Sessions provides search, open and archived filters, recent-activity or title sorting, and a visible New session action.
 Enter or double-click opens an unarchived result.
 The detail panel always belongs to a visible search result and clears when no result matches.
+Rows use compact title and metadata lines, with the current-session state included in metadata.
 Rename and deletion dialogs make the rest of the application inert and yield to permission review.
 
 Help leads with searchable shortcuts and expandable task guidance.

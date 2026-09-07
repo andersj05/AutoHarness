@@ -12,12 +12,14 @@ The [design system](../design/GUI_DESIGN_SYSTEM.md) owns the resulting interacti
 
 ## User-facing changes
 
-- Sidebar Search combines commands and unarchived sessions, with keyboard access and direct session switching.
-- Chat has a focused composer, optional session details, response copy, transcript actions, and safe Markdown formatting.
+- Sidebar Search combines commands and unarchived sessions, ranks label matches first, and opens the first enabled result with Enter.
+- Chat has a focused composer, optional session details, response and code-block copy, transcript actions, and safe Markdown formatting.
 - Sessions adds sorting and keyboard opening, and keeps selected details consistent with the visible results.
 - Providers leads with model defaults and daily actions, while credential maintenance and connection metadata use disclosures.
 - Memory leads with readable content and keeps its full audit trail available through Details and history.
-- Settings shows one category at a time and searches individual settings plus their option labels across categories.
+- Settings shows one category at a time, offers visual theme choices, and searches individual settings plus their option labels across categories.
+- The desktop always uses compact spacing and no longer exposes the Comfortable/Compact setting.
+- Secondary labels use stronger contrast, while status badges use quieter surfaces.
 - Help presents shortcuts and expandable guidance, with fewer introductory titles and descriptions.
 
 The renderer still sends typed commands to the Rust authority.
@@ -38,6 +40,10 @@ Model-authored HTML, image references, and links remain inert.
 | Search models and use Arrow keys or Enter | Available models can be selected without reaching unavailable entries |
 | Search Sessions until no result remains | Unrelated details and their destructive actions disappear |
 | Open a session rename or delete dialog and press a global shortcut | Background actions are blocked; permission review can preempt the dialog |
+| View Sessions or Providers at 907 pixels wide with the full navigation rail | Library content reflows; clientWidth and scrollWidth match for both route and detail panels |
+| Search for Audit context and press Enter in the search field | The matching session opens and the search dialog closes |
+| Select Light and press ArrowRight in visual theme selection | Dark becomes selected through the authoritative settings command |
+| Copy one of two code blocks | Only the selected block is copied, including its whitespace |
 
 Connection and catalog recovery messages now appear beside the composer instead of above the entire transcript.
 The compact callout action spans the row without widening its icon column.
@@ -50,7 +56,8 @@ Its local report is `target/gui-evidence/local-baseline/baseline.json` with stat
 The report is local evidence, not an immutable release-candidate attestation.
 
 The baseline includes frozen frontend installation, type checking, frontend tests and production build, Python tooling tests, documentation links, Rust formatting, generated theme freshness, strict all-feature Clippy, the complete locked Rust workspace tests, rustdoc, doctests, and storage-benchmark gates.
-After subsequent renderer-only fixes, frontend type checking, all 130 tests in 19 files, and the production build passed again.
+After the compact-layout refinement, frontend type checking, all 133 tests in 19 files, the production build, and generated-theme freshness passed again.
+The final frontend run stopped on the first failed gate and completed successfully.
 No Rust source changed in this redesign.
 
 Focused coverage includes [safe message formatting](../../apps/gui/src/components/MessageContent.test.tsx), [tail following and resize](../../apps/gui/src/components/Conversation.test.tsx), [model keyboard selection](../../apps/gui/src/components/ModelPicker.test.tsx), [menu focus](../../apps/gui/src/components/primitives/ActionMenu.test.tsx), and [application modal ownership](../../apps/gui/src/App.test.tsx).
@@ -63,13 +70,16 @@ Browser fixtures were reviewed interactively with screenshots and accessibility-
 | Viewport or treatment | Review |
 | --- | --- |
 | 1280 by 720 and 1280 by 800 | Light and dark conversation, library, providers, memory, and settings |
-| 900 by 640 | Compact navigation and stacked memory details |
+| 900 by 640 and 907 by 763 | Compact navigation, full-rail library reflow, memory filters, and paging |
 | 640 by 480 | Navigation drawer, session creation, memory actions, send and stop, permission review, failed response, and offline recovery |
-| 1600 by 1000 | Wide conversation measure and high-contrast navigation |
-| 200 percent interface zoom | Settings reflow, compact Search, conversation actions, and scrollable model selection |
+| 1600 by 1000 | Wide conversation measure, provider detail layout, two-column shortcuts, and high-contrast navigation |
+| 200 percent interface zoom | Settings reflow, visual theme selection, compact Search, conversation actions, and scrollable model selection |
 | Reduced motion | Enabled through Settings during zoom and keyboard review |
 
 Keyboard model search selected the requested model and closed its dialog.
+The global search Enter reproduction opened Audit context manifests after the fix.
+Visual theme controls remained usable at 200 percent zoom, including scrolling and selection.
+Code-copy feedback appeared in the browser, and unit tests verified exact clipboard text and the failure fallback.
 The compact permission dialog preserved its exact fields in a scrollable body and kept Deny and Allow once visible.
 The failure and offline recovery controls remained visible above the compact composer after the fixes.
 
