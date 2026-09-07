@@ -9,7 +9,7 @@ import {
   type TimestampStyle,
 } from "../protocol";
 import { Icon } from "./Icon";
-import { Button, Chip, Dialog, Field, VirtualList } from "./primitives";
+import { Button, Dialog, Field, VirtualList } from "./primitives";
 
 type SessionFilter = "open" | "archived" | "all";
 type SessionDialog =
@@ -159,7 +159,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
           {visibleSessions.length > 0 ? (
             <VirtualList
               ariaLabel="All sessions"
-              height={Math.min(listHeight, visibleSessions.length * 68)}
+              height={Math.min(listHeight, visibleSessions.length * 64)}
               itemKey={(session) => session.id}
               items={visibleSessions}
               renderItem={(session) => (
@@ -175,13 +175,12 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
                   type="button"
                 >
                   <span className="sessionWorkspaceIcon"><Icon name={session.archived ? "database" : "chat"} /></span>
-                  <span className="sessionWorkspaceCopy"><strong>{session.title}</strong><small>{session.messageCount === undefined ? "Message count unavailable" : `${session.messageCount} messages`}</small></span>
-                  {session.archived ? <Chip intent="neutral">archived</Chip> : session.id === snapshot.activeSessionId ? <Chip icon="bolt" intent="info">active</Chip> : null}
+                  <span className="sessionWorkspaceCopy"><strong>{session.title}</strong><small>{session.messageCount === undefined ? "Message count unavailable" : `${session.messageCount} messages`}{session.archived ? " · Archived" : session.id === snapshot.activeSessionId ? " · Current" : ""}</small></span>
                   {timestampStyle !== "hidden" && session.updatedAt ? <time dateTime={session.updatedAt}>{formattedDate(session.updatedAt, timestampStyle)}</time> : <span />}
                   <Icon name="chevron" />
                 </button>
               )}
-              rowHeight={68}
+              rowHeight={64}
             />
           ) : <p className="emptySessionSearch">No {filter === "all" ? "" : `${filter} `}sessions match “{query}”.</p>}
         </section>

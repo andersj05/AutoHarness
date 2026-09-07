@@ -126,28 +126,30 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
     <header className="routeWorkspaceHeader memoryHeader">
       <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
       <div><h1>Memory</h1></div>
-      <div className="memoryActions"><Button disabled={!ready || busy} onClick={() => open("import")}>Import document</Button><Button disabled={!ready || busy} onClick={() => open("remember")} variant="primary">Remember</Button></div>
+      <div className="memoryActions"><button aria-label="Refresh memory" className="iconButton" disabled={blocked || busy} onClick={() => setRefresh((value) => value + 1)} title="Refresh memory" type="button"><Icon name="refresh" size={16} /></button><Button disabled={!ready || busy} onClick={() => open("import")}>Import document</Button><Button disabled={!ready || busy} onClick={() => open("remember")} variant="primary">Remember</Button></div>
     </header>
     <form className="memoryFilters" onSubmit={(event) => { event.preventDefault(); changeQuery({ literal: search }); }}>
       <Field label="Search memory" maxLength={256} onChange={(event) => setSearch(event.target.value)} placeholder="Search memory…" type="search" value={search} />
       <label>Status<select aria-label="Memory status" value={query.status} onChange={(event) => changeQuery({ status: event.target.value as typeof query.status })}>{["all", "eligible", "active", "proposed", "inactive"].map((value) => <option key={value} value={value}>{label(value).replace(/^./, (character) => character.toUpperCase())}</option>)}</select></label>
       <label>Scope<select aria-label="Memory scope" value={query.scope} onChange={(event) => changeQuery({ scope: event.target.value as typeof query.scope })}>{["all", "user", "workspace", "session", "agent"].map((value) => <option key={value} value={value}>{value[0]?.toUpperCase()}{value.slice(1)}</option>)}</select></label>
-      <Button disabled={blocked || busy} type="submit" icon="search">Search</Button><Button disabled={blocked || busy} onClick={() => setRefresh((value) => value + 1)} icon="refresh">Refresh</Button>
+      <Button disabled={blocked || busy} type="submit" icon="search">Search</Button>
     </form>
     <p className="memoryStatus" role="status">{queryFailed ? "Memory query failed. Refresh to retry." : memory.state.kind === "failed" ? memory.state.payload.failure.message : !ready ? "Loading memory…" : `${memory.rows.length} records on this page`}</p>
     <div className="memoryColumns" aria-busy={!ready}>
       <section className="memoryList" aria-label="Memory records">
+        <div className="memoryRecordList">
         {ready && memory.rows.length === 0 ? <div className="memoryEmpty"><Icon name="memory" size={28} /><h2>No matching memory</h2><p>Try another filter, remember an instruction, or import a document for review.</p></div> : null}
         {ready ? memory.rows.map((row) => <button className="memoryRow" aria-pressed={selected?.memory_id === row.memory_id} key={row.memory_id} onClick={() => setSelectedId(row.memory_id)} type="button">
-          <span className="memoryRowMeta"><span data-status={row.status}>{row.status}</span><span>{row.scope}</span></span>
+          <span className="memoryRowMeta"><span data-status={row.status}>{label(row.status).replace(/^./, (character) => character.toUpperCase())}</span><span>{label(row.scope).replace(/^./, (character) => character.toUpperCase())}</span></span>
           <strong>{safe(row.preview)}</strong>
           <span className="memoryRowFooter">Used {row.admission_count} {row.admission_count === 1 ? "time" : "times"} · {date(row.updated_at_ms).slice(0, 10)}</span>
         </button>) : null}
-        <nav className="memoryPaging" aria-label="Memory pages">
+        </div>
+        {history.length > 0 || memory.next_cursor ? <nav className="memoryPaging" aria-label="Memory pages">
           <Button disabled={!ready || history.length === 0 || busy} onClick={() => { const previous = history.at(-1) ?? null; setHistory((entries) => entries.slice(0, -1)); setQuery((current) => ({ ...current, direction: "previous", before: previous })); setSelectedId(undefined); }}>Previous</Button>
           <span>Page {history.length + 1}</span>
           <Button disabled={!ready || !memory.next_cursor || busy} onClick={() => { setHistory((entries) => [...entries, query.before]); setQuery((current) => ({ ...current, direction: "next", before: memory.next_cursor })); setSelectedId(undefined); }}>Next</Button>
-        </nav>
+        </nav> : null}
       </section>
       <section className="memoryDetail" aria-label="Memory detail">
         {ready && selected && detail ? <>

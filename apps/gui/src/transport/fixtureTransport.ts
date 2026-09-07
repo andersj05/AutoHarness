@@ -139,7 +139,7 @@ const baseTranscript: readonly TranscriptItem[] = [
     id: "message-3",
     role: "agent",
     content:
-      "The first GUI slice can already feel complete: session rail, open conversation flow, bounded composer, model choice, live activity, and a context inspector. The fixture carrier can exercise the same contract in an ordinary browser while Tauri connects the real host.",
+      "Keep the first slice focused:\n\n- Browse and resume sessions.\n- Choose a provider and model.\n- Send, stop, and retry a response.\n\nRun the existing checks after each change:\n\n```sh\npnpm gui:typecheck\npnpm gui:test\npnpm gui:build\n```\n\nThen review keyboard navigation and a narrow window before expanding the scope.",
     createdAt: "2026-08-30T13:43:08.000Z",
   },
 ];

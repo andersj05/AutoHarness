@@ -28,7 +28,7 @@ function setup() {
 describe("Memory workspace", () => {
   it("reviews an imported proposal before issuing a distinct exact approval", async () => {
     const { commands, user, onDialogChange } = setup();
-    await user.click(await screen.findByRole("button", { name: /proposed workspace/ }));
+    await user.click(await screen.findByRole("button", { name: /Proposed Workspace/ }));
     expect(screen.getByText("Untrusted source")).toBeInTheDocument();
     expect(screen.getByText(/Review this proposal before it can be used/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Review approval" }));

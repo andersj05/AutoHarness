@@ -1,10 +1,30 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageContent } from "./MessageContent";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("MessageContent", () => {
+  it("copies only the chosen code block, including its whitespace", async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    render(<MessageContent text={'Explanation\n\n```rust\nfn main() {\n    println!("hello");\n}\n```\n\n```sh\ncargo test\n```'} />);
+    await user.click(screen.getAllByRole("button", { name: "Copy code" })[0]!);
+    expect(write).toHaveBeenCalledWith('fn main() {\n    println!("hello");\n}\n');
+    expect(screen.getAllByRole("button", { name: "Copy code" })[0]).toHaveTextContent("Copied");
+  });
+
+  it("keeps code selectable when clipboard access fails", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Denied"));
+    const { container } = render(<MessageContent text={'```html\n<script>alert("inert")</script>\n```'} />);
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Select the code to copy it manually");
+    expect(container.querySelector("pre")).toHaveTextContent('<script>alert("inert")</script>');
+    expect(container.querySelector("script")).toBeNull();
+  });
+
   it("renders useful Markdown structure without promoting headings to page titles", () => {
     const { container } = render(<MessageContent text={'# Plan\n\n1. **Read** the code\n2. Run `cargo test`\n\n```rust\nfn main() {}\n```\n\n| Task | State |\n| --- | --- |\n| Review | Ready |'} />);
     expect(screen.getByRole("heading", { name: "Plan", level: 3 })).toBeInTheDocument();
