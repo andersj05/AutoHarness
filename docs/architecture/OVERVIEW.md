@@ -57,7 +57,6 @@ crates/
   autoharness-evals/               # datasets, experiments, promotion evidence
   autoharness-plugin-host/         # Wasmtime/WIT capability host
   autoharness-client/              # versioned renderer-neutral client contract
-  autoharness-tui/                 # Ratatui model/update/view client
   autoharness-app/                 # binary, config, composition, lifecycle
 apps/
   gui/                             # React, TypeScript, Vite desktop frontend
@@ -190,31 +189,11 @@ High-frequency provider output is coalesced before crossing the carrier, and lon
 
 The detailed contract lives in [GUI.md](GUI.md).
 
-### Transitional terminal rendering
+### Retired terminal renderer
 
-The frozen TUI migration reference follows model/update/view:
-
-- **Model:** local read state needed to draw the current screen.
-- **Update:** pure or narrowly effectful handling of input and engine events.
-- **View:** terminal rendering from model state only.
-
-The view passes through the typed presentation layer described by [the terminal design system](../design/TUI_DESIGN_SYSTEM.md) and proposed in [ADR-0016](../adr/0016-use-typed-tui-presentation-layer.md).
-Effective local appearance preferences and the detected terminal color depth resolve once per frame into one immutable `Theme`.
-The theme owns semantic tokens, background intent, color-depth quantization, icon triples, gradients, and motion policy.
-One layout pass computes the named rectangles and ordered hit regions consumed by both painting and reverse-scan mouse dispatch.
-Route pages compose measured components that return their own action geometry, while provider, storage, model, and credential logic remain outside the render boundary.
-
-One typed terminal `Route` is always active: Chat, Sessions, Profiles, Settings, Help, or Memory.
-Wide terminals render a persistent navigation rail; narrower terminals render compact route tabs over the same content routes.
-The shell owns the one safe status projection for local profile, provider, credential source, model, attempt, usage, and catalog state.
-
-One `OverlayKind` slot owns modal input above the active route.
-Model selection, session-only credential entry, profile credential entry, command search, transcript search, tool permission, and destructive confirmation are mutually exclusive.
-Opening an overlay captures the exact route and focus to restore on dismissal.
-Permission decisions preempt and clear any lower-authority overlay, and route changes clear hidden confirmations and secret editors before changing focus.
-
-Network and storage tasks run outside the render loop.
-Bounded queues and coalesced delta rendering prevent high-frequency streams from starving keyboard input or terminal restoration.
+The terminal model/update/view adapter is removed under [ADR-0020](../adr/0020-retire-terminal-client.md).
+Its historical design and evidence remain in [the terminal design system](../design/TUI_DESIGN_SYSTEM.md) and Git history.
+The current application contract and desktop behavior are owned by [GUI.md](GUI.md).
 
 ### Improvement lifecycle
 
@@ -264,7 +243,7 @@ No plugin may obtain ambient filesystem, network, process, secret, memory, or pr
 Move a boundary out of process only after its local semantics and failure states are covered by conformance tests. The expected sequence is:
 
 1. Run the same engine behind a local daemon transport.
-2. Make the desktop GUI and any retained terminal client thin clients using the versioned protocol.
+2. Make the desktop GUI and future remote clients thin clients using the versioned protocol.
 3. Add remote worker leases for provider/tool/evaluation jobs.
 4. Replace SQLite with PostgreSQL for shared coordination while preserving the store port.
 5. Move large artifacts to object storage.

@@ -612,7 +612,7 @@ Proceed in this order:
 2. Complete the Phase 4.1 real desktop chat vertical slice through startup, permission, clean shutdown, and durable restart.
 3. Port session, provider, profile, model, settings, accessibility, and memory parity in independently testable GUI slices.
 4. Carry applicable provider, vault, migration, rollback, recovery, performance, and security evidence into the GUI release gate without claiming unfinished terminal-only evidence complete.
-5. Make the GUI the default only after one release candidate passes its cross-platform packaged-app checklist and approval.
+5. Improve the GUI-only source foundation authorized by ADR-0020; distribute signed packages only after one candidate passes its cross-platform release checklist and approval.
 
 Each step must leave a runnable or testable vertical slice; avoid creating unused framework layers far ahead of their first consumer.
 

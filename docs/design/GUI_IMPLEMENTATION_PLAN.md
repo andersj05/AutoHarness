@@ -188,8 +188,8 @@ Focused browser review covers the provider workspace at compact, mobile-resilien
 The Settings workspace exposes every renderer-relevant preference with effective provenance, hidden-override explanation, and reset, while the Rust host remains the only persistence authority.
 Keyboard integration covers all five primary routes with focus restoration, and semantic review covers the permission and credential dialogs in screen-reader order.
 Focused live browser review covers standard and mobile layouts, system appearance, high contrast, 200 percent zoom, responsive inspector behavior, and a clean browser console.
-Default pull-request CI now gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage without running the frozen TUI package or ignored PTY acceptance matrix.
-The terminal tests remain available for deliberate local migration-reference checks until final retirement.
+Default pull-request CI gates renderer-neutral Rust, desktop-host, frontend, documentation, and storage-benchmark coverage.
+The retired terminal tests remain available only in historical Git revisions.
 
 Stage 1 ownership is complete: application orchestration imports renderer-neutral messages, projections, and ports, and has no terminal dependency.
 It does not complete Stage 2 because the full real-provider startup-to-restart journey, packaged application lifecycle, cross-platform system-webview evidence, and crash-interruption matrix remain open.
