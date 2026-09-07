@@ -93,6 +93,7 @@ async fn run() -> Result<(), AppError> {
     let cache: Arc<dyn CatalogCache> = Arc::new(SqliteCatalogCache::open(paths.database())?);
     let policy = config::provider_policy()?;
     let profile_store = ProfileStore::open(&paths.profiles()).map_err(|_| AppError::FileSystem)?;
+    let initial_user_local_profile = profile_store.local_profile().unwrap_or_default();
     let initial_local_profile = profile_store
         .resolved_settings()
         .map(|settings| settings.local_profile().clone())
@@ -120,7 +121,11 @@ async fn run() -> Result<(), AppError> {
     let initial_session = Arc::new(projection::session(&session));
     let initial_catalog = Arc::new(provider.catalog);
     let initial_sessions = Arc::new(SessionsProjection::default());
-    let initial_settings = Arc::new(settings_projection(&resolved, initial_local_profile));
+    let initial_settings = Arc::new(settings_projection(
+        &resolved,
+        initial_local_profile,
+        initial_user_local_profile,
+    ));
     let (ui_ports, app_ports) = bounded_ports(
         Arc::clone(&initial_session),
         Arc::clone(&initial_sessions),
@@ -207,7 +212,15 @@ fn client_mode_from(arguments: impl IntoIterator<Item = String>) -> Result<Clien
             return Err(AppError::Configuration);
         }
     }
-    Ok(requested.unwrap_or(ClientMode::Tui))
+    Ok(requested.unwrap_or_else(default_client_mode))
+}
+
+fn default_client_mode() -> ClientMode {
+    #[cfg(feature = "gui-package")]
+    if env!("CARGO_BIN_NAME") == "autoharness" {
+        return ClientMode::Gui;
+    }
+    ClientMode::Tui
 }
 
 async fn run_terminal(
@@ -376,6 +389,7 @@ fn environment_launch() -> LaunchResolution {
 fn settings_projection(
     resolved: &LaunchResolution,
     local_profile: autoharness_settings::EffectiveLocalProfile,
+    user_local_profile: autoharness_settings::LocalProfile,
 ) -> SettingsProjection {
     SettingsProjection {
         provider_status: ProviderStatusProjection {
@@ -393,6 +407,7 @@ fn settings_projection(
             credential_connected: !resolved.credential.is_empty(),
         },
         local_profile,
+        user_local_profile,
         git_branch: None,
     }
 }
@@ -695,10 +710,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_client_remains_the_default_and_explicit_migration_path() {
+    fn client_default_respects_the_explicit_packaging_boundary() {
         assert_eq!(
             client_mode_from(Vec::<String>::new()).expect("default mode"),
-            ClientMode::Tui
+            default_client_mode()
         );
         assert_eq!(
             client_mode_from(["--tui".to_owned()]).expect("terminal mode"),
@@ -718,6 +733,19 @@ mod tests {
             client_mode_from(["--gui".to_owned()]).expect("GUI mode"),
             ClientMode::Gui
         );
+    }
+
+    #[test]
+    fn only_the_packaged_primary_binary_defaults_to_gui() {
+        #[cfg(feature = "gui-package")]
+        let expected = if env!("CARGO_BIN_NAME") == "autoharness" {
+            ClientMode::Gui
+        } else {
+            ClientMode::Tui
+        };
+        #[cfg(not(feature = "gui-package"))]
+        let expected = ClientMode::Tui;
+        assert_eq!(default_client_mode(), expected);
     }
 
     #[test]

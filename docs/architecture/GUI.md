@@ -2,7 +2,7 @@
 
 **Status:** Accepted migration target
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-03
 
 ## Purpose
 
@@ -75,8 +75,10 @@ React never imports a Rust runtime implementation and never receives a provider,
 
 ## Client protocol
 
-The protocol is currently at schema version 2.
-Schema version 2 adds typed provider profiles, non-secret connection configuration, profile scope, credential state, model defaults, reasoning effort, and native Codex authentication commands without adding secret material to serializable frames.
+The protocol is currently at schema version 4.
+Schema version 2 added typed provider profiles, non-secret connection configuration, profile scope, credential state, model defaults, reasoning effort, and native Codex authentication commands without adding secret material to serializable frames.
+Schema version 3 added the authoritative renderer-relevant settings projection and typed user-layer preference changes.
+Schema version 4 adds bounded Memory inspection, exact revision-scoped lifecycle commands, and recoverable memory-page failures.
 All numeric identities that can exceed JavaScript's safe integer range cross the boundary as strings.
 Secret inputs use dedicated one-way commands and never appear in snapshots, frames, notices, frontend storage, or diagnostics.
 
@@ -98,6 +100,8 @@ The current command set covers:
 - Create or edit, duplicate, activate, test, disconnect, or delete an exact named provider profile.
 - Save model and reasoning defaults together for the active provider profile.
 - Start or cancel one request-correlated native Codex subscription authentication flow.
+- Change or clear one renderer-relevant user preference through the Rust settings authority.
+- Query, remember, import, correct, approve, reject, retract, export, or delete memory through the existing coordinator and ledger authority.
 
 ### Frames
 
@@ -109,6 +113,8 @@ The first carrier sends:
 - Correlated commit, rejection, and authentication notices.
 - An explicit resynchronization snapshot when the client detects a gap.
 - Bounded provider projections that distinguish named profiles from a temporary session default and expose only safe connection, credential-source, default, health, and recovery metadata.
+- Effective GUI settings with values, provenance, and explicit user-override presence.
+- Query-correlated Memory pages with durable mutation generation, exact revision guards, evidence availability, provenance, relations, validation findings, and bounded admissions.
 
 Each frame carries a monotonic transport revision.
 Durable session revisions remain visible inside session data and are not replaced by the transport revision.
@@ -117,6 +123,32 @@ An active-session delta carries the exact session identity, updated session summ
 The splice retains the unchanged prefix and suffix and serializes only inserted or replaced transcript rows.
 The client rejects a delta whose identity or splice range does not match its authoritative baseline.
 Ordinary streaming therefore scales with the changed transcript item, while a complete snapshot remains the recovery and cross-session baseline.
+
+### Settings authority
+
+The renderer consumes effective theme, color mode, zoom, font size, reduced motion, density, timestamp, and composer-submission values from the snapshot.
+It may apply those values to presentation immediately, but it does not read or write settings files.
+Each Settings control sends one typed preference change to Rust, and clearing a value removes only the user-file override.
+Rust persists and resolves the change before a replacement projection becomes authoritative.
+Source and user-override fields let the UI explain defaults, inherited workspace or environment values, explicit overrides, and overrides hidden by higher-precedence layers.
+
+### Memory authority
+
+Memory pages contain at most 100 records and 8 MiB of serialized JSON, with individual content and nested collection bounds.
+The host converts an unrepresentable page into a safe workspace failure so users can narrow the query without blocking unrelated client commands.
+A query carries a view generation independent of the ledger mutation generation, and the renderer only enables actions against the requested current page.
+The coordinator applies literal search, scope, lifecycle, and opaque cursor filtering before paging.
+All integer sequence and generation values cross the carrier as decimal strings.
+
+Correction, proposal review, retraction, and deletion preserve exact optimistic ledger sequences.
+Approval and rejection also name the proposed revision, and retraction names the current revision.
+Imported and model-authored proposals remain visibly untrusted until a distinct user-approved revision commits.
+Deletion erases retained content and evidence while preserving audit metadata and existing user-owned exports.
+Standalone exports remain Rust-owned JSON files beside the database.
+
+The GUI uses the existing confined workspace-relative UTF-8 import command and never receives a generic file reader.
+The provenance timeline describes the projected source and current revision; retained historical revisions remain in the ledger and standalone export.
+Admission history shows its bounded displayed count against the host's recorded count.
 
 ### Ordering and recovery
 
@@ -163,6 +195,9 @@ The permission view cannot be hidden behind another modal, route, pane, or anima
 
 Window close requests cancellation but does not fabricate settlement.
 The existing durable recovery rules decide the result after restart.
+The native command palette exposes the same shutdown request through Quit AutoHarness.
+The Tauri event loop returns to the application entry point so coordinator and engine joins complete before process exit.
+The host emits a content-free renderer-ready marker only after validating acknowledgement of the initial baseline frame.
 
 ## Feature composition
 
@@ -183,6 +218,12 @@ The initial slots are:
 Third-party extensions initially contribute declarative data and actions rendered by trusted components.
 Arbitrary JavaScript plugins are out of scope.
 
+The implemented route and inspector slots use closed typed presentation interfaces.
+The inspector accepts plan, artifact, file, diff, terminal-output, and evaluation data rendered by trusted components as inert text.
+The native producer exposes existing tool evidence only; fixture producers demonstrate the other surface contracts until their authoritative runtimes exist.
+No surface supplies HTML, script, styles, executable command callbacks, arbitrary links, or a filesystem capability.
+Two-column comparisons preserve complete before and after content without interpreting patch instructions.
+
 ## Testing contract
 
 The GUI adds these gates without weakening the Rust gates:
@@ -199,3 +240,12 @@ The GUI adds these gates without weakening the Rust gates:
 
 The frozen TUI and its PTY tests remain available as local migration references until the GUI release checklist explicitly retires them.
 They do not gate ordinary GUI migration pull requests.
+
+## Candidate packaging
+
+The opt-in `gui-package` feature embeds production frontend assets and makes the packaged `autoharness` executable open the GUI without arguments.
+The `ah` executable and ordinary source builds retain the terminal default.
+On Windows, use `ah` for terminal operation because the packaged desktop executable has the native window subsystem rather than a console.
+The packaging overlay is separate from the inactive preview bundle configuration.
+Candidate behavior does not authorize the repository-wide default cutover.
+The [update policy](../release/GUI_UPDATE_POLICY.md) owns distribution and rollback rules, and the [release checklist](../release/GUI_RELEASE_CHECKLIST.md) owns promotion evidence.

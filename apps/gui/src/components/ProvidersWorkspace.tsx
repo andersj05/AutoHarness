@@ -329,7 +329,7 @@ export function ProvidersWorkspace({
   };
 
   return (
-    <main className="routeWorkspace providerRouteWorkspace" id="main-content">
+    <main className="routeWorkspace providerRouteWorkspace" id="main-content" tabIndex={-1}>
       <header className="routeWorkspaceHeader providerWorkspaceHeader">
         <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
         <div>

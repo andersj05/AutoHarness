@@ -111,6 +111,7 @@ fn sample_snapshot() -> ClientSnapshot {
             )
             .expect("valid provider projection"),
         ],
+        ClientSettingsProjection::default(),
         0,
     )
     .expect("valid client snapshot")
@@ -366,6 +367,74 @@ fn provider_management_commands_are_bounded_typed_and_secret_free() {
 }
 
 #[test]
+fn renderer_settings_are_typed_resettable_and_versioned() {
+    let mut snapshot = sample_snapshot();
+    snapshot.settings = ClientSettingsProjection {
+        theme_preset: EffectiveSetting::new(
+            ThemePreset::Rose,
+            PreferenceSource::WorkspaceFile,
+            true,
+        ),
+        color_mode: EffectiveSetting::new(
+            ColorMode::HighContrast,
+            PreferenceSource::UserFile,
+            true,
+        ),
+        zoom_percent: EffectiveSetting::new(
+            GuiZoomPercent::new(200).expect("maximum zoom"),
+            PreferenceSource::UserFile,
+            true,
+        ),
+        font_size: EffectiveSetting::new(GuiFontSize::ExtraLarge, PreferenceSource::Default, false),
+        density: EffectiveSetting::new(Density::Compact, PreferenceSource::UserFile, true),
+        reduced_motion: EffectiveSetting::new(true, PreferenceSource::WorkspaceFile, false),
+        timestamp_style: EffectiveSetting::new(
+            TimestampStyle::Absolute,
+            PreferenceSource::UserFile,
+            true,
+        ),
+        composer_submit_behavior: EffectiveSetting::new(
+            ComposerSubmitBehavior::Enter,
+            PreferenceSource::UserFile,
+            true,
+        ),
+    };
+
+    let encoded = serde_json::to_value(&snapshot).expect("serialize settings projection");
+    assert_eq!(encoded["schema_version"], 4);
+    assert_eq!(encoded["settings"]["zoom_percent"]["value"], 200);
+    assert_eq!(
+        encoded["settings"]["theme_preset"]["source"],
+        "workspace_file"
+    );
+    assert_eq!(
+        serde_json::from_value::<ClientSnapshot>(encoded).expect("round trip"),
+        snapshot
+    );
+
+    let reset = CommandEnvelope::new(ClientCommand::UpdateClientPreference {
+        change: ClientPreferenceChange::ThemePreset { value: None },
+    });
+    assert_eq!(
+        serde_json::to_value(reset).expect("serialize reset")["command"]["payload"]["change"]["kind"],
+        "theme_preset"
+    );
+}
+
+#[test]
+fn renderer_settings_reject_zoom_outside_the_accessibility_range() {
+    assert!(GuiZoomPercent::new(74).is_err());
+    assert!(GuiZoomPercent::new(201).is_err());
+    for invalid in [74, 201] {
+        let wire = json!({
+            "kind": "zoom_percent",
+            "payload": {"value": invalid}
+        });
+        assert!(serde_json::from_value::<ClientPreferenceChange>(wire).is_err());
+    }
+}
+
+#[test]
 fn dedicated_secret_ingress_is_bounded_and_debug_redacted() {
     let sentinel = "credential-sentinel-value";
     let ingress = SecretIngress::new(
@@ -578,6 +647,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session.clone(),
             base.catalog.clone(),
             vec![base.providers[0].clone(), second],
+            base.settings.clone(),
             0,
         )
         .is_ok()
@@ -605,6 +675,7 @@ fn connection_identity_is_distinct_from_adapter_identity() {
             base.active_session,
             base.catalog,
             vec![base.providers[0].clone(), duplicate_connection],
+            base.settings,
             0,
         )
         .is_err()
@@ -845,4 +916,94 @@ fn notices_preserve_request_correlation() {
         .request_id(),
         None
     );
+}
+
+#[test]
+fn memory_commands_preserve_exact_revision_authority_and_redact_content() {
+    use autoharness_client::{DecimalU64, MemoryCommand, MemoryId, MemoryText};
+    let command = CommandEnvelope::new(ClientCommand::Memory {
+        command: MemoryCommand::Approve {
+            memory_id: MemoryId::new("memory-1").unwrap(),
+            expected_last_sequence: DecimalU64::new(9_007_199_254_740_993),
+            proposal_revision_id: MemoryId::new("proposal-1").unwrap(),
+        },
+    });
+    let encoded = serde_json::to_value(&command).unwrap();
+    assert_eq!(
+        encoded["command"]["payload"]["command"]["payload"]["expected_last_sequence"],
+        "9007199254740993"
+    );
+    assert_eq!(
+        serde_json::from_value::<CommandEnvelope>(encoded.clone()).unwrap(),
+        command
+    );
+    let mut forged = encoded;
+    forged["command"]["payload"]["command"]["payload"]["trust"] =
+        serde_json::json!("user_approved");
+    assert!(serde_json::from_value::<CommandEnvelope>(forged).is_err());
+    let text = MemoryText::new("private-memory-sentinel").unwrap();
+    assert!(!format!("{text:?}").contains("private-memory-sentinel"));
+    assert!(MemoryText::new("x".repeat(65_537)).is_err());
+}
+
+#[test]
+fn memory_snapshot_requires_bounded_unique_rows_and_prevents_session_only_delta() {
+    use autoharness_client::{
+        MemoryId, MemoryProjection, MemoryRow, MemoryScope, MemoryStatus, MemoryText, UnixMillis,
+    };
+    let row = MemoryRow {
+        memory_id: MemoryId::new("memory-1").unwrap(),
+        preview: MemoryText::new("inert <script>text</script>").unwrap(),
+        status: MemoryStatus::Proposed,
+        scope: MemoryScope::Workspace,
+        updated_at_ms: UnixMillis::new(1),
+        confidence_bps: None,
+        admission_count: 0,
+        detail: None,
+    };
+    let mut memory = MemoryProjection {
+        rows: vec![row.clone()],
+        total: 1,
+        ..Default::default()
+    };
+    let encoded = serde_json::to_value(&memory).unwrap();
+    assert_eq!(
+        serde_json::from_value::<MemoryProjection>(encoded).unwrap(),
+        memory
+    );
+    let previous = sample_snapshot();
+    let next = previous.clone().with_memory(memory.clone()).unwrap();
+    assert!(ActiveSessionDelta::between(&previous, &next).is_none());
+    memory.rows.push(row.clone());
+    memory.total = 2;
+    assert!(memory.validate().is_err());
+    memory.rows = vec![row; 101];
+    memory.total = 101;
+    assert!(memory.validate().is_err());
+}
+
+#[test]
+fn memory_page_enforces_an_aggregate_budget_without_allocating_serialized_output() {
+    use autoharness_client::{
+        MemoryId, MemoryProjection, MemoryRow, MemoryScope, MemoryStatus, MemoryText, UnixMillis,
+    };
+    let rows = (0..100)
+        .map(|index| MemoryRow {
+            memory_id: MemoryId::new(format!("memory-{index}")).unwrap(),
+            // JSON escaping is included in the wire budget.
+            preview: MemoryText::new("\0".repeat(65_536)).unwrap(),
+            status: MemoryStatus::Proposed,
+            scope: MemoryScope::Workspace,
+            updated_at_ms: UnixMillis::new(1),
+            confidence_bps: None,
+            admission_count: 0,
+            detail: None,
+        })
+        .collect();
+    let page = MemoryProjection {
+        rows,
+        total: 100,
+        ..Default::default()
+    };
+    assert!(page.validate().is_err());
 }

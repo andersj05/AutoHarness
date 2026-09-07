@@ -3,9 +3,11 @@ import type {
   ActiveSessionProjection,
   CatalogProjection,
   CommandOutcome,
+  ComposerSubmitBehavior,
   ConnectionState,
   ModelDescriptor,
   TextMessage,
+  TimestampStyle,
   TranscriptItem,
 } from "../protocol";
 import type { OptimisticPrompt } from "../store/clientStore";
@@ -24,6 +26,8 @@ interface ConversationProps {
   interactionBlocked?: boolean;
   optimisticPrompts?: readonly OptimisticPrompt[];
   searchRequest?: number;
+  submissionBehavior: ComposerSubmitBehavior;
+  timestampStyle: TimestampStyle;
   onCancel: (attemptId: string) => void;
   onDraftChange: Dispatch<SetStateAction<string>>;
   onOpenCredential: () => void;
@@ -67,7 +71,23 @@ function transcriptPlainText(items: readonly TranscriptItem[]): string {
   }).join("\n\n");
 }
 
-function MessageTurn({ highlight, message, optimistic = false }: { highlight?: string; message: TextMessage; optimistic?: boolean }) {
+function messageTimestamp(date: Date, style: TimestampStyle): string {
+  if (style === "absolute") {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  }
+  const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const absoluteSeconds = Math.abs(deltaSeconds);
+  const [value, unit] = absoluteSeconds < 60
+    ? [deltaSeconds, "second" as const]
+    : absoluteSeconds < 3_600
+      ? [Math.round(deltaSeconds / 60), "minute" as const]
+      : absoluteSeconds < 86_400
+        ? [Math.round(deltaSeconds / 3_600), "hour" as const]
+        : [Math.round(deltaSeconds / 86_400), "day" as const];
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(value, unit);
+}
+
+function MessageTurn({ highlight, message, optimistic = false, timestampStyle }: { highlight?: string; message: TextMessage; optimistic?: boolean; timestampStyle: TimestampStyle }) {
   const timestamp = message.createdAt ? new Date(message.createdAt) : undefined;
   const hasValidTimestamp = timestamp && Number.isFinite(timestamp.getTime());
   return (
@@ -78,9 +98,9 @@ function MessageTurn({ highlight, message, optimistic = false }: { highlight?: s
         </span>
         <div>
           <strong>{message.role === "agent" ? "AutoHarness" : "You"}</strong>
-          {hasValidTimestamp && timestamp && message.createdAt ? (
-            <time dateTime={message.createdAt}>
-              {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(timestamp)}
+          {timestampStyle !== "hidden" && hasValidTimestamp && timestamp && message.createdAt ? (
+            <time dateTime={message.createdAt} title={new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" }).format(timestamp)}>
+              {messageTimestamp(timestamp, timestampStyle)}
             </time>
           ) : null}
         </div>
@@ -107,6 +127,8 @@ export function Conversation({
   interactionBlocked = false,
   optimisticPrompts = [],
   searchRequest = 0,
+  submissionBehavior,
+  timestampStyle,
   model,
   session,
   onCancel,
@@ -229,7 +251,7 @@ export function Conversation({
         : undefined;
 
   return (
-    <main className="conversationWorkspace" id="main-content">
+    <main className="conversationWorkspace" id="main-content" tabIndex={-1}>
       <header className="conversationHeader">
         <div className="headerIdentity">
           <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button">
@@ -350,7 +372,7 @@ export function Conversation({
               activeIndex={activeMatch}
               items={transcript}
               renderItem={(item, index) =>
-                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} optimistic={item.id.startsWith("optimistic:")} /> : (
+                item.kind === "message" ? <MessageTurn highlight={index === activeMatch ? searchQuery.trim() : undefined} message={item} optimistic={item.id.startsWith("optimistic:")} timestampStyle={timestampStyle} /> : (
                   <ToolCard forceOpen={index === activeMatch} name={item.name} resource={item.resource} status={item.status} summary={item.summary}>
                     {item.failure ? (
                       <>
@@ -401,6 +423,7 @@ export function Conversation({
             onOpenModelPicker={onOpenModelPicker}
             onSubmit={onSubmit}
             runtimeMode={runtimeMode}
+            submissionBehavior={submissionBehavior}
           />
         </div>
       </div>

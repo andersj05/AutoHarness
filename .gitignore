@@ -28,3 +28,6 @@ Thumbs.db
 *.tsbuildinfo
 .vite/
 coverage/
+
+# Python validation output
+__pycache__/

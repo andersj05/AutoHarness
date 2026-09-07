@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientCommand, ClientSnapshot } from "../protocol";
@@ -31,12 +31,30 @@ function renderWorkspace(value = snapshot()) {
       onOpen={onOpen}
       onOpenNavigation={() => undefined}
       snapshot={value}
+      timestampStyle="relative"
     />,
   );
   return { commands, onCommand, onOpen, user };
 }
 
 describe("SessionsWorkspace", () => {
+  it("waits for export settlement before opening a destructive review", async () => {
+    let settle!: (outcome: "committed") => void;
+    const onCommand = vi.fn(() => new Promise<"committed">((resolve) => { settle = resolve; }));
+    const user = userEvent.setup();
+    render(<SessionsWorkspace snapshot={snapshot()} onCommand={onCommand} onOpen={() => undefined} onOpenNavigation={() => undefined} timestampStyle="relative" />);
+    await user.click(screen.getByRole("button", { name: "Export Markdown" }));
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => settle("committed"));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const confirmation = screen.getByRole("textbox", { name: "Confirm session title" });
+    await user.type(confirmation, "Design the GUI migration");
+    expect(confirmation).toHaveValue("Design the GUI migration");
+    expect(screen.getByRole("button", { name: "Delete permanently" })).toBeEnabled();
+  });
+
   it("searches identities, filters archives, and opens a selected session", async () => {
     const { onOpen, user } = renderWorkspace();
     const search = screen.getByRole("searchbox", { name: "Search sessions" });

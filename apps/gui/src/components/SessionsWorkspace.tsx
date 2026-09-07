@@ -5,6 +5,7 @@ import {
   type ClientSnapshot,
   type CommandOutcome,
   type SessionSummary,
+  type TimestampStyle,
 } from "../protocol";
 import { Icon } from "./Icon";
 import { Button, Chip, Dialog, Field, VirtualList } from "./primitives";
@@ -20,6 +21,7 @@ interface SessionsWorkspaceProps {
   onCommand: (command: ClientCommand) => Promise<CommandOutcome>;
   onOpen: (id: string) => void;
   onOpenNavigation: () => void;
+  timestampStyle: TimestampStyle;
 }
 
 function titleError(title: string): string | undefined {
@@ -33,14 +35,25 @@ function titleError(title: string): string | undefined {
   return undefined;
 }
 
-function formattedDate(value?: string): string {
+function formattedDate(value: string | undefined, style: TimestampStyle): string {
+  if (style === "hidden") return "Hidden by preference";
   if (!value) return "Update time unavailable";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "Update time unavailable";
+  if (style === "relative") {
+    const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+    const absoluteSeconds = Math.abs(deltaSeconds);
+    const [relativeValue, unit] = absoluteSeconds < 3_600
+      ? [Math.round(deltaSeconds / 60), "minute" as const]
+      : absoluteSeconds < 86_400
+        ? [Math.round(deltaSeconds / 3_600), "hour" as const]
+        : [Math.round(deltaSeconds / 86_400), "day" as const];
+    return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(relativeValue, unit);
+  }
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigation }: SessionsWorkspaceProps) {
+export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigation, timestampStyle }: SessionsWorkspaceProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SessionFilter>("open");
   const [selectedId, setSelectedId] = useState(() => snapshot.activeSessionId ?? snapshot.sessions[0]?.id);
@@ -91,19 +104,22 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
     setBusyAction(undefined);
     if (outcome === "committed") {
       setActionMessage(success);
-      if (closeDialog) setDialog(undefined);
-      setDeleteConfirmation("");
+      if (closeDialog) {
+        setDialog(undefined);
+        setDeleteConfirmation("");
+      }
     }
   };
 
   const openDialog = (next: SessionDialog) => {
+    if (busyAction) return;
     setDialog(next);
     setRenameTitle(next.session.title);
     setDeleteConfirmation("");
   };
 
   return (
-    <main className="routeWorkspace sessionRouteWorkspace" id="main-content">
+    <main className="routeWorkspace sessionRouteWorkspace" id="main-content" tabIndex={-1}>
       <header className="routeWorkspaceHeader sessionWorkspaceHeader">
         <button aria-label="Open navigation" className="iconButton mobileMenu" onClick={onOpenNavigation} type="button"><Icon name="menu" /></button>
         <div><p className="eyebrow">Durable history</p><h1>Sessions</h1><p>Search, resume, rename, archive, export, or remove replayable conversations.</p></div>
@@ -125,7 +141,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
           {visibleSessions.length > 0 ? (
             <VirtualList
               ariaLabel="All sessions"
-              height={listHeight}
+              height={Math.min(listHeight, visibleSessions.length * 68)}
               itemKey={(session) => session.id}
               items={visibleSessions}
               renderItem={(session) => (
@@ -140,7 +156,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
                   <span className="sessionWorkspaceIcon"><Icon name={session.archived ? "database" : "chat"} /></span>
                   <span className="sessionWorkspaceCopy"><strong>{session.title}</strong><small>{session.messageCount === undefined ? "Message count unavailable" : `${session.messageCount} messages`}</small></span>
                   {session.archived ? <Chip intent="neutral">archived</Chip> : session.id === snapshot.activeSessionId ? <Chip icon="bolt" intent="info">active</Chip> : null}
-                  {session.updatedAt ? <time dateTime={session.updatedAt}>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(session.updatedAt))}</time> : <span />}
+                  {timestampStyle !== "hidden" && session.updatedAt ? <time dateTime={session.updatedAt}>{formattedDate(session.updatedAt, timestampStyle)}</time> : <span />}
                   <Icon name="chevron" />
                 </button>
               )}
@@ -158,7 +174,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
               </header>
               <dl className="sessionFacts">
                 <div><dt>Identity</dt><dd><code>{selected.id}</code></dd></div>
-                <div><dt>Last update</dt><dd>{formattedDate(selected.updatedAt)}</dd></div>
+                <div><dt>Last update</dt><dd>{formattedDate(selected.updatedAt, timestampStyle)}</dd></div>
                 <div><dt>Transcript</dt><dd>{selected.messageCount === undefined ? "Unknown length" : `${selected.messageCount} durable messages`}</dd></div>
                 <div><dt>Status</dt><dd>{selected.archived ? "Read-only archive" : selected.id === snapshot.activeSessionId ? "Open in Chat" : "Available to resume"}</dd></div>
               </dl>
@@ -177,9 +193,9 @@ export function SessionsWorkspace({ snapshot, onCommand, onOpen, onOpenNavigatio
                 <Button icon="copy" onClick={() => void run("export", { type: "export_transcript", sessionId: selected.id }, `Exported “${selected.title}”.`, false)} loading={busyAction === "export"} loadingLabel="Exporting">Export Markdown</Button>
               </div>
               <div className="sessionSecondaryActions">
-                <Button onClick={() => openDialog({ kind: "rename", session: selected })} size="small" variant="quiet">Rename</Button>
-                {!selected.archived ? <Button onClick={() => openDialog({ kind: "archive", session: selected })} size="small" variant="quiet">Archive</Button> : null}
-                <Button className="dangerText" onClick={() => openDialog({ kind: "delete", session: selected })} size="small" variant="quiet">Delete</Button>
+                <Button disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "rename", session: selected })} size="small" variant="quiet">Rename</Button>
+                {!selected.archived ? <Button disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "archive", session: selected })} size="small" variant="quiet">Archive</Button> : null}
+                <Button className="dangerText" disabled={Boolean(busyAction)} onClick={() => openDialog({ kind: "delete", session: selected })} size="small" variant="quiet">Delete</Button>
               </div>
               <p aria-live="polite" className="sessionActionMessage">{actionMessage}</p>
             </>

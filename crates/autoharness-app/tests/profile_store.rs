@@ -107,7 +107,7 @@ fn malformed_existing_file_is_backed_up_and_replaced() {
     let store = ProfileStore::open(&path).expect("recover store");
 
     let document = store.read_document().expect("replacement document");
-    assert!(document.contains("\"schema_version\": 4"));
+    assert!(document.contains("\"schema_version\": 5"));
     let backup = dir.path().join("profiles.json.bad");
     assert_eq!(fs::read_to_string(backup).expect("backup"), "{corrupted");
 }
@@ -370,6 +370,48 @@ fn local_preferences_persist_and_reset_to_inherited_defaults() {
             .prompt_status_detail()
             .source(),
         Source::Default
+    );
+}
+
+#[test]
+fn any_mutation_normalizes_legacy_preferences_before_writing_schema_five() {
+    let dir = store_dir();
+    let path = dir.path().join("profiles.json");
+    fs::write(
+        &path,
+        r#"{
+            "schema_version": 4,
+            "local_profile": {
+                "preferences": {
+                    "theme_preset": "dark",
+                    "glyph_mode": "ascii",
+                    "terminal_timestamp_style": "absolute"
+                }
+            }
+        }"#,
+    )
+    .expect("write legacy settings");
+    let store = ProfileStore::open(&path).expect("open legacy store");
+
+    store
+        .set_active_profile(None)
+        .expect("normalize through ordinary mutation");
+
+    let value: serde_json::Value =
+        serde_json::from_str(&store.read_document().expect("read normalized settings"))
+            .expect("valid normalized json");
+    assert_eq!(value["schema_version"], 5);
+    assert_eq!(
+        value["local_profile"]["preferences"]["shared"]["theme_preset"],
+        "dark"
+    );
+    assert_eq!(
+        value["local_profile"]["preferences"]["shared"]["timestamp_style"],
+        "absolute"
+    );
+    assert_eq!(
+        value["local_profile"]["preferences"]["terminal"]["glyph_mode"],
+        "ascii"
     );
 }
 

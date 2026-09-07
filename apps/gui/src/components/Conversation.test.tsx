@@ -26,6 +26,8 @@ function session(content: string): ActiveSessionProjection {
 
 const callbacks = {
   draft: "",
+  submissionBehavior: "enter" as const,
+  timestampStyle: "relative" as const,
   onCancel: vi.fn(),
   onDraftChange: vi.fn(),
   onOpenCredential: vi.fn(),

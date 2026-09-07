@@ -1,0 +1,98 @@
+name: GUI candidate packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native candidate platform (all only for deliberate release validation)
+        type: choice
+        default: ubuntu-24.04
+        options:
+          - ubuntu-24.04
+          - windows-2025
+          - macos-26
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-packages-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    name: Package and native validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ inputs.platform == 'all' && fromJSON('["windows-2025", "ubuntu-24.04", "macos-26"]') || fromJSON(format('["{0}"]', inputs.platform)) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Linux system webview and test driver
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libayatana-appindicator3-dev libdbus-1-dev librsvg2-dev libssl-dev
+          libwebkit2gtk-4.1-dev libxdo-dev pkg-config webkit2gtk-driver xvfb openbox
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+      - name: Validate release tooling
+        run: python -m unittest discover -s scripts -p "test_*.py"
+      - name: Build unsigned candidate (never promotion evidence)
+        run: python scripts/package_gui.py --unsigned
+      - name: Match Microsoft native driver to WebView2
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup_gui_webdriver.ps1
+      - name: Windows installer and native lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
+          ./scripts/test_gui_installer.ps1 -Installer $installers[0].FullName
+      - name: Linux install and native lifecycle
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./target/release/bundle/deb/*.deb
+          xvfb-run --auto-servernum --server-args='-screen 0 1920x1200x24' bash scripts/gui_linux_webdriver.sh
+      - name: Linux uninstall
+        if: always() && runner.os == 'Linux'
+        run: |
+          for package in target/release/bundle/deb/*.deb; do
+            test -f "$package" || continue
+            sudo dpkg --remove "$(dpkg-deb --field "$package" Package)"
+          done
+          test ! -e /usr/bin/autoharness
+      - name: macOS install and native startup replay
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/gui-dmg" "$RUNNER_TEMP/gui-installed"
+          hdiutil attach target/release/bundle/dmg/*.dmg -readonly -nobrowse -mountpoint "$RUNNER_TEMP/gui-dmg"
+          trap 'hdiutil detach "$RUNNER_TEMP/gui-dmg"' EXIT
+          ditto "$RUNNER_TEMP/gui-dmg/AutoHarness.app" "$RUNNER_TEMP/gui-installed/AutoHarness.app"
+          plutil -lint "$RUNNER_TEMP/gui-installed/AutoHarness.app/Contents/Info.plist"
+          python scripts/gui_process_smoke.py --binary "$RUNNER_TEMP/gui-installed/AutoHarness.app/Contents/MacOS/autoharness" --output target/gui-evidence/macos
+      - name: Retain packages and synthetic screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gui-candidate-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            target/gui-packages/
+            target/gui-evidence/
+          if-no-files-found: error
+          retention-days: 14

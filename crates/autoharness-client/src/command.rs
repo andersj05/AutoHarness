@@ -6,9 +6,9 @@ use zeroize::Zeroizing;
 
 use crate::bounds::validate_credential;
 use crate::{
-    AttemptId, CLIENT_SCHEMA_VERSION, ConnectionId, ModelRef, PromptContent, ProviderProfileInput,
-    ReasoningEffort, RequestId, SafeFailure, SessionId, SessionTitle, ToolCallId,
-    TransportRevision, ValidationError,
+    AttemptId, CLIENT_SCHEMA_VERSION, ClientPreferenceChange, ConnectionId, ModelRef,
+    PromptContent, ProviderProfileInput, ReasoningEffort, RequestId, SafeFailure, SessionId,
+    SessionTitle, ToolCallId, TransportRevision, ValidationError,
 };
 
 /// Purpose of one dedicated secret-ingress submission.
@@ -40,6 +40,9 @@ pub enum PermissionDecision {
     content = "payload"
 )]
 pub enum ClientCommand {
+    Memory {
+        command: crate::MemoryCommand,
+    },
     CreateSession,
     OpenSession {
         session_id: SessionId,
@@ -83,6 +86,9 @@ pub enum ClientCommand {
     },
     DeleteProviderProfile {
         connection_id: ConnectionId,
+    },
+    UpdateClientPreference {
+        change: ClientPreferenceChange,
     },
     StartCodexAuthentication,
     CancelCodexAuthentication {

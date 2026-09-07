@@ -7,8 +7,8 @@ use autoharness_domain::{
     RetryAdvice,
 };
 use autoharness_settings::{
-    ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, Layout,
-    PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
+    ColorMode, ComposerSubmitBehavior, Density, EffectiveLocalProfile, GlyphMode, GuiFontSize,
+    GuiZoomPercent, Layout, LocalProfile, PromptStatusDetail, TerminalTimestampStyle, ThemePreset,
 };
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders};
@@ -2328,6 +2328,10 @@ pub enum LocalPreferenceChange {
     ComposerSubmitBehavior(Option<ComposerSubmitBehavior>),
     /// Prompt status-bar information density.
     PromptStatusDetail(Option<PromptStatusDetail>),
+    /// Desktop renderer zoom percentage.
+    GuiZoomPercent(Option<GuiZoomPercent>),
+    /// Desktop renderer base font size.
+    GuiFontSize(Option<GuiFontSize>),
 }
 
 /// Kind of request awaiting application acknowledgement.
@@ -4042,6 +4046,8 @@ pub struct SettingsProjection {
     pub provider_status: ProviderStatusProjection,
     /// Effective local profile preferences and provenance for every leaf.
     pub local_profile: EffectiveLocalProfile,
+    /// Persisted user-layer values used to expose exact reset availability.
+    pub user_local_profile: LocalProfile,
     /// Safe current Git branch for the workspace, when the workspace is a checkout.
     pub git_branch: Option<String>,
 }

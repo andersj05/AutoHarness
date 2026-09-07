@@ -52,6 +52,11 @@ macro_rules! string_id {
     };
 }
 
+string_id!(
+    MemoryId,
+    "memory_id",
+    "Stable opaque memory ledger identity."
+);
 string_id!(SessionId, "session_id", "Stable durable session identity.");
 string_id!(InputId, "input_id", "Stable durable user-input identity.");
 string_id!(

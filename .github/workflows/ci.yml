@@ -5,10 +5,6 @@ on:
     branches:
       - main
       - dev
-  push:
-    branches:
-      - main
-      - dev
   workflow_dispatch:
 
 permissions:
@@ -23,7 +19,25 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  scope:
+    name: Select checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      benchmarks: ${{ steps.scope.outputs.benchmarks }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: scope
+        run: python3 scripts/ci_scope.py
+
   quality:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     name: Rust quality
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -34,6 +48,16 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Install pinned pnpm for embedded GUI assets
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Install pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Build assets required by all-feature package documentation
+        run: pnpm install --frozen-lockfile && pnpm gui:build
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
       - name: Show toolchain
@@ -85,8 +109,12 @@ jobs:
           persist-credentials: false
       - name: Check relative documentation links
         run: python3 scripts/check_docs_links.py
+      - name: Test release tooling and CI routing
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
 
   frontend:
+    needs: scope
+    if: needs.scope.outputs.frontend == 'true'
     name: Desktop GUI
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -113,6 +141,8 @@ jobs:
         run: pnpm gui:build
 
   benchmarks:
+    needs: scope
+    if: needs.scope.outputs.benchmarks == 'true'
     name: Validate storage benchmark environment
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -133,6 +163,8 @@ jobs:
         run: cargo test --manifest-path benchmarks/Cargo.toml --bin autoharness-phase1-benchmarks --locked
 
   test:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     name: Runtime and desktop tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -182,3 +214,23 @@ jobs:
           --test startup_reconnect
           --test vault_fake
           --features gui --locked --no-fail-fast
+
+  result:
+    name: CI passed
+    if: always()
+    needs: [scope, docs, quality, frontend, benchmarks, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require every selected check to pass
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          assert results['scope']['result'] == 'success', 'CI scope selection failed'
+          assert results['docs']['result'] == 'success', 'Documentation or tooling tests failed'
+          for name, result in results.items():
+              assert result['result'] in ('success', 'skipped'), f'{name}: {result["result"]}'
+          PY

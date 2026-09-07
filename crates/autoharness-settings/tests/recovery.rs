@@ -12,7 +12,7 @@ fn malformed_user_layer_is_skipped_and_defaults_remain() {
     assert_eq!(
         resolved
             .provenance()
-            .get("local_profile.preferences.theme_preset"),
+            .get("local_profile.preferences.shared.theme_preset"),
         Some(&autoharness_settings::Source::Default)
     );
     assert_eq!(resolved.diagnostics().len(), 1);

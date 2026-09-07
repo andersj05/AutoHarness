@@ -124,11 +124,13 @@ impl ActiveSessionDelta {
     /// Builds a delta only when all changes are confined to the active session.
     #[must_use]
     pub fn between(previous: &ClientSnapshot, next: &ClientSnapshot) -> Option<Self> {
-        if previous.schema_version != next.schema_version
+        if previous.memory != next.memory
+            || previous.schema_version != next.schema_version
             || previous.lifecycle != next.lifecycle
             || previous.active_session_id != next.active_session_id
             || previous.catalog != next.catalog
             || previous.providers != next.providers
+            || previous.settings != next.settings
             || previous.sessions.len() != next.sessions.len()
         {
             return None;
@@ -235,6 +237,7 @@ impl ActiveSessionDelta {
             Some(active_session),
             snapshot.catalog.clone(),
             snapshot.providers.clone(),
+            snapshot.settings.clone(),
             snapshot.provider_recovery_pending.get(),
         )
     }

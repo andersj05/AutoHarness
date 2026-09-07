@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AttemptProjection, CommandOutcome, ModelDescriptor } from "../protocol";
+import type { AttemptProjection, CommandOutcome, ComposerSubmitBehavior, ModelDescriptor } from "../protocol";
 import { Icon } from "./Icon";
 
 interface ComposerProps {
@@ -8,13 +8,14 @@ interface ComposerProps {
   disabledReason?: string;
   model?: ModelDescriptor;
   runtimeMode: "native" | "fixture";
+  submissionBehavior: ComposerSubmitBehavior;
   onCancel: (attemptId: string) => void;
   onDraftChange: Dispatch<SetStateAction<string>>;
   onOpenModelPicker: () => void;
   onSubmit: (prompt: string) => Promise<CommandOutcome>;
 }
 
-export function Composer({ attempt, draft, disabledReason, model, runtimeMode, onCancel, onDraftChange, onOpenModelPicker, onSubmit }: ComposerProps) {
+export function Composer({ attempt, draft, disabledReason, model, runtimeMode, submissionBehavior, onCancel, onDraftChange, onOpenModelPicker, onSubmit }: ComposerProps) {
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isStreaming = attempt.kind === "streaming" || attempt.kind === "cancelling";
@@ -51,9 +52,15 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, o
           <span className="srOnly">Message AutoHarness</span>
           <textarea
             aria-describedby={disabledReason ? "composer-disabled-reason" : "composer-help"}
+            aria-keyshortcuts={submissionBehavior === "enter" ? "Enter" : "Control+S Meta+S"}
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              if (event.nativeEvent.isComposing) return;
+              const enterSubmit = submissionBehavior === "enter" && event.key === "Enter" && !event.shiftKey;
+              const controlSubmit = submissionBehavior === "control_s"
+                && event.key.toLocaleLowerCase() === "s"
+                && (event.ctrlKey || event.metaKey);
+              if (enterSubmit || controlSubmit) {
                 event.preventDefault();
                 void submit();
               }
@@ -88,7 +95,7 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, o
               <span className="srOnly">Stop response</span>
             </button>
           ) : (
-            <button className="submitButton" disabled={!canSubmit} onClick={() => void submit()} title="Send message" type="button">
+            <button className="submitButton" disabled={!canSubmit} onClick={() => void submit()} title={submissionBehavior === "enter" ? "Send message (Enter)" : "Send message (Ctrl/Cmd + S)"} type="button">
               <Icon name="arrow-up" size={17} />
               <span className="srOnly">Send message</span>
             </button>
@@ -97,7 +104,7 @@ export function Composer({ attempt, draft, disabledReason, model, runtimeMode, o
       </div>
       <div className="composerFootnote">
         <span id={disabledReason ? "composer-disabled-reason" : "composer-help"}>
-          {disabledReason ?? "Enter to send, Shift Enter for a new line"}
+          {disabledReason ?? (submissionBehavior === "enter" ? "Enter to send, Shift Enter for a new line" : "Ctrl/Cmd + S to send, Enter for a new line")}
         </span>
         <span className="composerSecurity"><Icon name="shield" size={12} /> {runtimeMode === "fixture" ? "simulated, not persisted" : "local and replayable"}</span>
       </div>

@@ -36,7 +36,7 @@ export function Dialog({
   useEffect(() => {
     const prior = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const root = dialogRef.current;
-    (root?.querySelector<HTMLElement>("[data-initial-focus], [autofocus]") ?? root?.querySelector<HTMLElement>(FOCUSABLE))?.focus();
+    (root?.querySelector<HTMLElement>("[data-initial-focus], [autofocus]") ?? root?.querySelector<HTMLElement>(FOCUSABLE))?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       if (!root) return;
       if (event.key === "Escape" && dismissible && onCloseRef.current) {
@@ -60,7 +60,7 @@ export function Dialog({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      prior?.focus();
+      prior?.focus({ preventScroll: true });
     };
   }, [dismissible]);
 
