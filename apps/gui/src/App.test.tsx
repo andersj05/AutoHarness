@@ -266,8 +266,20 @@ describe("AutoHarness GUI", () => {
     expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
     expect(screen.getByText("React-free client store that repairs revision gaps.", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("Browser fixture - simulated state only")).toBeInTheDocument();
-    expect(screen.getAllByText("Browser fixture").length).toBeGreaterThan(0);
+    expect(screen.getByText("Preview · changes aren't saved")).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Context inspector" })).not.toBeInTheDocument();
     expect(screen.queryByText("Rust-owned authority")).not.toBeInTheDocument();
+  });
+
+  it("finds and opens recent sessions from sidebar search", async () => {
+    const { transport, user } = renderScenario("ready");
+    await screen.findByRole("heading", { name: "Design the GUI migration" });
+    await user.click(screen.getByRole("button", { name: "Search and commands" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search commands" }), "Audit context");
+    await user.click(screen.getByRole("menuitem", { name: /Audit context manifests/ }));
+    expect(transport.commands.some((command) => command.type === "open_session")).toBe(true);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Audit context manifests" })).toBeInTheDocument();
   });
 
   it("opens the keyboard command palette and persists authoritative appearance settings", async () => {
@@ -293,6 +305,7 @@ describe("AutoHarness GUI", () => {
   it("exposes a keyboard-resizable context split pane on wide workspaces", async () => {
     renderScenario("ready");
     await screen.findByRole("heading", { name: "Design the GUI migration" });
+    fireEvent.click(screen.getByRole("button", { name: "Open context inspector" }));
     const separator = screen.getByRole("separator", { name: "Resize context inspector" });
     expect(separator).toHaveAttribute("aria-valuenow", "72");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
@@ -311,6 +324,7 @@ describe("AutoHarness GUI", () => {
     expect(await screen.findByRole("heading", { name: "Sessions" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Resize navigation" })).toHaveAttribute("aria-valuenow", "272");
     await user.click(screen.getByRole("button", { name: "Chat" }));
+    await user.click(screen.getByRole("button", { name: "Open context inspector" }));
     expect(screen.getByRole("separator", { name: "Resize context inspector" })).toHaveAttribute("aria-valuenow", "72");
   });
 

@@ -1,13 +1,16 @@
 # GUI design system
 
-**Status:** Active migration contract
+**Status:** Active desktop design contract
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-07
 
 ## Direction
 
-AutoHarness keeps the atmosphere of its terminal interface without keeping terminal layout constraints.
-The GUI should feel like a precise instrument: deep surfaces, luminous cyan-to-violet accents, restrained motion, monospace technical detail, and generous spatial hierarchy.
+AutoHarness is a calm workspace for conversations, providers, and memory.
+Use clear labels, quiet surfaces, readable text, and a consistent sidebar with fast access to recent work.
+Notion's persistent navigation and Spotify's optional detail panes inform the hierarchy without copying their branding.
+Keep ordinary flows free of implementation terminology and decorative subtitles.
+Explain consequences at the point of action, and disclose technical detail when requested.
 
 The interface is not a terminal emulator.
 It uses native semantic controls, fluid layout, readable proportional text where appropriate, and rich desktop interactions.
@@ -16,7 +19,7 @@ It uses native semantic controls, fluid layout, readable proportional text where
 
 1. Keep the conversation calm and the controls quiet until they are needed.
 2. Use whitespace, hierarchy, and translucency before borders.
-3. Use the cyan-to-violet gradient only for focus, progress, identity, and major structure.
+3. Reserve accent color for meaningful state and focus, with neutral navigation and primary controls.
 4. Render code, commands, paths, identifiers, and metrics in monospace, while ordinary prose uses a highly legible system sans-serif stack.
 5. Express state with text, shape, icon, and contrast rather than color alone.
 6. Keep one obvious primary action on every empty, offline, error, permission, and destructive surface.
@@ -31,7 +34,8 @@ The wide shell has three regions:
 - A flexible primary workspace with a readable conversation measure.
 - An optional 320-pixel inspector for context, activity, permissions, and details.
 
-The rail and inspector are independently collapsible.
+The rail and inspector are independently collapsible, and the inspector starts closed.
+Sidebar Search opens commands and unarchived sessions through one keyboard-accessible picker.
 Collapsed panes retain selection and scroll state.
 The center workspace never shifts while text is being selected or a response is streaming.
 

@@ -46,7 +46,7 @@ export function App({ store }: AppProps) {
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [railWidth, setRailWidth] = useState(248);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(() => !mediaMatches("(max-width: 1180px)"));
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -181,10 +181,9 @@ export function App({ store }: AppProps) {
     return (
       <main aria-busy="true" className="bootSurface">
         <div className="bootMark"><span /><span /><span /></div>
-        <p className="eyebrow">Local runtime</p>
         <h1>Repairing the desktop view</h1>
         <div className="bootTrace"><i /><i /><i /><i /><i /></div>
-        <p>Waiting for a fresh authoritative snapshot before commands are enabled.</p>
+        <p>Reconnecting to your session. Your draft is safe.</p>
       </main>
     );
   }
@@ -193,10 +192,9 @@ export function App({ store }: AppProps) {
     return (
       <main aria-busy="true" className="bootSurface">
         <div className="bootMark"><span /><span /><span /></div>
-        <p className="eyebrow">Local runtime</p>
         <h1>Opening your workspace</h1>
         <div className="bootTrace"><i /><i /><i /><i /><i /></div>
-        <p>Replaying the durable session and restoring provider state.</p>
+        <p>Restoring your last session.</p>
       </main>
     );
   }
@@ -231,10 +229,13 @@ export function App({ store }: AppProps) {
     { id: "export-transcript", label: "Export active transcript", description: "Write replayable history to Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "Toggle context and runtime details", icon: "inspect" },
     ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Settle runtime work and close the application", keywords: "exit shutdown close" }] : []),
+    ...projection.sessions.filter((session) => !session.archived).map((session): CommandItem => ({ id: `session:${session.id}`, label: session.title, description: "Session", icon: "chat", keywords: "recent conversation" })),
   ];
 
   const runCommand = (command: string) => {
-    if (command === "quit") {
+    if (command.startsWith("session:")) {
+      openSession(command.slice("session:".length));
+    } else if (command === "quit") {
       setClosing(true);
       void store.close();
     } else if (command === "new-session") {
@@ -332,8 +333,6 @@ export function App({ store }: AppProps) {
     >
       <a aria-hidden={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? true : undefined} className="skipLink" href="#main-content" tabIndex={blockingDialogOpen || (mobileViewport && mobileRailOpen) ? -1 : undefined}>Skip to main content</a>
       <div className="appShell" ref={shellRef}>
-        <div className="ambient ambientOne" />
-        <div className="ambient ambientTwo" />
         {mobileRailOpen ? <button aria-label="Dismiss navigation drawer" className="mobileScrim" onClick={() => setMobileRailOpen(false)} type="button" /> : null}
         <AppRail
         activeRoute={route}
@@ -348,6 +347,7 @@ export function App({ store }: AppProps) {
         }}
         onOpenSession={openSession}
         onRoute={setRoute}
+        onSearch={() => setCommandPaletteOpen(true)}
         onToggleCollapsed={() => setRailCollapsed((value) => !value)}
         onWidthChange={setRailWidth}
         runtimeMode={projection.runtimeMode}

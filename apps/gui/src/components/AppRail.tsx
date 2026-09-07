@@ -17,6 +17,7 @@ interface AppRailProps {
   onCreateSession: () => void;
   onOpenSession: (id: string) => void;
   onRoute: (route: RouteId) => void;
+  onSearch: () => void;
   onToggleCollapsed: () => void;
   onWidthChange: (width: number) => void;
 }
@@ -26,7 +27,6 @@ const routes: readonly { id: RouteId; label: string; icon: IconName }[] = [
   { id: "sessions", label: "Sessions", icon: "sessions" },
   { id: "providers", label: "Providers", icon: "providers" },
   { id: "memory", label: "Memory", icon: "memory" },
-  { id: "help", label: "Help", icon: "inspect" },
 ];
 
 export function AppRail({
@@ -42,6 +42,7 @@ export function AppRail({
   onCreateSession,
   onOpenSession,
   onRoute,
+  onSearch,
   onToggleCollapsed,
   onWidthChange,
 }: AppRailProps) {
@@ -115,7 +116,6 @@ export function AppRail({
         </div>
         <div className="brandCopy">
           <strong>AutoHarness</strong>
-          <span>{runtimeMode === "fixture" ? "browser fixture" : "agent workspace"}</span>
         </div>
         <button
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
@@ -136,6 +136,10 @@ export function AppRail({
         <Icon name="new" />
         <span>New session</span>
         <kbd>Ctrl N</kbd>
+      </button>
+
+      <button aria-label="Search and commands" className="railSearchButton" onClick={() => { onCloseMobile(); onSearch(); }} type="button" title="Search and commands (Ctrl K)">
+        <Icon name="search" size={17} /><span>Search</span><kbd>Ctrl K</kbd>
       </button>
 
       <nav aria-label="Primary" className="routeNav">
@@ -164,11 +168,11 @@ export function AppRail({
           </button>
         </div>
         <div className="sessionRailList">
-          {sessions.slice(0, 5).map((session) => (
+          {sessions.filter((session) => !session.archived).slice(0, 12).map((session) => (
             <button
-              aria-current={activeSessionId === session.id ? "true" : undefined}
+              aria-current={activeRoute === "chat" && activeSessionId === session.id ? "true" : undefined}
               className="sessionRailItem"
-              data-active={activeSessionId === session.id}
+              data-active={activeRoute === "chat" && activeSessionId === session.id}
               key={session.id}
               onClick={() => {
                 onOpenSession(session.id);
@@ -177,7 +181,7 @@ export function AppRail({
               title={session.title}
               type="button"
             >
-              <span className="sessionMarker" />
+              <Icon name="chat" size={14} />
               <span>{session.title}</span>
             </button>
           ))}
@@ -185,6 +189,7 @@ export function AppRail({
       </section>
 
       <div className="railFooter">
+        <button aria-label="Help" aria-current={activeRoute === "help" ? "page" : undefined} className="routeButton" data-active={activeRoute === "help"} onClick={() => navigate("help")} title="Help" type="button"><Icon name="inspect" /><span>Help</span></button>
         <button
           aria-label="Settings"
           aria-current={activeRoute === "settings" ? "page" : undefined}
@@ -197,14 +202,7 @@ export function AppRail({
           <Icon name="settings" />
           <span>Settings</span>
         </button>
-        <div className="profileSummary">
-          <span className="avatar" aria-hidden="true">A</span>
-          <span className="profileCopy">
-            <strong>{runtimeMode === "fixture" ? "Browser fixture" : "Local workspace"}</strong>
-            <small>{runtimeMode === "fixture" ? "Simulated state only" : "Private by default"}</small>
-          </span>
-          <span className="onlineDot" data-fixture={runtimeMode === "fixture"} title={runtimeMode === "fixture" ? "Fixture preview" : "Runtime ready"} />
-        </div>
+        {runtimeMode === "fixture" ? <p className="railPreview" title="Browser fixture - simulated state only">Preview · changes aren't saved</p> : null}
       </div>
       {!collapsed && !mobileViewport ? (
         <button
