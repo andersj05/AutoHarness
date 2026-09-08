@@ -149,7 +149,7 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
         <div className="settingsSections">
           {visibleSections.has("appearance") ? (
             <section aria-labelledby="settings-appearance-heading" className="settingsWorkspace" id="settings-appearance">
-              <header><h2 id="settings-appearance-heading">Appearance</h2></header>
+              <header className={needle ? undefined : "srOnly"}><h2 id="settings-appearance-heading">Appearance</h2></header>
               <SettingShell visible={visible("theme-preset")} busy={busy === "theme_preset"} description="Choose a theme, or follow your system." id="theme-preset" label="Theme" onReset={() => reset("theme_preset", "Theme")} setting={settings.themePreset}>
                 <ThemePicker colorMode={settings.colorMode.value} describedBy={describedBy("theme-preset")} disabled={Boolean(busy)} onChange={(value) => void update({ kind: "theme_preset", value }, "Theme")} value={settings.themePreset.value} />
               </SettingShell>
@@ -161,7 +161,7 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
 
           {visibleSections.has("accessibility") ? (
             <section aria-labelledby="settings-accessibility-heading" className="settingsWorkspace" id="settings-accessibility">
-              <header><h2 id="settings-accessibility-heading">Accessibility</h2></header>
+              <header className={needle ? undefined : "srOnly"}><h2 id="settings-accessibility-heading">Accessibility</h2></header>
               <SettingShell visible={visible("zoom-percent")} busy={busy === "zoom_percent"} description="Make everything on screen larger or smaller." id="zoom-percent" label="Zoom" onReset={() => reset("zoom_percent", "Zoom")} setting={settings.zoomPercent}>
                 <select aria-describedby={describedBy("zoom-percent")} disabled={Boolean(busy)} id="zoom-percent" onChange={(event) => void update({ kind: "zoom_percent", value: Number(event.target.value) }, "Zoom")} value={settings.zoomPercent.value}>{ZOOM_LEVELS.map((value) => <option key={value} value={value}>{value}%</option>)}</select>
               </SettingShell>
@@ -176,7 +176,7 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
 
           {visibleSections.has("conversation") ? (
             <section aria-labelledby="settings-conversation-heading" className="settingsWorkspace" id="settings-conversation">
-              <header><h2 id="settings-conversation-heading">Conversation</h2></header>
+              <header className={needle ? undefined : "srOnly"}><h2 id="settings-conversation-heading">Conversation</h2></header>
               <SettingShell visible={visible("timestamp-style")} busy={busy === "timestamp_style"} description="Show relative times, exact local dates and times, or no timestamps." id="timestamp-style" label="Timestamps" onReset={() => reset("timestamp_style", "Timestamps")} setting={settings.timestampStyle}>
                 <select aria-describedby={describedBy("timestamp-style")} disabled={Boolean(busy)} id="timestamp-style" onChange={(event) => void update({ kind: "timestamp_style", value: event.target.value as TimestampStyle }, "Timestamps")} value={settings.timestampStyle.value}>{TIMESTAMPS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
               </SettingShell>
@@ -186,7 +186,7 @@ export function SettingsWorkspace({ settings, onCommand, onOpenNavigation }: Set
             </section>
           ) : null}
 
-          {visibleSections.size === 0 ? <div className="settingsEmpty"><Icon name="search" size={23} /><h2>No settings match “{query}”</h2><p>Try theme, zoom, motion, timestamps, or submission.</p></div> : null}
+          {visibleSections.size === 0 ? <div className="settingsEmpty"><Icon name="search" size={23} /><h2>No settings match “{query}”</h2><p>Try theme, zoom, motion, timestamps, or submission.</p><Button variant="quiet" onClick={() => setQuery("")}>Clear search</Button></div> : null}
         </div>
       </div>
       <p aria-atomic="true" aria-live="polite" className="settingsAnnouncer">{message}</p>

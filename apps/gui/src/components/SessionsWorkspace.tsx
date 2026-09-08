@@ -168,7 +168,12 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
               )}
               rowHeight={64}
             />
-          ) : <p className="emptySessionSearch">No {filter === "all" ? "" : `${filter} `}sessions match “{query}”.</p>}
+          ) : <div className="sessionSearchEmpty">
+            <Icon name={query.trim() ? "search" : "sessions"} size={25} />
+            <h2>{query.trim() ? "No sessions found" : filter === "archived" ? "No archived sessions" : "No open sessions"}</h2>
+            <p>{query.trim() ? `No ${filter === "all" ? "" : `${filter} `}sessions match “${query}”.` : filter === "archived" ? "Sessions you archive will appear here." : "Start a conversation to create a session."}</p>
+            {query.trim() ? <Button variant="quiet" onClick={() => setQuery("")}>Clear search</Button> : filter === "archived" ? <Button variant="quiet" onClick={() => setFilter("open")}>Show open sessions</Button> : <Button icon="new" onClick={onCreate}>Start a conversation</Button>}
+          </div>}
         </section>
 
         <aside aria-label="Selected session details" className="sessionDetailPane">

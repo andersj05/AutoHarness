@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   Button,
@@ -55,7 +55,7 @@ describe("desktop design-system primitives", () => {
     expect(activated).toEqual(["settings"]);
   });
 
-  it("traps dialog focus and restores the invoking control", async () => {
+  it.each([false, true])("traps dialog focus and restores its original trigger (Strict Mode: %s)", async (strict) => {
     const user = userEvent.setup();
     function Harness() {
       const [open, setOpen] = useState(false);
@@ -70,7 +70,7 @@ describe("desktop design-system primitives", () => {
         </>
       );
     }
-    render(<Harness />);
+    render(strict ? <StrictMode><Harness /></StrictMode> : <Harness />);
     const trigger = screen.getByRole("button", { name: "Open review" });
     await user.click(trigger);
     expect(screen.getByRole("button", { name: "First action" })).toHaveFocus();
@@ -78,7 +78,7 @@ describe("desktop design-system primitives", () => {
     await user.keyboard("{Shift>}{Tab}{/Shift}");
     expect(screen.getByRole("button", { name: "Last action" })).toHaveFocus();
     await user.keyboard("{Escape}");
-    expect(trigger).toHaveFocus();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("filters and chooses command-palette actions from the keyboard", async () => {

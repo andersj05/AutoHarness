@@ -57,6 +57,9 @@ describe("SessionsWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Return to chat" })).not.toBeInTheDocument();
     await user.type(screen.getByRole("searchbox", { name: "Search sessions" }), "no-such-session");
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getByRole("heading", { name: "Provider recovery probes" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("");
   });
 
   it("waits for export settlement before opening a destructive review", async () => {

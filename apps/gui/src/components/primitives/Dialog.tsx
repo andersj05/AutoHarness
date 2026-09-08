@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PropsWithChildren, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type PropsWithChildren, type ReactNode } from "react";
 import { Icon } from "../Icon";
 import { Button } from "./Button";
 
@@ -30,13 +30,17 @@ export function Dialog({
 }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const returnFocusRef = useRef<HTMLElement>();
+  const restoreFrameRef = useRef<number>();
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => {
-    const prior = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  useLayoutEffect(() => {
+    if (restoreFrameRef.current !== undefined) cancelAnimationFrame(restoreFrameRef.current);
+    if (!returnFocusRef.current && document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
+    const prior = returnFocusRef.current;
     const root = dialogRef.current;
     (root?.querySelector<HTMLElement>("[data-initial-focus], [autofocus]") ?? root?.querySelector<HTMLElement>(FOCUSABLE))?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
@@ -62,7 +66,9 @@ export function Dialog({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      prior?.focus({ preventScroll: true });
+      restoreFrameRef.current = requestAnimationFrame(() => {
+        if (prior?.isConnected && !prior.closest("[inert]")) prior.focus({ preventScroll: true });
+      });
     };
   }, [dismissible]);
 

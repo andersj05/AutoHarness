@@ -679,7 +679,7 @@
   @media (max-width: 1180px) {
     .workspaceSurface > .dsSplitPane, .workspaceSurface > .dsSplitPane > .dsSplitPrimary, .workspaceSurface > .dsSplitPane > .dsSplitSecondary { display: contents; }
     .workspaceSurface > .dsSplitPane > .dsSplitHandle { display: none; }
-    .contextInspector { position: fixed; top: 0; right: 0; width: min(340px, calc(100vw - 72px)); box-shadow: -20px 0 55px rgb(0 0 0 / 34%); }
+    .dsSplitSecondary .contextInspector { position: fixed; top: 0; right: 0; width: min(340px, calc(100vw - 32px)); box-shadow: -20px 0 55px rgb(0 0 0 / 34%); }
   }
 
   @media (max-width: 900px) {
@@ -1229,3 +1229,9 @@
 }
 
 .memoryDetail > .memoryActions .actionMenu { margin-left: auto; }
+
+.sessionSearchEmpty { padding: 48px 24px; text-align: center; color: var(--text-muted); }
+.sessionSearchEmpty h2 { margin: 16px 0 8px; color: var(--text); font-size: 17px; font-weight: 550; }
+.sessionSearchEmpty p { margin: 0 auto 14px; max-width: 38ch; line-height: 1.7; font-size: 13px; overflow-wrap: anywhere; }
+.settingsWorkspace:has(> header.srOnly) > .settingRow:first-of-type { border-top: 0; padding-top: 0; }
+.settingsEmpty > .dsButton { margin-top: 12px; }

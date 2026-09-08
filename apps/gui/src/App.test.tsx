@@ -296,6 +296,7 @@ describe("AutoHarness GUI", () => {
     expect(await screen.findByRole("heading", { name: "Desktop polish" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Message AutoHarness" })).toHaveValue("Unfinished idea");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename session" })).toHaveFocus());
     expect(screen.getByRole("button", { name: "Desktop polish" })).toHaveAttribute("aria-description", "Unsent draft in this session");
     expect(transport.commands).toContainEqual({ type: "rename_session", sessionId: "session-gui-migration", title: "Desktop polish" });
   });
