@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import type {
   ClientCommand,
   ClientSnapshot,
@@ -184,6 +184,7 @@ export function ProvidersWorkspace({
   const [defaultModelId, setDefaultModelId] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
   const credentialRef = useRef<HTMLInputElement>(null);
+  const providerTypeName = useId();
 
   const selected = snapshot.providers.find((profile) => profile.id === selectedId);
   const deleteTarget = snapshot.providers.find((profile) => profile.id === deleteTargetId);
@@ -380,8 +381,8 @@ export function ProvidersWorkspace({
                 type="button"
               >
                 <span className="providerRowIcon"><Icon name={profile.configuration.kind === "router" ? "branch" : profile.configuration.kind === "codex_subscription" ? "terminal" : "spark"} /></span>
-                <span className="providerRowCopy"><strong>{profile.displayName}</strong><small>{profile.scope === "session_default" ? "Session default" : profileKindLabel(profile.configuration.kind)}</small></span>
-                <Chip intent={statusIntent(profile.status)}>{profile.active ? "Active" : STATUS_LABELS[profile.status]}</Chip>
+                <span className="providerRowCopy"><strong>{profile.displayName}</strong><small>{profile.scope === "session_default" ? "Session default" : profileKindLabel(profile.configuration.kind)}{profile.active ? " · Active" : ""}</small></span>
+                <Chip intent={statusIntent(profile.status)}>{STATUS_LABELS[profile.status]}</Chip>
               </button>
             ))}
             {snapshot.providers.length === 0 ? <div className="providerListEmpty"><Icon name="providers" /><strong>No provider profiles</strong><p>Add Gemini or a router profile, or connect a Codex subscription.</p></div> : null}
@@ -393,47 +394,42 @@ export function ProvidersWorkspace({
             <form className="providerEditor" onSubmit={(event) => void saveEditor(event)}>
               <header>
                 <span className="providerDetailIcon"><Icon name={editor.mode === "duplicate" ? "copy" : "providers"} /></span>
-                <div><p className="eyebrow">{editor.mode === "edit" ? "Non-secret settings" : editor.mode === "duplicate" ? "Independent copy" : "New connection"}</p><h2>{editor.mode === "edit" ? `Edit “${editor.draft.id}”` : editor.mode === "duplicate" ? "Duplicate profile" : "Add provider profile"}</h2></div>
+                <div><h2>{editor.mode === "edit" ? `Edit “${editor.draft.id}”` : editor.mode === "duplicate" ? "Duplicate profile" : "Add provider profile"}</h2></div>
               </header>
               <div className="providerEditorFields">
+                {editor.mode !== "duplicate" ? <fieldset className="providerTypePicker">
+                  <legend>Provider type</legend>
+                  {([ ["gemini", "Google AI Studio", "Gemini models", "spark"], ["router", "OpenAI-compatible router", "Hosted or local models", "branch"] ] as const).map(([kind, name, hint, icon]) => <label key={kind} data-selected={editor.draft.kind === kind}>
+                    <input type="radio" name={providerTypeName} value={kind} checked={editor.draft.kind === kind} onChange={() => setEditor({ ...editor, draft: { ...editor.draft, kind } })} />
+                    <Icon name={icon} size={21} /><span><strong>{name}</strong><small>{hint}</small></span><Icon name="check" size={15} className="providerTypeCheck" />
+                  </label>)}
+                </fieldset> : null}
                 <Field
                   autoCapitalize="none"
+                  autoFocus
                   autoComplete="off"
                   autoCorrect="off"
                   data-initial-focus
                   disabled={editor.mode === "edit"}
                   error={editor.draft.id ? editorErrors.id : undefined}
-                  hint={editor.mode === "edit" ? "Stable profile identity cannot be renamed." : "Up to 64 visible ASCII characters without spaces or quotation marks."}
+                  hint={editor.mode === "edit" ? "Profile names cannot be changed." : "A short name without spaces, such as personal or team-router."}
                   label="Profile name"
                   onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, id: event.target.value } })}
                   spellCheck={false}
                   value={editor.draft.id}
                 />
-                {editor.mode !== "duplicate" ? (
-                  <label className="providerSelectField">
-                    <span>Provider type</span>
-                    <select
-                      aria-label="Provider type"
-                      onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, kind: event.target.value as ProfileDraft["kind"] } })}
-                      value={editor.draft.kind}
-                    >
-                      <option value="gemini">Google AI Studio</option>
-                      <option value="router">OpenAI-compatible router</option>
-                    </select>
-                    <small>Codex subscriptions use the native browser sign-in flow.</small>
-                  </label>
-                ) : null}
                 {editor.mode !== "duplicate" && editor.draft.kind === "router" ? (
                   <>
-                    <Field error={editor.draft.baseUrl ? editorErrors.baseUrl : undefined} hint="HTTPS is required except for loopback development endpoints. Include a trailing slash." label="Base URL" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, baseUrl: event.target.value } })} placeholder="https://router.example/v1/" spellCheck={false} type="url" value={editor.draft.baseUrl} />
-                    <div className="providerFieldPair">
-                      <Field error={editorErrors.project} hint="Optional stable cache and policy identity." label="Project identity" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, project: event.target.value } })} placeholder="team-a" spellCheck={false} value={editor.draft.project} />
+                    <Field error={editor.draft.baseUrl ? editorErrors.baseUrl : undefined} hint="Use HTTPS, or HTTP for localhost. End the URL with a slash." label="Base URL" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, baseUrl: event.target.value } })} placeholder="https://router.example/v1/" spellCheck={false} type="url" value={editor.draft.baseUrl} />
+                    <details className="providerAdvanced" open={Boolean(editor.draft.project || editor.draft.authHeader) || undefined}><summary>Advanced options<Icon name="chevron" size={15} /></summary><div className="providerFieldPair">
+                      <Field error={editorErrors.project} hint="Optional project identifier for your router." label="Project identity" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, project: event.target.value } })} placeholder="team-a" spellCheck={false} value={editor.draft.project} />
                       <Field error={editorErrors.authHeader} hint="Optional. Defaults to Authorization." label="Authentication header" onChange={(event) => setEditor({ ...editor, draft: { ...editor.draft, authHeader: event.target.value } })} placeholder="authorization" spellCheck={false} value={editor.draft.authHeader} />
-                    </div>
+                    </div></details>
                   </>
                 ) : null}
                 {editor.mode === "duplicate" ? <Callout detail="Only non-secret configuration and model defaults are copied. The new profile starts without credential linkage." icon="copy" title="Credentials stay separate" /> : null}
               </div>
+              {editor.mode === "create" ? <p className="providerSetupHint"><Icon name="shield" size={15} />You can add your API key after creating the profile.</p> : null}
               <footer className="providerEditorActions">
                 <Button onClick={() => setEditor(undefined)} variant="quiet">Cancel</Button>
                 <Button disabled={editorInvalid || interactionBlocked} loading={busyAction === "save-profile"} loadingLabel="Saving" type="submit" variant="primary">{editor.mode === "edit" ? "Save changes" : editor.mode === "duplicate" ? "Duplicate profile" : "Create profile"}</Button>
@@ -448,7 +444,7 @@ export function ProvidersWorkspace({
               </header>
 
               {selected.safeError ? <Callout detail={selected.safeError} intent="danger" title="Connection test failed" /> : null}
-              {selected.scope === "session_default" ? <Callout detail="This temporary row reflects process-level defaults. Create a named profile to save configuration, credentials, and model defaults." intent="info" title="Session default" /> : null}
+              {selected.scope === "session_default" ? <Callout detail="Add a profile to save this connection and its model defaults." intent="info" title="Session default" /> : null}
 
 
 
@@ -456,7 +452,7 @@ export function ProvidersWorkspace({
                 <div className="providerPrimaryActions">
                   <div className="providerConnectionActions" data-single={selected.active}>
                     {!selected.active ? <Button disabled={responseActive || interactionBlocked} icon="bolt" loading={busyAction === "activate"} loadingLabel="Activating" onClick={() => void run("activate", { type: "activate_provider_profile", connectionId: selected.id }, `Activated “${selected.displayName}”.`)} size="small" variant="primary">Make active</Button> : null}
-                    <Button disabled={selected.status === "connecting" || interactionBlocked} icon="refresh" loading={busyAction === "test"} loadingLabel="Testing" onClick={() => void run("test", { type: "test_provider_profile", connectionId: selected.id }, `Content-free connection test passed for “${selected.displayName}”.`)} size="small">Test connection</Button>
+                    <Button disabled={selected.status === "connecting" || interactionBlocked} icon="refresh" loading={busyAction === "test"} loadingLabel="Testing" onClick={() => void run("test", { type: "test_provider_profile", connectionId: selected.id }, `Connection test passed for “${selected.displayName}”.`)} size="small">Test connection</Button>
                   </div>
                   {selected.configuration.kind !== "codex_subscription" ? (
                     <div className="providerConfigurationActions">
@@ -475,9 +471,9 @@ export function ProvidersWorkspace({
                   <div className="providerSectionHeading"><div><h3 id="defaults-heading">Model and reasoning</h3></div>{!selected.active ? <Chip intent="neutral">Activate to edit</Chip> : null}</div>
                   {selected.active ? (
                     <form className="providerDefaultsForm" onSubmit={(event) => void saveDefaults(event)}>
-                      <label className="providerSelectField"><span>Default model</span><select aria-label="Default model" disabled={snapshot.catalog.status !== "ready" && snapshot.catalog.status !== "empty"} onChange={(event) => { setDefaultModelId(event.target.value); const model = snapshot.catalog.models.find((candidate) => candidate.id === event.target.value); if (model?.supportsReasoning === false) setReasoningEffort(""); }} value={defaultModelId}><option value="">Choose a model</option>{savedModelUnavailable ? <option value={defaultModelId}>Saved model unavailable in current catalog</option> : null}{snapshot.catalog.models.filter((model) => model.selectable).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</select><small>{snapshot.catalog.status === "loading" ? "The host is refreshing the active provider catalog." : snapshot.catalog.status === "failed" ? snapshot.catalog.safeError ?? "The catalog could not load." : "Models available from this provider."}</small></label>
-                      <label className="providerSelectField"><span>Reasoning effort</span><select aria-label="Reasoning effort" disabled={!defaultModelId || selectedModel?.supportsReasoning === false} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")} value={reasoningEffort}>{REASONING_EFFORTS.map(([value, label]) => <option key={value || "provider-default"} value={value}>{label}</option>)}</select><small>{selectedModel?.supportsReasoning === false ? "This model does not advertise reasoning control." : "Saved with your default model."}</small></label>
-                      <Button disabled={!defaultModelId || !defaultsDirty || interactionBlocked} loading={busyAction === "defaults"} loadingLabel="Saving defaults" type="submit" variant="primary">Save defaults</Button>
+                      <label className="providerSelectField"><span>Default model</span><select aria-label="Default model" disabled={snapshot.catalog.status !== "ready" && snapshot.catalog.status !== "empty"} onChange={(event) => { setDefaultModelId(event.target.value); const model = snapshot.catalog.models.find((candidate) => candidate.id === event.target.value); if (model?.supportsReasoning === false) setReasoningEffort(""); }} value={defaultModelId}><option value="">Choose a model</option>{savedModelUnavailable ? <option value={defaultModelId}>Saved model unavailable in current catalog</option> : null}{snapshot.catalog.models.filter((model) => model.selectable).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}</select><small>{snapshot.catalog.status === "loading" ? "Loading available models…" : snapshot.catalog.status === "failed" ? snapshot.catalog.safeError ?? "The catalog could not load." : ""}</small></label>
+                      <label className="providerSelectField"><span>Reasoning effort</span><select aria-label="Reasoning effort" disabled={!defaultModelId || selectedModel?.supportsReasoning === false} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort | "")} value={reasoningEffort}>{REASONING_EFFORTS.map(([value, label]) => <option key={value || "provider-default"} value={value}>{label}</option>)}</select><small>{selectedModel?.supportsReasoning === false ? "This model does not support reasoning control." : "Saved with your default model."}</small></label>
+                      <div className="providerDefaultsActions">{defaultsDirty ? <Button onClick={() => { setDefaultModelId(selected.defaultModelId ?? ""); setReasoningEffort(selected.defaultReasoningEffort ?? ""); }} variant="quiet">Discard changes</Button> : null}<Button disabled={!defaultModelId || !defaultsDirty || interactionBlocked} loading={busyAction === "defaults"} loadingLabel="Saving defaults" type="submit" variant="primary">Save defaults</Button></div>
                     </form>
                   ) : <Callout detail="Activate this profile to choose its default model." icon="model" title="Activate to choose defaults" />}
                 </section>

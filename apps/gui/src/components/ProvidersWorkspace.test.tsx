@@ -42,6 +42,19 @@ function renderWorkspace(options: {
 }
 
 describe("ProvidersWorkspace", () => {
+  it("discards unsaved model defaults and keeps a failing active connection visible", async () => {
+    const base = createFixtureSnapshot("ready");
+    const { commands, user } = renderWorkspace({ snapshot: { ...base, providers: [{ ...base.providers[0]!, active: true, status: "failed" }] } });
+    expect(screen.getByRole("button", { name: /Personal Gemini.*Active.*Failed/ })).toBeInTheDocument();
+    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
+    const saved = (effort as HTMLSelectElement).value;
+    await user.selectOptions(effort, "low");
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(effort).toHaveValue(saved);
+    expect(screen.getByRole("button", { name: "Save defaults" })).toBeDisabled();
+    expect(commands).toEqual([]);
+  });
+
   it("creates a validated router profile through the typed command boundary", async () => {
     const { commands, user } = renderWorkspace();
     await user.click(screen.getAllByRole("button", { name: "Add profile" })[0]!);
@@ -49,7 +62,7 @@ describe("ProvidersWorkspace", () => {
     expect(create).toBeDisabled();
 
     await user.type(screen.getByRole("textbox", { name: "Profile name" }), "team-router");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Provider type" }), "router");
+    await user.click(screen.getByRole("radio", { name: /OpenAI-compatible router/ }));
     const baseUrl = screen.getByRole("textbox", { name: "Base URL" });
     await user.type(baseUrl, "http://router.example/v1");
     expect(screen.getByText("End the base URL path with a slash.")).toBeInTheDocument();
@@ -57,6 +70,7 @@ describe("ProvidersWorkspace", () => {
 
     await user.clear(baseUrl);
     await user.type(baseUrl, "https://router.example/v1/");
+    await user.click(screen.getByText("Advanced options", { exact: true }));
     await user.type(screen.getByRole("textbox", { name: "Project identity" }), "team-a");
     await user.type(screen.getByRole("textbox", { name: "Authentication header" }), "x-api-key");
     await user.click(create);
@@ -239,7 +253,7 @@ describe("ProvidersWorkspace", () => {
     };
     const base = createFixtureSnapshot("credential");
     renderWorkspace({ snapshot: { ...base, providers: [fallback], connectionId: fallback.id } });
-    expect(screen.getByText("This temporary row reflects process-level defaults.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Add a profile to save this connection and its model defaults.", { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Test connection" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
