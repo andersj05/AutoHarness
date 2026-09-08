@@ -369,6 +369,7 @@ export function App({ store }: AppProps) {
                   mobileOpen={inspectorOpen}
                   model={activeModel}
                   onClose={() => setInspectorOpen(false)}
+                  onChangeModel={() => setModelPickerOpen(true)}
                   runtimeMode={projection.runtimeMode}
                   session={activeSession}
                 />

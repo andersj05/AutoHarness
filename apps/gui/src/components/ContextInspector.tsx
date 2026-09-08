@@ -1,7 +1,6 @@
 import { InspectorSlot, type PresentationSlots } from "../features/workspace/slots";
 import type { ActivityItem, ActiveSessionProjection, ConnectionState, ModelDescriptor } from "../protocol";
 import { Icon } from "./Icon";
-import { Meter } from "./primitives";
 
 interface ContextInspectorProps {
   slots?: Pick<PresentationSlots, "inspector">;
@@ -12,73 +11,65 @@ interface ContextInspectorProps {
   runtimeMode: "native" | "fixture";
   session?: ActiveSessionProjection;
   onClose: () => void;
+  onChangeModel: () => void;
 }
 
-function formatTokens(value: bigint): string {
-  if (value >= 1_000_000n) return `${value / 1_000_000n}.${value / 100_000n % 10n}m`;
-  if (value >= 1_000n) return `${value / 1_000n}.${value / 100n % 10n}k`;
-  return value.toString();
+function tokens(value: string | undefined): string {
+  return value !== undefined && /^\d+$/.test(value)
+    ? new Intl.NumberFormat().format(BigInt(value))
+    : "Not reported";
 }
 
-export function ContextInspector({ slots, activity, connection, mobileOpen, model, runtimeMode, session, onClose }: ContextInspectorProps) {
-  const runtimeOnline = connection.kind === "online";
-  const latestUsage = session?.attempt.kind === "completed" &&
-    session.attempt.inputTokens !== undefined &&
-    session.attempt.outputTokens !== undefined
-    ? BigInt(session.attempt.inputTokens) + BigInt(session.attempt.outputTokens)
-    : undefined;
-  const contextWindow = model?.contextWindowTokens ? BigInt(model.contextWindowTokens) : undefined;
-  const validUsage = latestUsage !== undefined && latestUsage >= 0n;
-  const contextPercent = validUsage && latestUsage !== undefined && contextWindow !== undefined && contextWindow > 0n
-    ? Number((latestUsage * 100n / contextWindow) > 100n ? 100n : latestUsage * 100n / contextWindow)
-    : 0;
+const connectionLabels: Record<ConnectionState["kind"], string> = {
+  online: "Connected", offline: "Offline", connecting: "Connecting", credential_required: "Sign-in needed",
+};
+
+export function ContextInspector({ slots, activity, connection, mobileOpen, model, runtimeMode, session, onClose, onChangeModel }: ContextInspectorProps) {
+  const attempt = session?.attempt;
+  const usage = attempt?.kind === "completed" ? attempt : undefined;
+  const working = attempt?.kind === "streaming" || attempt?.kind === "cancelling";
   return (
     <aside aria-label="Context inspector" className="contextInspector" data-mobile-open={mobileOpen}>
       <header className="inspectorHeader">
-        <div>
-          <h2>Session details</h2>
-        </div>
-        <button aria-label="Close inspector" className="iconButton inspectorClose" onClick={onClose} type="button">
-          <Icon name="close" />
-        </button>
+        <h2>Session details</h2>
+        <button aria-label="Close inspector" className="iconButton inspectorClose" onClick={onClose} type="button"><Icon name="close" /></button>
       </header>
 
-      <section className="contextMeterSection" aria-labelledby="context-meter-heading">
-        <h3 className="srOnly" id="context-meter-heading">Latest turn usage</h3>
-        <Meter
-          detail={validUsage && latestUsage !== undefined ? `${formatTokens(latestUsage)} reported tokens` : "Usage not reported for this turn"}
-          label="Latest turn context usage"
-          value={validUsage && contextWindow ? contextPercent : undefined}
-        />
+      <section className="inspectorSection inspectorModelSection" aria-labelledby="inspector-model-heading">
+        <div className="sectionTitleRow"><h3 id="inspector-model-heading">Model</h3><span className="inspectorConnection" data-online={connection.kind === "online"}>{connectionLabels[connection.kind]}</span></div>
+        <button className="inspectorModelButton" disabled={!session || working} onClick={onChangeModel} type="button" aria-label="Change session model">
+          <span className="inspectorModelIcon"><Icon name="model" size={20} /></span>
+          <span><strong>{model?.displayName ?? "Choose a model"}</strong><small>{model?.provider ?? (connection.kind === "offline" ? "No provider connected" : connection.providerLabel)}</small></span>
+          <Icon name="chevron" size={16} />
+        </button>
+        {model ? <dl className="inspectorCapabilities">
+          {model.contextWindowTokens ? <div><dt>Context window</dt><dd>{tokens(model.contextWindowTokens)} tokens</dd></div> : null}
+          {model.supportsReasoning !== undefined ? <div><dt>Reasoning</dt><dd>{model.supportsReasoning ? "Supported" : "Not supported"}</dd></div> : null}
+          {model.supportsTools !== undefined ? <div><dt>Tools</dt><dd>{model.supportsTools ? "Supported" : "Not supported"}</dd></div> : null}
+        </dl> : null}
       </section>
 
-      <section className="inspectorSection" aria-labelledby="runtime-heading">
-        <div className="sectionTitleRow">
-          <h3 id="runtime-heading">Runtime</h3>
-          <span className="liveLabel" data-online={runtimeOnline}><span /> {runtimeOnline ? "online" : "local"}</span>
-        </div>
-        <dl className="inspectorFacts">
-          <div><dt>Provider</dt><dd>{connection.kind === "offline" ? "Offline" : connection.providerLabel}</dd></div>
-          <div><dt>Model</dt><dd>{model?.displayName ?? "Not selected"}</dd></div>
-          <div><dt>Reasoning</dt><dd>{model?.supportsReasoning === true ? "Supported" : model?.supportsReasoning === false ? "Unsupported" : "Unknown"}</dd></div>
-          <div><dt>Tools</dt><dd>{model?.supportsTools === true ? "Supported" : model?.supportsTools === false ? "Unsupported" : "Unknown"}</dd></div>
-        </dl>
+      <section className="inspectorSection" aria-labelledby="turn-usage-heading">
+        <div className="sectionTitleRow"><h3 id="turn-usage-heading">Last response</h3></div>
+        {usage ? <dl className="inspectorTokenStats">
+          <div><dt>Input tokens</dt><dd>{tokens(usage.inputTokens)}</dd></div>
+          <div><dt>Output tokens</dt><dd>{tokens(usage.outputTokens)}</dd></div>
+        </dl> : <p className="inspectorEmpty">{working ? "Token counts appear when the response finishes." : attempt?.kind === "failed" ? "The response failed. Retry from the conversation." : attempt?.kind === "cancelled" ? "The response was stopped." : "No completed response yet."}</p>}
       </section>
 
       <section className="inspectorSection activitySection" aria-labelledby="activity-heading">
-        <div className="sectionTitleRow"><h3 id="activity-heading">Turn activity</h3><span>{activity.length} steps</span></div>
-        <ol className="activityList">
+        <div className="sectionTitleRow"><h3 id="activity-heading">Activity</h3><span>{activity.length ? `${activity.length} ${activity.length === 1 ? "step" : "steps"}` : ""}</span></div>
+        {activity.length ? <ol className="activityList">
           {activity.map((item) => (
             <li data-status={item.status} key={item.id}>
-              <span className="activityNode">{item.status === "complete" ? <Icon name="check" size={12} /> : null}</span>
-              <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+              <span className="activityNode" aria-hidden="true">{item.status === "complete" ? <Icon name="check" size={12} /> : item.status === "warning" ? <Icon name="warning" size={11} /> : null}</span>
+              <span><strong>{item.label}<span className="srOnly"> ({item.status})</span></strong><small>{item.detail}</small></span>
             </li>
           ))}
-        </ol>
+        </ol> : <p className="inspectorEmpty">Activity will appear here as you work.</p>}
       </section>
 
       {slots?.inspector?.length ? <InspectorSlot surfaces={slots.inspector} /> : null}
-
       {runtimeMode === "fixture" ? <p className="inspectorPreview">Preview data. Changes are not saved.</p> : null}
     </aside>
   );
