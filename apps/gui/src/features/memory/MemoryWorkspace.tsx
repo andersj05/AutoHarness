@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClientCommand, CommandOutcome } from "../../protocol";
 import { Icon } from "../../components/Icon";
+import { ActionMenu } from "../../components/primitives/ActionMenu";
 import { Button, Chip, Dialog, Field } from "../../components/primitives";
 import { securityDisplaySafe as safe } from "../../securityText";
 import { InertText, SafeDiff } from "../../components/primitives/Content";
@@ -40,6 +41,7 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [copyResult, setCopyResult] = useState<{ key: string; failed: boolean }>();
   const generation = useRef(BigInt(memory.view_generation));
   const callbacks = useRef({ onCommand, onDialogChange });
   callbacks.current = { onCommand, onDialogChange };
@@ -111,14 +113,22 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
     setBusy(false);
     if (outcome === "committed") {
       setReview(undefined); setDraft("");
-      setMessage(action === "export" ? "Export committed. The JSON file is beside the database." : action === "import" ? "Imported as an untrusted proposal. Review it before approval." : "The host committed the memory change.");
+      setMessage(action === "export" ? "Export committed. The JSON file is beside the database." : action === "import" ? "Imported as an untrusted proposal. Review it before approval." : "Memory updated.");
       setRefresh((value) => value + 1);
-    } else setMessage(outcome === "unknown" ? "Outcome unknown. Refresh and inspect the ledger before trying again." : "The host rejected this change. Refresh and review its current state.");
+    } else setMessage(outcome === "unknown" ? "Outcome unknown. Refresh and inspect the ledger before trying again." : "Could not save this change. Refresh and review the current version.");
   };
 
   const detail = selected?.detail;
   const revision = detail?.revision_context;
   const hasContent = detail?.content !== null && detail?.content !== undefined;
+  const copyKey = `${selected?.memory_id}:${detail?.revision}`;
+  const copied = copyResult?.key === copyKey && !copyResult.failed;
+  const copyFailed = copyResult?.key === copyKey && copyResult.failed;
+  const copyMemory = async () => {
+    if (!ready || !hasContent) return;
+    try { await navigator.clipboard.writeText(detail?.content ?? ""); setCopyResult({ key: copyKey, failed: false }); }
+    catch { setCopyResult({ key: copyKey, failed: true }); }
+  };
   const reviewable = hasContent && revision?.proposal_revision_id && ["proposed", "conflicting"].includes(selected?.status ?? "");
   const correctable = hasContent && revision && (selected?.status === "active" || selected?.status === "expired" || (selected?.status === "conflicting" && !revision.proposal_revision_id));
   const retractable = revision && (correctable || selected?.status === "active");
@@ -134,7 +144,7 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
       <label>Scope<select aria-label="Memory scope" value={query.scope} onChange={(event) => changeQuery({ scope: event.target.value as typeof query.scope })}>{["all", "user", "workspace", "session", "agent"].map((value) => <option key={value} value={value}>{value[0]?.toUpperCase()}{value.slice(1)}</option>)}</select></label>
       <Button disabled={blocked || busy} type="submit" icon="search">Search</Button>
     </form>
-    <p className="memoryStatus" role="status">{queryFailed ? "Memory query failed. Refresh to retry." : memory.state.kind === "failed" ? memory.state.payload.failure.message : !ready ? "Loading memory…" : `${memory.rows.length} records on this page`}</p>
+    <div className="memoryResultBar"><p className="memoryStatus" role="status">{queryFailed ? "Memory query failed. Refresh to retry." : memory.state.kind === "failed" ? memory.state.payload.failure.message : !ready ? "Loading memory…" : `${memory.rows.length} ${memory.rows.length === 1 ? "record" : "records"} on this page`}</p>{query.literal || query.status !== "all" || query.scope !== "all" || search ? <Button disabled={blocked || busy} size="small" variant="quiet" onClick={() => { setSearch(""); changeQuery({ literal: "", status: "all", scope: "all" }); }}>Clear filters</Button> : null}</div>
     <div className="memoryColumns" aria-busy={!ready}>
       <section className="memoryList" aria-label="Memory records">
         <div className="memoryRecordList">
@@ -153,16 +163,20 @@ export function MemoryWorkspace({ memory, blocked, sessionId, onCommand, onOpenN
       </section>
       <section className="memoryDetail" aria-label="Memory detail">
         {ready && selected && detail ? <>
-          <div className="memoryDetailHeading"><div><p className="eyebrow">{selected.scope} memory · Revision {detail.revision}</p><h2 className={selected.status === "proposed" ? undefined : "srOnly"}>{selected.status === "proposed" ? "Proposal review" : "Saved memory"}</h2></div><Chip intent={selected.status === "active" ? "success" : "warning"}>{selected.status}</Chip></div>
+          <div className="memoryDetailHeading"><div><p className="eyebrow">{label(selected.scope).replace(/^./, (character) => character.toUpperCase())} memory · Revision {detail.revision}</p><h2 className={selected.status === "proposed" ? undefined : "srOnly"}>{selected.status === "proposed" ? "Proposal review" : "Saved memory"}</h2></div><Chip intent={selected.status === "active" ? "success" : "warning"}>{label(selected.status).replace(/^./, (character) => character.toUpperCase())}</Chip></div>
           {(detail.trust !== "user_approved" || selected.status === "proposed") && <div className="memoryWarning"><strong>Untrusted source</strong><p>{selected.status === "proposed" ? "Review this proposal before it can be used in future conversations." : "This memory requires validation before use."}</p></div>}
           <InertText className="memoryBody" text={detail.content ?? "Content erased. Only audit metadata remains."} />
           <div className="memoryActions">
             {reviewable ? <><Button disabled={busy} onClick={() => open("approve")} variant="primary">Review approval</Button><Button disabled={busy} onClick={() => open("reject")}>Reject</Button></> : null}
             {correctable ? <Button disabled={busy} onClick={() => open("revise")}>Correct</Button> : null}
-            {retractable ? <Button disabled={busy} onClick={() => open("retract")}>Retract</Button> : null}
-            <Button disabled={busy} onClick={() => open("export")}>Export</Button>
-            {selected.status !== "deleted" ? <Button disabled={busy || !revision} onClick={() => open("delete")} variant="quiet" className="dangerText">Delete content</Button> : null}
+            {hasContent ? <Button icon={copied ? "check" : "copy"} size="small" variant="quiet" aria-label="Copy memory content" onClick={() => void copyMemory()}>{copied ? "Copied" : "Copy"}</Button> : null}
+            <ActionMenu label="More memory actions" key={copyKey} blocked={blocked || busy || Boolean(review)} items={[
+              { id: "export", label: "Export", icon: "download" },
+              ...(retractable ? [{ id: "retract", label: "Retract", icon: "stop" as const }] : []),
+              ...(selected.status !== "deleted" ? [{ id: "delete", label: "Delete content", disabled: !revision }] : []),
+            ]} onAction={(action) => { if (action === "export" || action === "retract" || action === "delete") open(action); }} />
           </div>
+          <p className="memoryCopyStatus" role="status">{copyFailed ? "Could not copy. Select the text and copy it manually." : copied ? "Memory copied." : ""}</p>
           <details className="memoryAudit" key={selected.memory_id}><summary>Details and history</summary>
           <dl className="memoryFacts"><div><dt>Identity</dt><dd>{safe(selected.memory_id)}</dd></div><div><dt>Trust</dt><dd>{label(detail.trust)}</dd></div><div><dt>Source</dt><dd>{safe(detail.source)}</dd></div><div><dt>Scope identity</dt><dd>{safe(revision?.scope_identity ?? "Unavailable")}</dd></div><div><dt>Sensitivity</dt><dd>{revision?.sensitivity ?? "Unavailable"}</dd></div><div><dt>Expires</dt><dd>{date(detail.valid_until_ms)}</dd></div><div><dt>Confidence</dt><dd>{selected.confidence_bps === null ? "Not reported" : `${selected.confidence_bps / 100}% (not authority)`}</dd></div></dl>
           <section aria-label="Provenance timeline"><h3>Provenance timeline</h3><ol className="memoryTimeline"><li><strong>{label(revision?.origin ?? "source unavailable")}</strong><span>{date(detail.created_at_ms)}</span></li><li><strong>Current revision {detail.revision} · {selected.status}</strong><code>{safe(revision?.revision_id ?? "Unavailable")}</code><span>{date(selected.updated_at_ms)}</span></li>{revision?.proposal_revision_id && <li><strong>Awaiting distinct approval revision</strong><code>{safe(revision.proposal_revision_id)}</code></li>}</ol></section>

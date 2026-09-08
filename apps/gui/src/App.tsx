@@ -322,7 +322,7 @@ export function App({ store }: AppProps) {
     ) : route === "memory" ? (
       <MemoryWorkspace memory={projection.memory} sessionId={activeSessionId} blocked={Boolean(projection.pendingPermission)} onCommand={(command) => store.dispatchAndWait(command)} onDialogChange={setRouteDialogOpen} onOpenNavigation={() => setMobileRailOpen(true)} />
     ) : route === "help" ? (
-      <HelpWorkspace onOpenNavigation={() => setMobileRailOpen(true)} />
+      <HelpWorkspace onOpenNavigation={() => setMobileRailOpen(true)} onRoute={setRoute} />
     ) : (
       <SettingsWorkspace
         onCommand={(command) => store.dispatchAndWait(command)}

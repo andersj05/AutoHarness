@@ -1196,3 +1196,36 @@
 .headerIdentity h1 { overflow: visible; }
 .dsFieldControl:has(input:focus-visible) { outline: var(--focus-width) solid var(--focus-outer); outline-offset: var(--focus-offset); box-shadow: 0 0 0 var(--focus-width) var(--focus-inner); }
 .dsFieldControl input:focus-visible { outline: 0; box-shadow: none; }
+
+.memoryResultBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 35px; padding-bottom: 8px; }
+.memoryResultBar .memoryStatus { margin: 0; padding: 0; }
+.memoryFilters select { min-height: var(--control-height-lg); }
+.memoryFilters > label { font-size: 13px; }
+.memoryCopyStatus { margin: 0; color: var(--text-muted); font-size: 12px; }
+.memoryCopyStatus:not(:empty) { padding-top: 10px; }
+.helpLayout { display: grid; grid-template-columns: 230px minmax(0, 700px); gap: 42px; padding-top: 28px; }
+.helpTopicNav { display: grid; align-content: start; gap: 3px; }
+.helpTopicNav button { display: flex; min-width: 0; align-items: flex-start; gap: 10px; padding: 11px 10px; border-radius: 6px; background: transparent; color: var(--text-muted); text-align: left; font-size: 13px; line-height: 1.5; }
+.helpTopicNav button svg { flex: 0 0 auto; margin-top: 2px; }
+.helpTopicNav button:hover { background: var(--surface-1); color: var(--text); }
+.helpTopicNav button[aria-current="true"] { background: var(--surface-2); color: var(--text); font-weight: 550; }
+.helpArticle { min-width: 0; padding: 6px 0 32px; }
+.helpArticle h2 { margin: 0 0 20px; color: var(--text); font-size: 22px; letter-spacing: -.025em; font-weight: 600; }
+.helpArticle p { max-width: 65ch; margin: 0 0 18px; color: var(--text-muted); font-size: 14px; line-height: 1.85; }
+.helpArticle > .dsButton { margin-top: 10px; }
+.helpSteps { display: grid; gap: 22px; margin: 25px 0 28px; padding: 0; list-style: none; }
+.helpSteps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 13px; color: var(--text); font-size: 14px; line-height: 1.8; }
+.helpStepNumber { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.helpArticle .helpShortcuts { grid-template-columns: 1fr; margin-top: 26px; }
+.helpEmpty { padding: 36px 0; color: var(--text-muted); }
+.helpEmpty h2 { margin: 16px 0 8px; color: var(--text); font-size: 18px; }
+.helpEmpty p { margin-bottom: 16px; font-size: 14px; }
+.helpTopicSelect { display: none; }
+@container workspace (max-width: 820px) {
+  .helpLayout { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-top: 20px; }
+  .helpTopicNav { display: none; }
+  .helpTopicSelect { display: grid; gap: 8px; color: var(--text-muted); font-size: 13px; }
+  .helpTopicSelect select { width: 100%; min-height: var(--control-height-lg); border: 1px solid var(--line-strong); border-radius: 7px; padding: 8px 12px; background: var(--base); color: var(--text); }
+}
+
+.memoryDetail > .memoryActions .actionMenu { margin-left: auto; }

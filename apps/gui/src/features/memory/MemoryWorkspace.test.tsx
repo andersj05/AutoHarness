@@ -26,6 +26,20 @@ function setup() {
 }
 
 describe("Memory workspace", () => {
+  it("copies the selected content and keeps clipboard feedback scoped to that revision", async () => {
+    const { user } = setup();
+    const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    await user.click(await screen.findByRole("button", { name: "Copy memory content" }));
+    expect(clipboard).toHaveBeenCalledWith(fixtureMemoryRow(1).detail!.content);
+    expect(screen.getByText("Memory copied.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Proposed Workspace/ }));
+    expect(screen.queryByText("Memory copied.")).not.toBeInTheDocument();
+    clipboard.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    await user.click(screen.getByRole("button", { name: "Copy memory content" }));
+    expect(screen.getByText(/Could not copy. Select the text/)).toBeInTheDocument();
+    clipboard.mockRestore();
+  });
+
   it("reviews an imported proposal before issuing a distinct exact approval", async () => {
     const { commands, user, onDialogChange } = setup();
     await user.click(await screen.findByRole("button", { name: /Proposed Workspace/ }));
@@ -39,7 +53,7 @@ describe("Memory workspace", () => {
     await user.click(within(dialog).getByRole("button", { name: "Approve proposal" }));
     expect(commands).toContainEqual({ type: "memory", command: { kind: "approve", payload: { memory_id: "memory-2", expected_last_sequence: "3", proposal_revision_id: "memory-2-revision-1" } } });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText("workspace memory · Revision 2")).toBeInTheDocument();
+    expect(screen.getByText("Workspace memory · Revision 2")).toBeInTheDocument();
     expect(screen.queryByText("Untrusted source")).not.toBeInTheDocument();
   });
 
@@ -51,14 +65,17 @@ describe("Memory workspace", () => {
     expect(screen.getByLabelText("Proposed content comparison").querySelector("img")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Correct memory" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Export" }));
+    await user.click(screen.getByRole("button", { name: "More memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
     await user.click(screen.getByRole("button", { name: "Export memory" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Retract" }));
+    await user.click(screen.getByRole("button", { name: "More memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Retract" }));
     await user.click(screen.getByRole("button", { name: "Retract memory" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Correct" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete content" }));
+    await user.click(screen.getByRole("button", { name: "More memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete content" }));
     const remove = screen.getByRole("button", { name: "Delete memory content" });
     expect(remove).toBeDisabled();
     await user.type(screen.getByRole("textbox", { name: "Confirm memory identity" }), "memory-1");
@@ -76,6 +93,10 @@ describe("Memory workspace", () => {
     expect(await screen.findByText("No matching memory")).toBeInTheDocument();
     await user.selectOptions(screen.getByRole("combobox", { name: "Memory status" }), "inactive");
     expect(commands).toContainEqual(expect.objectContaining({ type: "memory", command: { kind: "query", payload: expect.objectContaining({ literal: 'no-match OR "literal"', status: "inactive", before: null }) } }));
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(await screen.findByRole("button", { name: "Correct" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search memory" })).toHaveValue("");
+    expect(commands.at(-1)).toMatchObject({ command: { payload: { literal: "", status: "all", scope: "all", before: null, direction: "first" } } });
   });
 
   it("uses opaque paging boundaries and resets them when scope changes", async () => {
@@ -109,7 +130,8 @@ describe("Memory workspace", () => {
     const view = render(<MemoryWorkspace {...props} memory={memory} />);
     view.rerender(<MemoryWorkspace {...props} memory={{ ...memory, view_generation: "1" }} />);
     expect(screen.getByRole("button", { name: "Correct" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Retract" })).toBeEnabled();
+    await userEvent.setup().click(screen.getByRole("button", { name: "More memory actions" }));
+    expect(screen.getByRole("menuitem", { name: "Retract" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Review approval" })).not.toBeInTheDocument();
   });
 
