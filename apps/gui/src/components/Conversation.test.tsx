@@ -36,6 +36,7 @@ const callbacks = {
   onOpenNavigation: vi.fn(),
   onExport: vi.fn(async () => "committed" as const),
   onRefresh: vi.fn(),
+  onRename: vi.fn(),
   onRetry: vi.fn(),
   onSubmit: vi.fn(async () => "committed" as const),
 };

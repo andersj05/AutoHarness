@@ -6,6 +6,7 @@ import { ContextInspector } from "./components/ContextInspector";
 import { Conversation } from "./components/Conversation";
 import { CredentialDialog } from "./components/CredentialDialog";
 import { Icon } from "./components/Icon";
+import { RenameSessionDialog } from "./components/RenameSessionDialog";
 import { ModelPicker } from "./components/ModelPicker";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { ProvidersWorkspace } from "./components/ProvidersWorkspace";
@@ -41,6 +42,7 @@ function useMediaQuery(query: string): boolean {
 export function App({ store }: AppProps) {
   const client = useClientStore(store);
   const [closing, setClosing] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string }>();
   const [routeDialogOpen, setRouteDialogOpen] = useState(false);
   const [route, setRoute] = useState<RouteId>("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -75,7 +77,7 @@ export function App({ store }: AppProps) {
         : event.key === "F1" ? "help" : undefined;
       if (!newSessionShortcut && !paletteShortcut && !routeShortcut) return;
       event.preventDefault();
-      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || routeDialogOpen) return;
+      if (client.lifecycle !== "ready" || event.repeat || client.projection?.pendingPermission || modelPickerOpen || credentialOpen || mobileRailOpen || routeDialogOpen || renameTarget) return;
       if (routeShortcut) {
         setCommandPaletteOpen(false);
         setRoute(routeShortcut);
@@ -88,7 +90,7 @@ export function App({ store }: AppProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, routeDialogOpen, store]);
+  }, [client.lifecycle, client.projection?.pendingPermission, commandPaletteOpen, credentialOpen, mobileRailOpen, modelPickerOpen, renameTarget, routeDialogOpen, store]);
 
   useEffect(() => {
     if (previousRouteRef.current === route) return;
@@ -107,7 +109,7 @@ export function App({ store }: AppProps) {
     : undefined;
   const permissionAnswering = pendingPermissionIdentity !== undefined
     && answeringPermissionIdentity === pendingPermissionIdentity;
-  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen || routeDialogOpen;
+  const blockingDialogOpen = Boolean(projection?.pendingPermission) || modelPickerOpen || credentialOpen || commandPaletteOpen || routeDialogOpen || Boolean(renameTarget);
   const activeDraft = activeSessionId ? sessionDrafts[activeSessionId] ?? "" : "";
   const setActiveDraft = (next: SetStateAction<string>) => {
     if (!activeSessionId) return;
@@ -126,6 +128,7 @@ export function App({ store }: AppProps) {
   useEffect(() => {
     if (pendingPermissionIdentity) {
       setModelPickerOpen(false);
+      setRenameTarget(undefined);
       setCredentialOpen(false);
       setCommandPaletteOpen(false);
       setMobileRailOpen(false);
@@ -134,6 +137,10 @@ export function App({ store }: AppProps) {
       current === pendingPermissionIdentity ? current : undefined
     ));
   }, [pendingPermissionIdentity]);
+
+  useEffect(() => {
+    if (renameTarget && renameTarget.id !== activeSessionId) setRenameTarget(undefined);
+  }, [activeSessionId, renameTarget]);
 
   useEffect(() => {
     if (blockingDialogOpen) {
@@ -226,6 +233,7 @@ export function App({ store }: AppProps) {
     { id: "help", label: "Open help", keywords: "shortcuts workflows recovery guidance", icon: "inspect", shortcut: "F1" },
     { id: "choose-model", label: "Choose model", icon: "model" },
     { id: "find-transcript", label: "Find in transcript", description: "Search messages, tools, paths, and results", icon: "search", shortcut: "Ctrl F", keywords: "conversation search" },
+    { id: "rename-session", label: "Rename session", icon: "edit", disabled: !activeSession, keywords: "title name conversation" },
     { id: "export-transcript", label: "Export active transcript", description: "Save the conversation as Markdown", icon: "download", keywords: "save markdown" },
     { id: "toggle-inspector", label: inspectorOpen ? "Close inspector" : "Open inspector", description: "View model, usage, and activity", icon: "inspect" },
     ...(projection.runtimeMode === "native" ? [{ id: "quit", label: "Quit AutoHarness", description: "Close the application", keywords: "exit shutdown close" }] : []),
@@ -241,6 +249,8 @@ export function App({ store }: AppProps) {
     } else if (command === "new-session") {
       void store.dispatch({ type: "create_session" });
       setRoute("chat");
+    } else if (command === "rename-session" && activeSession) {
+      setRenameTarget({ id: activeSession.id, title: activeSession.title });
     } else if (command === "choose-model") {
       setModelPickerOpen(true);
     } else if (command === "toggle-inspector") {
@@ -276,6 +286,7 @@ export function App({ store }: AppProps) {
         onOpenInspector={() => setInspectorOpen(true)}
         onOpenModelPicker={() => setModelPickerOpen(true)}
         onOpenNavigation={() => setMobileRailOpen(true)}
+        onRename={() => { if (activeSession) setRenameTarget({ id: activeSession.id, title: activeSession.title }); }}
         onRefresh={() => void store.dispatch({ type: "refresh_catalog" })}
         onExport={() => activeSession ? store.dispatchAndWait({ type: "export_transcript", sessionId: activeSession.id }) : Promise.resolve("rejected")}
         onRetry={(attemptId) => {
@@ -354,6 +365,7 @@ export function App({ store }: AppProps) {
         onWidthChange={setRailWidth}
         runtimeMode={projection.runtimeMode}
         sessions={projection.sessions}
+        drafts={sessionDrafts}
         width={railWidth}
         />
         <div className="workspaceSurface" ref={workspaceRef}>
@@ -381,6 +393,8 @@ export function App({ store }: AppProps) {
           ) : routeWorkspace}
         </div>
       </div>
+
+      {renameTarget && !projection.pendingPermission ? <RenameSessionDialog session={renameTarget} onCommand={(command) => store.dispatchAndWait(command)} onClose={() => setRenameTarget(undefined)} /> : null}
 
       {commandPaletteOpen && !projection.pendingPermission ? (
         <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} onSelect={runCommand} />

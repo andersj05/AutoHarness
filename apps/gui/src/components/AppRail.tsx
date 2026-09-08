@@ -12,6 +12,7 @@ interface AppRailProps {
   mobileOpen: boolean;
   runtimeMode: "native" | "fixture";
   sessions: readonly SessionSummary[];
+  drafts: Readonly<Record<string, string>>;
   width: number;
   onCloseMobile: () => void;
   onCreateSession: () => void;
@@ -37,6 +38,7 @@ export function AppRail({
   mobileOpen,
   runtimeMode,
   sessions,
+  drafts,
   width,
   onCloseMobile,
   onCreateSession,
@@ -170,6 +172,8 @@ export function AppRail({
         <div className="sessionRailList">
           {sessions.filter((session) => !session.archived).slice(0, 12).map((session) => (
             <button
+              aria-label={session.title}
+              aria-description={drafts[session.id]?.trim() ? "Unsent draft in this session" : undefined}
               aria-current={activeRoute === "chat" && activeSessionId === session.id ? "true" : undefined}
               className="sessionRailItem"
               data-active={activeRoute === "chat" && activeSessionId === session.id}
@@ -183,6 +187,7 @@ export function AppRail({
             >
               <Icon name="chat" size={14} />
               <span>{session.title}</span>
+              {drafts[session.id]?.trim() ? <span aria-hidden="true" className="sessionDraftLabel">Draft</span> : null}
             </button>
           ))}
         </div>

@@ -282,6 +282,24 @@ describe("AutoHarness GUI", () => {
     expect(await screen.findByRole("heading", { name: "Audit context manifests" })).toBeInTheDocument();
   });
 
+  it("renames from the chat header with Enter and keeps the draft attached to its session", async () => {
+    const { transport, user } = renderScenario("ready");
+    await user.type(await screen.findByRole("textbox", { name: "Message AutoHarness" }), "Unfinished idea");
+    expect(screen.getByRole("button", { name: "Design the GUI migration" })).toHaveAttribute("aria-description", "Unsent draft in this session");
+    await user.click(screen.getByRole("button", { name: "Rename session" }));
+    expect(document.querySelector(".appShell")).toHaveAttribute("inert");
+    await user.keyboard("{Control>}n{/Control}");
+    expect(transport.commands.some((command) => command.type === "create_session")).toBe(false);
+    const title = screen.getByRole("textbox", { name: "New title" });
+    await user.clear(title);
+    await user.type(title, "Desktop polish{Enter}");
+    expect(await screen.findByRole("heading", { name: "Desktop polish" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message AutoHarness" })).toHaveValue("Unfinished idea");
+    expect(screen.getByRole("button", { name: "Desktop polish" })).toHaveAttribute("aria-description", "Unsent draft in this session");
+    expect(transport.commands).toContainEqual({ type: "rename_session", sessionId: "session-gui-migration", title: "Desktop polish" });
+  });
+
   it("opens the keyboard command palette and persists authoritative appearance settings", async () => {
     const { transport, user } = renderScenario("ready");
     await screen.findByRole("heading", { name: "Design the GUI migration" });

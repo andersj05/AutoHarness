@@ -37,6 +37,7 @@ interface ConversationProps {
   onOpenModelPicker: () => void;
   onOpenNavigation: () => void;
   onRefresh: () => void;
+  onRename: () => void;
   onRetry: (attemptId: string) => void;
   onExport: () => Promise<CommandOutcome>;
   onSubmit: (prompt: string) => Promise<CommandOutcome>;
@@ -133,6 +134,7 @@ export function Conversation({
   onOpenModelPicker,
   onOpenNavigation,
   onRefresh,
+  onRename,
   onRetry,
   onExport,
   onSubmit,
@@ -268,7 +270,7 @@ export function Conversation({
             <Icon name="menu" />
           </button>
           <div>
-            <h1>{session?.title ?? "Chat"}</h1>
+            <h1 aria-label={session?.title ?? "Chat"}>{session ? <button aria-label="Rename session" className="conversationTitleButton" onClick={onRename} title="Rename session" type="button"><span>{session.title}</span><Icon name="edit" size={14} /></button> : "Chat"}</h1>
           </div>
         </div>
         <div className="headerActions">
@@ -279,10 +281,12 @@ export function Conversation({
             <Icon name="panel-right" />
           </button>
           <ActionMenu label="Session actions" blocked={interactionBlocked} items={[
+            { id: "rename", label: "Rename session", icon: "edit", disabled: !session },
             { id: "copy", label: "Copy transcript", icon: "copy", disabled: transcript.length === 0 },
             { id: "export", label: exporting ? "Exporting…" : "Export transcript", icon: "download", disabled: exporting || transcript.length === 0 },
           ]} onAction={(id) => {
-            if (id === "copy") void copyTranscript();
+            if (id === "rename") onRename();
+            else if (id === "copy") void copyTranscript();
             else { setExporting(true); void onExport().finally(() => setExporting(false)); }
           }} />
         </div>

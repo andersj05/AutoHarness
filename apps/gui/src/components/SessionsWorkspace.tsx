@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  MAX_SESSION_TITLE_UTF8_BYTES,
   type ClientCommand,
   type ClientSnapshot,
   type CommandOutcome,
@@ -9,6 +8,7 @@ import {
   type TimestampStyle,
 } from "../protocol";
 import { Icon } from "./Icon";
+import { RenameSessionDialog } from "./RenameSessionDialog";
 import { Button, Dialog, Field, VirtualList } from "./primitives";
 
 type SessionFilter = "open" | "archived" | "all";
@@ -25,17 +25,6 @@ interface SessionsWorkspaceProps {
   onOpen: (id: string) => void;
   onOpenNavigation: () => void;
   timestampStyle: TimestampStyle;
-}
-
-function titleError(title: string): string | undefined {
-  if (!title.trim()) return "Enter a visible session title.";
-  if ([...title].some((character) => /[\u0000-\u001f\u007f]/.test(character))) {
-    return "Session titles cannot contain control characters.";
-  }
-  if (new TextEncoder().encode(title).length > MAX_SESSION_TITLE_UTF8_BYTES) {
-    return `Keep the title within ${MAX_SESSION_TITLE_UTF8_BYTES} UTF-8 bytes.`;
-  }
-  return undefined;
 }
 
 function formattedDate(value: string | undefined, style: TimestampStyle): string {
@@ -62,7 +51,6 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
   const [filter, setFilter] = useState<SessionFilter>("open");
   const [selectedId, setSelectedId] = useState(() => snapshot.activeSessionId ?? snapshot.sessions[0]?.id);
   const [dialog, setDialog] = useState<SessionDialog>();
-  const [renameTitle, setRenameTitle] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [busyAction, setBusyAction] = useState<string>();
   const [actionMessage, setActionMessage] = useState<string>();
@@ -111,7 +99,6 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
   const selected = visibleSessions.find((session) => session.id === selectedId) ?? visibleSessions[0];
   const openCount = snapshot.sessions.filter((session) => !session.archived).length;
   const archivedCount = snapshot.sessions.length - openCount;
-  const renameError = titleError(renameTitle);
 
   const run = async (key: string, command: ClientCommand, success: string, closeDialog = true) => {
     if (busyAction) return;
@@ -131,7 +118,6 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
   const openDialog = (next: SessionDialog) => {
     if (busyAction) return;
     setDialog(next);
-    setRenameTitle(next.session.title);
     setDeleteConfirmation("");
   };
 
@@ -227,14 +213,7 @@ export function SessionsWorkspace({ snapshot, onCommand, onCreate, onDialogChang
       </div>
 
       {dialog?.kind === "rename" && !snapshot.pendingPermission ? createPortal(
-        <Dialog
-          description={`Give this session a name you can find later.`}
-          footer={<><Button onClick={() => setDialog(undefined)} variant="quiet">Cancel</Button><Button disabled={Boolean(renameError) || renameTitle === dialog.session.title} loading={busyAction === "rename"} loadingLabel="Renaming" onClick={() => void run("rename", { type: "rename_session", sessionId: dialog.session.id, title: renameTitle }, `Renamed session to “${renameTitle}”.`)} variant="primary">Save title</Button></>}
-          onClose={() => setDialog(undefined)}
-          title={`Rename “${dialog.session.title}”`}
-        >
-          <Field autoComplete="off" data-initial-focus error={renameError} label="New title" onChange={(event) => setRenameTitle(event.target.value)} value={renameTitle} />
-        </Dialog>, document.querySelector(".app") ?? document.body,
+        <RenameSessionDialog session={dialog.session} onCommand={onCommand} onClose={() => setDialog(undefined)} onRenamed={(title) => setActionMessage(`Renamed session to “${title}”.`)} />, document.querySelector(".app") ?? document.body,
       ) : null}
 
       {dialog?.kind === "archive" && !snapshot.pendingPermission ? createPortal(

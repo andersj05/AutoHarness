@@ -1182,3 +1182,17 @@
 .providerSetupHint svg { flex: 0 0 auto; }
 .providerDefaultsActions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; grid-column: 1 / -1; }
 @container workspace (max-width: 950px) { .providerTypePicker { grid-template-columns: 1fr; } }
+
+.conversationTitleButton { display: flex; align-items: center; gap: 9px; max-width: 100%; padding: 6px 7px; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; }
+.conversationTitleButton:hover { background: var(--surface-2); }
+.conversationTitleButton span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversationTitleButton svg { flex: 0 0 auto; color: var(--text-muted); opacity: 0; }
+.conversationTitleButton:hover svg, .conversationTitleButton:focus-visible svg { opacity: 1; }
+.sessionRailItem .sessionDraftLabel { flex: 0 0 auto; margin-left: auto; color: var(--text-muted); font-size: 11px; font-style: italic; }
+.renameSessionStatus { padding-top: 12px; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+.headerIdentity { flex: 1; }
+.headerIdentity > div { flex: 1; min-width: 0; }
+.headerIdentity h1 { overflow: visible; }
+.dsFieldControl:has(input:focus-visible) { outline: var(--focus-width) solid var(--focus-outer); outline-offset: var(--focus-offset); box-shadow: 0 0 0 var(--focus-width) var(--focus-inner); }
+.dsFieldControl input:focus-visible { outline: 0; box-shadow: none; }
