@@ -16,8 +16,8 @@ Keep Rust authoritative for durability, providers, credentials, permissions, too
 - `autoharness-client::runtime` owns in-process messages, projections, and bounded channels; the crate root separately defines the schema-v4 wire protocol.
 - The coordinator and carrier no longer depend on terminal-owned contracts.
 - The desktop provides Chat, Sessions, Providers, Memory, Settings, Help, exact permission review, ephemeral credentials, and inert typed advanced surfaces.
-- The `feat/desktop-ux-redesign` branch uses fixed compact spacing, visual theme selection, responsive library layouts, simpler global search with Enter selection, safe Markdown and code copying, and progressive disclosure.
-- The [UX validation](../release/GUI_UX_REDESIGN_VALIDATION.md) records 133 passing GUI tests, frontend and theme gates, the earlier complete local baseline, browser review, and native-review limits.
+- The `feat/desktop-ux-redesign` branch uses fixed compact spacing, visual theme selection, responsive library layouts, direct renaming and draft indicators, reported-token details, simpler provider setup, memory copying and filter reset, and a focused Help reader.
+- The [UX validation](../release/GUI_UX_REDESIGN_VALIDATION.md) records 141 passing GUI tests, frontend and theme gates, the earlier complete local baseline, browser review, and native-review limits.
 - Legacy terminal settings remain readable for existing profile compatibility.
 - The [foundation review](../release/GUI_FOUNDATION_REVIEW.md) records the passing local baseline, native Windows lifecycle, palette contrast fix, and alias diagnostics regression.
 

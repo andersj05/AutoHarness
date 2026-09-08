@@ -39,6 +39,7 @@ Sidebar Search opens commands and unarchived sessions through one keyboard-acces
 The search field leads the dialog; its accessible title is not repeated as visible decoration.
 Label matches rank above description and keyword matches, and Enter opens the first enabled result for a non-empty query.
 Collapsed panes retain selection and scroll state.
+Recent sessions show a Draft marker when they contain unsent text in the current application process.
 Streaming and resize follow the conversation tail only while the reader remains near it.
 Reading older messages must not pull the viewport back to the tail, and Jump to latest restores following.
 
@@ -86,7 +87,12 @@ The composer is a rounded command surface anchored to the visible conversation t
 It grows within a bounded height, preserves a single scrollport, and exposes the selected model plus Send or Stop.
 Only implemented controls appear in the composer.
 Recovery and connection actions sit above the composer so they remain discoverable at the conversation tail.
-The header contains the session title, transcript search, optional details, and a menu for transcript copy and export.
+The header contains a directly editable session title, transcript search, optional details, and a menu for renaming, transcript copy, and export.
+The shared rename dialog validates the title and accepts Enter to save through the authoritative command boundary.
+Session details leads with a model selector, then separate provider-reported input and output token counts.
+Missing counts remain unknown; response usage must not be presented as current context occupancy.
+The advertised context window remains a model capability, separate from response usage.
+The narrow inspector remains a bounded drawer instead of inheriting the desktop split column width.
 
 Agent responses render headings, lists, tables, inline code, and code blocks through a Markdown parser.
 HTML remains inert, image references never fetch remote content, and links display their targets without navigation.
@@ -166,7 +172,7 @@ The GUI token layer adds semantic typography, spacing, elevation, radii, focus, 
 The shared primitive catalog includes `Button`, `Field`, `Chip`, `Menu`, `Dialog`, `CommandPalette`, `SplitPane`, `VirtualList`, `Callout`, `ToolCard`, `Meter`, and `StatusSurface`.
 These primitives remain transport-free and expose native roles, accessible names, focus behavior, keyboard interaction, and text or shape redundancy for semantic states.
 
-The live shell consumes the shared appearance matrix, command palette, split pane, virtual session list, status surfaces, meters, tool cards, fields, chips, and buttons.
+The live shell consumes the shared appearance matrix, command palette, split pane, virtual session list, status surfaces, tool cards, fields, chips, and buttons.
 Permission review remains the highest-authority dialog and preempts the command palette and ordinary shortcuts.
 Reduced-motion preference is accepted from the operating system and can also be enabled through presentation settings.
 
@@ -176,6 +182,9 @@ The Providers workspace uses a master-detail layout with a bounded profile list,
 Named profiles expose grouped connection and configuration actions, while the temporary session-default row is visibly distinct and omits durable edit, test, default, and deletion controls.
 Environment overrides use a prominent explanatory callout and describe saved vault material only as a fallback.
 Model defaults and daily actions precede credential maintenance.
+Profile creation uses native provider-choice radios and discloses optional router configuration under Advanced options.
+An active connection still exposes its actual connection status.
+Unsaved default-model changes can be discarded without issuing a host command.
 Saved credentials live in a collapsed disclosure; missing credentials and environment overrides remain immediately visible.
 Masked credential fields stack at narrow widths and clear before native transfer or when their disclosure closes.
 Connection identifiers and metadata remain available in a separate disclosure.
@@ -187,6 +196,8 @@ Permanent profile deletion moves into a separate danger zone and remains disable
 
 The Settings workspace groups seven user-facing preferences into Appearance, Accessibility, and Conversation sections with searchable labels and descriptions.
 One selected category is visible at a time; search matches individual settings and option labels across every category.
+Category headings remain accessible but are visually omitted when the selected navigation category already supplies the context.
+Empty searches offer Clear search.
 Every row presents the effective value, a concise explanation, and a Reset action when a user-file override exists.
 Ordinary default and saved-value sources remain accessible to assistive technology, while higher-precedence sources are visibly explained.
 Theme selection uses native radio inputs with visual System, Light, and Dark previews plus the six color themes.
@@ -200,13 +211,16 @@ At high zoom the rail compacts, route workspaces reflow, and the inspector becom
 The application exposes named navigation and main landmarks, a skip link, route headings, icon labels, polite status announcements, and deterministic document order.
 Alt+1 through Alt+5 opens each primary route and restores focus to its main landmark.
 Permission and credential dialogs retain labelled descriptions, logical screen-reader order, focus containment, and focus restoration.
+Dialog focus ownership survives Strict Mode effect replay and returns only to a connected control outside an inert subtree.
 
 ## Implemented Stage 7 Memory workspace
 
 Memory uses a bounded master-detail list with explicit search submission, scope and lifecycle filters, and stable cursor navigation.
 Paging controls remain outside the scrolling record list and appear only when there is another page or paging history.
 Refresh is a named icon action beside the primary workspace actions.
-The detail surface leads with the selected memory content.
+The detail surface leads with the selected memory content and supports copying it.
+Export, retraction, and deletion are grouped in More memory actions and retain their existing review dialogs.
+Clear filters resets literal search, scope, lifecycle, and paging through a new authoritative query.
 A Details and history disclosure groups exact identity, trust, sensitivity, current provenance timeline, retained or erased evidence, typed relations, validation findings, and bounded admission history.
 Approval warnings and review actions remain visible outside that disclosure.
 Proposed content carries an explicit untrusted-source warning and a separate exact-revision approval dialog.
@@ -222,11 +236,14 @@ The responsive list stacks above details at narrow widths and high zoom, while d
 Sessions provides search, open and archived filters, recent-activity or title sorting, and a visible New session action.
 Enter or double-click opens an unarchived result.
 The detail panel always belongs to a visible search result and clears when no result matches.
+Empty results explain the state and offer search reset, open-session navigation, or session creation.
 Rows use compact title and metadata lines, with the current-session state included in metadata.
 Rename and deletion dialogs make the rest of the application inert and yield to permission review.
 
-Help leads with searchable shortcuts and expandable task guidance.
-Search opens matching guidance without flooding the default view.
+Help presents a searchable topic navigation and one readable article at a time.
+At narrow widths, a native topic selector replaces the secondary navigation column.
+Guidance uses short paragraphs, numbered steps where useful, and direct actions into the relevant workspace.
+Keyboard shortcuts remain a dedicated searchable topic.
 
 ## Visual validation
 

@@ -30,7 +30,7 @@
 ## Verified repository capabilities
 
 - The GUI-only foundation passes the complete local baseline; native review fixes menu selection contrast across all 45 theme/treatment combinations and restores safe lifecycle diagnostics for the `ah` alias.
-- The current GUI suite has 133 passing tests; the [desktop UX validation](../release/GUI_UX_REDESIGN_VALIDATION.md) records fixed compact spacing, visual theme selection, responsive library layouts, keyboard search, safe Markdown and code copying, a passing complete local baseline, and browser-only visual evidence.
+- The current GUI suite has 141 passing tests; the [desktop UX validation](../release/GUI_UX_REDESIGN_VALIDATION.md) records fixed compact spacing, visual theme selection, responsive libraries, direct renaming and drafts, precise usage reporting, provider setup, memory actions, a Help reader, a passing earlier complete local baseline, and browser-only visual evidence.
 - The application suite has 327 tests, and the previously validated native executable names preserve desktop session lifecycle and restart behavior.
 
 The terminal entries below record historical capabilities from pre-retirement revisions.
